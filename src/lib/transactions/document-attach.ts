@@ -51,6 +51,8 @@
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { errorCauseTag } from '@/lib/errors/db-error'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
 import {
   completeInboxItemsForBookedTransaction,
@@ -456,7 +458,7 @@ export async function attachDocumentToTransaction(
     // would sit on a row whose verifikat can never reference it.
     const joinsEntryId = besidePinOn ?? (tx.journal_entry_id as string | null) ?? null
     if (joinsEntryId && (await lockedJournalEntryIds(supabase, companyId, [joinsEntryId])).has(joinsEntryId)) {
-      return { ok: false, code: 'PERIOD_LOCKED', details: { journal_entry_id: joinsEntryId } }
+      return lockedYearRefusal(joinsEntryId)
     }
     const refusal = await releaseFromOtherRows(ctx, documentId, holders)
     if (refusal) return refusal
@@ -510,7 +512,7 @@ export async function attachDocumentToTransaction(
     // The caller pinned this document to the bank row its verifikat books.
     const linkErr = await linkToBookedEntry(supabase, companyId, documentId, journalEntryId, { rule_id: 'bank_row_document_pin' })
     if (linkErr) {
-      if (isPeriodLockError(linkErr)) {
+      if (isPeriodLockRefusal(linkErr)) {
         // Honest about the partial write: the pin (and the inbox back-link)
         // persisted; only the verifikat link was blocked.
         return { ok: false, code: 'DOC_ATTACH_PERIOD_LOCKED', details: { journal_entry_id: journalEntryId } }
@@ -585,8 +587,18 @@ async function linkToBookedEntry(
   return error ?? null
 }
 
-function isPeriodLockError(error: unknown): boolean {
-  return /locked\/closed fiscal period|Bokföringen är låst/i.test((error as { message?: string } | null)?.message ?? '')
+/**
+ * A verifikat in a locked or closed year takes no document; nothing was
+ * written. The code is the PERIOD_LOCKED this operation publishes, the
+ * sentence the one every document door gives (DOC_UPLOAD_PERIOD_LOCKED).
+ */
+function lockedYearRefusal(journalEntryId: string): Extract<OperationOutcome<AttachDocumentResult>, { ok: false }> {
+  return {
+    ok: false,
+    code: 'PERIOD_LOCKED',
+    details: { journal_entry_id: journalEntryId },
+    messageSv: getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv,
+  }
 }
 
 /**
@@ -610,9 +622,7 @@ async function attachBesidePin(
   if (docJournalEntryId !== journalEntryId) {
     const linkErr = await linkToBookedEntry(supabase, companyId, documentId, journalEntryId, { rule_id: 'bank_row_extra_underlag' })
     if (linkErr) {
-      if (isPeriodLockError(linkErr)) {
-        return { ok: false, code: 'PERIOD_LOCKED', details: { journal_entry_id: journalEntryId } }
-      }
+      if (isPeriodLockRefusal(linkErr)) return lockedYearRefusal(journalEntryId)
       log.error('attach document: adding underlag to the verifikat failed', { cause: errorCauseTag(linkErr) })
       return failed(linkErr)
     }

@@ -50,7 +50,8 @@ import { z } from 'zod'
 import { created } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   uploadDocument,
   validateDocumentFile,
@@ -112,6 +113,7 @@ registerEndpoint({
     `Max size ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB enforced server-side: DOC_UPLOAD_TOO_LARGE on overrun. On the hosted service the platform refuses a request body over 4.5 MB before it reaches Accounted (a plain-text 413, no error envelope), so keep files there under 4 MB.`,
     `Only ${ALLOWED_DOCUMENT_TYPES.join(' / ')} accepted: DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.`,
     'WORM: once linked to a posted journal entry, the document row cannot be modified or deleted (DB trigger). Upload-then-link is reversible (the document exists with journal_entry_id=null until linked); once linked, treat as immutable.',
+    'A journal_entry_id whose verifikat is in a locked or closed fiscal year answers 400 DOC_UPLOAD_PERIOD_LOCKED and stores nothing. recovery_hint names the way forward: unlock or reopen the year first, or upload without journal_entry_id to archive the file unlinked. Either way, send the next attempt with a new Idempotency-Key: the refusal is cached under the old one.',
     'Every upload stores its own row unless dedupe_by_content=true: then, without journal_entry_id, bytes already in the archive answer that document (deduplicated: true, duplicate_of = id, still 201), whose journal_entry_id may already be set. To put it on another verifikat too, POST /documents/{id}/link with copy: true.',
     'Dry-run is not supported on this endpoint: the engine hashes + stores + inserts in one atomic flow. ?dry_run=true (or X-Dry-Run: true) answers 400 VALIDATION_ERROR and stores nothing; test keys are refused with TEST_KEY_WRITE_BLOCKED.',
   ],
@@ -363,6 +365,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         { requestId: ctx.requestId },
       )
     } catch (err) {
+      // journal_entry_id names a verifikat in a locked or closed year: the
+      // database refused the row (enforce_period_lock_documents) and nothing
+      // is stored. A refusal with its code and way forward
+      // (DOC_UPLOAD_PERIOD_LOCKED), never the storage 500 below: production
+      // 2026-11-16 answered an integration 500 with no reason.
+      if (isPeriodLockRefusal(err)) {
+        return v1ErrorResponse(err, opLog, { requestId: ctx.requestId })
+      }
       const message = err instanceof Error ? err.message : 'unknown'
       // Magic-byte validation rejections (validateDocumentMagicBytes) are a
       // client problem, not a storage failure: surface as 400 with an

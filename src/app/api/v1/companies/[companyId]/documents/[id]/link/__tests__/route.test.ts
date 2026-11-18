@@ -40,6 +40,7 @@ import { createTableMockSupabase } from '@/tests/helpers'
 import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { POST as link } from '../route'
 import { toHandle } from '@/lib/handles'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -152,7 +153,11 @@ describe('POST /documents/:id/link', () => {
     },
   )
 
-  it('a dry run refuses a verifikat in a locked period with PERIOD_LOCKED', async () => {
+  // v1 keeps the PERIOD_LOCKED it documents for this endpoint; the sentences
+  // and the next step are the one answer every document door gives.
+  const LOCKED_ANSWER = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+
+  it('a dry run refuses a verifikat in a locked period with PERIOD_LOCKED and the way forward', async () => {
     const client = makeClient({
       company_members: MEMBER,
       document_attachments: { data: DOC },
@@ -163,8 +168,37 @@ describe('POST /documents/:id/link', () => {
 
     const res = await post({ journal_entry_id: JE_ID }, { query: '?dry_run=true' })
 
-    expect((await res.json()).error).toMatchObject({ code: 'PERIOD_LOCKED', details: { fiscal_period_id: 'fp-1', status: 'locked' } })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatchObject({
+      code: 'PERIOD_LOCKED',
+      details: { fiscal_period_id: 'fp-1', status: 'locked' },
+      message: LOCKED_ANSWER.message_sv,
+      message_en: LOCKED_ANSWER.message_en,
+      recovery_hint: LOCKED_ANSWER.remediation!.description,
+    })
     expect(documentWrites(client)).toEqual([])
+  })
+
+  it('answers a year locked between the check and the write as the check does, not with a 500', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      document_attachments: [
+        { data: DOC },
+        { data: null, error: { code: 'P0001', message: 'Cannot attach documents to entries in a locked/closed fiscal period' } },
+      ],
+      journal_entries: { data: ENTRY },
+      fiscal_periods: { data: OPEN },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await post({ journal_entry_id: JE_ID })
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatchObject({
+      code: 'PERIOD_LOCKED',
+      message: LOCKED_ANSWER.message_sv,
+      recovery_hint: LOCKED_ANSWER.remediation!.description,
+    })
   })
 
   it('a dry run previews the link and writes nothing', async () => {

@@ -34,6 +34,7 @@ vi.mock('@/lib/documents/link-document', async (importOriginal) => {
 import { POST } from '../route'
 import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { NextResponse } from 'next/server'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -195,32 +196,36 @@ describe('POST /api/documents/[id]/link', () => {
     expect(body.data.id).toBe('doc-1')
   })
 
-  it('maps a period-lock trigger error to PERIOD_LOCKED', async () => {
+  it('maps the document period-lock trigger to DOC_UPLOAD_PERIOD_LOCKED with its way forward', async () => {
     enqueueChecks()
     enqueue({ data: { id: JE_ID } }) // linkToJournalEntry: verifikat company check
     enqueue({
       data: null,
-      error: { message: 'new row violates ... locked/closed fiscal period' },
+      error: { code: 'P0001', message: 'Cannot attach documents to entries in a locked/closed fiscal period' },
     })
     const res = await POST(
       makeReq({ journal_entry_id: JE_ID, inbox_item_id: INBOX_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
-    const { body } = await parseJsonResponse<{ error: { code: string } }>(res)
-    expect(body.error.code).toBe('PERIOD_LOCKED')
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
+    expect(body.error.message).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
     // The inbox stamp must not run when the link itself failed.
     expect(mockSupabase.from).not.toHaveBeenCalledWith('invoice_inbox_items')
   })
 
-  it('refuses a verifikat in a locked period with PERIOD_LOCKED before the write', async () => {
+  it('refuses a verifikat in a locked period with DOC_UPLOAD_PERIOD_LOCKED before the write', async () => {
     enqueue({ data: { id: 'doc-1', journal_entry_id: null, journal_entry_line_id: null, file_name: 'x.pdf' } })
     enqueue({ data: { id: JE_ID, status: 'posted', fiscal_period_id: 'fp-1' } })
     enqueue({ data: { id: 'fp-1', period_start: '2025-01-01', is_closed: false, locked_at: '2026-01-31T00:00:00Z', closed_externally: false, closing_entry_id: null } })
 
     const res = await POST(makeReq({ journal_entry_id: JE_ID }), createMockRouteParams({ id: 'doc-1' }))
-    const { body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
 
-    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
+    expect(body.error.message).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
     expect(findCalls('document_attachments', 'update')).toHaveLength(0)
   })
 

@@ -14,6 +14,7 @@ import { isActingType, isBooked } from '@/lib/documents/read/lanes'
 import { HEIC_MIME_TYPES } from '@/lib/documents/read/image'
 import { ensurePreview } from '@/lib/documents/preview'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
+import { isPeriodLockRefusal } from '@/lib/documents/locked-period'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('documents/jobs')
@@ -123,7 +124,13 @@ async function runClaimed(
     return { kind: job.kind, result }
   } catch (err) {
     const reason = (err instanceof Error ? err.message : String(err)).slice(0, 500)
-    if (PERIOD_LOCKED_RE.test(reason)) {
+    // The period-lock trigger on document_attachments (migration 017) refuses
+    // every write to a document on an entry in a locked or closed period,
+    // Arkiv's type and read stamps included. Retrying buys nothing and five
+    // attempts with backoff ate the worker's minute (prod 2026-09-24), so the
+    // job is settled as skipped; the document stays untyped until the lock
+    // changes.
+    if (isPeriodLockRefusal(reason)) {
       await settleJob(supabase, job, { status: 'done', result: 'skipped: period_locked', last_error: reason })
       return { kind: job.kind, result: 'skipped: period_locked' }
     }
@@ -232,16 +239,6 @@ const isProviderOutage = (reason: string) => reason.startsWith(READER_UNAVAILABL
  * outage's backoff, and runDocumentJobFor leaves it alone until that is over.
  */
 const waitsOutOutage = (reason: string) => isProviderOutage(reason) && !isRunDeadlineCut(reason)
-
-/**
- * The period-lock trigger on document_attachments (migration 017) refuses
- * every write to a document that sits on an entry in a locked or closed
- * period, Arkiv's type and read stamps included. Retrying buys nothing and
- * five attempts with backoff ate the worker's minute (prod 2026-09-24: eight
- * such failures an hour ahead of a person's uploads). The job is settled as
- * skipped; the document stays untyped until the lock or the trigger changes.
- */
-const PERIOD_LOCKED_RE = /locked\/closed fiscal period|Bokföringen är låst/i
 
 async function settleJob(supabase: SupabaseClient, job: ClaimedJob, patch: Record<string, unknown>): Promise<void> {
   const { error } = await supabase

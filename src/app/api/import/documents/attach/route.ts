@@ -217,11 +217,9 @@ export const POST = withRouteContext(
 
       // enforce_period_lock_documents: a migrated year is often closed by the
       // time the receipts arrive, and the trigger blocks the link outright.
+      // The registry message carries the reason and the way forward in full.
       if (isPeriodLockRefusal(err)) {
-        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
-          requestId,
-          details: { reason: getErrorMessage(err) },
-        })
+        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, { requestId })
       }
       if (/kunde inte verifieras|matchar inte den angivna filtypen/i.test(message)) {
         opLog.warn('underlag attach rejected by content validation', { reason: message })

@@ -47,6 +47,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
 
 import { POST } from '../route'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -155,5 +156,25 @@ describe('POST /api/documents/[id]/versions', () => {
       'doc-1',
       expect.objectContaining({ name: 'kvitto.pdf', type: 'application/pdf' }),
     )
+  })
+
+  // The new version is a new document row on the same verifikat, which
+  // enforce_period_lock_documents refuses in a locked or closed year. It
+  // answered 500; it is the refusal every document door gives.
+  it('returns 400 DOC_UPLOAD_PERIOD_LOCKED with the way forward when the verifikat is in a locked or closed year', async () => {
+    mockCreateNewVersion.mockRejectedValue(
+      new Error('Failed to create new version: Cannot attach documents to entries in a locked/closed fiscal period'),
+    )
+    const res = await POST(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
+    expect(body.error.message).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
+  })
+
+  it('still returns 500 for a version that failed for another reason', async () => {
+    mockCreateNewVersion.mockRejectedValue(new Error('Failed to upload new version: socket closed'))
+    const res = await POST(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    expect(res.status).toBe(500)
   })
 })

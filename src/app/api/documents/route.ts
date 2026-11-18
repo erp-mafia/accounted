@@ -112,12 +112,10 @@ export const POST = withRouteContext(
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown'
       // DB trigger rejects inserts whose journal_entry_id points at an entry
-      // in a closed/locked period. Surface as 400 with the real reason.
+      // in a closed/locked period. Surface as 400 with the reason and the way
+      // forward, which the registry message carries in full.
       if (isPeriodLockRefusal(err)) {
-        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
-          requestId,
-          details: { reason: getErrorMessage(err) },
-        })
+        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, { requestId })
       }
       // Magic-byte validation rejections (validateDocumentMagicBytes) are a
       // client problem, not a storage failure: surface as 400 with an

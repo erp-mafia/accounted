@@ -3661,7 +3661,7 @@ function documentLinkRefusalResult(refusal: LinkDocumentRefusal): { error: strin
         errorCode: refusal.code,
       }
     case 'PERIOD_LOCKED':
-      return { error: 'Verifikationens period är låst: bilagan kan inte länkas.', status: 409, errorCode: refusal.code }
+      return { error: documentPeriodLockedSv(), status: 409, errorCode: refusal.code }
     case 'NOT_FOUND':
       return {
         error:
@@ -3683,15 +3683,21 @@ function isDocumentLinkConflict(err: unknown): boolean {
 }
 
 /**
+ * A document on a verifikat in a locked or closed year: the sentence every
+ * door gives it (DOC_UPLOAD_PERIOD_LOCKED), naming the way forward.
+ */
+function documentPeriodLockedSv(): string {
+  return getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv
+}
+
+/**
  * Shared failure mapping for both link executors. A locked period is the one
  * case worth its own sentence: it is recoverable by unlocking, unlike the rest,
  * and the raw trigger text is English database prose. Everything else goes
  * through getErrorMessage so nothing reaches the Granskning panel untranslated.
  */
 function documentLinkFailureMessage(err: unknown): string {
-  if (isPeriodLockRefusal(err)) {
-    return 'Verifikationens period är låst: bilagan kan inte länkas.'
-  }
+  if (isPeriodLockRefusal(err)) return documentPeriodLockedSv()
   // The precheck names the holder; this is the race it cannot see (a link
   // set between the precheck and the write) or a line-level link that would
   // change. Both are the immutability trigger refusing, never a server fault.
@@ -3756,9 +3762,7 @@ async function commitLinkDocumentToVoucher(
       },
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err ?? '')
-    const isLocked = /locked\/closed fiscal period|Bokföringen är låst/i.test(msg)
-    const status = isLocked || isDocumentLinkConflict(err) ? 409 : 500
+    const status = isPeriodLockRefusal(err) || isDocumentLinkConflict(err) ? 409 : 500
     return { error: documentLinkFailureMessage(err), status }
   }
 }

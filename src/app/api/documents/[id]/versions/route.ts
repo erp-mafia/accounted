@@ -4,6 +4,7 @@ import { createNewVersion, validateDocumentFile } from '@/lib/core/documents/doc
 import { readUploadedFile } from '@/lib/core/documents/staged-upload'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { errorResponse, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 
 /**
  * POST /api/documents/:id/versions
@@ -15,7 +16,7 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'document.versions.create',
-  async (request, { supabase, user, companyId }, { params }) => {
+  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
     const { id } = await params
 
     try {
@@ -43,6 +44,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
       return NextResponse.json({ data: newVersion })
     } catch (error) {
+      // A new version of an underlag on a verifikat in a locked or closed year
+      // is a new document row there, which enforce_period_lock_documents
+      // refuses: the 400 every document door gives it, not a 500.
+      if (isPeriodLockRefusal(error)) return errorResponse(error, log, { requestId })
       console.error('[documents/versions/POST] Version creation failed:', error)
       return NextResponse.json(
         { error: error instanceof Error ? getUserErrorMessage(error) : 'Version creation failed' },

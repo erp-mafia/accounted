@@ -3628,7 +3628,7 @@ function lockedPeriodLinkError(total: number, periods: LockedLinkPeriod[], other
       ? 'is locked: unlock it with gnubok_unlock_period'
       : p.reopen_tool === 'gnubok_reopen_fiscal_period_external'
         ? 'is marked closed in the previous system: reopen it with gnubok_reopen_fiscal_period_external'
-        : 'was closed by a year-end run here and cannot be reopened'
+        : 'was closed by a year-end run here: only the company owner can reopen it, in the app (Inställningar → Bokföring → Räkenskapsår), while its årsredovisning is not signed, adopted or filed'
     return `fiscal_year ${p.fiscal_year} (fiscal_period_id ${p.fiscal_period_id}, ${rows(p.row_count)}) ${state}.`
   })
   const reopenable = periods.filter((p) => p.reopen_tool !== null)
@@ -3644,7 +3644,9 @@ function lockedPeriodLinkError(total: number, periods: LockedLinkPeriod[], other
       description:
         'Reopen the year, stage the links again, then lock or klarmarkera it again: gnubok_reopen_fiscal_period_external ' +
         'for a year marked closed in the previous system, gnubok_unlock_period for a locked year that is not closed. ' +
-        'A year closed by a year-end run here cannot be reopened.',
+        'A year closed by a year-end run here is reopened only by the company owner in the app (Inställningar → Bokföring → ' +
+        'Räkenskapsår) while its årsredovisning is not signed, adopted or filed; there is no API or MCP door. A year that ' +
+        'stays closed keeps the document archived unlinked.',
       ...(first ? { tool: first.reopen_tool } : {}),
       ...(first && reopenable.length === 1 ? { args: { fiscal_period_id: first.fiscal_period_id } } : {}),
     },

@@ -20,6 +20,10 @@ vi.mock('@/lib/documents/link-document', async (importOriginal) => ({
 }))
 
 import { commitPendingOperation } from '../commit'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+
+/** The one answer for a document on a locked or closed year (DOC_UPLOAD_PERIOD_LOCKED). */
+const LOCKED_SV = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv
 
 function op(links: unknown[]): PendingOperation {
   return {
@@ -81,7 +85,7 @@ describe('commitPendingOperation: link_documents_to_vouchers with a copy row', (
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({
       linked_count: 1,
-      skipped: [{ document_id: 'invoice', journal_entry_id: 'je-a27', reason: 'Verifikationens period är låst: bilagan kan inte länkas.' }],
+      skipped: [{ document_id: 'invoice', journal_entry_id: 'je-a27', reason: LOCKED_SV }],
     })
   })
 
@@ -135,7 +139,7 @@ describe('commitPendingOperation: link_document_to_voucher staged as a copy (crm
 
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
-    expect(result.error).toBe('Verifikationens period är låst: bilagan kan inte länkas.')
+    expect(result.error).toBe(LOCKED_SV)
   })
 
   it('links the document itself when the operation was not staged as a copy', async () => {

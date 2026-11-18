@@ -24,6 +24,9 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { documentHeldElsewhereReasonEn } from '@/lib/documents/link-holder'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import type { Logger } from '@/lib/logger'
 
 const Body = z
   .object({
@@ -85,6 +88,27 @@ registerEndpoint({
   response: { success: dataEnvelope(DocumentLinkedResponse) },
 })
 
+/**
+ * A verifikat in a locked or closed year takes no document. This endpoint has
+ * published PERIOD_LOCKED for that since it shipped, and a changed code breaks
+ * a dated version (versioning policy; decision 2026-10-13), so the code stays.
+ * The sentences and the next step are the one answer every other door gives
+ * (DOC_UPLOAD_PERIOD_LOCKED), not PERIOD_LOCKED's advice to move an entry date.
+ */
+function periodLockedRefusal(
+  ctx: { requestId: string; log: Logger },
+  details?: { fiscal_period_id: string; status: 'closed' | 'locked' },
+) {
+  const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+  return v1ErrorResponseFromCode('PERIOD_LOCKED', ctx.log, {
+    requestId: ctx.requestId,
+    ...(details ? { details } : {}),
+    messageSv: answer.message_sv,
+    messageEn: answer.message_en,
+    remediation: answer.remediation,
+  })
+}
+
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'documents.link',
   async (request, ctx, params) => {
@@ -120,6 +144,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         { dryRun: ctx.dryRun, userId: ctx.userId },
       )
     } catch (err) {
+      // The year was locked between the check and the write: the trigger's
+      // refusal, answered as the check answers it.
+      if (isPeriodLockRefusal(err)) return periodLockedRefusal(ctx)
       ctx.log.error('documents.link failed', err as Error, { documentId, journalEntryId: body.journal_entry_id })
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }
@@ -141,10 +168,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
       if (outcome.code === 'PERIOD_LOCKED') {
         const { period } = outcome.details
-        return v1ErrorResponseFromCode('PERIOD_LOCKED', ctx.log, {
-          requestId: ctx.requestId,
-          details: { fiscal_period_id: period.id, status: period.is_closed ? 'closed' : 'locked' },
-        })
+        return periodLockedRefusal(ctx, { fiscal_period_id: period.id, status: period.is_closed ? 'closed' : 'locked' })
       }
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId, details: outcome.details })
     }

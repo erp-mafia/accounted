@@ -6214,6 +6214,29 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
 // Wave 4: documents, masters, salary, company, API keys
 // ─────────────────────────────────────────────────────────────────
 
+/**
+ * Why a verifikat in a locked or closed year takes no document, and the ways
+ * out the product has: unlock, the two reopens under Räkenskapsår (crm#1290
+ * for a year closed with bokslut), or the file kept unlinked. The one answer
+ * of every door that uploads, links, versions or attaches a document
+ * (DOC_UPLOAD_PERIOD_LOCKED, DOC_ATTACH_PERIOD_LOCKED, and the doors that
+ * keep a published PERIOD_LOCKED), so its last sentence holds for a file
+ * that was refused at upload and for one already stored. Unlinked files are
+ * not named by place: the Dokument section is not shown to every company
+ * (lib/arkiv/flag.ts).
+ */
+const DOCUMENT_LOCKED_YEAR = {
+  message_sv:
+    'Verifikationen ligger i ett låst eller stängt räkenskapsår, och där går det inte att lägga till underlag. Lås upp året eller öppna det igen under Inställningar → Bokföring → Räkenskapsår, lägg till underlaget och lås eller stäng sedan året igen. Ett år som stängts med bokslut i Accounted kan bara företagets ägare öppna, och bara så länge årsredovisningen inte är undertecknad, fastställd eller inskickad. Går året inte att öppna kan filen ändå sparas, utan koppling till verifikationen.',
+  message_en:
+    'The voucher is in a locked or closed fiscal year, where no document can be added. Unlock or reopen the year under Settings → Bookkeeping → Fiscal years, add the document, then lock or close the year again. Only the company owner can reopen a year closed with a year-end closing in Accounted, and only while its annual report has not been signed, adopted or filed. If the year cannot be reopened, the file can still be kept, without a link to the voucher.',
+  remediation: {
+    description:
+      'The verifikat\'s fiscal year is locked or closed, and the database refuses every document on it. Read the year with gnubok_list_fiscal_periods (GET /fiscal-periods). Locked, not closed: unlock it with gnubok_unlock_period (POST /fiscal-periods/{id}/unlock). Marked closed in a previous system (closed_externally, no closing entry): reopen it with gnubok_reopen_fiscal_period_external (POST /fiscal-periods/{id}/reopen-external). Closed by a year-end run in Accounted: only the company owner reopens it, in the app under Inställningar → Bokföring → Räkenskapsår, while its årsredovisning is not signed, adopted or filed (no API or MCP door). Reopening a year is the user\'s decision. Then send the request again, on /api/v1 with a new Idempotency-Key (the refusal is cached under the old one), and lock or close the year again. A year that stays closed: the file is kept unlinked. Send an upload again without journal_entry_id; a document that is already stored stays as it is (GET /documents?linked=false lists both).',
+    tool: 'gnubok_list_fiscal_periods',
+  },
+} satisfies Pick<StructuredErrorEntry, 'message_sv' | 'message_en' | 'remediation'>
+
 const DOCUMENT: Record<string, StructuredErrorEntry> = {
   // Arkiv rolls out per company (ARKIV_COMPANY_IDS). Outside the rollout the
   // Arkiv tools refuse; coded so an agent reads "not switched on" and moves
@@ -6263,10 +6286,16 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Filen kunde inte sparas.',
     message_en: 'Document storage failed.',
   },
+  // A document on a verifikat in a locked or closed year
+  // (DOCUMENT_PERIOD_LOCK_REFUSAL in document-period-lock-refusal.ts, the trigger's
+  // text), refused with nothing written: the one
+  // answer (DOCUMENT_LOCKED_YEAR) of every door that uploads, links or
+  // versions a document. v1 documents.link keeps the PERIOD_LOCKED code it
+  // publishes and speaks this answer.
   DOC_UPLOAD_PERIOD_LOCKED: {
     httpStatus: 400,
-    message_sv: 'Det går inte att bifoga underlag till verifikationer i en låst eller stängd period.',
-    message_en: 'Cannot attach documents to entries in a locked or closed fiscal period.',
+    ...DOCUMENT_LOCKED_YEAR,
+    retryable: false,
   },
   DOC_DOWNLOAD_FAILED: {
     httpStatus: 500,
@@ -6389,12 +6418,13 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_link_document_to_voucher',
     },
   },
+  // The pin on the bank row was saved; only the link to its verifikat was
+  // refused. The rest is the one answer for a locked year (DOCUMENT_LOCKED_YEAR).
   DOC_ATTACH_PERIOD_LOCKED: {
     httpStatus: 409,
-    message_sv:
-      'Bilagan kopplades till transaktionen men verifikationens period är låst: den kunde inte länkas till verifikationen.',
-    message_en:
-      'The document was attached to the transaction, but its journal entry is in a locked period, so it could not be linked to the entry.',
+    message_sv: `Bilagan kopplades till transaktionen men inte till verifikationen. ${DOCUMENT_LOCKED_YEAR.message_sv}`,
+    message_en: `The document was attached to the transaction but not to its voucher. ${DOCUMENT_LOCKED_YEAR.message_en}`,
+    remediation: DOCUMENT_LOCKED_YEAR.remediation,
   },
   DOC_ATTACH_PROPAGATION_FAILED: {
     httpStatus: 500,

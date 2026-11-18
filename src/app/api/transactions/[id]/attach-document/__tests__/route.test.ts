@@ -28,6 +28,7 @@ vi.mock('@/lib/init', () => ({
 }))
 
 import { POST, DELETE } from '../route'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -217,9 +218,12 @@ describe('POST /api/transactions/[id]/attach-document', () => {
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
     )
-    const { status, body } = await parseJsonResponse<{ error: { message: string } }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
     expect(status).toBe(409)
-    expect(body.error.message).toContain('låst')
+    expect(body.error.code).toBe('DOC_ATTACH_PERIOD_LOCKED')
+    // The pin is saved; the rest is the one answer for a locked year, with the way forward.
+    expect(body.error.message).toContain('Bilagan kopplades till transaktionen men inte till verifikationen.')
+    expect(body.error.message).toContain(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
   })
 
   it('returns 500 with the idempotent-retry message when propagation fails', async () => {
@@ -477,8 +481,10 @@ describe('POST /api/transactions/[id]/attach-document: a document another row ho
     enqueue({ data: [], error: null }) // bank_row_anchors: that row is unbooked
     enqueue({ data: [{ id: 'je-1', fiscal_period: { is_closed: true, locked_at: null } }], error: null }) // closed period
 
-    const { body } = await parseJsonResponse<{ error: { code: string } }>(await post())
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await post())
+    // The published code, with the one answer for a locked year as its sentence.
     expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(body.error.message).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
     expect(findCalls('transactions', 'update')).toEqual([])
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
     expect(findCalls('document_attachments', 'update')).toEqual([])

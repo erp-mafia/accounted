@@ -2,7 +2,8 @@
  * Tests for POST /api/v1/companies/:companyId/documents (API-key upload).
  *
  * Covers: 401, 400 (missing Idempotency-Key, missing file, bad upload_source),
- * 404 for a journal_entry_id outside the caller's company, and the happy path.
+ * 404 for a journal_entry_id outside the caller's company, 400 for one in a
+ * locked or closed year (it was a 500), and the happy path.
  * The happy path pins two contracts: the public response carries row fields
  * only (no storage_path, no extraction fields), and document.uploaded
  * subscribers run after the response. No v1 read exposes extraction, so no
@@ -47,6 +48,7 @@ vi.mock('@/lib/core/documents/document-service', async () => {
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -319,6 +321,60 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
       deduplicated: true,
       duplicate_of: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
     })
+  })
+
+  // Production 2026-11-16: an integration's PDF named a verifikat in a closed
+  // year, enforce_period_lock_documents refused the row, and the caller got
+  // 500 DOC_UPLOAD_STORAGE_FAILED with no reason and no way forward. Runs the
+  // real uploadDocument against the database's own refusal text.
+  it('answers 400 DOC_UPLOAD_PERIOD_LOCKED with the reason and the way forward when the verifikat is in a locked or closed year', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/core/documents/document-service')>(
+      '@/lib/core/documents/document-service',
+    )
+    uploadDocumentMock.mockImplementation(actual.uploadDocument)
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const db = createTableMockSupabase({
+      ...MEMBER,
+      journal_entries: { data: { id: JE_ID }, error: null },
+      document_attachments: {
+        data: null,
+        error: { code: 'P0001', message: 'Cannot attach documents to entries in a locked/closed fiscal period' },
+      },
+    })
+    mockServiceClient.mockReturnValue({
+      ...db.supabase,
+      storage: {
+        getBucket: vi.fn().mockResolvedValue({ data: { id: 'documents' }, error: null }),
+        from: vi.fn().mockReturnValue({ upload, remove }),
+      },
+    })
+
+    const res = await POST(makeUpload({ file: pdf(), journal_entry_id: JE_ID }), params())
+    const body = await res.json()
+
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
+    expect(body.error.message).toBe(answer.message_sv)
+    expect(body.error.message).toContain('Lås upp året eller öppna det igen under Inställningar → Bokföring → Räkenskapsår')
+    expect(body.error.message_en).toBe(answer.message_en)
+    expect(body.error.recovery_hint).toBe(answer.remediation!.description)
+    expect(JSON.stringify(body)).not.toContain('Cannot attach')
+    // Nothing stays behind: the object the upload wrote is removed again.
+    expect(remove).toHaveBeenCalledWith([upload.mock.calls[0][0]])
+    expect(db.payloads('arrivals', 'upsert')).toEqual([])
+  })
+
+  it('still answers 500 DOC_UPLOAD_STORAGE_FAILED for a failure that is no refusal', async () => {
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ ...MEMBER }).supabase)
+    uploadDocumentMock.mockRejectedValue(new Error('Failed to upload document: socket closed'))
+
+    const res = await POST(makeUpload({ file: pdf() }), params())
+    const body = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(body.error.code).toBe('DOC_UPLOAD_STORAGE_FAILED')
   })
 
   it('ignores dedupe_by_content on an upload that names a verifikat: the same underlag sits on several verifikat as one copy each', async () => {

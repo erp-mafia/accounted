@@ -3,6 +3,9 @@ import { eventBus } from '@/lib/events/bus'
 import { makeDocumentAttachment } from '@/tests/helpers'
 import sharp from 'sharp'
 import { receiptImage, receiptImageFormats } from '@/tests/fixtures/receipt-images'
+import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 // ============================================================
 // Mock: separate client (no .then) from query builder (thenable)
@@ -881,6 +884,37 @@ describe('uploadDocument', () => {
 
     expect(supabase.from).toHaveBeenCalledTimes(1)
     expect(serviceRemove).toHaveBeenCalledTimes(1)
+  })
+
+  // enforce_period_lock_documents refuses a row on a verifikat in a locked or
+  // closed year. v1 answered that 500 (prod 2026-11-16): the thrown error must
+  // read as the refusal it is, for every door that classifies it.
+  it('throws a verifikat in a locked or closed year as DOC_UPLOAD_PERIOD_LOCKED, keeping the SQLSTATE, and keeps nothing', async () => {
+    results = [
+      { data: null, error: { code: 'P0001', message: 'Cannot attach documents to entries in a locked/closed fiscal period' } },
+    ]
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    const thrown = await uploadDocument(
+      supabase as never,
+      'user-1',
+      'company-1',
+      { name: 'kvitto.pdf', buffer: pdfBuffer('closed year receipt'), type: 'application/pdf' },
+      { journal_entry_id: 'je-closed' },
+    ).then(
+      () => null,
+      (err: unknown) => err,
+    )
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error & { code?: string }).code).toBe('P0001')
+    expect(isPeriodLockRefusal(thrown)).toBe(true)
+    expect(classifyError(thrown).code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
+    expect(getErrorMessage(thrown)).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
+    expect(serviceRemove).toHaveBeenCalledWith([upload.mock.calls[0]![0]])
   })
 })
 

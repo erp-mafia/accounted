@@ -19,6 +19,7 @@ import { userFacingCode } from './user-facing'
 import { toError } from './to-error'
 import { ZodError } from 'zod'
 import { getErrorMessage } from './get-error-message'
+import { DOCUMENT_PERIOD_LOCK_REFUSAL } from './document-period-lock-refusal'
 import { foreignKeyRefusal } from './foreign-key-refusal'
 import { fieldValidationError, zodErrorFieldIssues } from './refusal'
 import {
@@ -187,15 +188,19 @@ function extractCode(error: unknown): string | null {
 
 /**
  * Refusals the database raises as plain text (RAISE EXCEPTION with no code of
- * ours): the period-lock trigger (migration 017), the company lock date, and
- * the locked period's tax adjustment and tax depreciation election triggers.
- * Triggers are never edited, so their sentences are read here, once, for
- * every door: routes and services ask isPeriodLockRefusal/isLockDateRefusal
- * instead of matching them. Application code throws a code instead
- * (codedRefusal, userFacing): a sentence is never how the app tells a door
- * what failed.
+ * ours): the period-lock triggers (migration 017: a verifikat, and a document
+ * on one), the company lock date, and the locked period's tax adjustment and
+ * tax depreciation election triggers. Every one of them is a lock. Triggers
+ * are never edited, so their sentences are read here, once, for every door:
+ * routes and services ask isPeriodLockRefusal/isLockDateRefusal instead of
+ * matching them. Application code throws a code instead (codedRefusal,
+ * userFacing): a sentence is never how the app tells a door what failed.
  */
 const DATABASE_REFUSALS: ReadonlyArray<{ pattern: RegExp; code: string; lockDate?: true }> = [
+  // First: the generic pattern below matches the document trigger's text too.
+  // A document refused on a locked year was a 500 on v1 upload and three
+  // different sentences elsewhere; every door now answers this one code.
+  { pattern: DOCUMENT_PERIOD_LOCK_REFUSAL, code: 'DOC_UPLOAD_PERIOD_LOCKED' },
   { pattern: /locked\/closed fiscal period/i, code: 'PERIOD_LOCKED' },
   { pattern: /Bokföringen är låst/, code: 'PERIOD_LOCKED', lockDate: true },
   { pattern: /Fiscal period is locked for tax (adjustments|depreciation elections)/i, code: 'PERIOD_LOCKED' },
@@ -210,13 +215,13 @@ function databaseRefusalCode(message: string): string | null {
 }
 
 /**
- * The database refused a write behind a lock: a locked or closed period, the
- * company lock date, or a locked period's tax figures. Takes the thrown value
- * or its message.
+ * The database refused a write behind a lock: a locked or closed period (a
+ * verifikat, or a document on one), the company lock date, or a locked
+ * period's tax figures. Takes the thrown value or its message.
  */
 export function isPeriodLockRefusal(error: unknown): boolean {
   if (error === null || error === undefined) return false
-  return databaseRefusal(extractEnglishMessage(error))?.code === 'PERIOD_LOCKED'
+  return databaseRefusal(extractEnglishMessage(error)) !== null
 }
 
 /** The company lock date (enforce_company_lock_date) refused it, not a period's own lock. */
@@ -848,7 +853,15 @@ function buildResponse(
 export function errorResponseFromCode(
   code: string,
   log: MinimalLogger,
-  ctx: ErrorResponseContext & { reason?: string } = {},
+  ctx: ErrorResponseContext & {
+    reason?: string
+    /**
+     * Replaces the registry's next step, with messageSv/messageEn, when a door
+     * keeps a code it has published but speaks another entry's answer (v1
+     * documents.link: PERIOD_LOCKED with DOC_UPLOAD_PERIOD_LOCKED's).
+     */
+    remediation?: StructuredErrorRemediation
+  } = {},
 ): NextResponse {
   const entry = entryFor(code)
   const status = ctx.status ?? entry.httpStatus
@@ -860,6 +873,7 @@ export function errorResponseFromCode(
       httpStatus: status,
       ...(ctx.messageSv ? { message_sv: ctx.messageSv } : {}),
       ...(ctx.messageEn ? { message_en: ctx.messageEn } : {}),
+      ...(ctx.remediation ? { remediation: ctx.remediation } : {}),
     },
     ctx.requestId,
     ctx.details,

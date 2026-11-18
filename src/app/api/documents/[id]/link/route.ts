@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { LinkDocumentSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -70,8 +70,10 @@ export const POST = withRouteContext(
             details: { current_journal_entry_id: outcome.details.current_journal_entry_id },
           })
         }
+        // The answer every door gives a document on a locked or closed year,
+        // with the way forward, not the generic "Bokföringen är låst".
         if (outcome.code === 'PERIOD_LOCKED') {
-          return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
+          return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, { requestId })
         }
         return errorResponseFromCode('NOT_FOUND', opLog, { requestId, details: outcome.details })
       }
@@ -99,16 +101,14 @@ export const POST = withRouteContext(
 
       return NextResponse.json({ data: document, copy_of_document_id: outcome.copy_of_document_id })
     } catch (err) {
+      // Linking writes journal_entry_id on document_attachments; the
+      // enforce_period_lock_documents trigger blocks that when the target entry
+      // sits in a closed/locked period (a lock taken after the check above).
+      if (isPeriodLockRefusal(err)) return errorResponse(err, opLog, { requestId })
       opLog.error('document link failed', err as Error, {
         journalEntryId: body.journal_entry_id,
       })
       const message = err instanceof Error ? err.message : ''
-      // Linking writes journal_entry_id on document_attachments; the
-      // enforce_period_lock trigger blocks that when the target entry sits in a
-      // closed/locked period.
-      if (isPeriodLockRefusal(err)) {
-        return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
-      }
       if (/journal entry not found/i.test(message)) {
         return errorResponseFromCode('DOC_LINK_ENTRY_NOT_FOUND', opLog, { requestId })
       }

@@ -1159,7 +1159,10 @@ export async function uploadDocument(
     await createServiceClientNoCookies()
       .storage.from(DOCUMENTS_BUCKET)
       .remove([storagePath])
-    throw new Error(`Failed to create document record: ${error.message}`)
+    // With its SQLSTATE, as in completePendingDocumentUpload. A verifikat in a
+    // locked or closed year is refused here by enforce_period_lock_documents;
+    // classifyError reads that text as DOC_UPLOAD_PERIOD_LOCKED for every door.
+    throw dbError(error, 'Failed to create document record')
   }
 
   const result = data as DocumentAttachment

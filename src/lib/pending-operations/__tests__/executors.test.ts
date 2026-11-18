@@ -172,6 +172,7 @@ import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   return {
@@ -2115,7 +2116,8 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     )
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
-    expect(result.error).toBe('Verifikationens period är låst: bilagan kan inte länkas.')
+    // The one answer for a document on a locked or closed year, with its way forward.
+    expect(result.error).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
     expect(findCall('document_attachments', 'update')).toBeUndefined()
   })
 })

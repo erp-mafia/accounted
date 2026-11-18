@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Documents: a locked year is a refusal, not a server error (2026-11)
+
+- **Fix: \`POST /documents\` with a \`journal_entry_id\` on a verifikat in a locked or closed fiscal year answers \`400 DOC_UPLOAD_PERIOD_LOCKED\`** (2026-11-18) and stores nothing; \`message\` says why and \`recovery_hint\` names the way forward (unlock or reopen the year, or upload without \`journal_entry_id\`). **Before**, it answered \`500 DOC_UPLOAD_STORAGE_FAILED\` with no reason. \`POST /documents/{id}/link\` keeps its documented \`400 PERIOD_LOCKED\` for the same case and now gives the same message and \`recovery_hint\`. Additive; the API version date is unchanged.
+
 ### Dry-run: refused where it cannot preview (2026-11)
 
 - **Behaviour change: \`dry_run=true\` on a write without dry-run support answers \`400 VALIDATION_ERROR\`** (2026-11-16), with \`details.field\` \`dry_run\`, and runs nothing. Before, 28 of the 31 writes without \`x-dry-run-supported\` ignored the flag (or the \`X-Dry-Run\` header) and ran for real while the caller believed it previewed: period lock, close, year-end, opening balances and currency revaluation, match-invoice and match-supplier-invoice, generate-agi, SIE and bank imports, approving, rejecting or withdrawing a pending operation, the webhook delete, test, verify and rotate-secret verbs, a webhook delivery retry and the service-account writes. Document upload, inbox delivery and bank sync already refused it. Writes with \`x-dry-run-supported: true\` preview as before, and a request without the flag is unchanged. A test key is still answered \`403 TEST_KEY_WRITE_BLOCKED\` on these endpoints.

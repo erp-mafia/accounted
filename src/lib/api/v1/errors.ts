@@ -27,6 +27,7 @@ import { NextResponse } from 'next/server'
 import {
   errorResponse as legacyErrorResponse,
   errorResponseFromCode as legacyErrorResponseFromCode,
+  type StructuredErrorRemediation,
 } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
@@ -170,6 +171,8 @@ export async function v1ErrorResponseFromCode(
     /** The thrower's own sentences, for a code whose message names something (thrown_message_sv). */
     messageSv?: string
     messageEn?: string
+    /** Replaces the registry's next step (recovery_hint): see errorResponseFromCode. */
+    remediation?: StructuredErrorRemediation
   },
 ): Promise<NextResponse> {
   const legacy = legacyErrorResponseFromCode(code, log, {
@@ -179,6 +182,7 @@ export async function v1ErrorResponseFromCode(
     reason: ctx.reason,
     ...(ctx.messageSv ? { messageSv: ctx.messageSv } : {}),
     ...(ctx.messageEn ? { messageEn: ctx.messageEn } : {}),
+    ...(ctx.remediation ? { remediation: ctx.remediation } : {}),
   })
   return rewriteEnvelope(legacy, ctx)
 }

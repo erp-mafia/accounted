@@ -28,6 +28,7 @@ import {
 import { conflictCode, getErrorEntry, hasErrorEntry, siCreateInvalidInputMessages } from './structured-errors'
 import { bankRowAlreadyBookedMessages } from './match-si-tx-already-booked'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
+import { DOCUMENT_PERIOD_LOCK_REFUSAL } from './document-period-lock-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 import { syncHoldMessage } from '@/lib/bank-sync/sync-hold-message'
 import { bankRefusalMessage } from '@/lib/bank-feed/failure-text'
@@ -139,6 +140,13 @@ const GENERIC_FALLBACK: Bilingual = { sv: 'Något gick fel. Försök igen.', en:
 // Known error patterns → user-friendly Swedish messages
 const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   [
+    // A document on a verifikat in a locked or closed year: the registry's
+    // sentence, read before the generic pattern below, which matches this
+    // text too and spoke of creating a verifikat.
+    DOCUMENT_PERIOD_LOCK_REFUSAL,
+    getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv,
+  ],
+  [
     /locked\/closed fiscal period/i,
     'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
   ],
@@ -183,10 +191,6 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     // or any delete reaching a set-off row.
     /SETOFF_DELETE_BLOCKED|SETOFF_IMMUTABLE/,
     'En kvittning tas aldrig bort eller ändras. Återför kvittningsverifikationen (storno) i stället.',
-  ],
-  [
-    /Cannot attach documents to entries in a locked/i,
-    'Kan inte bifoga dokument till verifikationer i en låst period.',
   ],
   [
     /Entry date .+ is outside fiscal period/i,
