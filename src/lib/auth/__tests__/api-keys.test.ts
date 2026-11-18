@@ -573,6 +573,7 @@ describe('validateApiKey', () => {
         label: 'Claude (Anthropic)',
       })
       expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'chatgpt', serviceAccount: null }).label).toBe('ChatGPT (OpenAI)')
+      expect(credentialActor({ apiKeyName: OAUTH_MCP_KEY_NAME, client: 'squidler', serviceAccount: null }).label).toBe('Squidler')
     })
 
     it('names a registered client by its own name', () => {

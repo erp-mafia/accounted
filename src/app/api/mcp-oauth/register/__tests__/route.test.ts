@@ -63,6 +63,34 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(body.token_endpoint_auth_method).toBe('none')
   })
 
+  it('accepts registration with the Squidler callbacks, production and dev', async () => {
+    const redirectUris = [
+      'https://squidler.io/api/oauth/callback/accounted',
+      'https://dev.squidler.io/api/oauth/callback/accounted',
+    ]
+    const response = await POST(createRequest({
+      client_name: 'Squidler',
+      redirect_uris: redirectUris,
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual(redirectUris)
+  })
+
+  it('rejects other squidler.io paths and subdomains', async () => {
+    for (const uri of [
+      'https://squidler.io/api/oauth/callback/other',
+      'https://www.squidler.io/api/oauth/callback/accounted',
+    ]) {
+      const response = await POST(createRequest({
+        redirect_uris: [uri],
+        token_endpoint_auth_method: 'none',
+      }))
+      expect(response.status).toBe(400)
+    }
+  })
+
   it('accepts the three redirect_uris Cursor registers in one request', async () => {
     // Cursor sends the legacy deeplink, the Cloud Agents web fallback and the
     // RFC 8252 loopback together; one unknown URI used to fail the whole set.

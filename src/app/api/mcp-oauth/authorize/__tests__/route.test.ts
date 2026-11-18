@@ -75,6 +75,7 @@ import { GET, POST } from '../route'
 const CLAUDE: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'claude' }
 const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'chatgpt' }
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
+const SQUIDLER: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'squidler' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
 const GEMINI: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'gemini' }
@@ -562,6 +563,25 @@ describe('client identity on the consent page', () => {
     expect(html).toContain('Grok (xAI)')
     expect(html).toContain('Verifierad')
     expect(html).toContain('grok.com')
+    expect(html).not.toContain('En extern applikation')
+  })
+
+  it('names Squidler as a verified client for its own callback', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(SQUIDLER)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'https://squidler.io/api/oauth/callback/accounted',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Squidler')
+    expect(html).toContain('Verifierad')
+    expect(html).toContain('squidler.io')
     expect(html).not.toContain('En extern applikation')
   })
 

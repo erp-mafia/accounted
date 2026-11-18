@@ -1,0 +1,1 @@
+[2026-11-17] Squidler is a built-in OAuth client (prod and dev callback, exact match): its customers are not technical and registering the callback once per customer stopped them. Founder decision after the partner call; replaces the 2026-11-04 choice of per-user registration for Squidler only.

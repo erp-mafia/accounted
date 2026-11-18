@@ -4,11 +4,11 @@
 /**
  * Who is behind a connection row, as the Settings list labels it. The
  * built-in OAuth clients come from api_keys.client (migration
- * 20260913120000): claude, chatgpt, grok, gemini, cursor, cursor_deeplink and
- * local. `local` is any loopback sign-in (Claude Code, Codex, ...), so it is
- * named as a local client, never guessed as Claude Code.
+ * 20260913120000): claude, chatgpt, grok, gemini, cursor, cursor_deeplink,
+ * squidler and local. `local` is any loopback sign-in (Claude Code, Codex,
+ * ...), so it is named as a local client, never guessed as Claude Code.
  */
-export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor' | 'local' | 'mcp' | 'key'
+export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor' | 'squidler' | 'local' | 'mcp' | 'key'
 
 export interface ConnectionRow {
   source?: 'signin' | 'manual'
@@ -25,6 +25,7 @@ export function connectionKind(row: Pick<ConnectionRow, 'source' | 'client'>): C
     case 'chatgpt':
     case 'grok':
     case 'gemini':
+    case 'squidler':
     case 'local':
       return row.client
     case 'cursor':

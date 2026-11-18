@@ -15,13 +15,22 @@ import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
 /**
  * Identity of a built-in client, derived from the redirect URI pattern that
  * matched. Rendered on the consent page so the user can tell a real Claude /
- * ChatGPT / Grok / Gemini / Cursor connector from a look-alike registration.
+ * ChatGPT / Grok / Gemini / Cursor / Squidler connector from a look-alike
+ * registration.
  */
-export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor' | 'cursor_deeplink' | 'local'
+export type BuiltInProvider =
+  | 'claude'
+  | 'chatgpt'
+  | 'grok'
+  | 'gemini'
+  | 'cursor'
+  | 'cursor_deeplink'
+  | 'squidler'
+  | 'local'
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * the Claude, ChatGPT, Grok, Gemini and Cursor connectors keep working without seeded rows, and so
+ * the Claude, ChatGPT, Grok, Gemini, Cursor and Squidler connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
@@ -65,6 +74,15 @@ export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor
  * local-machine trust. It is its own provider, `cursor_deeplink`, so the
  * consent page can show it unverified like localhost: a scheme proves
  * nothing about who receives the code, an https host does.
+ *
+ * Squidler (squidler.io, AI colleagues for small companies) is a partner
+ * that connects its customers' agents over MCP and uses one fixed callback
+ * for all of them, one for production and one for its dev environment. Its
+ * customers are not technical, and registering the callback once per
+ * customer under Agenter stopped them, so both are built in (founder
+ * decision 2026-11-17, replacing the per-user registration chosen for it on
+ * 2026-11-04). Each is an exact path on Squidler's own https host, never a
+ * prefix, so no other squidler.io path and no other subdomain rides on it.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
@@ -75,6 +93,8 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/oauth-redirect\.googleusercontent\.com\/r\/user_bound_custom-mcp-[A-Za-z0-9_-]+$/, provider: 'gemini' },
   { pattern: /^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback$/, provider: 'cursor_deeplink' },
   { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
+  { pattern: /^https:\/\/squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
+  { pattern: /^https:\/\/dev\.squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },
 ]

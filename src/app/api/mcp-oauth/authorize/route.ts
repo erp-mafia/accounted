@@ -1446,6 +1446,8 @@ function describeClient(
         // 8.4), so it carries loopback trust, not vendor trust: same tag as
         // localhost, never marked verified.
         return { name: 'Cursor (Anysphere)', shortName: 'Cursor', tag: 'Din egen dator', verified: false }
+      case 'squidler':
+        return { name: 'Squidler', shortName: 'Squidler', tag: 'Verifierad', verified: true }
       case 'local':
         return { name: 'Lokal utveckling (localhost)', shortName: 'Klienten', tag: 'Din egen dator', verified: false }
     }

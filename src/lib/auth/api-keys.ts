@@ -216,6 +216,7 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
   chatgpt: 'ChatGPT (OpenAI)',
   grok: 'Grok (xAI)',
   cursor: 'Cursor',
+  squidler: 'Squidler',
 }
 
 /** The facts of a validated key that decide who it is. */
