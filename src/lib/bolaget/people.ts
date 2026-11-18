@@ -8,8 +8,8 @@
  * same person twice without decrypting) and masked (what members and agents
  * see). It is collected in the app only: the operation inputs never carry
  * it (staging-pii-guard), and nothing here returns it except
- * loadFullPersonnummer, which only the aktiebok printout for an owner or
- * admin calls.
+ * loadFullPersonnummer and loadFullIdentity, which only the printouts and
+ * tax returns for an owner or admin call.
  */
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -67,7 +67,7 @@ export function checkPartyRef(ref: PartyRef, label: string): void {
   if (org && looksLikeSwedishPersonalNumber(org)) {
     throw new PartyRefError(
       'BOLAGET_PERSONNUMMER_IN_APP_ONLY',
-      'Ett personnummer registreras bara i Accounted, under Ägare och aktiebok, aldrig i ett anrop.',
+      'Ett personnummer registreras bara i Accounted, under Aktiebok, aldrig i ett anrop.',
     )
   }
   if (org && !isValidOrgNumber(org)) throw new PartyRefError('BOLAGET_PARTY_INVALID', `Organisationsnumret för ${name} är inte giltigt.`)
@@ -96,10 +96,36 @@ export async function assertPartiesInCompany(supabase: SupabaseClient, companyId
 }
 
 /**
+ * The one person in the Bolaget registers with this name, or null. Only
+ * register people count (parties of origin 'bolaget': the board members
+ * seeded from the registry and holders entered here), so a shareholder an
+ * agent names is the board member already there, and never a private
+ * customer or supplier who happens to share the name. Two register people
+ * with the name answer null: the caller picks one by id.
+ */
+export async function findRegisterPersonByName(
+  supabase: SupabaseClient,
+  companyId: string,
+  name: string,
+): Promise<{ party_id: string; name: string } | null> {
+  const { data, error } = await supabase
+    .from('parties')
+    .select('id, display_name')
+    .eq('company_id', companyId)
+    .eq('kind', 'person')
+    .eq('origin', 'bolaget')
+    .is('merged_into', null)
+    .ilike('display_name', name.trim().replace(/[%_\\]/g, (c) => `\\${c}`))
+    .limit(2)
+  if (error) throw new Error(`parties read failed: ${error.message}`)
+  const rows = (data ?? []) as Array<{ id: string; display_name: string }>
+  return rows.length === 1 ? { party_id: rows[0]!.id, name: rows[0]!.display_name } : null
+}
+
+/**
  * The party a reference names, created when it is new. A company is found
  * by its org number; a person by name when exactly one register person has
- * it (so a shareholder an agent names is the board member already seeded),
- * otherwise created.
+ * it (findRegisterPersonByName), otherwise created.
  */
 export async function ensureRegisterParty(ctx: OperationContext, ref: PartyRef): Promise<string> {
   if (ref.party_id) {
@@ -107,21 +133,19 @@ export async function ensureRegisterParty(ctx: OperationContext, ref: PartyRef):
     return ref.party_id
   }
   checkPartyRef(ref, 'personen')
-  const name = ref.name!.trim()
   const kind: PartyKind = ref.kind === 'company' || ref.org_number ? 'company' : 'person'
   if (kind === 'person') {
-    const { data, error } = await ctx.supabase
-      .from('parties')
-      .select('id')
-      .eq('company_id', ctx.companyId)
-      .eq('kind', 'person')
-      .is('merged_into', null)
-      .ilike('display_name', name.replace(/[%_\\]/g, (c) => `\\${c}`))
-      .limit(2)
-    if (error) throw new Error(`parties read failed: ${error.message}`)
-    const rows = (data ?? []) as Array<{ id: string }>
-    if (rows.length === 1) return rows[0]!.id
+    const match = await findRegisterPersonByName(ctx.supabase, ctx.companyId, ref.name!)
+    if (match) return match.party_id
   }
+  return createRegisterParty(ctx, ref)
+}
+
+/** A new register party for a reference that names nobody already there (the caller has looked). */
+export async function createRegisterParty(ctx: OperationContext, ref: PartyRef): Promise<string> {
+  checkPartyRef(ref, 'personen')
+  const name = ref.name!.trim()
+  const kind: PartyKind = ref.kind === 'company' || ref.org_number ? 'company' : 'person'
   const { data: partyId, error } = await ctx.supabase.rpc('ensure_party', {
     p_company_id: ctx.companyId,
     p_user_id: ctx.userId,
@@ -221,6 +245,7 @@ export async function savePersonPrivate(companyId: string, partyId: string, inpu
 interface PrivateRow {
   party_id: string
   personnummer_masked: string | null
+  foreign_id: string | null
   birth_date: string | null
   address_line1: string | null
   address_line2: string | null
@@ -228,6 +253,17 @@ interface PrivateRow {
   city: string | null
   country: string | null
   email: string | null
+}
+
+/**
+ * A foreign identity number as members and agents see it: all but the last
+ * four characters hidden, the way a personnummer is masked. A number of four
+ * characters or fewer shows only its last one.
+ */
+export function maskForeignId(foreignId: string): string {
+  const value = foreignId.trim()
+  const shown = value.length > 4 ? 4 : 1
+  return 'X'.repeat(Math.max(value.length - shown, 0)) + value.slice(-shown)
 }
 
 /** Register parties by id, with masked identity and address. Never the personnummer itself. */
@@ -240,7 +276,7 @@ export async function loadRegisterParties(companyId: string, partyIds: string[])
     partiesInCompany(service, companyId, unique),
     service
       .from('party_person_private')
-      .select('party_id, personnummer_masked, birth_date, address_line1, address_line2, postal_code, city, country, email')
+      .select('party_id, personnummer_masked, foreign_id, birth_date, address_line1, address_line2, postal_code, city, country, email')
       .eq('company_id', companyId)
       .in('party_id', unique),
   ])
@@ -260,6 +296,7 @@ export async function loadRegisterParties(companyId: string, partyIds: string[])
       kind: p.kind === 'person' ? 'person' : 'company',
       org_number: p.kind === 'person' ? null : p.org_number,
       personnummer_masked: priv?.personnummer_masked ?? null,
+      foreign_id_masked: priv?.foreign_id?.trim() ? maskForeignId(priv.foreign_id) : null,
       birth_date: priv?.birth_date ?? null,
       address,
       email: priv?.email ?? null,
@@ -293,8 +330,46 @@ export async function loadFullPersonnummer(companyId: string, partyIds: string[]
   return out
 }
 
-/** How a register party is identified in print: personnummer (full or masked), org number, or birth date. */
-export function identityText(party: RegisterParty, fullPersonnummer?: Map<string, string>): string {
-  if (party.kind === 'company') return party.org_number ? formatOrgNumberDisplay(party.org_number) : ''
-  return fullPersonnummer?.get(party.party_id) ?? party.personnummer_masked ?? party.birth_date ?? ''
+/**
+ * The full identity number per party for the aktiebok printouts an owner or
+ * admin asks for (ABL 5:5 p. 2): the personnummer (YYYYMMDD-NNNN), or the
+ * foreign identity number of a party that has no personnummer. Never for an
+ * agent. The tax returns keep to loadFullPersonnummer: a foreign number is
+ * not a personnummer there.
+ */
+export async function loadFullIdentity(companyId: string, partyIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const unique = [...new Set(partyIds)]
+  if (unique.length === 0) return out
+  const { data, error } = await createServiceClient()
+    .from('party_person_private')
+    .select('party_id, personnummer_encrypted, foreign_id')
+    .eq('company_id', companyId)
+    .in('party_id', unique)
+  if (error) throw new Error(`party_person_private read failed: ${error.message}`)
+  for (const row of (data ?? []) as Array<{ party_id: string; personnummer_encrypted: string | null; foreign_id: string | null }>) {
+    if (row.personnummer_encrypted) {
+      try {
+        out.set(row.party_id, formatPersonnummer12(decryptStoredPersonalNumber(row.personnummer_encrypted)))
+        continue
+      } catch {
+        // A row that does not decrypt prints masked instead.
+      }
+    }
+    if (!row.personnummer_encrypted && row.foreign_id?.trim()) out.set(row.party_id, row.foreign_id.trim())
+  }
+  return out
+}
+
+/**
+ * How a register party is identified in print (ABL 5:5 p. 2): the
+ * organisationsnummer of a company, the personnummer of a person (full for
+ * an owner or admin, else masked), or the other identity number of a party
+ * that has neither. A birth date stands in only when no number is on file.
+ */
+export function identityText(party: RegisterParty, fullIdentity?: Map<string, string>): string {
+  if (party.kind === 'company' && party.org_number) return formatOrgNumberDisplay(party.org_number)
+  const number = fullIdentity?.get(party.party_id) ?? party.personnummer_masked ?? party.foreign_id_masked
+  if (number) return number
+  return party.kind === 'company' ? '' : party.birth_date ?? ''
 }

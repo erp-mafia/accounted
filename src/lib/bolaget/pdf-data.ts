@@ -241,11 +241,13 @@ export function buildAktiebokPdfData(
       aktiebrev: aktiebrev ? `Nr ${aktiebrev.aktiebrev_number} (${aktiebrev.event_date})` : null,
       notes: r.notes
         .filter((n) => n.kind !== 'aktiebrev')
-        .map((n) =>
-          n.kind === 'pant'
-            ? `Pantsatt till ${parties.get(n.counterparty_party_id ?? '')?.name ?? 'okänd'} (${n.event_date})`
-            : `Nyttjanderätt: ${parties.get(n.counterparty_party_id ?? '')?.name ?? 'okänd'}${n.note ? `, ${n.note}` : ''} (${n.event_date})`,
-        ),
+        .map((n) => {
+          const other = parties.get(n.counterparty_party_id ?? '')
+          if (n.kind === 'pant') return `Pantsatt till ${other?.name ?? 'okänd'} (${n.event_date})`
+          // ABL 5:6: the holder of the right stands in the aktiebok with identity number and postal address, like the owner.
+          const who = [other?.name ?? 'okänd', other ? ident(other.party_id) : '', addressText(other)].filter((part) => part).join(', ')
+          return `Nyttjanderätt: ${who}${n.note ? `. ${n.note}` : ''} (${n.event_date})`
+        }),
       board_flag: officers.has(r.party_id),
     }
   })

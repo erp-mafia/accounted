@@ -17,7 +17,7 @@
  *   the aktiebok genast (20:21) and their holders told by post (20:18).
  *
  * Each date the law sets becomes a deadline (deadlines.ts). Aktiebok entries
- * other than a nyemission's allotment are made in Ägare och aktiebok, which
+ * other than a nyemission's allotment are made in Aktiebok, which
  * holds the share numbers; the warnings say when.
  */
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
@@ -230,14 +230,14 @@ export async function createCapitalChange(
   } else if (input.kind === 'fondemission') {
     warnings.push(warning(
       'CAPITAL_REGISTER_AFTER_REGISTRATION',
-      'Nya aktier från fondemissionen förs in i aktieboken när Bolagsverket har registrerat beslutet (12 kap. 10 § ABL), under Ägare och aktiebok.',
+      'Nya aktier från fondemissionen förs in i aktieboken när Bolagsverket har registrerat beslutet (12 kap. 10 § ABL), under Aktiebok.',
       'New bonus shares are entered in the share register once Bolagsverket has registered the decision (ABL 12:10).',
     ))
   } else {
     if (!input.purpose) return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Ange ändamålet med minskningen.' }
     warnings.push(warning(
       'CAPITAL_REGISTER_AFTER_REGISTRATION',
-      'Aktier som dras in stryks ur aktieboken genast när minskningen registrerats (20 kap. 21 § ABL), under Ägare och aktiebok.',
+      'Aktier som dras in stryks ur aktieboken genast när minskningen registrerats (20 kap. 21 § ABL), under Aktiebok.',
       'Cancelled shares are struck from the share register as soon as the reduction is registered (ABL 20:21).',
     ))
   }

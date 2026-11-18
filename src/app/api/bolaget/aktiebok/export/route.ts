@@ -3,7 +3,7 @@ import { fileResponse } from '@/lib/api/file-response'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { aktiebokCsv, type AktiebokCsvView } from '@/lib/bolaget/csv'
-import { loadFullPersonnummer } from '@/lib/bolaget/people'
+import { loadFullIdentity } from '@/lib/bolaget/people'
 import { buildAktiebokPdfData } from '@/lib/bolaget/pdf-data'
 import { renderAktiebokPdf } from '@/lib/bolaget/pdf'
 import { loadRoles } from '@/lib/bolaget/roles'
@@ -36,7 +36,7 @@ export const GET = withRouteContext('bolaget.aktiebok_export', async (request, c
     companyForPdf(ctx.supabase, ctx.companyId),
     callerIsCompanyAdmin(ctx.supabase, ctx.user.id, ctx.companyId),
   ])
-  const fullPersonnummer = isAdmin ? await loadFullPersonnummer(ctx.companyId, [...data.parties.keys()]) : undefined
+  const fullPersonnummer = isAdmin ? await loadFullIdentity(ctx.companyId, [...data.parties.keys()]) : undefined
   const printout = buildAktiebokPdfData(data, roles, company, { fullPersonnummer, generatedAt: todayIsoStockholm() })
   const name = `Aktiebok_${data.as_of}`
   if (format === 'csv') {

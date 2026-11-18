@@ -6,7 +6,7 @@
  *
  * Reads answer names and masked identities only. A personnummer never
  * travels these doors: the inputs name a person by party_id or by name, and
- * the person's identity is completed in Accounted (Ägare och aktiebok).
+ * the person's identity is completed in Accounted (Aktiebok).
  * Every write stages over MCP and a person approves it. Every write is an
  * owner's or admin's (FORBIDDEN for a member), staged or approved.
  *
@@ -89,7 +89,7 @@ const ShareRegisterOut = z.object({
       party_id: z.string(),
       name: z.string(),
       kind: KIND,
-      identity: z.string().nullable().describe('Masked personnummer (XXXXXXXX-1234) or org number; null when not on file.'),
+      identity: z.string().nullable().describe('Masked personnummer (XXXXXXXX-1234), org number, or masked foreign identity number; null when not on file.'),
       has_address: z.boolean(),
       shares: z.number().int(),
       votes: z.number(),
@@ -120,7 +120,19 @@ const ShareRegisterOut = z.object({
     kvotvarde: z.number().nullable(),
   }),
   incomplete: z.object({ without_identity: z.number().int(), without_address: z.number().int() }),
+  note_problems: z
+    .array(
+      z.object({
+        share_register_event_id: z.string(),
+        event_number: z.number().int(),
+        event_date: z.string(),
+        kind: z.enum(['aktiebrev', 'pant', 'nyttjanderatt']),
+        message: z.string(),
+      }),
+    )
+    .describe('Stored aktiebrev, pant or nyttjanderätt entries the history cannot hold. They are left out of notes; void each with a rattelse entry.'),
   events_count: z.number().int(),
+  last_event_number: z.number().int().describe('The number of the newest entry, 0 when there is none. Send it as expected_last_event_number with a new entry.'),
 })
 
 const ShareEventOut = z.object({
@@ -408,6 +420,9 @@ const ShareEventIn = z
     document_id: z.string().uuid().nullish().describe('The underlying document in the archive (avtal, protokoll).'),
     note: z.string().trim().max(2000).nullish().describe('Free text; required for anteckning and rattelse (the reason).'),
     forbehall_cleared: z.boolean().nullish().describe('overlatelse: the class\'s samtycke, förköp or hembud has been handled.'),
+    to_is_new: z.boolean().nullish().describe('to_name is somebody new although a person with that name is already in the registers (otherwise the entry is made for that person, and the preview says so).'),
+    counterparty_is_new: z.boolean().nullish().describe('counterparty_name is somebody new although a person with that name is already in the registers.'),
+    expected_last_event_number: z.number().int().min(0).nullish().describe('last_event_number from the preview or from gnubok_get_share_register. When the register has a newer entry the write is refused with SHARE_REGISTER_STALE instead of landing on a register you have not seen.'),
   })
   .strict()
 
@@ -427,6 +442,9 @@ export const shareRegisterEventsCreate = defineOperation({
     pitfalls: [
       'SHARE_REGISTER_NOT_HELD: the from-holder does not hold all of the shares on event_date.',
       'SHARE_REGISTER_RANGE_TAKEN: an issue overlaps shares already held; omit the range and send share_count.',
+      'SHARE_REGISTER_STALE: the register got an entry after the one you saw; read it again and retry.',
+      'A range_start with a share_count names the whole block (range_start to range_start + share_count - 1).',
+      'FORBIDDEN: only the company\'s owner or an administrator adds to the aktiebok.',
       'BOLAGET_PERSONNUMMER_IN_APP_ONLY: a personnummer was sent; name the person and complete them in the app.',
       'A transfer of a class with samtycke, förköp or hembud answers a warning until forbehall_cleared is true.',
     ],
@@ -456,6 +474,7 @@ export const shareRegisterEventsCreate = defineOperation({
     'SHARE_REGISTER_NOTE_INVALID',
     'SHARE_REGISTER_CORRECTION_INVALID',
     'SHARE_REGISTER_AVSTAMNINGSBOLAG',
+    'SHARE_REGISTER_STALE',
     'SHARE_CLASS_NOT_FOUND',
     'SHARE_CLASS_REQUIRED',
     'BOLAGET_PARTY_NOT_FOUND',
@@ -480,7 +499,7 @@ export const shareRegisterEventsCreate = defineOperation({
       },
       extras: (input) => ({
         next: {
-          description: 'After approval, read the register with gnubok_get_share_register. A new person holder needs personnummer and address in Accounted (Ägare och aktiebok).',
+          description: 'After approval, read the register with gnubok_get_share_register. A new person holder needs personnummer and address in Accounted (Aktiebok).',
           tool: 'gnubok_get_share_register',
           ...(typeof input.event_date === 'string' ? { args: { as_of: input.event_date } } : {}),
         },

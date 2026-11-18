@@ -51,6 +51,7 @@ const PERSON = (party_id: string, name: string, masked: string | null) => ({
   kind: 'person' as const,
   org_number: null,
   personnummer_masked: masked,
+  foreign_id_masked: null,
   birth_date: null,
   address: null,
   email: null,
@@ -60,7 +61,7 @@ const ALL_PARTIES = new Map<string, unknown>([
   [BO, PERSON(BO, 'Bo Ek', 'XXXXXXXX-2342')],
   [CIA, PERSON(CIA, 'Cia Berg', 'XXXXXXXX-3453')],
   [DODSBO, PERSON(DODSBO, 'Dödsboet efter Dan Ek', 'XXXXXXXX-4564')],
-  [BOLAG, { party_id: BOLAG, name: 'Holding AB', kind: 'company', org_number: ORG, personnummer_masked: null, birth_date: null, address: null, email: null }],
+  [BOLAG, { party_id: BOLAG, name: 'Holding AB', kind: 'company', org_number: ORG, personnummer_masked: null, foreign_id_masked: null, birth_date: null, address: null, email: null }],
 ])
 
 function dividendRow(id: string, over: Record<string, unknown> = {}) {
@@ -143,7 +144,7 @@ describe('loadKu31Status', () => {
     const status = await loadKu31Status(ctx, 2026)
     expect(status.ready).toBe(false)
     expect(status.blockers).toEqual([
-      expect.objectContaining({ code: 'KU31_PERSONNUMMER_MISSING', party_id: BO, message_sv: expect.stringContaining('Ägare och aktiebok') }),
+      expect.objectContaining({ code: 'KU31_PERSONNUMMER_MISSING', party_id: BO, message_sv: expect.stringContaining('Aktiebok') }),
     ])
   })
 

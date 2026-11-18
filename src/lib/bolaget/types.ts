@@ -200,6 +200,12 @@ export interface RegisterParty {
   org_number: string | null
   /** "XXXXXXXX-1234", or null when no personnummer is on file. */
   personnummer_masked: string | null
+  /**
+   * The "annat identifieringsnummer" of a holder without a Swedish
+   * personnummer or organisationsnummer (ABL 5:5 p. 2), masked like the
+   * personnummer: all but its last four characters. Null when none is on file.
+   */
+  foreign_id_masked: string | null
   birth_date: string | null
   address: PartyAddress | null
   email: string | null

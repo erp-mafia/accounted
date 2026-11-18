@@ -46,9 +46,9 @@ const BOLAG = '00000000-0000-4000-8000-0000000b0003'
 const CLASS_A = '00000000-0000-4000-8000-0000000ca001'
 
 const parties = new Map([
-  [ANNA, { party_id: ANNA, name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', birth_date: null, address: null, email: null }],
-  [BO, { party_id: BO, name: 'Bo Ek', kind: 'person', org_number: null, personnummer_masked: null, birth_date: null, address: null, email: null }],
-  [BOLAG, { party_id: BOLAG, name: 'Holding AB', kind: 'company', org_number: '5560000000', personnummer_masked: null, birth_date: null, address: null, email: null }],
+  [ANNA, { party_id: ANNA, name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', foreign_id_masked: null, birth_date: null, address: null, email: null }],
+  [BO, { party_id: BO, name: 'Bo Ek', kind: 'person', org_number: null, personnummer_masked: null, foreign_id_masked: null, birth_date: null, address: null, email: null }],
+  [BOLAG, { party_id: BOLAG, name: 'Holding AB', kind: 'company', org_number: '5560000000', personnummer_masked: null, foreign_id_masked: null, birth_date: null, address: null, email: null }],
 ])
 
 function register(holders: Array<[string, number]>, events: unknown[] = []) {

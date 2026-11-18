@@ -1,7 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { fileResponse } from '@/lib/api/file-response'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { loadFullPersonnummer } from '@/lib/bolaget/people'
+import { loadFullIdentity } from '@/lib/bolaget/people'
 import { buildAktiebrevData } from '@/lib/bolaget/pdf-data'
 import { renderAktiebrevPdf } from '@/lib/bolaget/pdf'
 import { replayShareRegister } from '@/lib/bolaget/register-state'
@@ -33,7 +33,7 @@ export const GET = withRouteContext<{ params: Promise<{ eventId: string }> }>('b
     data.events.filter((e) => e.kind === 'rattelse' || e.event_date < event.event_date || e.event_number <= event.event_number),
     event.event_date,
   )
-  const fullPersonnummer = isAdmin ? await loadFullPersonnummer(ctx.companyId, [...data.parties.keys()]) : undefined
+  const fullPersonnummer = isAdmin ? await loadFullIdentity(ctx.companyId, [...data.parties.keys()]) : undefined
   const brev = buildAktiebrevData(event, data, onIssue, roles, company, fullPersonnummer)
   if (!brev) return errorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
   const pdf = await renderAktiebrevPdf(brev)

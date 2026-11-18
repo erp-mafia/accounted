@@ -32,7 +32,7 @@ export function navRollouts(companyId: string | null | undefined): NavRollouts {
     // plan are resolved per request by GET /api/signing/availability, which the
     // page's actions follow.
     signingEnabled: signingSwitchedOn(companyId),
-    // The Bolaget section (Ägare och aktiebok, Styrelse och firmateckning).
+    // The Bolaget section (Aktiebok, Styrelse och firmateckning).
     bolagetEnabled: isBolagetEnabled(companyId),
     // Avtal och åtaganden (Bolaget rollout, BOLAGET_COMPANY_IDS).
     commitmentsEnabled: commitmentsEnabledFor(companyId),

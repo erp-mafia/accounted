@@ -212,7 +212,7 @@ export const ku31StatusGet = defineOperation({
       'The dividends with a betalningsdag in the year (booked or paid), each recipient with the amount and the whole kronor field 574 reports, who is left out (Swedish legal persons), the fåmansföretag answer (field 061 or 062) and the blockers. The file itself is downloaded in Accounted by an owner or administrator: it carries personnummer.',
     useWhen: 'Before 31 January, to see whether KU31 for last year can be filed and what is missing.',
     doNotUseFor: 'Getting the file: there is no machine door for it.',
-    pitfalls: ['KU31_PERSONNUMMER_MISSING: the person\'s personnummer is added in Accounted (Ägare och aktiebok), never through the API.'],
+    pitfalls: ['KU31_PERSONNUMMER_MISSING: the person\'s personnummer is added in Accounted (Aktiebok), never through the API.'],
     example: { response: { data: { income_year: 2026, deadline: '2027-01-31', ready: false, blockers: [{ code: 'KU31_FAMANS_UNANSWERED', message_sv: 'Svara på om bolaget är ett fåmansföretag...' }] }, meta: META } },
   },
   input: z.object({ income_year: z.coerce.number().int().min(2000).max(2099).describe('The inkomstår, e.g. 2026.') }),

@@ -26,7 +26,7 @@ vi.mock('@/lib/bolaget/roles', async (importOriginal) => ({
 vi.mock('@/lib/bolaget/people', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bolaget/people')>()),
   loadRegisterParties: vi.fn().mockResolvedValue(new Map()),
-  loadFullPersonnummer: vi.fn().mockResolvedValue(new Map()),
+  loadFullIdentity: vi.fn().mockResolvedValue(new Map()),
   savePersonPrivate: vi.fn(),
 }))
 vi.mock('@/lib/bolaget/beneficial-owners', async (importOriginal) => ({
@@ -43,7 +43,7 @@ import { getCompanyRole } from '@/lib/auth/require-write'
 import { bolagetGate } from '@/lib/bolaget/gate'
 import { loadShareRegisterData, registerShareEvent } from '@/lib/bolaget/share-register'
 import { addCompanyRole, loadRoles } from '@/lib/bolaget/roles'
-import { loadFullPersonnummer, savePersonPrivate } from '@/lib/bolaget/people'
+import { loadFullIdentity, loadRegisterParties, savePersonPrivate } from '@/lib/bolaget/people'
 import { confirmBeneficialOwners } from '@/lib/bolaget/beneficial-owners'
 import { replayShareRegister, summarizeHoldings } from '@/lib/bolaget/register-state'
 import { reconcileWithSettings } from '@/lib/bolaget/reconcile'
@@ -80,8 +80,9 @@ function registerData(): ShareRegisterData {
     events,
     replay,
     summary: summarizeHoldings(replay.ranges, classes),
-    parties: new Map([[ANNA, { party_id: ANNA, name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', birth_date: null, address: null, email: null }]]),
+    parties: new Map([[ANNA, { party_id: ANNA, name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', foreign_id_masked: null, birth_date: null, address: null, email: null }]]),
     reconciliation: reconcileWithSettings(100, { aktiekapital: 25000, antal_aktier: 100 }),
+    note_problems: [],
   }
 }
 
@@ -129,6 +130,25 @@ describe('GET /api/bolaget/share-register', () => {
     expect(body.data.events[0].text).toContain('Bildande')
     expect(loadShareRegisterData).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }), '2026-10-29')
     expect(JSON.stringify(body)).not.toMatch(/"(19|20)\d{6}-?\d{4}"/)
+  })
+
+  it('sends a person\'s address, e-mail and birth date to an owner or admin only', async () => {
+    const anna = {
+      party_id: ANNA, name: 'Anna Ek', kind: 'person' as const, org_number: null, personnummer_masked: 'XXXXXXXX-1234', foreign_id_masked: null,
+      birth_date: '1980-01-01', address: { line1: 'Storgatan 1', line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE' }, email: 'anna@example.se',
+    }
+    vi.mocked(loadRegisterParties).mockResolvedValue(new Map([[ANNA, anna]]))
+
+    vi.mocked(getCompanyRole).mockResolvedValueOnce({ ok: true, role: 'member' } as never)
+    const forMember = (await (await get('')).json()).data
+    expect(forMember.can_print_full_identity).toBe(false)
+    expect(forMember.people).toEqual([expect.objectContaining({ party_id: ANNA, name: 'Anna Ek', personnummer_masked: 'XXXXXXXX-1234', address: null, email: null, birth_date: null })])
+
+    vi.mocked(getCompanyRole).mockResolvedValueOnce({ ok: true, role: 'admin' } as never)
+    const forAdmin = (await (await get('')).json()).data
+    expect(forAdmin.can_print_full_identity).toBe(true)
+    expect(forAdmin.people).toEqual([expect.objectContaining({ email: 'anna@example.se', birth_date: '1980-01-01', address: expect.objectContaining({ line1: 'Storgatan 1' }) })])
+    vi.mocked(loadRegisterParties).mockResolvedValue(new Map())
   })
 })
 
@@ -256,10 +276,10 @@ describe('GET /api/bolaget/aktiebok/export and the holder extract', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toContain('text/csv')
     expect(await res.text()).toContain('Anna Ek;XXXXXXXX-1234;100')
-    expect(loadFullPersonnummer).not.toHaveBeenCalled()
+    expect(loadFullIdentity).not.toHaveBeenCalled()
 
     vi.mocked(getCompanyRole).mockResolvedValueOnce({ ok: true, role: 'owner' } as never)
-    vi.mocked(loadFullPersonnummer).mockResolvedValueOnce(new Map([[ANNA, '19800101-1234']]))
+    vi.mocked(loadFullIdentity).mockResolvedValueOnce(new Map([[ANNA, '19800101-1234']]))
     const admin = await getExport(createMockRequest('/api/bolaget/aktiebok/export?format=csv&view=holders'), noParams)
     expect(await admin.text()).toContain('Anna Ek;19800101-1234;100')
   })

@@ -143,7 +143,7 @@ function refusePersonnummer(value: unknown, depth = 0): void {
     if (UUID_RE.test(value)) return
     for (const m of value.matchAll(/\b\d{6}(?:\d{2})?[-+]?\d{4}\b/g)) {
       if (looksLikeSwedishPersonalNumber(m[0])) {
-        throw new PartyRefError('BOLAGET_PERSONNUMMER_IN_APP_ONLY', 'Ett personnummer registreras bara i Accounted, under Ägare och aktiebok, aldrig i ett protokoll eller ett anrop.')
+        throw new PartyRefError('BOLAGET_PERSONNUMMER_IN_APP_ONLY', 'Ett personnummer registreras bara i Accounted, under Aktiebok, aldrig i ett protokoll eller ett anrop.')
       }
     }
     return

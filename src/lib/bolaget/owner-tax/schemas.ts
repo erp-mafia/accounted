@@ -5,7 +5,7 @@
  *
  * A counterparty is named by party id, or by name (and an org number for a
  * company). A personnummer never travels here: it is entered in Accounted,
- * under Ägare och aktiebok.
+ * under Aktiebok.
  */
 import { z } from 'zod'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'

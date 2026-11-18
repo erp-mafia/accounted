@@ -79,6 +79,7 @@ describe('Bolaget operations', () => {
       summary: summarizeHoldings(replay.ranges, []),
       parties: new Map(),
       reconciliation: reconcileWithSettings(0, { aktiekapital: null, antal_aktier: null }),
+      note_problems: [],
     })
     vi.mocked(loadRoles).mockResolvedValue({ as_of: '2026-06-30', signatory_rule: null, roles: [], signatory_rules: [], board: [], ceo: null })
     const outcome = await shareRegisterGet.run(ctx, { as_of: '2026-06-30' }, { dryRun: false })

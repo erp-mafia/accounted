@@ -12,7 +12,7 @@ export interface ShareRegisterHolderView {
   party_id: string
   name: string
   kind: 'person' | 'company'
-  /** Masked personnummer (XXXXXXXX-1234) or org number; null when missing. */
+  /** Masked personnummer (XXXXXXXX-1234), org number or masked foreign identity number; null when missing. */
   identity: string | null
   has_address: boolean
   shares: number
@@ -46,12 +46,20 @@ export interface ShareRegisterView {
   reconciliation: ShareRegisterData['reconciliation']
   /** Holders a person must still complete for the printout (ABL 5:5). */
   incomplete: { without_identity: number; without_address: number }
+  /**
+   * Stored note entries (aktiebrev, pant, nyttjanderätt) the history cannot
+   * hold. They are left out of `notes`; each is voided with a rättelse.
+   */
+  note_problems: Array<{ share_register_event_id: string; event_number: number; event_date: string; kind: 'aktiebrev' | 'pant' | 'nyttjanderatt'; message: string }>
   events_count: number
+  /** The number of the newest entry (0 when there is none): send it as expected_last_event_number with a new entry. */
+  last_event_number: number
 }
 
 function identityOf(p: RegisterParty | undefined): string | null {
   if (!p) return null
-  return p.kind === 'company' ? p.org_number : p.personnummer_masked ?? (p.birth_date ? `född ${p.birth_date}` : null)
+  if (p.kind === 'company') return p.org_number ?? p.foreign_id_masked
+  return p.personnummer_masked ?? p.foreign_id_masked ?? (p.birth_date ? `född ${p.birth_date}` : null)
 }
 
 export function shareRegisterView(data: ShareRegisterData, roles: RolesView | null): ShareRegisterView {
@@ -111,7 +119,15 @@ export function shareRegisterView(data: ShareRegisterData, roles: RolesView | nu
       without_identity: holders.filter((h) => !h.identity).length,
       without_address: holders.filter((h) => !h.has_address).length,
     },
+    note_problems: data.note_problems.map((problem) => ({
+      share_register_event_id: problem.event_id,
+      event_number: problem.event_number,
+      event_date: problem.event_date,
+      kind: problem.kind,
+      message: problem.message,
+    })),
     events_count: data.events.length,
+    last_event_number: data.events.reduce((max, e) => Math.max(max, e.event_number), 0),
   }
 }
 

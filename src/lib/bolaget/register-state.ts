@@ -54,11 +54,34 @@ export interface ShareAnnotation {
   note: string | null
 }
 
+/** A stored note entry the history cannot hold: left out of the answer and named here, so a read still answers. */
+export interface NoteProblem {
+  event_id: string
+  event_number: number
+  event_date: string
+  kind: AnnotationKind
+  message: string
+}
+
 export interface ReplayResult {
   /** Holdings with adjacent ranges of the same holder and class joined, by share number. */
   ranges: HoldingRange[]
   annotations: ShareAnnotation[]
   totalShares: number
+  /** Empty unless the replay ran with `notes: 'collect'` and a stored note entry was left out. */
+  noteProblems: NoteProblem[]
+}
+
+export interface ReplayOptions {
+  /**
+   * What an aktiebrev, pant or nyttjanderätt entry the history cannot hold
+   * does. 'strict' (the default) throws, which is the check of an entry
+   * before it is saved. 'collect' leaves the entry out and names it in
+   * `noteProblems`: the database validates holdings but not notes, so a read
+   * of the stored register must answer even when two note entries collide,
+   * and a rättelse must still be possible. Holdings always throw.
+   */
+  notes?: 'strict' | 'collect'
 }
 
 type ReplayEvent = Pick<
@@ -143,7 +166,7 @@ export function mergeRanges(ranges: readonly HoldingRange[]): HoldingRange[] {
  * Replay the aktiebok up to and including `asOf` (null: every entry).
  * Throws ShareRegisterError on the first entry the history cannot hold.
  */
-export function replayShareRegister(events: readonly ReplayEvent[], asOf: string | null = null): ReplayResult {
+export function replayShareRegister(events: readonly ReplayEvent[], asOf: string | null = null, options: ReplayOptions = {}): ReplayResult {
   const voided = voidedEventIds(events)
   const ordered = events
     .filter((e) => e.kind !== 'rattelse' && !voided.has(e.id) && (asOf === null || e.event_date <= asOf))
@@ -151,6 +174,8 @@ export function replayShareRegister(events: readonly ReplayEvent[], asOf: string
 
   let state: HoldingRange[] = []
   let notes: ShareAnnotation[] = []
+  const noteProblems: NoteProblem[] = []
+  const collect = options.notes === 'collect'
 
   for (const ev of ordered) {
     const num = ev.event_number > 0 ? ev.event_number : null
@@ -233,24 +258,29 @@ export function replayShareRegister(events: readonly ReplayEvent[], asOf: string
     }
 
     if (ev.kind === 'aktiebrev' || ev.kind === 'pant' || ev.kind === 'nyttjanderatt') {
+      const kind: AnnotationKind = ev.kind
+      // A note the history cannot hold: refused before it is saved, left out and named when it is already stored.
+      const invalid = (message: string): void => {
+        if (!collect) throw new ShareRegisterError('SHARE_REGISTER_NOTE_INVALID', message, num)
+        noteProblems.push({ event_id: ev.id, event_number: ev.event_number, event_date: ev.event_date, kind, message })
+      }
       const opening = ev.kind === 'aktiebrev' ? ev.aktiebrev_action === 'issued' : ev.note_status === 'open'
       if (opening) {
         if (covered(state, start, end) !== end - start + 1) {
-          throw new ShareRegisterError('SHARE_REGISTER_NOTE_INVALID', `${rangeText(start, end)} finns inte i aktieboken den ${ev.event_date}.`, num)
+          invalid(`${rangeText(start, end)} finns inte i aktieboken den ${ev.event_date}.`)
+          continue
         }
         if (ev.kind === 'aktiebrev') {
           // An aktiebrev is made out to one holder (ABL 6:2).
           const holders = new Set(state.filter((r) => overlaps(r.range_start, r.range_end, start, end)).map((r) => r.party_id))
           if (holders.size > 1) {
-            throw new ShareRegisterError('SHARE_REGISTER_NOTE_INVALID', `${rangeText(start, end)} ägs av flera; ett aktiebrev utfärdas till en ägare.`, num)
+            invalid(`${rangeText(start, end)} ägs av flera; ett aktiebrev utfärdas till en ägare.`)
+            continue
           }
           const clash = notes.find((n) => n.kind === 'aktiebrev' && (n.aktiebrev_number === ev.aktiebrev_number || overlaps(n.range_start, n.range_end, start, end)))
           if (clash) {
-            throw new ShareRegisterError(
-              'SHARE_REGISTER_NOTE_INVALID',
-              `Aktiebrev ${clash.aktiebrev_number} gäller redan ${rangeText(clash.range_start, clash.range_end)}. Makulera det först.`,
-              num,
-            )
+            invalid(`Aktiebrev ${clash.aktiebrev_number} gäller redan ${rangeText(clash.range_start, clash.range_end)}. Makulera det först.`)
+            continue
           }
         }
         notes.push({
@@ -273,13 +303,12 @@ export function replayShareRegister(events: readonly ReplayEvent[], asOf: string
           ? n.aktiebrev_number === ev.aktiebrev_number
           : n.counterparty_party_id === ev.counterparty_party_id && overlaps(n.range_start, n.range_end, start, end))
       if (!notes.some(matches)) {
-        throw new ShareRegisterError(
-          'SHARE_REGISTER_NOTE_INVALID',
+        invalid(
           ev.kind === 'aktiebrev'
             ? `Det finns inget utfärdat aktiebrev ${ev.aktiebrev_number ?? ''} att makulera.`
             : `Det finns ingen öppen anteckning att avsluta på ${rangeText(start, end)}.`,
-          num,
         )
+        continue
       }
       notes =
         ev.kind === 'aktiebrev'
@@ -295,6 +324,7 @@ export function replayShareRegister(events: readonly ReplayEvent[], asOf: string
     ranges,
     annotations: notes.sort((a, b) => a.range_start - b.range_start),
     totalShares: ranges.reduce((sum, r) => sum + (r.range_end - r.range_start + 1), 0),
+    noteProblems,
   }
 }
 

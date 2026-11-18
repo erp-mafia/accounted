@@ -46,7 +46,7 @@ const register = {
   events: [],
   replay: { ranges: [], annotations: [], totalShares: 1000 },
   summary: { total_shares: 1000, total_votes: 1000, classes: [], holders: [{ party_id: ANNA, shares: 1000, votes: 1000, capital_pct: 100, votes_pct: 100, by_class: [], ranges: [] }] },
-  parties: new Map([[ANNA, { party_id: ANNA, name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', birth_date: null, address: null, email: null }]]),
+  parties: new Map([[ANNA, { party_id: ANNA, name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', foreign_id_masked: null, birth_date: null, address: null, email: null }]]),
   reconciliation: { status: 'match' },
 } as unknown as ShareRegisterData
 
@@ -54,7 +54,7 @@ function rolesView(roles: Array<Partial<RolesView['roles'][number]>> = []): Role
   return { as_of: '2027-05-10', signatory_rule: null, signatory_rules: [], board: [], ceo: null, roles: roles as RolesView['roles'] }
 }
 
-const annaBoard = { id: 'r1', party_id: ANNA, role: 'styrelseledamot' as const, valid_from: '2020-01-10', valid_to: null, source: 'person' as const, decision_id: null, registered_at: null, details: {}, created_at: '2020-01-10', party: { party_id: ANNA, name: 'Anna Ek', kind: 'person' as const, org_number: null, personnummer_masked: null, birth_date: null, address: null, email: null }, label_sv: 'Styrelseledamot', active: true }
+const annaBoard = { id: 'r1', party_id: ANNA, role: 'styrelseledamot' as const, valid_from: '2020-01-10', valid_to: null, source: 'person' as const, decision_id: null, registered_at: null, details: {}, created_at: '2020-01-10', party: { party_id: ANNA, name: 'Anna Ek', kind: 'person' as const, org_number: null, personnummer_masked: null, foreign_id_masked: null, birth_date: null, address: null, email: null }, label_sv: 'Styrelseledamot', active: true }
 
 function meetingRow(overrides: Record<string, unknown> = {}) {
   return {

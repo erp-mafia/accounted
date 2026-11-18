@@ -194,6 +194,40 @@ describe('replayShareRegister', () => {
   })
 })
 
+describe('replayShareRegister: stored notes the history cannot hold', () => {
+  const stored = () => [
+    ev({ kind: 'bildande', event_date: '2020-01-10', share_class_id: A, to_party_id: 'anna', range_start: 1, range_end: 100 }),
+    ev({ id: 'brev-1', kind: 'aktiebrev', event_date: '2020-02-01', range_start: 1, range_end: 100, aktiebrev_number: '1', aktiebrev_action: 'issued' }),
+    ev({ id: 'brev-2', kind: 'aktiebrev', event_date: '2020-02-01', range_start: 1, range_end: 100, aktiebrev_number: '1', aktiebrev_action: 'issued' }),
+  ]
+
+  it('throws on the second of two colliding aktiebrev when an entry is checked', () => {
+    expect(() => replayShareRegister(stored())).toThrow(ShareRegisterError)
+  })
+
+  it('answers the register with the colliding entry left out and named when the stored history is read', () => {
+    const result = replayShareRegister(stored(), null, { notes: 'collect' })
+    expect(result.totalShares).toBe(100)
+    expect(result.annotations.map((n) => n.event_id)).toEqual(['brev-1'])
+    expect(result.noteProblems).toEqual([expect.objectContaining({ event_id: 'brev-2', kind: 'aktiebrev', event_date: '2020-02-01' })])
+    expect(result.noteProblems[0]!.message).toMatch(/Aktiebrev 1 gäller redan/)
+  })
+
+  it('has nothing to name once a rattelse voids the colliding entry', () => {
+    const events = [...stored(), ev({ kind: 'rattelse', event_date: '2026-01-01', corrects_event_id: 'brev-2', note: 'Införd två gånger' })]
+    expect(replayShareRegister(events, null, { notes: 'collect' }).noteProblems).toEqual([])
+    expect(() => replayShareRegister(events)).not.toThrow()
+  })
+
+  it('still throws on holdings the history cannot hold, whatever the notes do', () => {
+    const events = [
+      ...stored(),
+      ev({ kind: 'overlatelse', event_date: '2021-01-01', share_class_id: A, from_party_id: 'bo', to_party_id: 'cia', range_start: 1, range_end: 10, transfer_reason: 'kop' }),
+    ]
+    expect(() => replayShareRegister(events, null, { notes: 'collect' })).toThrow(/ägs inte/)
+  })
+})
+
 describe('checkCorrection', () => {
   it('voids one earlier entry that is not a rattelse, once', () => {
     const events = founding()

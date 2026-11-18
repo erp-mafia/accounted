@@ -115,7 +115,7 @@ export async function loadKu20Status(ctx: OperationContext, year: number): Promi
   }
   for (const r of recipients) {
     if (r.reason === 'personnummer_missing') {
-      blockers.push({ code: 'KU20_PERSONNUMMER_MISSING', party_id: r.party_id, message_sv: `${r.name || 'En mottagare'} saknar personnummer. Lägg till det under Bolaget, Ägare och aktiebok (personens uppgifter).` })
+      blockers.push({ code: 'KU20_PERSONNUMMER_MISSING', party_id: r.party_id, message_sv: `${r.name || 'En mottagare'} saknar personnummer. Lägg till det under Bolaget, Aktiebok (personens uppgifter).` })
     }
     if (r.expected_tax !== null && r.tax_withheld !== r.expected_tax) {
       warnings.push({ code: 'KU20_WITHHOLDING_EXPECTED', party_id: r.party_id, message_sv: `${r.name}: ett fåmansföretag gör skatteavdrag med 30 % på ränta till en delägare (${r.expected_tax} kr), registrerat är ${r.tax_withheld} kr.` })

@@ -1762,7 +1762,7 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       },
     },
   },
-  // Ägare och aktiebok (Bolaget, generated only while BOLAGET_COMPANY_IDS
+  // Aktiebok (Bolaget, generated only while BOLAGET_COMPANY_IDS
   // names a company): the register is kept for an aktiebolag, its dates are
   // real days and a new holder or role is named. The beneficial-owner
   // assessment reads the owners as register parties (kind person). The

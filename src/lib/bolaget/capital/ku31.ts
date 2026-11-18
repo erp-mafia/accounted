@@ -169,7 +169,7 @@ export async function loadKu31Status(ctx: OperationContext, year: number): Promi
     blockers.push({
       code: 'KU31_PERSONNUMMER_MISSING',
       party_id: r.party_id,
-      message_sv: `${r.name || 'En mottagare'} saknar personnummer. Lägg till det under Bolaget, Ägare och aktiebok (personens uppgifter) och skapa filen igen.`,
+      message_sv: `${r.name || 'En mottagare'} saknar personnummer. Lägg till det under Bolaget, Aktiebok (personens uppgifter) och skapa filen igen.`,
     })
   }
   if (settings?.famansforetag === null || settings?.famansforetag === undefined) {
@@ -331,7 +331,7 @@ export function unreadablePersonnummer(form: 'KU31' | 'KU20', r: { party_id: str
     ok: false,
     code: `${form}_NOT_READY`,
     details: { blockers: [{ code: `${form}_PERSONNUMMER_MISSING`, party_id: r.party_id }] },
-    messageSv: `${r.name || 'En mottagare'} saknar ett läsbart personnummer. Ange det igen under Bolaget, Ägare och aktiebok.`,
+    messageSv: `${r.name || 'En mottagare'} saknar ett läsbart personnummer. Ange det igen under Bolaget, Aktiebok.`,
   }
 }
 

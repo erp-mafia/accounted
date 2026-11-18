@@ -7,12 +7,26 @@
  * rules first (register-state.ts) so the preview says why in Swedish, and
  * adds what only a person can judge as warnings: a förbehåll to clear, a
  * holder without a personnummer, an emission not yet registered.
+ *
+ * Who may add an entry is decided here, not at a door: the board keeps the
+ * aktiebok (ABL 5:7), so only the company's owner or an administrator does,
+ * through the page, the API, an agent's approval or the capital events.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { requireCompanyAdmin } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { bolagetFailure } from './errors'
-import { assertPartiesInCompany, checkPartyRef, ensureRegisterParty, loadRegisterParties, type PartyRef } from './people'
+import {
+  assertPartiesInCompany,
+  checkPartyRef,
+  createRegisterParty,
+  ensureRegisterParty,
+  findRegisterPersonByName,
+  loadRegisterParties,
+  type PartyRef,
+} from './people'
 import {
   checkCorrection,
   nextFreeShareNumber,
@@ -20,6 +34,7 @@ import {
   ShareRegisterError,
   summarizeHoldings,
   type HoldingsSummary,
+  type NoteProblem,
   type ReplayResult,
 } from './register-state'
 import { reconcileWithSettings, type ShareCapitalReconciliation } from './reconcile'
@@ -57,14 +72,23 @@ export async function loadShareClasses(supabase: SupabaseClient, companyId: stri
   return ((data ?? []) as Record<string, unknown>[]).map(normaliseClass)
 }
 
+/**
+ * Every entry of the company's aktiebok, in entry order. Read in pages: a
+ * single read stops at 1,000 rows, and a register that silently lost its
+ * newest entries (the rättelser among them) would answer wrong holdings.
+ */
 export async function loadShareEvents(supabase: SupabaseClient, companyId: string): Promise<ShareEvent[]> {
-  const { data, error } = await supabase
-    .from('share_register_events')
-    .select('id, event_number, event_date, kind, share_class_id, to_share_class_id, from_party_id, to_party_id, range_start, range_end, transfer_reason, price_total, ratio, aktiebrev_number, aktiebrev_action, counterparty_party_id, note_status, corrects_event_id, registered_on, decision_id, document_id, journal_entry_id, note, created_at, created_via')
-    .eq('company_id', companyId)
-    .order('event_number')
-  if (error) throw new Error(`share_register_events read failed: ${error.message}`)
-  return ((data ?? []) as Record<string, unknown>[]).map(normaliseEvent)
+  const rows = await fetchAllRows<Record<string, unknown>>(
+    ({ from, to }) =>
+      supabase
+        .from('share_register_events')
+        .select('id, event_number, event_date, kind, share_class_id, to_share_class_id, from_party_id, to_party_id, range_start, range_end, transfer_reason, price_total, ratio, aktiebrev_number, aktiebrev_action, counterparty_party_id, note_status, corrects_event_id, registered_on, decision_id, document_id, journal_entry_id, note, created_at, created_via')
+        .eq('company_id', companyId)
+        .order('event_number')
+        .range(from, to),
+    { dedupeBy: (row) => String(row.id) },
+  )
+  return rows.map(normaliseEvent)
 }
 
 export async function loadRegisterSettings(supabase: SupabaseClient, companyId: string): Promise<{ is_avstamningsbolag: boolean }> {
@@ -102,7 +126,12 @@ export interface ShareRegisterData {
   /** Every party the register names (holders, transferors, pledgees). */
   parties: Map<string, RegisterParty>
   reconciliation: ShareCapitalReconciliation
+  /** Stored note entries the history cannot hold: left out of `replay`, to be voided with a rättelse. */
+  note_problems: NoteProblem[]
 }
+
+/** How the stored register is read: a note entry the history cannot hold is left out and named, never fatal. */
+const STORED = { notes: 'collect' } as const
 
 /** The aktiebok as of a date (today when null). */
 export async function loadShareRegisterData(ctx: OperationContext, asOf: string | null = null): Promise<ShareRegisterData> {
@@ -113,12 +142,12 @@ export async function loadShareRegisterData(ctx: OperationContext, asOf: string 
     loadShareEvents(ctx.supabase, ctx.companyId),
     loadShareCapitalSettings(ctx.supabase, ctx.companyId),
   ])
-  const replay = replayShareRegister(events, day)
+  const replay = replayShareRegister(events, day, STORED)
   const summary = summarizeHoldings(replay.ranges, classes)
   const partyIds = events.flatMap((e) => [e.from_party_id, e.to_party_id, e.counterparty_party_id]).filter((id): id is string => Boolean(id))
   const parties = await loadRegisterParties(ctx.companyId, partyIds)
   // Reconcile the register as it stands today with the settings (which hold today's figures).
-  const current = asOf && asOf < todayIsoStockholm() ? replayShareRegister(events, null) : replay
+  const current = asOf && asOf < todayIsoStockholm() ? replayShareRegister(events, null, STORED) : replay
   return {
     as_of: day,
     is_avstamningsbolag: settings.is_avstamningsbolag,
@@ -128,6 +157,7 @@ export async function loadShareRegisterData(ctx: OperationContext, asOf: string 
     summary,
     parties,
     reconciliation: reconcileWithSettings(current.totalShares, capital),
+    note_problems: current.noteProblems,
   }
 }
 
@@ -170,8 +200,22 @@ export interface ShareEventInput {
   note?: string | null
   /** The person has handled the class's samtycke, förköp or hembud for this transfer. */
   forbehall_cleared?: boolean | null
+  /** to_name is somebody new although a register person already has that name. */
+  to_is_new?: boolean | null
+  /** counterparty_name is somebody new although a register person already has that name. */
+  counterparty_is_new?: boolean | null
+  /**
+   * The number of the last entry the caller saw (the preview answers it as
+   * last_event_number). Sent back with the entry, it is refused with
+   * SHARE_REGISTER_STALE when the register has moved on since: a transfer
+   * previewed before a split would otherwise land on other shares.
+   */
+  expected_last_event_number?: number | null
   created_via?: 'app' | 'api' | 'mcp'
 }
+
+/** Said to a member who is neither the owner nor an administrator. */
+export const REGISTER_ADMIN_MESSAGE_SV = 'Bara företagets ägare eller en administratör kan föra in något i aktieboken (styrelsen ansvarar för den, 5 kap. 7 § ABL).'
 
 export interface ShareEventCreated {
   share_register_event_id: string
@@ -213,12 +257,20 @@ export async function registerShareEvent(
   try {
     const today = todayIsoStockholm()
     if (input.event_date > today) return { ok: false, code: 'BOLAGET_DATES_INVALID', messageSv: 'En anteckning i aktieboken kan inte dateras framåt i tiden.' }
+    // Checked here so every door answers the same, a preview included: a
+    // member is told before filling in a form or staging a proposal.
+    const refused = await requireCompanyAdmin(ctx, REGISTER_ADMIN_MESSAGE_SV)
+    if (refused) return refused
     const [settings, classes, events] = await Promise.all([
       loadRegisterSettings(ctx.supabase, ctx.companyId),
       loadShareClasses(ctx.supabase, ctx.companyId),
       loadShareEvents(ctx.supabase, ctx.companyId),
     ])
     if (settings.is_avstamningsbolag) return { ok: false, code: 'SHARE_REGISTER_AVSTAMNINGSBOLAG' }
+    const lastEventNumber = events.reduce((max, e) => Math.max(max, e.event_number), 0)
+    if (input.expected_last_event_number !== null && input.expected_last_event_number !== undefined && input.expected_last_event_number !== lastEventNumber) {
+      return { ok: false, code: 'SHARE_REGISTER_STALE', details: { last_event_number: lastEventNumber } }
+    }
 
     const kind = input.kind
     const warnings: OperationWarning[] = []
@@ -241,9 +293,13 @@ export async function registerShareEvent(
       toClassId = toClass.id
     }
 
+    if (kind === 'omvandling' && toClassId === classId) {
+      return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'Aktierna har redan det aktieslaget. Välj ett annat aktieslag att omvandla till.' }
+    }
+
     // The parties.
-    const toRef = ISSUE_KINDS.includes(kind) || kind === 'overlatelse' ? partyRef(input.to_party_id, input.to_name, input.to_kind, input.to_org_number) : null
-    const counterRef = kind === 'pant' || kind === 'nyttjanderatt'
+    let toRef = ISSUE_KINDS.includes(kind) || kind === 'overlatelse' ? partyRef(input.to_party_id, input.to_name, input.to_kind, input.to_org_number) : null
+    let counterRef = kind === 'pant' || kind === 'nyttjanderatt'
       ? partyRef(input.counterparty_party_id, input.counterparty_name, input.counterparty_kind, input.counterparty_org_number)
       : null
     if ((ISSUE_KINDS.includes(kind) || kind === 'overlatelse') && !toRef) return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'Ange vem som får aktierna.' }
@@ -253,30 +309,55 @@ export async function registerShareEvent(
     if (HOLDER_KINDS.includes(kind) && !input.from_party_id) return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'Ange nuvarande ägare av aktierna.' }
     if (toRef) checkPartyRef(toRef, 'mottagaren')
     if (counterRef) checkPartyRef(counterRef, 'motparten')
+    // A person given by name who is already in the registers is that person,
+    // and the preview says so before anything is saved. Somebody new with the
+    // same name is entered with to_is_new (or counterparty_is_new).
+    const matched: Array<{ field: 'to' | 'counterparty'; party_id: string; name: string }> = []
+    if (toRef && !toRef.party_id && toRef.kind === 'person' && !input.to_is_new) {
+      const match = await findRegisterPersonByName(ctx.supabase, ctx.companyId, toRef.name!)
+      if (match) {
+        matched.push({ field: 'to', ...match })
+        toRef = { party_id: match.party_id }
+      }
+    }
+    if (counterRef && !counterRef.party_id && counterRef.kind === 'person' && !input.counterparty_is_new) {
+      const match = await findRegisterPersonByName(ctx.supabase, ctx.companyId, counterRef.name!)
+      if (match) {
+        matched.push({ field: 'counterparty', ...match })
+        counterRef = { party_id: match.party_id }
+      }
+    }
     await assertPartiesInCompany(ctx.supabase, ctx.companyId, [input.from_party_id, toRef?.party_id, counterRef?.party_id])
+    if (kind === 'overlatelse' && toRef?.party_id && toRef.party_id === input.from_party_id) {
+      return { ok: false, code: 'BOLAGET_PARTY_INVALID', messageSv: 'Överlåtaren och mottagaren är samma. Välj en annan mottagare.' }
+    }
 
     // The share numbers: given, or for a count the next free numbers (an issue) or the holder's lowest block that fits.
     let rangeStart = input.range_start ?? null
     let rangeEnd = input.range_end ?? null
     const rangeKinds: readonly ShareEventKind[] = [...ISSUE_KINDS, ...HOLDER_KINDS, 'aktiebrev', 'pant', 'nyttjanderatt']
     if (rangeKinds.includes(kind)) {
-      if (rangeStart === null && input.share_count) {
-        const before = replayShareRegister(events, null)
+      const count = input.share_count ?? null
+      if (rangeStart === null && count) {
+        const stored = replayShareRegister(events, null, STORED)
         if (ISSUE_KINDS.includes(kind)) {
-          rangeStart = nextFreeShareNumber(before.ranges)
+          rangeStart = nextFreeShareNumber(stored.ranges)
         } else if (HOLDER_KINDS.includes(kind)) {
-          const asOfDay = replayShareRegister(events, input.event_date)
+          const asOfDay = replayShareRegister(events, input.event_date, STORED)
           const block = asOfDay.ranges.find(
-            (r) => r.party_id === input.from_party_id && r.share_class_id === classId && r.range_end - r.range_start + 1 >= input.share_count!,
+            (r) => r.party_id === input.from_party_id && r.share_class_id === classId && r.range_end - r.range_start + 1 >= count,
           )
           if (!block) return { ok: false, code: 'SHARE_REGISTER_RANGE_REQUIRED' }
           rangeStart = block.range_start
         }
-        if (rangeStart !== null) rangeEnd = rangeStart + input.share_count - 1
       }
       if (rangeStart === null) return { ok: false, code: 'SHARE_REGISTER_RANGE_REQUIRED' }
-      if (rangeEnd === null) rangeEnd = rangeStart
+      // A first number with a count names the block: 500 shares from number 1 are 1 to 500, not share 1 alone.
+      if (rangeEnd === null) rangeEnd = count ? rangeStart + count - 1 : rangeStart
       if (rangeEnd < rangeStart) return { ok: false, code: 'SHARE_REGISTER_RANGE_REQUIRED' }
+      if (count && rangeEnd - rangeStart + 1 !== count) {
+        return { ok: false, code: 'VALIDATION_ERROR', messageSv: `Antalet aktier (${count}) stämmer inte med aktienumren ${rangeStart}-${rangeEnd}. Ange det ena eller rätta det andra.` }
+      }
     } else {
       rangeStart = null
       rangeEnd = null
@@ -324,10 +405,16 @@ export async function registerShareEvent(
       checkCorrection(events, candidate.corrects_event_id)
     }
 
-    // The whole history must still hold with the entry in it (the database checks the same at commit).
-    replayShareRegister([...events, candidate], null)
-    const before = replayShareRegister(events, input.event_date)
-    const after = replayShareRegister([...events, candidate], input.event_date)
+    // The whole history must still hold with the entry in it (the database
+    // checks the holdings again at commit). A note entry already stored that
+    // the history cannot hold is not this entry's doing, and must not stop the
+    // rättelse that voids it; one this entry brings about is refused.
+    const withEntry = [...events, candidate]
+    const alreadyBroken = new Set(replayShareRegister(events, null, STORED).noteProblems.map((problem) => problem.event_id))
+    const broken = replayShareRegister(withEntry, null, STORED).noteProblems.find((problem) => !alreadyBroken.has(problem.event_id))
+    if (broken) throw new ShareRegisterError('SHARE_REGISTER_NOTE_INVALID', broken.message, broken.event_number > 0 ? broken.event_number : null)
+    const before = replayShareRegister(events, input.event_date, STORED)
+    const after = replayShareRegister(withEntry, input.event_date, STORED)
 
     // What a person must judge.
     if (kind === 'overlatelse' && shareClass && (shareClass.forbehall_samtycke || shareClass.forbehall_forkop || shareClass.forbehall_hembud) && !input.forbehall_cleared) {
@@ -337,23 +424,44 @@ export async function registerShareEvent(
         'The share class carries a consent, pre-emption or right-of-first-refusal clause. Check it has been handled before entering the transfer.',
       ))
     }
-    if ((kind === 'nyemission' || kind === 'fondemission') && !input.registered_on) {
+    if (kind === 'nyemission' && !input.registered_on) {
       warnings.push(warning(
         'SHARE_REGISTER_NOT_REGISTERED',
-        'Emissionen förs in nu; ange registreringsdagen när Bolagsverket har registrerat beslutet.',
-        'The issue is entered now; record the registration date once Bolagsverket has registered the decision.',
+        'De tilldelade aktierna förs in nu (13 kap. 18 § ABL). En införd anteckning ändras inte: när Bolagsverket har registrerat emissionen förs registreringsdagen in som en egen anteckning.',
+        'The allotted shares are entered now (ABL 13:18). An entry is never changed: once Bolagsverket has registered the issue, record the registration date as a note of its own.',
+      ))
+    }
+    if (kind === 'fondemission' && !input.registered_on) {
+      warnings.push(warning(
+        'SHARE_REGISTER_FONDEMISSION_NOT_REGISTERED',
+        'Aktier från en fondemission förs in i aktieboken först när Bolagsverket har registrerat beslutet (12 kap. 10 § ABL). Ange registreringsdagen, eller vänta med anteckningen tills beslutet är registrerat.',
+        'Bonus shares are entered in the share register only once Bolagsverket has registered the decision (ABL 12:10). Give the registration date, or wait with the entry until the decision is registered.',
+      ))
+    }
+    for (const match of matched) {
+      warnings.push(warning(
+        'BOLAGET_PARTY_MATCHED_EXISTING',
+        `${match.name} finns redan i bolagets register och anteckningen förs på den personen. Gäller det någon annan med samma namn, lägg in personen som ny.`,
+        `${match.name} is already in the company's registers and the entry is made for that person. If this is somebody else with the same name, enter them as a new person.`,
       ))
     }
     if (toRef && !toRef.party_id && (toRef.kind ?? 'person') === 'person') {
       warnings.push(warning(
         'BOLAGET_PERSONNUMMER_MISSING',
-        'Lägg till personnummer och adress för den nya ägaren under Ägare och aktiebok (5 kap. 5 § ABL).',
-        'Add the new holder\'s personnummer and address in Ägare och aktiebok (ABL 5:5).',
+        'Lägg till personnummer och adress för den nya ägaren under Aktiebok (5 kap. 5 § ABL).',
+        'Add the new holder\'s personnummer and address in Aktiebok (ABL 5:5).',
       ))
     }
 
     if (dryRun) {
-      const touched = new Set([candidate.from_party_id, candidate.to_party_id].filter((id): id is string => Boolean(id)))
+      // Whose holdings the entry changes: the parties it names; for a rättelse
+      // the parties of the entry it voids; for a split or a sammanläggning
+      // every holder, since every share is renumbered.
+      const voidedEntry = kind === 'rattelse' ? events.find((e) => e.id === candidate.corrects_event_id) ?? null : null
+      const everyHolder = kind === 'split' || kind === 'sammanlaggning' ? [...before.ranges, ...after.ranges].map((r) => r.party_id) : []
+      const touched = new Set(
+        [candidate.from_party_id, candidate.to_party_id, voidedEntry?.from_party_id, voidedEntry?.to_party_id, ...everyHolder].filter((id): id is string => Boolean(id)),
+      )
       const holdingOf = (ranges: ReplayResult['ranges'], partyId: string) =>
         ranges.filter((r) => r.party_id === partyId).reduce((n, r) => n + (r.range_end - r.range_start + 1), 0)
       return {
@@ -375,6 +483,11 @@ export async function registerShareEvent(
           price_total: candidate.price_total,
           ratio: candidate.ratio,
           corrects_event_id: candidate.corrects_event_id,
+          corrects_event_number: voidedEntry?.event_number ?? null,
+          // Send back as expected_last_event_number with the entry itself.
+          last_event_number: lastEventNumber,
+          // Named people who were already in the registers: the entry is made for them.
+          matched_parties: matched,
           total_shares_before: before.totalShares,
           total_shares_after: after.totalShares,
           holders_changed: [...touched].map((partyId) => ({
@@ -384,6 +497,8 @@ export async function registerShareEvent(
             shares_after: holdingOf(after.ranges, partyId),
           })),
           warnings: warnings.map((w) => w.message_sv),
+          // The code of each warning, in the same order: a caller that says one of them its own way leaves that sentence out by code.
+          warning_codes: warnings.map((w) => w.code),
         },
       }
     }
@@ -394,8 +509,10 @@ export async function registerShareEvent(
       const created = await insertShareClass(ctx, { code: 'A', name: null, votes_per_share: 1 })
       finalClassId = created.id
     }
-    const toPartyId = toRef ? await ensureRegisterParty(ctx, toRef) : null
-    const counterpartyId = counterRef ? await ensureRegisterParty(ctx, counterRef) : null
+    // A named person was looked for above; whoever is still unnamed here is new.
+    const partyOf = (ref: PartyRef) => (ref.party_id || ref.kind !== 'person' ? ensureRegisterParty(ctx, ref) : createRegisterParty(ctx, ref))
+    const toPartyId = toRef ? await partyOf(toRef) : null
+    const counterpartyId = counterRef ? await partyOf(counterRef) : null
     const { data, error } = await ctx.supabase
       .from('share_register_events')
       .insert({
@@ -421,6 +538,8 @@ export async function registerShareEvent(
         document_id: candidate.document_id,
         note: candidate.note,
         details: input.forbehall_cleared ? { forbehall_cleared: true } : {},
+        // The last entry this check saw: the database refuses the row when another entry got in between.
+        based_on_event_number: lastEventNumber,
         created_by: ctx.userId,
         created_via: input.created_via ?? (ctx.pendingOperationId ? 'mcp' : 'app'),
       })

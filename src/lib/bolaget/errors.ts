@@ -9,7 +9,7 @@ import { PartyRefError } from './people'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
-/** Codes the database raises as `CODE: text` (20261029210000_bolaget_registers.sql). */
+/** Codes the database raises as `CODE: text` (20261029210000_bolaget_registers.sql, 20261118150000_share_register_admin_and_integrity.sql). */
 const DB_CODES = [
   'SHARE_REGISTER_RANGE_TAKEN',
   'SHARE_REGISTER_NOT_HELD',
@@ -17,6 +17,8 @@ const DB_CODES = [
   'SHARE_REGISTER_APPEND_ONLY',
   'SHARE_REGISTER_AVSTAMNINGSBOLAG',
   'SHARE_REGISTER_CORRECTION_INVALID',
+  'SHARE_REGISTER_STALE',
+  'BOLAGET_DATES_INVALID',
   'COMPANY_ROLE_APPEND_ONLY',
   'COMPANY_ROLE_ALREADY_ENDED',
   'BENEFICIAL_OWNER_APPEND_ONLY',

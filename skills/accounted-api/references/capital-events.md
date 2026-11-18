@@ -507,7 +507,7 @@ The dividends with a betalningsdag in the year (booked or paid), each recipient 
 **Do not use for:** Getting the file: there is no machine door for it.
 
 **Pitfalls:**
-- KU31_PERSONNUMMER_MISSING: the person's personnummer is added in Accounted (Ägare och aktiebok), never through the API.
+- KU31_PERSONNUMMER_MISSING: the person's personnummer is added in Accounted (Aktiebok), never through the API.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

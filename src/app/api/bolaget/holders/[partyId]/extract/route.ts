@@ -2,7 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { fileResponse } from '@/lib/api/file-response'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { loadFullPersonnummer } from '@/lib/bolaget/people'
+import { loadFullIdentity } from '@/lib/bolaget/people'
 import { buildHolderExtractData } from '@/lib/bolaget/pdf-data'
 import { renderHolderExtractPdf } from '@/lib/bolaget/pdf'
 import { bolagetGateResponse, callerIsCompanyAdmin, companyForPdf, operationContext } from '@/lib/bolaget/session'
@@ -26,7 +26,7 @@ export const GET = withRouteContext<{ params: Promise<{ partyId: string }> }>('b
     companyForPdf(ctx.supabase, ctx.companyId),
     callerIsCompanyAdmin(ctx.supabase, ctx.user.id, ctx.companyId),
   ])
-  const fullPersonnummer = isAdmin ? await loadFullPersonnummer(ctx.companyId, [partyId]) : undefined
+  const fullPersonnummer = isAdmin ? await loadFullIdentity(ctx.companyId, [partyId]) : undefined
   const extract = buildHolderExtractData(data, partyId, company, { fullPersonnummer, generatedAt: todayIsoStockholm() })
   if (!extract) return errorResponseFromCode('BOLAGET_PARTY_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
   const pdf = await renderHolderExtractPdf(extract)

@@ -26,9 +26,9 @@ function ev(partial: Partial<ShareEvent> & Pick<ShareEvent, 'id' | 'event_number
 }
 
 const parties = new Map<string, RegisterParty>([
-  ['anna', { party_id: 'anna', name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', birth_date: null, address: { line1: 'Storgatan 1', line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE' }, email: null }],
-  ['bo', { party_id: 'bo', name: 'Bo Holding AB', kind: 'company', org_number: '5560000001', personnummer_masked: null, birth_date: null, address: null, email: null }],
-  ['cia', { party_id: 'cia', name: 'Cia Ek', kind: 'person', org_number: null, personnummer_masked: null, birth_date: null, address: null, email: null }],
+  ['anna', { party_id: 'anna', name: 'Anna Ek', kind: 'person', org_number: null, personnummer_masked: 'XXXXXXXX-1234', foreign_id_masked: null, birth_date: null, address: { line1: 'Storgatan 1', line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE' }, email: null }],
+  ['bo', { party_id: 'bo', name: 'Bo Holding AB', kind: 'company', org_number: '5560000001', personnummer_masked: null, foreign_id_masked: null, birth_date: null, address: null, email: null }],
+  ['cia', { party_id: 'cia', name: 'Cia Ek', kind: 'person', org_number: null, personnummer_masked: null, foreign_id_masked: null, birth_date: null, address: null, email: null }],
 ])
 
 const events: ShareEvent[] = [
@@ -51,6 +51,7 @@ function registerData(asOf = '2026-10-29'): ShareRegisterData {
     summary: summarizeHoldings(replay.ranges, [A]),
     parties,
     reconciliation: reconcileWithSettings(replay.totalShares, { aktiekapital: 25000, antal_aktier: 1000 }),
+    note_problems: replay.noteProblems,
   }
 }
 

@@ -12768,7 +12768,7 @@ const BOLAGET_CAPITAL: Record<string, StructuredErrorEntry> = {
   },
   DIVIDEND_NO_HOLDERS: {
     httpStatus: 409,
-    message_sv: 'Aktieboken har inga ägare den dag som avgör vem som får utdelningen. För in aktierna under Ägare och aktiebok först.',
+    message_sv: 'Aktieboken har inga ägare den dag som avgör vem som får utdelningen. För in aktierna under Aktiebok först.',
     message_en: 'The share register has no holders on the day that decides who receives the dividend. Enter the shares first.',
   },
   DIVIDEND_EXCEEDS_FREE_EQUITY: {
@@ -13033,8 +13033,8 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
   },
   BOLAGET_PERSONNUMMER_IN_APP_ONLY: {
     httpStatus: 400,
-    message_sv: 'Ett personnummer registreras bara i Accounted, under Ägare och aktiebok, aldrig i ett anrop.',
-    message_en: 'A personnummer is entered in Accounted only (Ägare och aktiebok), never through the API or an agent.',
+    message_sv: 'Ett personnummer registreras bara i Accounted, under Aktiebok, aldrig i ett anrop.',
+    message_en: 'A personnummer is entered in Accounted only (Aktiebok), never through the API or an agent.',
   },
   BOLAGET_PERSONNUMMER_INVALID: {
     httpStatus: 400,
@@ -13091,6 +13091,11 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Aktieboken kan inte ändras i efterhand. Rätta med en ny anteckning.',
     message_en: 'The share register cannot be changed afterwards. Correct it with a new entry.',
+  },
+  SHARE_REGISTER_STALE: {
+    httpStatus: 409,
+    message_sv: 'Aktieboken har fått en ny anteckning sedan du förhandsgranskade. Förhandsgranska igen, så visas läget som det är nu.',
+    message_en: 'The share register has a new entry since your preview. Preview again to see it as it stands now.',
   },
   SHARE_REGISTER_AVSTAMNINGSBOLAG: {
     httpStatus: 409,

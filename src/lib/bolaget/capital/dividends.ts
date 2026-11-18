@@ -218,8 +218,8 @@ function identityWarnings(rows: readonly DistributionRecord[], parties: Map<stri
   if (missing.length === 0) return []
   return [warning(
     'DIVIDEND_HOLDER_IDENTITY_MISSING',
-    `${missing.length === 1 ? 'En mottagare' : `${missing.length} mottagare`} saknar personnummer. Lägg till det under Ägare och aktiebok innan kontrolluppgiften KU31 skapas.`,
-    `${missing.length} recipient(s) have no personnummer. Add it under Ägare och aktiebok before the KU31 file is made.`,
+    `${missing.length === 1 ? 'En mottagare' : `${missing.length} mottagare`} saknar personnummer. Lägg till det under Aktiebok innan kontrolluppgiften KU31 skapas.`,
+    `${missing.length} recipient(s) have no personnummer. Add it under Aktiebok before the KU31 file is made.`,
   )]
 }
 

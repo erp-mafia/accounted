@@ -1,6 +1,9 @@
 /**
  * pg-real tests for 20261029210000_bolaget_registers.sql (and the VALIDATE
- * in 20261029210100): the aktiebok is append-only and numbered in sequence,
+ * in 20261029210100) and 20261118150000_share_register_admin_and_integrity.sql:
+ * only an owner or admin writes the registers, an entry is refused when the
+ * register has moved on since it was checked, a share class change adds a
+ * dated note, the aktiebok is append-only and numbered in sequence,
  * the replay refuses a share held twice or a transfer of shares the
  * transferor does not hold, a rattelse voids an entry, roles are end-dated
  * never deleted, the personnummer table is out of members' reach and out of
@@ -221,7 +224,7 @@ describe('aktiebok: the replay', () => {
 })
 
 describe('aktiebok: RLS', () => {
-  it('shows a company only its own entries, lets a member write and a viewer only read', async () => {
+  it('shows a company only its own entries, lets its owner write and a viewer only read', async () => {
     const cls = await shareClass(a, 'R')
     const holder = await party(a, 'Rut')
     const entry = await event(a, { kind: 'bildande', date: '2020-01-10', classId: cls, to: holder, start: 9001, end: 9010 })
@@ -253,6 +256,160 @@ describe('aktiebok: RLS', () => {
         [a.companyId],
       )).rowCount)
     expect(inserted).toBe(1)
+  })
+})
+
+describe('aktiebok: the owner or an admin writes it (ABL 5:7)', () => {
+  const insertNote = `INSERT INTO public.share_register_events (company_id, event_date, kind, note) VALUES ($1, '2021-01-01', 'anteckning', 'x') RETURNING id`
+
+  it('refuses a member an entry, a share class and the avstämningsbolag switch, and takes them from an admin', async () => {
+    const c = await seedCompany()
+    const cls = await shareClass(c, 'A')
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId: c.companyId, userId: memberId, role: 'member' })
+    const adminId = await insertAuthUser()
+    await insertCompanyMember({ companyId: c.companyId, userId: adminId, role: 'admin' })
+
+    await expect(withUserContext(memberId, (client) => client.query(insertNote, [c.companyId]))).rejects.toMatchObject({ code: '42501' })
+    await expect(
+      withUserContext(memberId, (client) => client.query(`INSERT INTO public.share_classes (company_id, code) VALUES ($1, 'B')`, [c.companyId])),
+    ).rejects.toMatchObject({ code: '42501' })
+    await expect(
+      withUserContext(memberId, (client) => client.query(`UPDATE public.share_classes SET votes_per_share = 10 WHERE id = $1`, [cls])),
+    ).rejects.toMatchObject({ code: '42501' })
+    const deletedByMember = await withUserContext(memberId, async (client) =>
+      (await client.query(`DELETE FROM public.share_classes WHERE id = $1`, [cls])).rowCount)
+    expect(deletedByMember).toBe(0)
+    await expect(
+      withUserContext(memberId, (client) =>
+        client.query(`INSERT INTO public.share_register_settings (company_id, is_avstamningsbolag) VALUES ($1, true)`, [c.companyId])),
+    ).rejects.toMatchObject({ code: '42501' })
+    // The member still reads the register.
+    const read = await withUserContext(memberId, async (client) =>
+      (await client.query(`SELECT id FROM public.share_classes WHERE id = $1`, [cls])).rowCount)
+    expect(read).toBe(1)
+
+    const byAdmin = await withUserContext(adminId, async (client) => {
+      const note = await client.query(insertNote, [c.companyId])
+      const klass = await client.query(`INSERT INTO public.share_classes (company_id, code) VALUES ($1, 'B') RETURNING id`, [c.companyId])
+      const changed = await client.query(`UPDATE public.share_classes SET votes_per_share = 10 WHERE id = $1`, [cls])
+      const settings = await client.query(
+        `INSERT INTO public.share_register_settings (company_id, is_avstamningsbolag) VALUES ($1, false)
+         ON CONFLICT (company_id) DO UPDATE SET is_avstamningsbolag = false RETURNING company_id`,
+        [c.companyId],
+      )
+      return [note.rowCount, klass.rowCount, changed.rowCount, settings.rowCount]
+    })
+    expect(byAdmin).toEqual([1, 1, 1, 1])
+  })
+
+  it('records the signed-in caller as the writer, whatever the row says', async () => {
+    const c = await seedCompany()
+    const someoneElse = await insertAuthUser()
+    const createdBy = await withUserContext(c.userId, async (client) =>
+      (await client.query<{ created_by: string }>(
+        `INSERT INTO public.share_register_events (company_id, event_date, kind, note, created_by)
+         VALUES ($1, '2021-01-01', 'anteckning', 'x', $2) RETURNING created_by`,
+        [c.companyId, someoneElse],
+      )).rows[0]!.created_by)
+    expect(createdBy).toBe(c.userId)
+    // The service role names the acting user itself (an API key, an approved proposal).
+    const byService = await event(c, { kind: 'anteckning', date: '2021-01-01', note: 'x' })
+    const stored = await getPool().query<{ created_by: string }>(`SELECT created_by FROM public.share_register_events WHERE id = $1`, [byService.id])
+    expect(stored.rows[0]!.created_by).toBe(c.userId)
+  })
+})
+
+describe('aktiebok: an entry is tied to the register it was checked against', () => {
+  const insertBasedOn = `INSERT INTO public.share_register_events (company_id, event_date, kind, note, based_on_event_number)
+     VALUES ($1, '2021-01-01', 'anteckning', $2, $3) RETURNING event_number`
+
+  it('takes an entry checked against the newest entry and refuses one checked against an older register', async () => {
+    const c = await seedCompany()
+    const first = await getPool().query<{ event_number: number }>(insertBasedOn, [c.companyId, 'first', 0])
+    expect(first.rows[0]!.event_number).toBe(1)
+    // Two entries were checked while the register stood at entry 1: the first gets in, the second is refused.
+    const second = await getPool().query<{ event_number: number }>(insertBasedOn, [c.companyId, 'second', 1])
+    expect(second.rows[0]!.event_number).toBe(2)
+    await expect(getPool().query(insertBasedOn, [c.companyId, 'late', 1])).rejects.toThrow(/SHARE_REGISTER_STALE/)
+    await expect(getPool().query(insertBasedOn, [c.companyId, 'ahead', 7])).rejects.toThrow(/SHARE_REGISTER_STALE/)
+    // An entry that carries no number is not checked (a migration, the note a share class change adds).
+    const unchecked = await getPool().query<{ event_number: number }>(insertBasedOn, [c.companyId, 'unchecked', null])
+    expect(unchecked.rows[0]!.event_number).toBe(3)
+  })
+
+  it('refuses an entry dated after today on the Swedish calendar', async () => {
+    const c = await seedCompany()
+    await expect(
+      getPool().query(
+        `INSERT INTO public.share_register_events (company_id, event_date, kind, note) VALUES ($1, public.stockholm_today() + 1, 'anteckning', 'x')`,
+        [c.companyId],
+      ),
+    ).rejects.toThrow(/BOLAGET_DATES_INVALID/)
+    const today = await getPool().query(
+      `INSERT INTO public.share_register_events (company_id, event_date, kind, note) VALUES ($1, public.stockholm_today(), 'anteckning', 'x') RETURNING id`,
+      [c.companyId],
+    )
+    expect(today.rowCount).toBe(1)
+  })
+
+  it('refuses a rättelse reference on an entry that is not a rättelse', async () => {
+    const c = await seedCompany()
+    const first = await event(c, { kind: 'anteckning', date: '2021-01-01', note: 'x' })
+    await expect(event(c, { kind: 'anteckning', date: '2021-01-02', note: 'y', corrects: first.id })).rejects.toMatchObject({ code: '23514' })
+    // The entry can still be voided: the reference above took no slot in the once-only index.
+    const fix = await event(c, { kind: 'rattelse', date: '2021-01-03', note: 'fel', corrects: first.id })
+    expect(fix.event_number).toBe(2)
+  })
+})
+
+describe('aktiebok: a share class change is a dated note (ABL 5:5 p. 5, 5:9)', () => {
+  it('adds an anteckning naming what changed, in the transaction that changes the class', async () => {
+    const c = await seedCompany()
+    const cls = await shareClass(c, 'A', 1)
+    const anna = await party(c, 'Anna')
+    // Before the first entry a class is only being set up: no note.
+    await getPool().query(`UPDATE public.share_classes SET forbehall_hembud = true WHERE id = $1`, [cls])
+    const before = await getPool().query(`SELECT 1 FROM public.share_register_events WHERE company_id = $1`, [c.companyId])
+    expect(before.rowCount).toBe(0)
+
+    await event(c, { kind: 'bildande', date: '2020-01-10', classId: cls, to: anna, start: 1, end: 100 })
+    await getPool().query(`UPDATE public.share_classes SET votes_per_share = 0.1, forbehall_hembud = false, forbehall_samtycke = true WHERE id = $1`, [cls])
+    const notes = await getPool().query<{ event_number: number; kind: string; note: string; event_date: string; today: string }>(
+      `SELECT event_number, kind, note, event_date::text, public.stockholm_today()::text AS today
+         FROM public.share_register_events WHERE company_id = $1 ORDER BY event_number`,
+      [c.companyId],
+    )
+    expect(notes.rows.map((r) => r.kind)).toEqual(['bildande', 'anteckning'])
+    const note = notes.rows[1]!
+    expect(note.event_date).toBe(note.today)
+    expect(note.note).toBe(
+      'Aktieslag A: röstvärdet ändrat från 1 till 0,1; samtyckesförbehåll (4 kap. 8 § ABL) infört; hembudsförbehåll (4 kap. 27 § ABL) borttaget.',
+    )
+    // The holdings are untouched and the history still replays.
+    expect(await state(c)).toEqual([[anna, 1, 100]])
+
+    // A name or a reference to the bolagsordning is not what the aktiebok says about the shares: no note.
+    await getPool().query(`UPDATE public.share_classes SET name = 'Stamaktier', bolagsordning_reference = '§ 5' WHERE id = $1`, [cls])
+    const after = await getPool().query(`SELECT 1 FROM public.share_register_events WHERE company_id = $1`, [c.companyId])
+    expect(after.rowCount).toBe(2)
+  })
+
+  it('refuses the change to a member, note and all, and lets an admin make both', async () => {
+    const c = await seedCompany()
+    const cls = await shareClass(c, 'A', 1)
+    const anna = await party(c, 'Anna')
+    await event(c, { kind: 'bildande', date: '2020-01-10', classId: cls, to: anna, start: 1, end: 100 })
+    const adminId = await insertAuthUser()
+    await insertCompanyMember({ companyId: c.companyId, userId: adminId, role: 'admin' })
+    const written = await withUserContext(adminId, async (client) => {
+      await client.query(`UPDATE public.share_classes SET votes_per_share = 10 WHERE id = $1`, [cls])
+      return (await client.query<{ note: string; created_by: string }>(
+        `SELECT note, created_by FROM public.share_register_events WHERE company_id = $1 AND kind = 'anteckning'`,
+        [c.companyId],
+      )).rows
+    })
+    expect(written).toEqual([{ note: 'Aktieslag A: röstvärdet ändrat från 1 till 10.', created_by: adminId }])
   })
 })
 
@@ -337,6 +494,22 @@ describe('party_person_private', () => {
       )
     await insert(one)
     await expect(insert(two)).rejects.toMatchObject({ code: '23505' })
+  })
+})
+
+describe('parties.origin: the list written out (20261118150000, validated in 20261118150100)', () => {
+  it('holds the seven origins, validated, and refuses any other', async () => {
+    const res = await getPool().query<{ convalidated: boolean; def: string }>(
+      `SELECT c.convalidated, pg_get_constraintdef(c.oid) AS def FROM pg_constraint c
+        WHERE c.conrelid = 'public.parties'::regclass AND c.conname = 'parties_origin_check'`,
+    )
+    expect(res.rows).toHaveLength(1)
+    expect(res.rows[0]!.convalidated).toBe(true)
+    const values = [...res.rows[0]!.def.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]).sort()
+    expect(values).toEqual(['backfill', 'bank', 'bolaget', 'document', 'import', 'ledger', 'manual'])
+    await expect(
+      getPool().query(`INSERT INTO public.parties (company_id, user_id, display_name, kind, origin) VALUES ($1, $2, 'X', 'person', 'other')`, [a.companyId, a.userId]),
+    ).rejects.toMatchObject({ code: '23514' })
   })
 })
 

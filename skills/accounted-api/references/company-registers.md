@@ -1065,7 +1065,9 @@ Response `200`:
     notes: { kind: "aktiebrev" | "pant" | "nyttjanderatt", range_start: number, range_end: number, aktiebrev_number: string | null, counterparty_party_id: string | null, counterparty_name: string | null, event_number: number, event_date: string }[],
     reconciliation: { status: "match" | "mismatch" | "settings_empty" | "register_empty" | "both_empty", register_shares: number, settings_shares: number | null, aktiekapital: number | null, kvotvarde: number | null },
     incomplete: { without_identity: number, without_address: number },
-    events_count: number
+    note_problems: { share_register_event_id: string, event_number: number, event_date: string, kind: "aktiebrev" | "pant" | "nyttjanderatt", message: string }[],
+    events_count: number,
+    last_event_number: number
   },
   meta: {
     request_id: string,
@@ -1176,6 +1178,9 @@ Entries are kept forever (ABL 5:3) and numbered in sequence; a mistake is voided
 **Pitfalls:**
 - SHARE_REGISTER_NOT_HELD: the from-holder does not hold all of the shares on event_date.
 - SHARE_REGISTER_RANGE_TAKEN: an issue overlaps shares already held; omit the range and send share_count.
+- SHARE_REGISTER_STALE: the register got an entry after the one you saw; read it again and retry.
+- A range_start with a share_count names the whole block (range_start to range_start + share_count - 1).
+- FORBIDDEN: only the company's owner or an administrator adds to the aktiebok.
 - BOLAGET_PERSONNUMMER_IN_APP_ONLY: a personnummer was sent; name the person and complete them in the app.
 - A transfer of a class with samtycke, förköp or hembud answers a warning until forbehall_cleared is true.
 
@@ -1215,7 +1220,10 @@ Request body:
   decision_id?: string | null,
   document_id?: string | null,
   note?: string | null,
-  forbehall_cleared?: boolean | null
+  forbehall_cleared?: boolean | null,
+  to_is_new?: boolean | null,
+  counterparty_is_new?: boolean | null,
+  expected_last_event_number?: number | null
 }
 ```
 
