@@ -303,6 +303,12 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f supabase/bootstrap.sql
       - name: Apply every migration
+        # On a session whose search_path is the bare default, without the
+        # extensions schema: the session a fresh `supabase db push` gets. A
+        # migration that names an extension's type or function without its
+        # schema (vector, not extensions.vector) fails here, as it would there.
+        env:
+          PGOPTIONS: -c search_path="$user",public
         run: |
           set -euo pipefail
           for f in supabase/migrations/*.sql; do
