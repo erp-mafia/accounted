@@ -22,7 +22,7 @@ import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { supplierInvoiceBookingMoment, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
-import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { accountNameForRow } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-template-format'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -30,8 +30,13 @@ import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { postDocumentForm, uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { INBOX_UPLOAD_ACCEPT, isAllowedInboxFile } from '@/lib/documents/upload-types'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
-import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
-import { isWholeKronaRoundingOf, rowNetFromInvoiceTotals } from '@/lib/supplier-invoices/total-first'
+import {
+  invoiceTotalsCrosscheck,
+  invoiceVatIsBooked,
+  rowNetFromInvoiceTotals,
+  rowsAgainstInvoiceTotals,
+  totalFirstFill,
+} from '@/lib/supplier-invoices/total-first'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useFiledVatPeriod } from '@/lib/hooks/use-filed-vat-period'
@@ -46,6 +51,7 @@ import {
 import {
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
+  isForeignSupplierType,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { netVat } from '@/lib/bookkeeping/gross-split'
@@ -339,6 +345,9 @@ export default function NewSupplierInvoiceForm({
   // still equal to it is the fill's to update, any other amount is the
   // person's and is never overwritten.
   const totalFillRef = useRef<number | null>(null)
+  // Whether a reading made the rows: under reverse charge the fill leaves
+  // such a row as read (totalFirstFill).
+  const readingRowsRef = useRef(false)
 
   // Shell state
   const [forvalOpen, setForvalOpen] = useState(false)
@@ -429,10 +438,8 @@ export default function NewSupplierInvoiceForm({
   const watchedPaidPrivately = isPersonPayer(watchedPayer)
   const watchedReverseCharge = watch('reverse_charge')
   const watchedSelfBilled = watch('is_self_billed') === true
-  // An icke momsregistrerad company books the gross as the cost, and a
-  // reverse-charge invoice carries no moms: the Moms field only exists
-  // where an invoice moms can be booked.
-  const fakturaVatVisible = vatRegistered && !watchedReverseCharge
+  // The Moms field only exists where an invoice moms can be booked.
+  const fakturaVatVisible = invoiceVatIsBooked(vatRegistered, watchedReverseCharge)
   const enteredFakturaTotal = parseAmountInput(fakturaTotalStr)
   const enteredFakturaVat = fakturaVatVisible ? parseAmountInput(fakturaVatStr) : null
   // The net a single row takes from the totals at a moms sats, or null
@@ -501,6 +508,25 @@ export default function NewSupplierInvoiceForm({
     [markSettled],
   )
 
+  const handleInvoiceVatPrefilled = useCallback(
+    (vat: number | null) => {
+      setFakturaVatStr(vat == null ? '' : formatAmount(vat))
+      if (vat != null) markSettled('faktura_vat')
+    },
+    [markSettled],
+  )
+
+  // The rows a reading proposes: a single row holding the total-first net is
+  // the fill's to keep in step with the totals, any other rows stand as read.
+  const replaceRowsFromReading = useCallback(
+    (items: SupplierInvoiceLineItem[], filledNet: number | null) => {
+      totalFillRef.current = filledNet
+      readingRowsRef.current = true
+      replace(items)
+    },
+    [replace],
+  )
+
   useEffect(() => {
     if (settledFields.size === 0) return
     const timer = setTimeout(() => setSettledFields(new Set()), 1200)
@@ -515,19 +541,26 @@ export default function NewSupplierInvoiceForm({
     isLoadingInbox,
     applyCount: prefillApplyCount,
     applyInboxItem,
+    readingRowsChoice,
+    toggleReadingRows,
   } = useInboxPrefill({
     inboxItemId,
     suppliersLoaded,
     suppliers,
     setValue,
-    replace,
+    replace: replaceRowsFromReading,
     reset,
     getValues,
     toast,
     t,
     onFieldPrefilled: handleFieldPrefilled,
     onInvoiceTotal: handleInvoiceTotalPrefilled,
+    onInvoiceVat: handleInvoiceVatPrefilled,
     prefillAccount,
+    vatRegistered,
+    reverseCharge: watchedReverseCharge,
+    items: watchedItems,
+    accounts,
     accrualThresholdFor: (invoiceDate) =>
       accrualThresholdSek({
         entityType,
@@ -739,7 +772,7 @@ export default function NewSupplierInvoiceForm({
       setValue('currency', supplier.default_currency)
     }
     // A foreign supplier's service is omvänd betalningsskyldighet, from the EU or outside it.
-    if (supplier.supplier_type === 'eu_business' || supplier.supplier_type === 'non_eu_business') {
+    if (isForeignSupplierType(supplier.supplier_type)) {
       setValue('reverse_charge', true)
     }
     // Goods or services is never carried over from the previous supplier: it
@@ -912,10 +945,8 @@ export default function NewSupplierInvoiceForm({
   function handleAccountChange(index: number, accountNumber: string) {
     setValue(`items.${index}.account_number`, accountNumber)
     const currentDesc = watch(`items.${index}.description`)
-    if (!currentDesc && accountNumber.length === 4) {
-      const desc = getAccountDescription(accountNumber)
-      if (desc) setValue(`items.${index}.description`, desc.name)
-    }
+    const accountName = accountNameForRow(accountNumber, accounts)
+    if (!currentDesc && accountName) setValue(`items.${index}.description`, accountName)
     // Auto-fill the rad's moms from the konto's configured default (e.g.
     // öresavrundning 3740 = ingen moms), so a rounding line stops inheriting
     // the 25 % rad-default. Only when the konto carries an explicit default;
@@ -947,13 +978,14 @@ export default function NewSupplierInvoiceForm({
       : !watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)
         ? defaultRate
         : 0.25
-    const description =
-      accountNumber.length === 4 ? getAccountDescription(accountNumber)?.name ?? '' : ''
+    const description = accountNameForRow(accountNumber, accounts)
     const index = getValues('items').length
     // Total-first: the first row is born with the net the invoice totals
     // give, so the amount cell that takes focus already shows it.
     const net = index === 0 ? totalFirstNetAt(vatRate) : null
     if (net != null) totalFillRef.current = net
+    // A first row typed by hand is no reading's row.
+    if (index === 0) readingRowsRef.current = false
     append({
       description,
       amount: net ?? 0,
@@ -1308,15 +1340,18 @@ export default function NewSupplierInvoiceForm({
     watchedItems || [],
     limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled }),
   )
-  const statedVat = statedVatFromInvoiceField(bookedItems, enteredFakturaVat, watchedReverseCharge)
-  const exactAmounts = supplierInvoiceEditorAmounts(
-    bookedItems, watchedCurrency || 'SEK', watchedReverseCharge, false, statedVat,
-  )
-  const oreRounding =
-    oreRoundingChoice ?? isWholeKronaRoundingOf(exactAmounts.total, enteredFakturaTotal, watchedCurrency || 'SEK')
-  const { itemTotals, subtotal: bookedSubtotal, totalVat: deductibleVat, figures } = oreRounding
-    ? supplierInvoiceEditorAmounts(bookedItems, watchedCurrency || 'SEK', watchedReverseCharge, true, statedVat)
-    : exactAmounts
+  const {
+    statedVat,
+    oreRounding,
+    amounts: { itemTotals, subtotal: bookedSubtotal, totalVat: deductibleVat, figures },
+  } = rowsAgainstInvoiceTotals({
+    items: bookedItems,
+    currency: watchedCurrency || 'SEK',
+    reverseCharge: watchedReverseCharge,
+    invoiceTotal: enteredFakturaTotal,
+    invoiceVat: enteredFakturaVat,
+    oreRoundingChoice,
+  })
   const totalNonDeductibleVat = roundOre(nonDeductibleVat.reduce((sum, vat) => sum + vat, 0))
   const subtotal = roundOre(bookedSubtotal - totalNonDeductibleVat)
   const totalVat = roundOre(deductibleVat + totalNonDeductibleVat)
@@ -1329,20 +1364,32 @@ export default function NewSupplierInvoiceForm({
   const singleRowAmount = singleRow ? singleRow.amount || 0 : null
   const singleRowNet = singleRow ? totalFirstNetAt(singleRow.vat_rate || 0) : null
   useEffect(() => {
-    if (singleRowAmount == null || singleRowNet == null) return
-    if (singleRowAmount !== 0 && singleRowAmount !== totalFillRef.current) return
-    if (singleRowAmount === singleRowNet) return
-    totalFillRef.current = singleRowNet
-    setValue('items.0.amount', singleRowNet, { shouldDirty: true })
-  }, [singleRowAmount, singleRowNet, setValue])
+    if (singleRowAmount == null) return
+    const net = totalFirstFill({
+      amount: singleRowAmount,
+      net: singleRowNet,
+      filled: totalFillRef.current,
+      fromReading: readingRowsRef.current,
+      reverseCharge: watchedReverseCharge,
+    })
+    if (net == null) return
+    totalFillRef.current = net
+    setValue('items.0.amount', net, { shouldDirty: true })
+  }, [singleRowAmount, singleRowNet, watchedReverseCharge, setValue])
 
   // Cross-check: client-only compare against the displayed payable and the
   // rows' moms; a mismatch renders field-adjacent, never blocks, never travels.
-  const crosscheckDiff =
-    enteredFakturaTotal == null ? null : roundOre(enteredFakturaTotal - figures.toPay)
-  const crosscheckMatches = crosscheckDiff != null && Math.abs(crosscheckDiff) <= 0.005
-  const vatCrosscheckDiff =
-    enteredFakturaVat == null ? null : roundOre(enteredFakturaVat - totalVat)
+  const {
+    totalDiff: crosscheckDiff,
+    totalMatches: crosscheckMatches,
+    vatDiff: vatCrosscheckDiff,
+    vatMatches: vatCrosscheckMatches,
+  } = invoiceTotalsCrosscheck({
+    invoiceTotal: enteredFakturaTotal,
+    invoiceVat: enteredFakturaVat,
+    toPay: figures.toPay,
+    totalVat,
+  })
   const signedAmount = (amount: number) =>
     (amount > 0 ? '+' : '') + formatCurrency(amount, watchedCurrency)
 
@@ -2283,7 +2330,7 @@ export default function NewSupplierInvoiceForm({
                     inputMode="decimal"
                     autoComplete="off"
                     placeholder="0,00"
-                    className="h-9 text-right tabular-nums"
+                    className={cn('h-9 text-right tabular-nums', settledFields.has('faktura_vat') && 'prefill-settle')}
                     value={fakturaVatStr}
                     onChange={(e) => setFakturaVatStr(e.target.value)}
                     onBlur={() => {
@@ -2308,7 +2355,7 @@ export default function NewSupplierInvoiceForm({
                         : t('crosscheck_match')}
                   </p>
                 )}
-                {vatCrosscheckDiff != null && Math.abs(vatCrosscheckDiff) > 0.005 && (
+                {vatCrosscheckDiff != null && !vatCrosscheckMatches && (
                   <p className="text-destructive">
                     {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
                   </p>
@@ -2316,7 +2363,7 @@ export default function NewSupplierInvoiceForm({
                 {/* Less moms than the rows carry is often a limited deduction
                     typed into the invoice's Moms field (crm#1617): point at
                     the row control that books it. */}
-                {vatCrosscheckDiff != null && vatCrosscheckDiff < -0.005 && totalNonDeductibleVat === 0 && (
+                {vatCrosscheckDiff != null && !vatCrosscheckMatches && vatCrosscheckDiff < 0 && totalNonDeductibleVat === 0 && (
                   <p className="text-muted-foreground">{t('crosscheck_vat_limited_hint')}</p>
                 )}
               </div>
@@ -2355,6 +2402,19 @@ export default function NewSupplierInvoiceForm({
                 </span>
               )}
             </SectionLabel>
+
+            {/* The invoice's own lines beside the rows the reading opened
+                with: one quiet choice, gone once the person has changed a row. */}
+            {readingRowsChoice && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                {t(readingRowsChoice.split ? 'reading_rows_split_line' : 'reading_rows_combined_line', {
+                  count: readingRowsChoice.lineCount,
+                })}{' '}
+                <button type="button" className={QUIET_LINK_CLASS} onClick={toggleReadingRows}>
+                  {t(readingRowsChoice.split ? 'reading_rows_combine' : 'reading_rows_split')}
+                </button>
+              </p>
+            )}
 
             {templateAccountNote &&
               (watchedItems ?? []).some((r) => r.account_number === templateAccountNote.account) && (

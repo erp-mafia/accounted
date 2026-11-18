@@ -7,6 +7,7 @@ import {
   findIllegalVatRateRow,
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
+  isForeignSupplierType,
   treatmentDeductsInputVat,
   defaultVatRateForTreatment,
 } from '@/lib/vat/supplier-invoice-line-checks'
@@ -148,6 +149,17 @@ describe('findReverseChargeAccountWarningRows', () => {
         { account_number: '7010' },
       ]),
     ).toEqual([0, 1])
+  })
+})
+
+describe('isForeignSupplierType', () => {
+  it('is true for a business in the EU or outside it, and for nothing else', () => {
+    expect(isForeignSupplierType('eu_business')).toBe(true)
+    expect(isForeignSupplierType('non_eu_business')).toBe(true)
+    expect(isForeignSupplierType('swedish_business')).toBe(false)
+    expect(isForeignSupplierType('individual')).toBe(false)
+    expect(isForeignSupplierType(null)).toBe(false)
+    expect(isForeignSupplierType(undefined)).toBe(false)
   })
 })
 

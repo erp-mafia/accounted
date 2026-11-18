@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isWholeKronaRoundingOf, rowNetFromInvoiceTotals } from '../total-first'
+import { isWholeKronaRoundingOf, rowNetFromInvoiceTotals, totalFirstFill } from '../total-first'
 import { supplierInvoiceEditorAmounts } from '../editor-amounts'
 
 const row = (amount: number, vat_rate: number) => ({ amount, account_number: '4010', vat_rate })
@@ -36,6 +36,41 @@ describe('rowNetFromInvoiceTotals', () => {
       const { totalVat } = supplierInvoiceEditorAmounts([row(net, rate)], 'SEK', false, false)
       if (totalVat !== vat) throw new Error(`moms ${vat} at ${rate} came back as ${totalVat} (net ${net})`)
     }
+  })
+})
+
+describe('totalFirstFill', () => {
+  const typed = { fromReading: false, reverseCharge: false }
+
+  it('fills an empty single row with the net the totals give', () => {
+    expect(totalFirstFill({ amount: 0, net: 908.8, filled: null, ...typed })).toBe(908.8)
+  })
+
+  it('follows while the row still holds what it put there, and rests when it already holds the net', () => {
+    expect(totalFirstFill({ amount: 908.8, net: 1000, filled: 908.8, ...typed })).toBe(1000)
+    expect(totalFirstFill({ amount: 908.8, net: 908.8, filled: 908.8, ...typed })).toBeNull()
+  })
+
+  it('never overwrites an amount the person typed, and does nothing without a Fakturabelopp', () => {
+    expect(totalFirstFill({ amount: 750, net: 908.8, filled: 908.8, ...typed })).toBeNull()
+    expect(totalFirstFill({ amount: 0, net: null, filled: null, ...typed })).toBeNull()
+  })
+
+  it('moves a row typed by hand to the whole Fakturabelopp when reverse charge is switched on, as before', () => {
+    // Fakturabelopp 1 149,00 typed, a row born at 25 %: 919,20, then reverse charge.
+    const net = rowNetFromInvoiceTotals({ total: 1149, vat: null, rate: 0.25, reverseCharge: true })
+    expect(totalFirstFill({ amount: 919.2, net, filled: 919.2, fromReading: false, reverseCharge: true })).toBe(1149)
+  })
+
+  // Review round 1, finding 2: the supplier is picked after the reading. The
+  // reading (919,20 + 229,80 = 1 149,00) made the row and handed it to the
+  // fill; the foreign supplier then switches reverse charge on.
+  it('leaves a row a reading made when reverse charge is switched on after it: the seller\'s moms stays a difference', () => {
+    const net = rowNetFromInvoiceTotals({ total: 1149, vat: null, rate: 0.25, reverseCharge: true })
+    expect(net).toBe(1149)
+    expect(totalFirstFill({ amount: 919.2, net, filled: 919.2, fromReading: true, reverseCharge: true })).toBeNull()
+    // Without reverse charge the reading's row follows the totals like any other.
+    expect(totalFirstFill({ amount: 919.2, net: 1000, filled: 919.2, fromReading: true, reverseCharge: false })).toBe(1000)
   })
 })
 
