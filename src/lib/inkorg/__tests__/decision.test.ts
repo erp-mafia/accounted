@@ -116,13 +116,14 @@ describe('focusDecision', () => {
 })
 
 describe('Ångra', () => {
-  it('only where an endpoint truly undoes it: a match and its release', () => {
-    expect(UNDO_OF).toEqual({ match_purchase: 'unmatch', accept_bank_match: 'unmatch', unmatch: 'rematch' })
-    const none: DecisionAction[] = ['register_invoice', 'register_and_settle', 'pay_in_bank', 'expense', 'book', 'not_underlag', 'retry_reading', 'credit']
+  it('only where an endpoint truly undoes it: a match, its release, and a removal from the Inkorg', () => {
+    expect(UNDO_OF).toEqual({ match_purchase: 'unmatch', accept_bank_match: 'unmatch', unmatch: 'rematch', not_underlag: 'restore' })
+    const none: DecisionAction[] = ['register_invoice', 'register_and_settle', 'pay_in_bank', 'expense', 'book', 'retry_reading', 'credit']
     for (const action of none) expect(canUndo(action)).toBe(false)
     expect(canUndo('match_purchase')).toBe(true)
     expect(canUndo('unmatch')).toBe(true)
     expect(canUndo('accept_bank_match')).toBe(true)
+    expect(canUndo('not_underlag')).toBe(true)
   })
 })
 

@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `473`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `475`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -94,6 +94,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/group-links",
   "GET /api/v1/companies/:companyId/inbox-items",
   "GET /api/v1/companies/:companyId/inbox-items/:id",
+  "GET /api/v1/companies/:companyId/inbox-items/removed",
   "GET /api/v1/companies/:companyId/invoices",
   "GET /api/v1/companies/:companyId/invoices/:id",
   "GET /api/v1/companies/:companyId/invoices/:id/collection",
@@ -340,6 +341,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/inbox-items/:id/convert",
   "POST /api/v1/companies/:companyId/inbox-items/:id/match-supplier",
   "POST /api/v1/companies/:companyId/inbox-items/:id/match-transaction",
+  "POST /api/v1/companies/:companyId/inbox-items/:id/restore",
   "POST /api/v1/companies/:companyId/inbox-items/:id/stamp",
   "POST /api/v1/companies/:companyId/inbox-items/:id/unmatch-transaction",
   "POST /api/v1/companies/:companyId/invoices",
@@ -491,7 +493,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "deadlines": 2,
   "expenses": 5,
   "import": 7,
-  "inbox": 11,
+  "inbox": 13,
   "invoicing": 37,
   "ledger": 138,
   "payments": 20,

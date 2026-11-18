@@ -140,6 +140,45 @@ describe('singleActionWarning: company settings (crm#1605)', () => {
  * the row without a dialog (crm#1094): the row and the bulk line are where
  * the approver reads "kan inte ångras".
  */
+/**
+ * The approval of a staged removal said the item "can be put back from Senast
+ * borttagna" for every item, also one that keeps no copy (no document) or
+ * that the restore refuses (a bank row or a verifikat has its document). The
+ * sentence follows the staged preview's can_be_put_back, the server's own
+ * answer (removalCanBePutBack, lib/documents/inbox-item-state.ts); without
+ * it the old sentence stands: permanent.
+ */
+describe('singleActionWarning: removing an inbox item', () => {
+  const params = { inbox_item_id: 'item-1' }
+
+  it('promises Senast borttagna only when the staged preview says the item can be put back', () => {
+    for (const lang of ['sv', 'en'] as const) {
+      const t = pendingTranslator(lang)
+      const pending = (lang === 'sv' ? sv : en).pending as unknown as Record<string, string>
+      expect(singleActionWarning('delete_inbox_item', params, t, { can_be_put_back: true })).toBe(pending.warning_delete_inbox_item_put_back)
+      // No document, a bank row or a verifikat has it, a row staged before the preview said so, or no preview at all.
+      for (const preview of [{ can_be_put_back: false }, {}, null, undefined, { can_be_put_back: 'true' }]) {
+        expect(singleActionWarning('delete_inbox_item', params, t, preview), JSON.stringify(preview)).toBe(pending.warning_delete_inbox_item)
+      }
+    }
+  })
+
+  it('says permanent where nothing comes back, and where to find the item where it does', () => {
+    expect(svPending.warning_delete_inbox_item).toContain('permanent')
+    expect(svPending.warning_delete_inbox_item).not.toContain('Senast borttagna')
+    expect(svPending.warning_delete_inbox_item_put_back).toContain('Senast borttagna')
+    expect(svPending.warning_delete_inbox_item_put_back).not.toContain('permanent')
+    const enPending = en.pending as unknown as Record<string, string>
+    expect(enPending.warning_delete_inbox_item).toContain('permanently')
+    expect(enPending.warning_delete_inbox_item_put_back).toContain('Recently removed')
+    expect(enPending.warning_delete_inbox_item_put_back).not.toContain('permanently')
+  })
+
+  it('leaves every other type deaf to a preview', () => {
+    expect(singleActionWarning('delete_asset', { asset_id: 'a-1' }, tSv, { can_be_put_back: true })).toBe(svWarning('delete_asset'))
+  })
+})
+
 describe('rowConsentSentence and the bulk line', () => {
   const registration = { mode: 'register_booked', invoice_number: '1023' }
 

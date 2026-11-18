@@ -243,6 +243,41 @@ describe('recordInboxDecision', () => {
     expect(inserts[0].row).toMatchObject({ inbox_item_id: null, document_id: 'doc-1', outcome: 'dismissed', final: null, acted_on: null })
   })
 
+  it('keeps the deleted item on its deletion, so it can be put back, and on no other decision', async () => {
+    const item = { id: 'item-1', document_id: 'doc-1', email_from: 'faktura@example.test', extracted_data: edited }
+    const { client, inserts } = fakeClient()
+
+    await recordInboxDecision(client as never, snap, null, 'user-1', null, item)
+    await recordInboxDecision(client as never, snap, null, 'user-1')
+    await recordInboxDecision(client as never, snap, { supplier_invoice_id: 'si-1', fields: {} }, 'user-1', null, item)
+
+    expect(inserts[0].row).toMatchObject({ outcome: 'dismissed', removed_item: item })
+    expect(inserts[1].row).not.toHaveProperty('removed_item')
+    expect(inserts[2].row).not.toHaveProperty('removed_item')
+  })
+
+  it('still records the deletion, with its trace id, while the database has no column for the kept item', async () => {
+    const rows: Array<Record<string, unknown>> = []
+    const client = {
+      from: () => ({
+        insert: async (row: Record<string, unknown>) => {
+          rows.push(row)
+          return { error: 'removed_item' in row ? { code: 'PGRST204', message: "Could not find the 'removed_item' column" } : null }
+        },
+      }),
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736'
+
+    await runWithTrace(traceId, () => recordInboxDecision(client as never, snap, null, 'user-1', null, { id: 'item-1' }))
+
+    const written = rows[rows.length - 1]
+    expect(written).toMatchObject({ outcome: 'dismissed', document_id: 'doc-1', trace_id: traceId })
+    expect(written).not.toHaveProperty('removed_item')
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
   it('records nothing for a deleted item without a document: no row could outlive it', async () => {
     const { client, inserts } = fakeClient()
 

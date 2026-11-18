@@ -4,6 +4,7 @@ import { isOwnIssuedInvoice, resolveInboxKind, type InboxKindSource } from '@/li
 import { inboxSourceForIntake, intakeSourceFromUploadSource } from '@/lib/intake/sources'
 import { isInboxItemTaken, isOpenInboxItem, whereInboxItemFree, whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
+import { hasQueuedOrBookedTwin } from '@/lib/documents/queued-inbox-item'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import { matchSupplierId, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
 import { isArchiveOnlyUpload } from '@/lib/documents/archive-only'
@@ -208,36 +209,6 @@ export async function routeClassifiedDocument(
     )
   if (error) throw new Error(`inbox item update failed: ${error.message}`)
   return 'routed_to_arkiv'
-}
-
-/**
- * True when another document of the company carries the same content hash and is booked on a verifikat, or has an
- * inbox item of its own (open or consumed). Documents without a hash are never treated as copies.
- */
-async function hasQueuedOrBookedTwin(supabase: SupabaseClient, companyId: string, doc: DocumentRow): Promise<boolean> {
-  if (!doc.sha256_hash) return false
-  const { data: twins, error } = await supabase
-    .from('document_attachments')
-    .select('id, journal_entry_id')
-    .eq('company_id', companyId)
-    .eq('sha256_hash', doc.sha256_hash)
-    .neq('id', doc.id)
-    .limit(20)
-  if (error) throw new Error(`duplicate lookup failed: ${error.message}`)
-  const rows = (twins ?? []) as Array<{ id: string; journal_entry_id: string | null }>
-  if (rows.length === 0) return false
-  if (rows.some((t) => t.journal_entry_id)) return true
-  const { data: twinItems, error: itemsError } = await supabase
-    .from('invoice_inbox_items')
-    .select('id')
-    .eq('company_id', companyId)
-    .in(
-      'document_id',
-      rows.map((t) => t.id),
-    )
-    .limit(1)
-  if (itemsError) throw new Error(`duplicate lookup failed: ${itemsError.message}`)
-  return ((twinItems as Array<{ id: string }> | null) ?? []).length > 0
 }
 
 /**

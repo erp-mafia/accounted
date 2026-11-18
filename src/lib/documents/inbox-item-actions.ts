@@ -9,6 +9,8 @@
  *   - an item converted to a supplier invoice is frozen: its reading cannot
  *     be edited and it cannot be deleted;
  *   - a booked item (created_journal_entry_id) cannot be deleted;
+ *   - a deleted item is kept on the decision row its deletion writes, so it
+ *     can be put back as it was (lib/operations/inbox-restore.ts);
  *   - field edits merge into the reading (never drop fields the edit did not
  *     name) under optimistic concurrency on updated_at;
  *   - releasing a transaction match clears the transaction's document pin
@@ -33,7 +35,15 @@ import {
 } from '@/lib/transactions/inbox-underlag'
 import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_DOCUMENT_KINDS } from '@/lib/documents/inbox-kind'
-import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
+import {
+  INBOX_ITEM_DOCUMENT_HOLD,
+  isOpenInboxItem,
+  removalCanBePutBack,
+  whereInboxItemOpen,
+  withDocumentHold,
+  type DocumentHoldRow,
+  type StageFields,
+} from '@/lib/documents/inbox-item-state'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { passed } from '@/lib/suggestion-log/checks'
 import { intakeSourceForInboxItem, type IntakeSourceId } from '@/lib/intake/sources'
@@ -104,7 +114,8 @@ export interface InboxItemSummary {
   error_message: string | null
 }
 
-function readingSummary(extracted: Record<string, unknown> | null) {
+/** What a list says about a reading: the vendor, the total, its currency and the invoice date. */
+export function readingSummary(extracted: Record<string, unknown> | null) {
   const supplier = (extracted?.supplier ?? undefined) as Record<string, unknown> | undefined
   const invoice = (extracted?.invoice ?? undefined) as Record<string, unknown> | undefined
   const totals = (extracted?.totals ?? undefined) as Record<string, unknown> | undefined
@@ -371,7 +382,7 @@ export async function getInboxItem(
 // Delete
 // ---------------------------------------------------------------------------
 
-interface DeletePreviewRow {
+interface DeletePreviewRow extends StageFields {
   id: string
   document_id: string | null
   extracted_data: Record<string, unknown> | null
@@ -389,17 +400,31 @@ interface DeletePreviewRow {
  * archive, and the preview now says both outright, with the file name,
  * supplier, amount and sender to tell one item from another. A file name
  * that cannot be read is left out, never a reason to refuse.
+ *
+ * can_be_put_back is removalCanBePutBack (./inbox-item-state.ts) on the row
+ * and on the verifikat that holds its document: the approval sentence of a
+ * staged removal promises Senast borttagna only when it is true. A document
+ * that cannot be read answers false: nothing is promised on a guess.
  */
 async function deletePreview(ctx: OperationContext, item: DeletePreviewRow): Promise<Record<string, unknown>> {
   let fileName: string | null = null
+  let canBePutBack = false
   if (item.document_id) {
     const { data: doc } = await ctx.supabase
       .from('document_attachments')
-      .select('file_name')
+      .select('file_name, journal_entry_id, entry:journal_entries!document_attachments_journal_entry_id_fkey(status)')
       .eq('id', item.document_id)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
-    fileName = (doc as { file_name?: string | null } | null)?.file_name ?? null
+    const document = doc as unknown as {
+      file_name?: string | null
+      journal_entry_id?: string | null
+      entry?: { status: string | null } | Array<{ status: string | null }> | null
+    } | null
+    fileName = document?.file_name ?? null
+    canBePutBack =
+      !!document &&
+      removalCanBePutBack(withDocumentHold({ ...item, document_hold: { journal_entry_id: document.journal_entry_id ?? null, entry: document.entry } }))
   }
   const reading = readingSummary(item.extracted_data)
   return {
@@ -407,6 +432,7 @@ async function deletePreview(ctx: OperationContext, item: DeletePreviewRow): Pro
     document_id: item.document_id ?? null,
     inbox_item_deleted: true,
     document_kept: true,
+    can_be_put_back: canBePutBack,
     file_name: fileName,
     supplier_name: reading.vendor_name,
     amount: reading.amount,
@@ -421,7 +447,11 @@ async function deletePreview(ctx: OperationContext, item: DeletePreviewRow): Pro
 /**
  * Discard an inbox item. Refused once it became a supplier invoice or was
  * booked. The document it carried stays in the archive (a separate row with
- * its own deletion rule).
+ * its own deletion rule), and the decision row keeps the item as it was, so
+ * it can be put back (restoreInboxItem, lib/operations/inbox-restore.ts). An item
+ * without a document leaves no decision row and cannot be put back; whether
+ * a removal can be undone is removalCanBePutBack (./inbox-item-state.ts), and
+ * the dry run answers it as can_be_put_back.
  */
 export async function deleteInboxItem(
   ctx: OperationContext,
@@ -430,7 +460,8 @@ export async function deleteInboxItem(
 ): Promise<OperationOutcome<{ id: string; deleted: true }>> {
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id, extracted_data, email_from, email_subject, created_at')
+    // The whole row: the decision keeps it as it was deleted.
+    .select('*')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -457,7 +488,7 @@ export async function deleteInboxItem(
     .eq('company_id', ctx.companyId)
   if (error) return failed(error)
   // Deleting ran one guard: the item was neither converted nor booked.
-  await recordInboxDecision(ctx.supabase, extractionSnapshot, null, ctx.userId, [passed('already_booked')])
+  await recordInboxDecision(ctx.supabase, extractionSnapshot, null, ctx.userId, [passed('already_booked')], item)
   return { ok: true, data: { id: inboxItemId, deleted: true } }
 }
 

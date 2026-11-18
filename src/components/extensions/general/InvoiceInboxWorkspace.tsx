@@ -70,12 +70,14 @@ import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { useAssistantAvailable, useAssistantChatEnabled, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
+import { RemovedItemsLink } from '@/components/inkorg/RemovedItems'
+import { useUndoRemoval } from '@/components/inkorg/use-undo-removal'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { AccountingMethod, InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
-import { isUnderlagDivergent, itemStage } from '@/lib/documents/inbox-item-state'
+import { isUnderlagDivergent, itemStage, removalCanBePutBack } from '@/lib/documents/inbox-item-state'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import {
   inboxKindLabelKey,
@@ -448,7 +450,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const tStart = useTranslations('start_cards')
   const tCommon = useTranslations('common')
   const locale = useLocale()
-  const companyId = useCompanyOptional()?.company?.id ?? null
+  const companyContext = useCompanyOptional()
+  const companyId = companyContext?.company?.id ?? null
+  // Senast borttagna is offered to whoever may remove: useCanWrite's rule, which the routes enforce.
+  const canRestore = !companyContext || (companyContext.role !== null && companyContext.role !== 'viewer')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Its own input: sharing the header's would upload without the purchase.
   const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -1289,15 +1294,26 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   // ── Delete ─────────────────────────────────────────────────
 
+  // Ångra on a removal's toast puts the items back (POST /api/inkorg/items/restore);
+  // afterwards they are under Senast borttagna. Offered only for a removal that can be put
+  // back (removalCanBePutBack): an item without a file keeps no copy, and one a bank row or
+  // a verifikat holds stays there.
+  const onRemovalUndone = useCallback(async () => {
+    await fetchItems()
+  }, [fetchItems])
+  const undoRemoval = useUndoRemoval(onRemovalUndone)
+
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm('Ta bort dokumentet ur inkorgen?')) return
+    const removed = items.find((it) => it.id === id)
+    const canUndo = !!removed && removalCanBePutBack(removed)
     setIsDeleting(true)
     try {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`, {
         method: 'DELETE',
       })
       if (!res.ok) throw await resolveFailure(res)
-      toast({ title: 'Borttagen' })
+      toast({ title: 'Borttagen', action: canUndo ? undoRemoval([id]) : undefined })
       if (selectedId === id) {
         setSelectedId(null)
         setSelected(null)
@@ -1312,7 +1328,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } finally {
       setIsDeleting(false)
     }
-  }, [fetchItems, selectedId, toast])
+  }, [fetchItems, items, selectedId, toast, undoRemoval])
 
   // The selection holds only the rendered inbox rows: a filter tab or a
   // search that hides a ticked row drops it, so "Ta bort" and "Bokför valda"
@@ -1370,6 +1386,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       )
       const failed = results.filter((r) => r.status === 'rejected').length
       const succeeded = deletable.length - failed
+      // What Ångra puts back: the ones that left and can come back.
+      const undoable = deletable
+        .filter((it, i) => results[i].status === 'fulfilled' && removalCanBePutBack(it))
+        .map((it) => it.id)
       const parts: string[] = []
       if (succeeded > 0) parts.push(`${succeeded} borttagna`)
       if (skipped > 0) parts.push(`${skipped} kopplade till leverantörsfaktura, hoppade över`)
@@ -1378,6 +1398,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         title: 'Bulkborttagning klar',
         description: parts.join(' · '),
         variant: failed > 0 ? 'destructive' : 'default',
+        action: undoable.length > 0 ? undoRemoval(undoable) : undefined,
       })
       clearSelection()
       // If the currently-selected item was deleted, clear the rail.
@@ -1389,7 +1410,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } finally {
       setIsBulkDeleting(false)
     }
-  }, [selectedIds, items, selectedId, fetchItems, toast, clearSelection])
+  }, [selectedIds, items, selectedId, fetchItems, toast, clearSelection, undoRemoval])
 
   // ── Inbox address ──────────────────────────────────────────
 
@@ -1559,6 +1580,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             {t('pipe_errors', { count: statusCounts.error })}
           </button>
         )}
+        {/* The way back for a document removed by mistake, for whoever may remove. */}
+        {canRestore && <RemovedItemsLink onRestored={onRemovalUndone} className="ml-auto shrink-0" />}
       </div>
 
       {/* Opened from the chip. Three ways in, each with the one fact that

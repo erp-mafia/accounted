@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { focusDecision, offersRemoval } from '../decision'
-import { MAX_INBOX_ITEMS_PER_REMOVAL, removalBatches, summariseRemovals, type InboxItemRemovalResult } from '../remove-items'
+import { MAX_INBOX_ITEMS_PER_REMOVAL, removalBatches, removalUndoSentence, summariseRemovals, type InboxItemRemovalResult } from '../remove-items'
 import { makeItem, reading } from './fixtures'
 
 const offered = (item: ReturnType<typeof makeItem>) => {
@@ -71,5 +71,21 @@ describe('summariseRemovals', () => {
 
   it('has nothing to say about refusals when everything left', () => {
     expect(summariseRemovals([{ id: 'a', removed: true }], 'sv')).toEqual({ removedIds: ['a'], refused: [], refusedCount: 0 })
+  })
+})
+
+describe('removalUndoSentence: what the confirm of several says about putting them back', () => {
+  it('promises Senast borttagna when every picked item can be put back', () => {
+    expect(removalUndoSentence(3, 3)).toEqual({ key: 'bulk_drop_confirm_body_put_back', values: { count: 3 } })
+    expect(removalUndoSentence(1, 1)).toEqual({ key: 'bulk_drop_confirm_body_put_back', values: { count: 1 } })
+  })
+
+  it('says it cannot be undone when none can', () => {
+    expect(removalUndoSentence(2, 0)).toEqual({ key: 'bulk_drop_confirm_body', values: { count: 2 } })
+  })
+
+  it('says both numbers for a mix, never a promise for all', () => {
+    expect(removalUndoSentence(5, 3)).toEqual({ key: 'bulk_drop_confirm_body_mixed', values: { putBack: 3, final: 2 } })
+    expect(removalUndoSentence(2, 1)).toEqual({ key: 'bulk_drop_confirm_body_mixed', values: { putBack: 1, final: 1 } })
   })
 })

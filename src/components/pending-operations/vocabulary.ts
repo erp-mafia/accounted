@@ -162,6 +162,8 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   match_batch_allocate: 'warning_match_batch_allocate',
   bulk_book_transactions: 'warning_bulk_book_transactions',
   delete_document: 'warning_delete_document',
+  // The sentence for a removal that keeps nothing to put back; singleActionWarning
+  // promises Senast borttagna only when the staged preview says the item can come back.
   delete_inbox_item: 'warning_delete_inbox_item',
   undo_bank_import: 'warning_undo_bank_import',
   correct_entry_metadata: 'warning_correct_entry_metadata',
@@ -247,13 +249,22 @@ const REGISTER_BOOKED_SENTENCE_KEYS: Record<RegisterBookedLedger, string> = {
  * target 'order' creates a draft kundorder (no F-number, nothing booked), and
  * a create_invoice or create_supplier_invoice_from_inbox staged as the
  * registration of an already-booked invoice posts nothing (crm#1094).
+ * One type reads the staged preview instead: delete_inbox_item says the item
+ * can be put back only when the preview's can_be_put_back is true (the
+ * server's removalCanBePutBack, lib/documents/inbox-item-state.ts), and
+ * says permanent for every other removal, also one staged before the
+ * preview carried it.
  * `t` reads the "pending" namespace.
  */
 export function singleActionWarning(
   operationType: string,
   params: Record<string, unknown> | null | undefined,
   t: (key: string) => string,
+  preview?: unknown,
 ): string {
+  if (operationType === 'delete_inbox_item' && (preview as { can_be_put_back?: unknown } | null | undefined)?.can_be_put_back === true) {
+    return t('warning_delete_inbox_item_put_back')
+  }
   if (operationType === 'convert_invoice' && params?.target === 'order') {
     return t('warning_convert_invoice_order')
   }

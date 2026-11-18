@@ -974,6 +974,8 @@ const SPREAD_COLUMN_HELPERS: Record<string, readonly string[]> = {
   agentReasonColumn: ['agent_reason'],
   // src/lib/observability/trace-column.ts: the request's trace id on a row it writes.
   traceIdColumn: ['trace_id'],
+  // src/lib/suggestion-log/inbox.ts: the inbox item a deletion's decision keeps.
+  removedItemColumn: ['removed_item'],
   // lib/salary/line-item-roles.ts: the flags of a payslip row, from its type.
   payslipLineFlags: ['is_taxable', 'is_avgift_basis', 'is_vacation_basis', 'is_gross_deduction', 'is_net_deduction'],
 }

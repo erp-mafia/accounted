@@ -27,6 +27,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { shortDate } from '@/lib/inkorg/dates'
 import type { DecisionAction, DecisionEvidence, FocusDecision as Decision } from '@/lib/inkorg/decision'
 import { itemHeadline, type InkorgItem } from '@/lib/inkorg/items'
+import { removalCanBePutBack } from '@/lib/documents/inbox-item-state'
 import { ownerPaidLines, templateCostAccount, type CounterpartyTemplateMatch } from '@/lib/inkorg/owner-paid'
 import type { PackageId } from '@/lib/modules/packages'
 import type { InvoiceExtractionResult } from '@/types'
@@ -311,7 +312,13 @@ export function FocusDecision({
 
   async function dropItem() {
     await confirm(
-      { title: t('drop_confirm_title'), description: t('drop_confirm_body'), confirmLabel: t('drop_confirm_label'), variant: 'destructive' },
+      {
+        title: t('drop_confirm_title'),
+        // Senast borttagna is promised only for an item whose removal keeps a copy that can come back.
+        description: removalCanBePutBack(item) ? t('drop_confirm_body_put_back') : t('drop_confirm_body'),
+        confirmLabel: t('drop_confirm_label'),
+        variant: 'destructive',
+      },
       async () => {
         const res = await fetch(ITEM_URL(item.id), { method: 'DELETE' })
         if (!res.ok) {

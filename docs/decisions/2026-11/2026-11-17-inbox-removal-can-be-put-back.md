@@ -1,0 +1,1 @@
+[2026-11-17] A deleted inbox item can be put back (Senast borttagna), kept on its deletion's decision row and re-inserted under its own id, once: a soft-delete flag needs a filter in 59 files that read invoice_inbox_items, and the document cannot stand in (an e-invoice's reading is on the item).

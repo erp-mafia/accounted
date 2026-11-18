@@ -5,14 +5,17 @@
  *   GET    /api/v1/companies/:companyId/inbox-items/:id
  *   PATCH  /api/v1/companies/:companyId/inbox-items/:id
  *   DELETE /api/v1/companies/:companyId/inbox-items/:id
+ *   GET    /api/v1/companies/:companyId/inbox-items/removed
+ *   POST   /api/v1/companies/:companyId/inbox-items/:id/restore
  *   POST   /api/v1/companies/:companyId/inbox-items/:id/unmatch-transaction
  *   POST   /api/v1/companies/:companyId/inbox-items/:id/convert
  *
  * The rules are the services' (lib/documents/inbox-item-actions.ts,
  * lib/operations/inbox-convert.ts), shared with the extension's dashboard
- * routes: converted items are frozen, booked ones cannot be discarded, the
- * list carries no e-mail body or full reading, and a dry run writes nothing
- * (for convert: no ankomstnummer either).
+ * routes: converted items are frozen, booked ones cannot be discarded, a
+ * discarded one is kept and can be put back once, the list carries no e-mail
+ * body or full reading, and a dry run writes nothing (for convert: no
+ * ankomstnummer either).
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -44,6 +47,8 @@ import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/suppli
 import { GET as listItems } from '../route'
 import { GET as getItem, PATCH as patchItem, DELETE as deleteItem } from '../[id]/route'
 import { POST as unmatch } from '../[id]/unmatch-transaction/route'
+import { GET as listRemoved } from '../removed/route'
+import { POST as restore } from '../[id]/restore/route'
 import { POST as convert } from '../[id]/convert/route'
 import { isIdempotencyClaim } from '@/tests/helpers'
 
@@ -446,6 +451,8 @@ describe('DELETE /inbox-items/:id', () => {
       document_id: DOC_ID,
       inbox_item_deleted: true,
       document_kept: true,
+      // It carries a document and nothing holds it: the removal can be undone (POST .../restore).
+      can_be_put_back: true,
       file_name: 'kvitto-0901.pdf',
       supplier_name: 'Clas Ohlson AB',
       amount: 499,
@@ -466,6 +473,159 @@ describe('DELETE /inbox-items/:id', () => {
       .filter((c) => BOOKS.has(c.table) && WRITES.has(c.method))
       .map((c) => `${c.table}.${c.method}`)
     expect(writes).toEqual(['invoice_inbox_items.delete'])
+    // The deletion's decision keeps the item as it was, mail text included: what puts it back.
+    const decision = client.calls.find((c) => c.table === 'suggestion_log' && c.method === 'insert')?.args[0]
+    expect(decision).toMatchObject({ outcome: 'dismissed', inbox_item_id: null, document_id: DOC_ID, removed_item: itemRow() })
+  })
+})
+
+describe('GET /inbox-items/removed', () => {
+  const get = () => listRemoved(request(`${BASE}/removed`, { method: 'GET' }), companyParams)
+  const decision = {
+    created_at: '2026-11-16T09:12:44.000Z',
+    actor_type: 'user',
+    resolved_by: 'user-1',
+    document_id: DOC_ID,
+    removed_item_id: ITEM_ID,
+    email_from: 'kvitto@clasohlson.se',
+    email_subject: 'Ditt kvitto',
+    supplier: READING.supplier,
+    invoice: READING.invoice,
+    totals: READING.totals,
+  }
+
+  it('403 without documents:read', async () => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY_ID, apiKeyId: 'ak_1', apiKeyName: 'k', scopes: ['suppliers:write'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await get()).status).toBe(403)
+  })
+
+  it('lists what can be put back, without the e-mail body or the full reading', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        suggestion_log: { data: [decision], error: null },
+        document_attachments: { data: [{ id: DOC_ID, file_name: 'kvitto-0901.pdf', sha256_hash: 'h', journal_entry_id: null, entry: null }], error: null },
+        invoice_inbox_items: { data: [], error: null },
+      }),
+    )
+    const res = await get()
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.data.removed_items).toEqual([
+      {
+        inbox_item_id: ITEM_ID,
+        document_id: DOC_ID,
+        file_name: 'kvitto-0901.pdf',
+        vendor_name: 'Clas Ohlson AB',
+        amount: 499,
+        currency: 'SEK',
+        email_from: 'kvitto@clasohlson.se',
+        email_subject: 'Ditt kvitto',
+        removed_at: '2026-11-16T09:12:44.000Z',
+        removed_by: { actor_type: 'user', user_id: 'user-1' },
+      },
+    ])
+  })
+})
+
+describe('POST /inbox-items/:id/restore', () => {
+  const post = (query = '', id = ITEM_ID) => restore(request(`${BASE}/${id}/restore${query}`, { method: 'POST' }), itemParams(id))
+  const kept = { created_at: '2026-11-16T09:12:44.000Z', document_id: DOC_ID, removed_item: { ...itemRow(), user_id: 'user-9', company_id: COMPANY_ID } }
+  const free = {
+    company_members: MEMBER,
+    suggestion_log: { data: [kept], error: null },
+    // The document as it stands, then its byte-identical copies: none.
+    document_attachments: [
+      { data: [{ id: DOC_ID, file_name: 'kvitto-0901.pdf', sha256_hash: 'h', journal_entry_id: null, entry: null }], error: null },
+      { data: [], error: null },
+    ],
+    invoice_inbox_items: { data: [], error: null },
+  }
+
+  it('403 without documents:write', async () => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY_ID, apiKeyId: 'ak_1', apiKeyName: 'k', scopes: ['documents:read'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await post()).status).toBe(403)
+  })
+
+  it('400 on a non-UUID id', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    expect((await post('', 'not-a-uuid')).status).toBe(400)
+  })
+
+  it('404 INBOX_ITEM_RESTORE_NOT_FOUND when the company deleted no such item', async () => {
+    const client = makeClient({ company_members: MEMBER, suggestion_log: { data: [], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_RESTORE_NOT_FOUND')
+    // Only this company's decisions were asked for.
+    expect(client.calls).toContainEqual({ table: 'suggestion_log', method: 'eq', args: ['company_id', COMPANY_ID] })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 INBOX_ITEM_RESTORE_IN_INBOX once it is back, writing nothing', async () => {
+    const client = makeClient({ ...free, invoice_inbox_items: { data: [{ id: ITEM_ID, document_id: DOC_ID }], error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('INBOX_ITEM_RESTORE_IN_INBOX')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 INBOX_ITEM_RESTORE_BOOKED when a verifikat holds the document since', async () => {
+    const client = makeClient({
+      ...free,
+      document_attachments: { data: [{ id: DOC_ID, file_name: 'kvitto-0901.pdf', sha256_hash: 'h', journal_entry_id: JE_ID, entry: { status: 'posted' } }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error.code).toBe('INBOX_ITEM_RESTORE_BOOKED')
+    expect(json.error.details).toEqual({ journal_entry_id: JE_ID })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run writes nothing; the commit re-creates the item under its own id', async () => {
+    const dry = makeClient(free)
+    mockServiceClient.mockReturnValue(dry)
+    const preview = await post('?dry_run=true')
+    expect(preview.status).toBe(200)
+    expect((await preview.json()).data.preview).toMatchObject({
+      inbox_item_id: ITEM_ID,
+      document_id: DOC_ID,
+      inbox_item_restored: true,
+      file_name: 'kvitto-0901.pdf',
+      supplier_name: 'Clas Ohlson AB',
+      amount: 499,
+    })
+    expect(wrote(dry)).toBe(false)
+
+    const client = makeClient(free)
+    mockServiceClient.mockReturnValue(client)
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ inbox_item_id: ITEM_ID, document_id: DOC_ID, restored: true })
+    const writes = client.calls.filter((c) => BOOKS.has(c.table) && WRITES.has(c.method))
+    // The item, then match on arrival's look in the bank for its payment (the bank_match columns).
+    expect(writes.map((c) => `${c.table}.${c.method}`)).toEqual(['invoice_inbox_items.insert', 'invoice_inbox_items.update'])
+    expect(Object.keys(writes[1].args[0] as object).every((column) => column.startsWith('bank_match_'))).toBe(true)
+    // As it arrived: the same id, reading, mail text and month, in the key's company.
+    expect(writes[0].args[0]).toMatchObject({
+      id: ITEM_ID,
+      company_id: COMPANY_ID,
+      user_id: 'user-9',
+      document_id: DOC_ID,
+      status: 'received',
+      extracted_data: READING,
+      extraction_skipped: false,
+      email_body_text: 'Hej Anna, tack för ditt köp',
+      created_at: '2026-09-02T07:41:10.000Z',
+    })
+    // No decision row and no reading: nothing is counted or read a second time.
+    expect(client.calls.some((c) => c.table === 'suggestion_log' && WRITES.has(c.method))).toBe(false)
   })
 })
 

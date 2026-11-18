@@ -478,16 +478,20 @@ export function offersRemoval(item: InkorgItem): boolean {
 
 /**
  * The actions an existing endpoint can truly undo, and how: a match is
- * released by unmatch-transaction, and a released match is made again by
+ * released by unmatch-transaction, a released match is made again by
  * match-transaction with the transaction it had (both sides restore the
- * transaction's document pin the same way). Everything else posts a
- * verifikat or a supplier invoice (undone only by a correction, never by
- * Ångra) or deletes the item, so it gets no Ångra.
+ * transaction's document pin the same way), and an item taken out of the
+ * Inkorg is put back as it was by restore (lib/operations/inbox-restore.ts),
+ * when its removal kept a copy that can come back (removalCanBePutBack,
+ * lib/documents/inbox-item-state.ts): Ångra is offered for those only.
+ * Everything else posts a verifikat or a supplier invoice (undone only by a
+ * correction, never by Ångra), so it gets no Ångra.
  */
-export const UNDO_OF: Readonly<Partial<Record<DecisionAction, 'unmatch' | 'rematch'>>> = {
+export const UNDO_OF: Readonly<Partial<Record<DecisionAction, 'unmatch' | 'rematch' | 'restore'>>> = {
   match_purchase: 'unmatch',
   accept_bank_match: 'unmatch',
   unmatch: 'rematch',
+  not_underlag: 'restore',
 }
 
 export function canUndo(action: DecisionAction): boolean {

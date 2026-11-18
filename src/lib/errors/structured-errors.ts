@@ -6599,6 +6599,51 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Posten är bokförd och kan inte tas bort.',
     message_en: 'The inbox item is booked and cannot be deleted.',
   },
+  // A deleted inbox item is put back from the copy its deletion kept
+  // (lib/operations/inbox-restore.ts): once, and only while nothing else has
+  // taken its document.
+  INBOX_ITEM_RESTORE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Det finns ingen borttagen post att lägga tillbaka.',
+    message_en: 'There is no deleted inbox item to put back.',
+    remediation: {
+      description:
+        'The id is the inbox item\'s own, as GET /inbox-items/removed lists it. An item deleted before deleted items were kept, one that carried no document, and one whose document was deleted from the archive since have nothing to put back.',
+    },
+  },
+  INBOX_ITEM_RESTORE_IN_INBOX: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet ligger redan i inkorgen.',
+    message_en: 'The document is already in the inbox.',
+    remediation: {
+      description:
+        'The item was put back already, or its document has an inbox item again (the same file or mail arrived once more). Nothing was written. Read the inbox (GET /inbox-items); do not retry.',
+    },
+  },
+  INBOX_ITEM_RESTORE_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet sitter på en verifikation och kan inte läggas tillbaka i inkorgen.',
+    message_en: 'The document is on a verifikat and cannot be put back in the inbox.',
+    remediation: {
+      description: 'details.journal_entry_id is the verifikat that holds the document. Nothing was written.',
+    },
+  },
+  INBOX_ITEM_RESTORE_LINKED: {
+    httpStatus: 409,
+    message_sv:
+      'Dokumentet är underlag till en leverantörsfaktura, ett utlägg eller en banktransaktion och kan inte läggas tillbaka i inkorgen.',
+    message_en:
+      'The document is the underlag of a supplier invoice, an expense claim or a bank transaction and cannot be put back in the inbox.',
+    remediation: {
+      description:
+        'details.linked_to says which: supplier_invoice, expense_claim or bank_transaction. The document is already in use there. Nothing was written.',
+    },
+  },
+  INBOX_ITEM_RESTORE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'En kopia av samma fil ligger redan i inkorgen eller är redan bokförd. Posten lades inte tillbaka.',
+    message_en: 'A copy of the same file is already in the inbox or already booked. The item was not put back.',
+  },
   // accounted#14: a second booking of the same underlag. Refused before
   // posting when the item already reads booked; when two calls race past
   // that read, the loser's verifikat is reversed (storno) before this answer.

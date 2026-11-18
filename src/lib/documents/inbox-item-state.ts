@@ -72,6 +72,23 @@ export function isOpenInboxItem(item: StageFields): boolean {
   return !item.routed_to_arkiv_at && !isInboxItemTaken(item)
 }
 
+/**
+ * Whether taking the item out of the inbox can be undone (Ångra on the toast,
+ * Senast borttagna). The removal keeps a copy only of an item that carries a
+ * document (the decision row that holds the copy is the document's), and the
+ * copy is put back only while nothing holds the item: a bank row it is
+ * matched to has taken its document as underlag, and a verifikat that holds
+ * the document books it. The one answer behind the confirm's sentence, the
+ * toast's Ångra and a staged removal's approval sentence, so no screen
+ * promises a put-back the restore refuses (lib/operations/inbox-restore.ts).
+ * What a row cannot show (a supplier invoice or an utlägg on the same
+ * document, a byte-identical copy filed since) the restore still refuses
+ * when it is asked.
+ */
+export function removalCanBePutBack(item: StageFields & { document_id?: string | null }): boolean {
+  return !!item.document_id && !isInboxItemTaken(item)
+}
+
 /** Nothing books it yet, a bank row it is matched to included: it can still follow its other half, or be booked. */
 export function isInboxItemUnbooked(item: StageFields): boolean {
   return !item.routed_to_arkiv_at && itemStage(item) !== 'booked'

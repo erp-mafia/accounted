@@ -1393,7 +1393,7 @@ export default function PendingOperationsPage() {
   const retrievedOf = (op: PendingOperation) =>
     op.agent_metadata?.skills_loaded?.length ? retrievedNames(op.agent_metadata.skills_loaded) : null
   const consequenceOf = (op: PendingOperation | null) =>
-    op && op.status === 'pending' ? singleActionWarning(op.operation_type, op.params, t) : ''
+    op && op.status === 'pending' ? singleActionWarning(op.operation_type, op.params, t, op.preview_data) : ''
   // The proposals that wait and are on screen (one on its way to the server
   // is not among them), and the ones whose last approval did not go through.
   const waitingIds = new Set(filteredOperations.filter((op) => op.status === 'pending').map((op) => op.id))
@@ -2285,7 +2285,7 @@ export default function PendingOperationsPage() {
         open={showCommitDialog}
         onOpenChange={setShowCommitDialog}
         title={selectedOp?.title || t('approve_operation_title')}
-        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type, selectedOp.params, t) : ''}
+        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type, selectedOp.params, t, selectedOp.preview_data) : ''}
         confirmLabel={t('approve')}
         isSubmitting={isCommitting}
         onConfirm={handleCommit}

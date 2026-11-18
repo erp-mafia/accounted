@@ -1,9 +1,9 @@
 /**
  * Invoice-inbox (Underlag) operations: list and read inbox items, correct a
- * reading's fields, release a transaction match, discard an item, and turn
- * one into a registered supplier invoice. Rules live in
- * lib/documents/inbox-item-actions.ts and lib/operations/inbox-convert.ts,
- * shared with the invoice-inbox extension's dashboard routes.
+ * reading's fields, release a transaction match, discard an item, put a
+ * discarded one back, and turn one into a registered supplier invoice. Rules
+ * live in lib/documents/inbox-item-actions.ts, lib/operations/inbox-restore.ts
+ * and lib/operations/inbox-convert.ts, shared with the dashboard routes.
  *
  * Stamping an item against a verifikat stays the hand-written v1 route
  * (POST /inbox-items/{id}/stamp).
@@ -12,7 +12,7 @@
  * (gnubok_list_inbox_items, gnubok_get_inbox_item,
  * gnubok_set_inbox_extracted_data, gnubok_create_supplier_invoice_from_inbox),
  * so those operations are v1 only. Delete and unmatch get generated staged
- * tools.
+ * tools. The deleted-items list and the restore are v1 only for now.
  */
 import { z } from 'zod'
 import { CreateSupplierInvoiceItemSchema, CreateSupplierInvoiceSchema, supplierInvoiceNumber } from '@/lib/api/schemas'
@@ -25,6 +25,7 @@ import {
   UpdateInboxItemFieldsSchema,
 } from '@/lib/documents/inbox-item-actions'
 import { convertInboxItemToSupplierInvoice } from '@/lib/operations/inbox-convert'
+import { listRemovedInboxItems, restoreInboxItem, REMOVED_INBOX_ITEMS_LIMIT } from '@/lib/operations/inbox-restore'
 import { INTAKE_SOURCE_IDS } from '@/lib/intake/sources'
 import { InboxPurchaseCategorySchema } from '@/lib/categories/inbox-purchase-category'
 import { DocumentReadingSchema } from '@/lib/documents/reading/schema'
@@ -230,16 +231,17 @@ export const inboxItemsDelete = defineOperation({
   kind: 'write',
   scope: 'documents:write',
   risk: 'medium',
-  reversible: false,
+  reversible: true,
   docs: {
     summary: 'Discard an inbox item that was never converted or booked.',
     description:
-      'Removes the inbox item (its e-mail metadata and reading). The document it carried stays in the archive with its own deletion rule (DELETE /documents/{id}). Refused once the item became a supplier invoice or was booked. Idempotent. Dry-runnable.',
+      'Takes the item out of the inbox. A document it carried stays in the archive with its own deletion rule (DELETE /documents/{id}), and the item as it was (its reading and e-mail fields) is kept with that document, so it can be put back (POST /inbox-items/{id}/restore) when the dry run\'s preview answers can_be_put_back true. Refused once the item became a supplier invoice or was booked. Idempotent. Dry-runnable.',
     useWhen: 'Spam, a duplicate delivery or a non-accounting e-mail landed in the inbox.',
     doNotUseFor: 'Deleting the document itself (DELETE /documents/{id}) or undoing a supplier invoice or verifikat.',
     pitfalls: [
       'A converted item returns 409 INBOX_ITEM_DELETE_CONVERTED; a booked one 409 INBOX_ITEM_DELETE_BOOKED.',
-      'Cannot be undone: the e-mail metadata and the reading are gone.',
+      'Not every removal can be undone: an item that carried no document (a mail without a readable attachment) keeps nothing, and one matched to a bank transaction, or whose document a verifikat holds, is not put back. The dry run\'s preview says which: can_be_put_back.',
+      'Deleting the document afterwards (DELETE /documents/{id}) removes the kept item with it: then nothing can be put back.',
     ],
     example: { response: { data: { inbox_item_id: '1b2c…', deleted: true }, meta: META } },
   },
@@ -255,7 +257,7 @@ export const inboxItemsDelete = defineOperation({
     name: 'gnubok_delete_inbox_item',
     title: 'Delete Inbox Item',
     description:
-      'Stage discarding an inbox item (spam, duplicate delivery). The document stays in the archive. Refused once the item became a supplier invoice or was booked; cannot be undone.',
+      'Stage discarding an inbox item (spam, duplicate delivery). Its document stays in the archive. The preview\'s can_be_put_back says whether a person can put the item back from Senast borttagna. Refused once the item became a supplier invoice or was booked.',
     // PH 243: "arkivera" is how people ask for it; the item leaves the Inkorg
     // and its document stays in the archive (Ta bort ur Inkorgen).
     keywords: [
@@ -274,6 +276,108 @@ export const inboxItemsDelete = defineOperation({
     const outcome = await deleteInboxItem(ctx, inbox_item_id, { dryRun })
     if (!outcome.ok || outcome.dryRun) return outcome
     return { ok: true, data: { inbox_item_id: outcome.data.id, deleted: true as const } }
+  },
+})
+
+const RemovedInboxItemOut = z.object({
+  inbox_item_id: z.string().uuid().describe('The item\'s own id, the one to put back.'),
+  document_id: z.string().uuid().describe('The document it carried, still in the archive.'),
+  file_name: z.string().nullable(),
+  vendor_name: z.string().nullable().describe('Supplier name as read from the document.'),
+  amount: z.number().nullable().describe('Total as read from the document, in its currency.'),
+  currency: z.string().nullable(),
+  email_from: z.string().nullable(),
+  email_subject: z.string().nullable(),
+  removed_at: z.string().describe('When it was deleted.'),
+  removed_by: z
+    .object({
+      actor_type: z.string().describe('The door that deleted it: user, api_key, mcp_oauth, agent_chat, ...'),
+      user_id: z.string().uuid().nullable().describe('The person who deleted it, or whom the key or agent acted for.'),
+    })
+    .describe('Who deleted it.'),
+})
+
+export const inboxItemsListRemoved = defineOperation({
+  id: 'inbox-items.list-removed',
+  kind: 'read',
+  scope: 'documents:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'List the inbox items deleted most recently that can still be put back.',
+    description: `Returns at most ${REMOVED_INBOX_ITEMS_LIMIT} deleted inbox items, newest deletion first, one per document: the file name, the vendor, total and currency of its reading, its e-mail sender and subject, when it was deleted and by whom. Only items that can be put back are listed: one that is in the inbox again, or whose document has since been booked or become the underlag of a supplier invoice, an expense claim or a bank transaction, is left out.`,
+    useWhen: 'An inbox item was deleted by mistake and you need its id to put it back.',
+    doNotUseFor: 'The inbox itself (GET /inbox-items) or the document archive (GET /documents).',
+    pitfalls: [
+      'Not a history of every deletion: an item deleted before deleted items were kept, one that carried no document and one whose document was deleted from the archive are never listed.',
+      'The list is read from the newest deletions only, so it can be shorter than the limit after many items were put back.',
+    ],
+    example: {
+      response: {
+        data: {
+          removed_items: [
+            {
+              inbox_item_id: '1b2c…',
+              document_id: '4f1c…',
+              file_name: 'kvitto.pdf',
+              vendor_name: 'Clas Ohlson AB',
+              amount: 499,
+              currency: 'SEK',
+              email_from: 'kvitto@clasohlson.se',
+              email_subject: 'Ditt kvitto',
+              removed_at: '2026-11-16T09:12:44Z',
+              removed_by: { actor_type: 'user', user_id: '8a3e…' },
+            },
+          ],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({}),
+  output: z.object({ removed_items: z.array(RemovedInboxItemOut) }),
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/inbox-items/removed' },
+  run: (ctx) => listRemovedInboxItems(ctx),
+})
+
+export const inboxItemsRestore = defineOperation({
+  id: 'inbox-items.restore',
+  kind: 'write',
+  scope: 'documents:write',
+  risk: 'low',
+  reversible: true,
+  docs: {
+    summary: 'Put a deleted inbox item back in the inbox, as it was deleted.',
+    description:
+      'Re-creates the item under its own id with the reading, e-mail fields, source and arrival time it had when it was deleted: nothing is read again and no new usage is counted. It comes back open: a bank transaction it was matched to is not matched again. Works once per deletion. Refused when the item or its document is in the inbox again, when the document is on a verifikat or is the underlag of a supplier invoice, an expense claim or a bank transaction, and when a byte-identical copy is queued or booked. Dry-runnable.',
+    useWhen: 'An inbox item was deleted by mistake (DELETE /inbox-items/{id}) and should be worked after all.',
+    doNotUseFor:
+      'Queueing an archive document that never was an inbox item (upload it: POST /inbox-items) or undoing a supplier invoice or verifikat.',
+    pitfalls: [
+      'The id is the deleted item\'s own inbox_item_id (GET /inbox-items/removed lists them), not the document id.',
+      'A second call answers 409 INBOX_ITEM_RESTORE_IN_INBOX: read the inbox instead of retrying.',
+      '404 INBOX_ITEM_RESTORE_NOT_FOUND also covers an id from another company and an item whose document was deleted from the archive.',
+    ],
+    example: { response: { data: { inbox_item_id: '1b2c…', document_id: '4f1c…', restored: true }, meta: META } },
+  },
+  input: z.object({ inbox_item_id: INBOX_ITEM_ID }),
+  output: z.object({ inbox_item_id: z.string().uuid(), document_id: z.string().uuid(), restored: z.literal(true) }),
+  errorCodes: [
+    'INBOX_ITEM_RESTORE_NOT_FOUND',
+    'INBOX_ITEM_RESTORE_IN_INBOX',
+    'INBOX_ITEM_RESTORE_BOOKED',
+    'INBOX_ITEM_RESTORE_LINKED',
+    'INBOX_ITEM_RESTORE_DUPLICATE',
+  ],
+  http: {
+    method: 'POST',
+    path: '/api/v1/companies/:companyId/inbox-items/:id/restore',
+    pathParams: { id: 'inbox_item_id' },
+  },
+  run: async (ctx, { inbox_item_id }, { dryRun }) => {
+    const outcome = await restoreInboxItem(ctx, inbox_item_id, { dryRun })
+    if (!outcome.ok || outcome.dryRun) return outcome
+    return { ok: true, data: { inbox_item_id: outcome.data.id, document_id: outcome.data.document_id, restored: true as const } }
   },
 })
 

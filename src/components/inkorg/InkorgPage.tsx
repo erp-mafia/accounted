@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { removalCanBePutBack } from '@/lib/documents/inbox-item-state'
 import { cn } from '@/lib/utils'
 import { INKORG_FOCUS_FIRST, INKORG_FOCUS_QUERY, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { ALL_STARTABLE, offersRemoval, type InkorgStartable } from '@/lib/inkorg/decision'
@@ -32,6 +33,8 @@ import { useDoorName } from './door-icon'
 import { InkorgFocus, type FocusMotion } from './InkorgFocus'
 import { InkorgList } from './InkorgList'
 import { RemoveSeveralBar } from './RemoveSeveralBar'
+import { RemovedItemsLink } from './RemovedItems'
+import { useUndoRemoval } from './use-undo-removal'
 import { InkorgToolbar } from './InkorgToolbar'
 import { MissingFocusStage } from './MissingFocusStage'
 import { MissingUnderlagList } from './MissingUnderlagList'
@@ -178,6 +181,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     [canWrite, view.kind, itemsState, queue],
   )
   const removableSet = useMemo(() => new Set(removableIds), [removableIds])
+  // The rows whose removal can be undone: what the bar's confirm and its Ångra may promise.
+  const putBackIds = useMemo(() => new Set(queue.filter(removalCanBePutBack).map((item) => item.id)), [queue])
   const selection = useBulkSelection(removableIds)
   // What came in here and left for Dokument lately: named under the list, so it never just vanishes (PH 225).
   const routedAway = useMemo(() => recentlyRoutedAway(items, view).length, [items, view])
@@ -312,10 +317,31 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     window.history.replaceState(null, '', url)
   }, [])
 
+  // Ångra on a removal's toast: the item is back in the queue, and back in focus, from the
+  // left, when the focus view is open (as a one-click booking's Ångra brings its item back).
+  const focusOpen = useRef(false)
+  useEffect(() => {
+    focusOpen.current = focusId !== null
+  }, [focusId])
+  const onRemovalUndone = useCallback(
+    async (ids: string[]) => {
+      await refresh()
+      if (!focusOpen.current || ids.length !== 1) return
+      setMotionState({ direction: -1, completed: false })
+      setFocusId(ids[0])
+      scrollContentTop()
+    },
+    [refresh],
+  )
+  const undoRemoval = useUndoRemoval(onRemovalUndone)
+
   const onDone = useCallback(
     async (item: InkorgItem, outcome: { leaves: boolean; payInBank?: PayInBankTarget; dropped?: boolean }) => {
       const id = item.id
       if (outcome.payInBank) setPayInBank(outcome.payInBank)
+      // Taken out of the Inkorg: said in a toast whose Ångra puts it back, when it can come back.
+      // One that cannot gets no toast: its confirm already said it cannot be undone.
+      if (outcome.dropped && removalCanBePutBack(item)) toast({ title: t('drop_done'), action: undoRemoval([id]) })
       // "Klart" first, so the stage carries it as it leaves.
       if (outcome.leaves) setFinishingId(id)
       // The receipt it came with follows it onto its booking (lib/operations/inbox-companion.ts),
@@ -344,7 +370,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
       if (!outcome.leaves) setRevision((r) => r + 1)
       else window.setTimeout(() => setFinishingId((f) => (f === id ? null : f)), DONE_MARK_MS)
     },
-    [refresh, locale, toast, t],
+    [refresh, locale, toast, t, undoRemoval],
   )
 
   // One click: the item leaves at once and the next one opens; the booking waits
@@ -814,7 +840,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                     selection={canWrite ? selection : undefined}
                     selectableIds={removableSet}
                   />
-                  <RemoveSeveralBar selection={selection} selectableCount={removableIds.length} onRemoved={refresh} />
+                  <RemoveSeveralBar selection={selection} selectableCount={removableIds.length} putBackIds={putBackIds} onRemoved={refresh} />
                   {itemsState === 'ready' && routedAway > 0 && (
                     <p className="mt-4 text-xs leading-5 text-muted-foreground">
                       {t('routed_away', { count: routedAway })}{' '}
@@ -822,6 +848,12 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                         {t('routed_away_open')}
                       </Link>
                     </p>
+                  )}
+                  {/* The way back for what was removed by mistake, for whoever may remove. */}
+                  {canWrite && itemsState === 'ready' && (
+                    <div className="mt-4">
+                      <RemovedItemsLink onRestored={refresh} />
+                    </div>
                   )}
                 </>
               )}

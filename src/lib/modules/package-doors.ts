@@ -501,6 +501,8 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'POST /api/inkorg/items/:id/book',
     // The single removal, once per item: it starts nothing.
     'POST /api/inkorg/items/remove',
+    // The removal undone: the item the inbox held comes back.
+    'POST /api/inkorg/items/restore',
     'DELETE /api/extensions/ext/mail/connections',
     'POST /api/extensions/ext/whatsapp-inbox/link/default-company',
     'POST /api/extensions/ext/whatsapp-inbox/link/revoke',
@@ -512,6 +514,8 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'op:inbox-items.delete',
     'op:inbox-items.match-supplier',
     'op:inbox-items.match-transaction',
+    // Putting a deleted item back re-creates what the inbox already held: it starts nothing.
+    'op:inbox-items.restore',
     'op:inbox-items.set-purchase-category',
     'op:inbox-items.unmatch-transaction',
     'op:inbox-items.update-extracted-data',

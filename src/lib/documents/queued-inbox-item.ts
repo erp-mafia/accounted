@@ -154,3 +154,39 @@ async function takeOver(
   const row = ((updated ?? []) as ItemRow[])[0]
   return row ? asQueued(row, true) : asQueued(queued, false)
 }
+
+/**
+ * True when another document of the company carries the same content hash and is booked on a verifikat, or has an
+ * inbox item of its own (open or consumed). Documents without a hash are never treated as copies. Asked by every
+ * writer that files an item for a document that has none (Arkiv's routing, putting a removed item back): a
+ * byte-identical copy beside one that is queued or booked is a double-booking risk.
+ */
+export async function hasQueuedOrBookedTwin(
+  supabase: SupabaseClient,
+  companyId: string,
+  doc: { id: string; sha256_hash?: string | null },
+): Promise<boolean> {
+  if (!doc.sha256_hash) return false
+  const { data: twins, error } = await supabase
+    .from('document_attachments')
+    .select('id, journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('sha256_hash', doc.sha256_hash)
+    .neq('id', doc.id)
+    .limit(20)
+  if (error) throw new Error(`duplicate lookup failed: ${error.message}`)
+  const rows = (twins ?? []) as Array<{ id: string; journal_entry_id: string | null }>
+  if (rows.length === 0) return false
+  if (rows.some((t) => t.journal_entry_id)) return true
+  const { data: twinItems, error: itemsError } = await supabase
+    .from('invoice_inbox_items')
+    .select('id')
+    .eq('company_id', companyId)
+    .in(
+      'document_id',
+      rows.map((t) => t.id),
+    )
+    .limit(1)
+  if (itemsError) throw new Error(`duplicate lookup failed: ${itemsError.message}`)
+  return ((twinItems as Array<{ id: string }> | null) ?? []).length > 0
+}

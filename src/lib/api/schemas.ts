@@ -3547,6 +3547,11 @@ export const RemoveInboxItemsSchema = z.object({
   inbox_item_ids: z.array(uuid).min(1).max(MAX_INBOX_ITEMS_PER_REMOVAL),
 })
 
+/** POST /api/inkorg/items/restore: the deleted inbox item to put back, by its own id. */
+export const RestoreInboxItemSchema = z.object({
+  inbox_item_id: uuid,
+})
+
 /**
  * The link to a company portal as pasted: the server applies the URL rule
  * (normalizePortalUrl in lib/receipt-hunt/company-portals.ts) and refuses

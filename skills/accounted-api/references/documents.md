@@ -862,16 +862,17 @@ Example response `200`:
 ### `DELETE /api/v1/companies/{companyId}/inbox-items/{id}`
 
 **Discard an inbox item that was never converted or booked.**
-`scope:documents:write · risk:medium · idempotent · dry-run`
+`scope:documents:write · risk:medium · idempotent · dry-run · reversible`
 
-Removes the inbox item (its e-mail metadata and reading). The document it carried stays in the archive with its own deletion rule (DELETE /documents/{id}). Refused once the item became a supplier invoice or was booked. Idempotent. Dry-runnable.
+Takes the item out of the inbox. A document it carried stays in the archive with its own deletion rule (DELETE /documents/{id}), and the item as it was (its reading and e-mail fields) is kept with that document, so it can be put back (POST /inbox-items/{id}/restore) when the dry run's preview answers can_be_put_back true. Refused once the item became a supplier invoice or was booked. Idempotent. Dry-runnable.
 
 **Use when:** Spam, a duplicate delivery or a non-accounting e-mail landed in the inbox.
 **Do not use for:** Deleting the document itself (DELETE /documents/{id}) or undoing a supplier invoice or verifikat.
 
 **Pitfalls:**
 - A converted item returns 409 INBOX_ITEM_DELETE_CONVERTED; a booked one 409 INBOX_ITEM_DELETE_BOOKED.
-- Cannot be undone: the e-mail metadata and the reading are gone.
+- Not every removal can be undone: an item that carried no document (a mail without a readable attachment) keeps nothing, and one matched to a bank transaction, or whose document a verifikat holds, is not put back. The dry run's preview says which: can_be_put_back.
+- Deleting the document afterwards (DELETE /documents/{id}) removes the kept item with it: then nothing can be put back.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1236,6 +1237,60 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/inbox-items/{id}/restore`
+
+**Put a deleted inbox item back in the inbox, as it was deleted.**
+`scope:documents:write · risk:low · idempotent · dry-run · reversible`
+
+Re-creates the item under its own id with the reading, e-mail fields, source and arrival time it had when it was deleted: nothing is read again and no new usage is counted. It comes back open: a bank transaction it was matched to is not matched again. Works once per deletion. Refused when the item or its document is in the inbox again, when the document is on a verifikat or is the underlag of a supplier invoice, an expense claim or a bank transaction, and when a byte-identical copy is queued or booked. Dry-runnable.
+
+**Use when:** An inbox item was deleted by mistake (DELETE /inbox-items/{id}) and should be worked after all.
+**Do not use for:** Queueing an archive document that never was an inbox item (upload it: POST /inbox-items) or undoing a supplier invoice or verifikat.
+
+**Pitfalls:**
+- The id is the deleted item's own inbox_item_id (GET /inbox-items/removed lists them), not the document id.
+- A second call answers 409 INBOX_ITEM_RESTORE_IN_INBOX: read the inbox instead of retrying.
+- 404 INBOX_ITEM_RESTORE_NOT_FOUND also covers an id from another company and an item whose document was deleted from the archive.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { inbox_item_id: string, document_id: string, restored: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "inbox_item_id": "1b2c…",
+    "document_id": "4f1c…",
+    "restored": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp`
 
 **Mark an inbox item as consumed by a journal entry.**
@@ -1344,6 +1399,73 @@ Example response `200`:
     "inbox_item_id": "1b2c…",
     "matched_transaction_id": null,
     "released_transaction_id": "1f2e…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/inbox-items/removed`
+
+**List the inbox items deleted most recently that can still be put back.**
+`scope:documents:read · risk:low · idempotent`
+
+Returns at most 20 deleted inbox items, newest deletion first, one per document: the file name, the vendor, total and currency of its reading, its e-mail sender and subject, when it was deleted and by whom. Only items that can be put back are listed: one that is in the inbox again, or whose document has since been booked or become the underlag of a supplier invoice, an expense claim or a bank transaction, is left out.
+
+**Use when:** An inbox item was deleted by mistake and you need its id to put it back.
+**Do not use for:** The inbox itself (GET /inbox-items) or the document archive (GET /documents).
+
+**Pitfalls:**
+- Not a history of every deletion: an item deleted before deleted items were kept, one that carried no document and one whose document was deleted from the archive are never listed.
+- The list is read from the newest deletions only, so it can be shorter than the limit after many items were put back.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    removed_items: { inbox_item_id: string, document_id: string, file_name: string | null, vendor_name: string | null, amount: number | null, currency: string | null, email_from: string | null, email_subject: string | null, removed_at: string, removed_by: { actor_type: string, user_id: string | null } }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "removed_items": [
+      {
+        "inbox_item_id": "1b2c…",
+        "document_id": "4f1c…",
+        "file_name": "kvitto.pdf",
+        "vendor_name": "Clas Ohlson AB",
+        "amount": 499,
+        "currency": "SEK",
+        "email_from": "kvitto@clasohlson.se",
+        "email_subject": "Ditt kvitto",
+        "removed_at": "2026-11-16T09:12:44Z",
+        "removed_by": {
+          "actor_type": "user",
+          "user_id": "8a3e…"
+        }
+      }
+    ]
   },
   "meta": {
     "request_id": "req_…",

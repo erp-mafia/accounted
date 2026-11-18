@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
-import { agentReasonColumn, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
+import { agentReasonColumn, isMissingColumnError, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
 import { committingAgentReason, committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
 import { modelReadingOf, type DocumentReadingRow } from '@/lib/documents/model-reading'
@@ -40,7 +40,10 @@ import { inboxInputHash, withProgramVersion } from './provenance'
  * Neither step can fail the booking: errors are logged and dropped.
  *
  * A deleted item is recorded against its document only: the row's
- * inbox_item_id would cascade it away with the item it describes.
+ * inbox_item_id would cascade it away with the item it describes. That row
+ * also keeps the item as it was deleted (removed_item, migration
+ * 20261117192013), which is what puts it back
+ * (lib/operations/inbox-restore.ts).
  */
 
 const log = createLogger('suggestion-log/inbox')
@@ -150,6 +153,31 @@ export async function loadEntryLines(
   }
 }
 
+/**
+ * The removed_item column of the decision that deleted an inbox item, for a
+ * payload to spread: `{}` on every other decision, so a row without one
+ * never names the column. The schema guard (tests/schema) reads the spread
+ * as this one column.
+ */
+export function removedItemColumn(item: Record<string, unknown> | null | undefined): { removed_item?: Record<string, unknown> } {
+  return item ? { removed_item: item } : {}
+}
+
+/**
+ * Write a decision that may keep the item it deleted. The code is live
+ * before the migration that adds the column runs: when PostgREST does not
+ * know it yet, the decision is written without the copy (that deletion then
+ * cannot be put back), so the write itself never fails over it.
+ */
+async function writeWithRemovedItem<R extends { error: { code?: string } | null }>(
+  item: Record<string, unknown> | null,
+  write: (item: Record<string, unknown> | null) => PromiseLike<R>,
+): Promise<R> {
+  if (!item) return write(null)
+  const first = await write(item)
+  return isMissingColumnError(first.error) ? write(null) : first
+}
+
 /** Postgres refused the row because its document_attachments row is gone (23503 on the document foreign key). */
 function isDocumentGone(error: { code?: string; message?: string }): boolean {
   return error.code === '23503' && (error.message ?? '').includes('suggestion_log_document_id_fkey')
@@ -170,6 +198,8 @@ export async function recordInboxDecision(
   userId: string | null,
   /** The guards the door ran before this decision (./checks.ts); omitted when it does not report them. */
   checks?: DecisionCheck[] | null,
+  /** On a deletion: the item's row as it was, kept so the item can be put back. */
+  removedItem?: Record<string, unknown> | null,
 ): Promise<void> {
   try {
     if (!booking && !snapshot.documentId) return
@@ -192,9 +222,12 @@ export async function recordInboxDecision(
       sourceId: snapshot.documentId ?? snapshot.inboxItemId,
       booked,
     })
-    // The approved operation's reason, when an agent staged it with one.
+    // The approved operation's reason, when an agent staged it with one. The
+    // copy of a deleted item is the outermost retry, so a database without
+    // its column still gets the trace id and the reason.
     const insert = (documentId: string | null) =>
-      writeWithTraceId((traceId) => writeWithAgentReason(committingAgentReason(), (agentReason) =>
+      writeWithRemovedItem(booking ? null : (removedItem ?? null), (removed) =>
+        writeWithTraceId((traceId) => writeWithAgentReason(committingAgentReason(), (agentReason) =>
         supabase.from('suggestion_log').insert({
           company_id: snapshot.companyId,
           kind: 'inbox_item',
@@ -213,8 +246,10 @@ export async function recordInboxDecision(
           // The request that recorded it (lib/observability/trace-context.ts).
           ...traceIdColumn(traceId),
           ...agentReasonColumn(agentReason),
+          ...removedItemColumn(removed),
         }),
-      ))
+      )),
+      )
     let { error } = await insert(snapshot.documentId)
     if (error && snapshot.documentId && isDocumentGone(error)) {
       // The document was deleted between the snapshot and this row: another

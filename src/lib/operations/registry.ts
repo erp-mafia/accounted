@@ -155,6 +155,8 @@ import {
   inboxItemsDelete,
   inboxItemsGet,
   inboxItemsList,
+  inboxItemsListRemoved,
+  inboxItemsRestore,
   inboxItemsUnmatchTransaction,
   inboxItemsUpdateExtractedData,
 } from './inbox-items'
@@ -432,6 +434,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   inboxItemsGet,
   inboxItemsUpdateExtractedData,
   inboxItemsDelete,
+  inboxItemsListRemoved,
+  inboxItemsRestore,
   inboxItemsUnmatchTransaction,
   inboxItemsConvertToSupplierInvoice,
   // inbox-matches
