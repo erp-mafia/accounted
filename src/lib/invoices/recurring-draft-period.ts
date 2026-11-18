@@ -13,9 +13,8 @@
  * the invoice, before the removal, because deleting the invoice nulls
  * last_invoice_id (ON DELETE SET NULL).
  *
- * next_run_date is left alone. It is the cadence, not what is billed, and the
- * run-now route never moves it either: the next scheduled run, or "Skapa
- * faktura nu", bills the restored period.
+ * next_run_date is left alone. It is the cadence, not what is billed: the
+ * next scheduled run, or "Skapa faktura nu", bills the restored period.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'

@@ -149,13 +149,16 @@ export default function RecurringInvoicesPage() {
         fetchSchedules()
       } else {
         // The server's sentence when it gave one: a run already in progress
-        // (another tab, the hourly cron) created nothing, and says so.
+        // (another tab, the hourly cron) created nothing, and says so; a run
+        // that may have left an invoice asks the person to check first.
         const json = await res.json().catch(() => null)
         toast({
           title: t('run_now_failed_title'),
           description: json?.error ? getErrorMessage(json, { locale }) : undefined,
           variant: 'destructive',
         })
+        // The schedule's own warning says what to do next (accounted#213).
+        fetchSchedules()
       }
     } finally {
       setRunningId(null)

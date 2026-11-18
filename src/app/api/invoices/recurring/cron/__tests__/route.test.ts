@@ -229,6 +229,7 @@ describe('GET /api/invoices/recurring/cron', () => {
     // Today Stockholm = 2026-07-06; schedule missed its 2026-07-05 date.
     vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
     enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5 })], error: null })
+    enqueue({ data: [{ id: 's-1' }], error: null }) // the roll landed
 
     const { body } = await parseJsonResponse<CronBody>(await GET(req()))
     expect(executeRecurringSchedule).not.toHaveBeenCalled()
@@ -260,8 +261,7 @@ describe('GET /api/invoices/recurring/cron', () => {
   it('writes a skip warning when rolling a stale schedule forward', async () => {
     vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
     enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5 })], error: null })
-    // Roll-forward update.
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 's-1' }], error: null }) // the roll landed
 
     const { body } = await parseJsonResponse<CronBody>(await GET(req()))
     expect(body.results[0].skipReason).toBe('stale_rolled_forward')
@@ -271,6 +271,32 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(roll!.payload.next_run_date).toBe('2026-08-05')
     expect(roll!.payload.last_run_warning).toContain('Ingen faktura skapades den 2026-07-05')
     expect(roll!.payload.last_run_warning).toContain('2026-08-05')
+  })
+
+  it('the stale roll writes only while the schedule\'s last run is the one it read (review of !1529)', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5, last_run_at: '2026-06-05T06:30:00.000Z' })], error: null })
+    enqueue({ data: [{ id: 's-1' }], error: null }) // the roll landed
+
+    await GET(req())
+
+    const [roll] = scheduleUpdates()
+    expect(roll!.filter((c) => c.method === 'eq' || c.method === 'is').map((c) => [c.method, ...c.args])).toEqual([
+      ['eq', 'id', 's-1'],
+      ['eq', 'company_id', 'c-1'],
+      ['eq', 'last_run_at', '2026-06-05T06:30:00.000Z'],
+    ])
+  })
+
+  it('a stale roll that finds the schedule moved on since its read writes nothing over it: a run made by hand recorded it meanwhile', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5 })], error: null })
+    enqueue({ data: [], error: null }) // the roll matched no row: last_run_at moved
+
+    const { body } = await parseJsonResponse<CronBody & { failed: number }>(await GET(req()))
+
+    expect(body.failed).toBe(0)
+    expect(body.results).toEqual([{ scheduleId: 's-1', skipped: true, skipReason: 'claimed_by_concurrent_run' }])
   })
 
   it('advances a quarterly schedule one quarter after a successful run', async () => {
@@ -304,8 +330,7 @@ describe('GET /api/invoices/recurring/cron', () => {
       data: [makeSchedule({ next_run_date: '2026-04-05', day_of_month: 5, interval_months: 3 })],
       error: null,
     })
-    // Roll-forward update.
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 's-1' }], error: null }) // the roll landed
 
     const { body } = await parseJsonResponse<CronBody>(await GET(req()))
     expect(executeRecurringSchedule).not.toHaveBeenCalled()
@@ -598,7 +623,7 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(scheduleUpdates()).toHaveLength(2)
   })
 
-  it('a failure with the invoice in place keeps the claim and tells the user to check the invoice', async () => {
+  it('a failure after the record keeps the invoice, and the record\'s own warning tells the user to check it', async () => {
     vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
     enqueue({ data: [makeSchedule({ auto_send: true })], error: null })
     enqueue({ data: [{ id: 's-1' }], error: null }) // claim
@@ -613,11 +638,29 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(body.failed).toBe(1)
     expect(removedDrafts).toEqual([])
     const writes = updatePayloads.filter((u) => u.table === 'recurring_invoice_schedules').map((u) => u.payload)
-    const last = writes[writes.length - 1]!
-    // No release: last_run_at is not handed back, so no second invoice today.
-    expect('last_run_at' in last).toBe(false)
-    expect(last.last_run_warning).toContain('avbröts: event bus unavailable')
-    expect(last.last_run_warning).toContain('Kontrollera om en faktura skapades för perioden')
+    // The claim and the record, nothing after: no release (no second invoice
+    // today), and no held warning. The schedule names the invoice and has
+    // moved on; held, its next date would be passed by (accounted#213).
+    expect(writes).toHaveLength(2)
+    expect(writes[1]).toMatchObject({ last_invoice_id: 'inv-1', next_run_date: '2026-08-06' })
+    expect(writes[1]!.last_run_warning).toContain('Kontrollera fakturan')
+  })
+
+  it('a schedule held by a run of "Skapa faktura nu" on an earlier day is not run on its date (accounted#213)', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    const held =
+      'Körningen 2026-07-05 avslutades inte. Kontrollera om en faktura skapades för perioden. ' +
+      'Om ingen skapades: använd "Skapa faktura nu". ' +
+      'Om en skapades: se till att schemats periodstart (om den är ifylld) ligger efter fakturans period, ' +
+      'och pausa och aktivera sedan schemat. ' +
+      'Har schemat inte flyttats till nästa körning väntar det tills du har gjort något av detta.'
+    enqueue({ data: [makeSchedule({ last_run_at: '2026-07-05T08:00:00.000Z', last_run_warning: held })], error: null })
+
+    const { body } = await parseJsonResponse<CronBody>(await GET(req()))
+
+    expect(body.results).toEqual([{ scheduleId: 's-1', skipped: true, skipReason: 'held_for_a_person' }])
+    expect(executeRecurringSchedule).not.toHaveBeenCalled()
+    expect(updatePayloads).toEqual([])
   })
 
   describe('a schedule its last run left for a person', () => {
@@ -691,7 +734,7 @@ describe('GET /api/invoices/recurring/cron', () => {
         data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5, last_run_warning: 'Körningen 2026-07-05 misslyckades: x. Nytt försök görs automatiskt varje timme idag.' })],
         error: null,
       })
-      enqueue({ data: null, error: null })
+      enqueue({ data: [{ id: 's-1' }], error: null }) // the roll landed
 
       const { body } = await parseJsonResponse<CronBody>(await GET(req()))
 
@@ -804,7 +847,7 @@ describe('GET /api/invoices/recurring/cron: billing period', () => {
   it('leaves period_start alone when a stale schedule is rolled forward without an invoice', async () => {
     vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
     enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5, period_start: '2026-07-01' })], error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 's-1' }], error: null }) // the roll landed
 
     await GET(req())
     expect(executeRecurringSchedule).not.toHaveBeenCalled()

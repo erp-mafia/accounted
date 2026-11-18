@@ -287,12 +287,39 @@ export class RecurringInvoiceKeptError extends Error {
 /**
  * A failure that may leave a draft behind (one the run could not remove, or
  * a header INSERT whose answer was an error): for a caller that records
- * through onInvoiceCreated (the cron, which holds the schedule on
- * RecurringInvoiceKeptError instead of retrying beside the draft), kept; for
- * any other caller, the failure as it is.
+ * through onInvoiceCreated (lib/invoices/recurring-schedule-run.ts, which
+ * holds the schedule on RecurringInvoiceKeptError instead of retrying beside
+ * the draft), kept; for any other caller, the failure as it is.
  */
 function keptOrPlain(options: ExecuteScheduleOptions, invoiceId: string, failure: Error): Error {
   return options.onInvoiceCreated ? new RecurringInvoiceKeptError(invoiceId, failure) : failure
+}
+
+/** The SQLSTATE classes a statement raises itself, before any commit: data, integrity, access, raise. */
+const REFUSED_SQLSTATE_CLASSES = new Set(['22', '23', '42', 'P0'])
+
+/**
+ * The rest, by code. Transaction rollbacks: a serialization failure, a
+ * deferred constraint at commit, a deadlock (not 40003, statement completion
+ * unknown). PostgREST requests that never reached a statement: no connection
+ * (PGRST000), no schema cache (PGRST002), no pool connection in time
+ * (PGRST003). Not PGRST001: a client error, which can come after a COMMIT
+ * landed (accounted#213).
+ */
+const REFUSED_CODES = new Set(['40001', '40002', '40P01', 'PGRST000', 'PGRST002', 'PGRST003'])
+
+/**
+ * Whether an error answer, for a row known to be absent, proves the write did
+ * not land and never will: the database refused the statement itself and its
+ * transaction rolled back, or PostgREST never sent it. Only ever asked once
+ * the row is read back absent: a refusal code alone can name a row that is
+ * there (a replayed POST answers 23505 on its own key). Any other answer (a
+ * reset connection, a gateway timeout, a client error) may hide one that
+ * landed, or one still on its way.
+ */
+function writeRefused(error: { code?: string } | null): boolean {
+  const code = error?.code ?? ''
+  return REFUSED_CODES.has(code) || (code.length === 5 && REFUSED_SQLSTATE_CLASSES.has(code.slice(0, 2)))
 }
 
 /**
@@ -503,11 +530,16 @@ export async function executeRecurringSchedule(
   // 5. Insert invoice header, under an id this run generates. An error answer
   //    to the INSERT does not prove the row is absent: postgrest-js answers a
   //    502/504 or a reset connection as an error and does not retry a POST,
-  //    so the row may have landed (accounted#211). The id names the draft the
-  //    run may have left, and a caller that records (the cron) keeps the run
-  //    held for a person instead of giving it back beside that draft.
+  //    so the row may have landed (accounted#211). The id settles it, read
+  //    back first whatever the answer's code: a row under it is this run's,
+  //    and the run goes on with it as if the answer had arrived
+  //    (accounted#213). Absent after a refusal by the database itself, nothing
+  //    landed or will: the run is given back and retried. Absent after any
+  //    other answer, or not read, it may still be on its way, and a caller
+  //    that records keeps the run held for a person instead of giving it back
+  //    beside that draft.
   const invoiceId = crypto.randomUUID()
-  const { data: invoice, error: invoiceError } = await supabase
+  const { data: inserted, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
       id: invoiceId,
@@ -552,12 +584,24 @@ export async function executeRecurringSchedule(
     .select()
     .single()
 
+  let invoice = inserted
   if (invoiceError || !invoice) {
+    const failure = new Error(`failed to insert invoice from schedule: ${invoiceError?.message ?? 'unknown'}`)
+    const { data: landed, error: readError } = await supabase
+      .from('invoices')
+      .select('id')
+      .eq('id', invoiceId)
+      .eq('company_id', schedule.company_id)
+      .maybeSingle()
+    if (!readError && !landed && writeRefused(invoiceError)) throw failure
     // Kept for a caller that records: given back, the next run would create a
-    // second draft for the period beside this one, if it landed. Any other
-    // caller (a person who clicked "Skapa faktura nu" and reads the answer)
-    // gets the failure as it is.
-    throw keptOrPlain(options, invoiceId, new Error(`failed to insert invoice from schedule: ${invoiceError?.message ?? 'unknown'}`))
+    // second draft for the period beside this one, if it landed.
+    if (readError || !landed) throw keptOrPlain(options, invoiceId, failure)
+    opLog.warn('recurring invoice insert answered an error but landed; the run goes on with it', {
+      invoiceId,
+      error: invoiceError?.message,
+    })
+    invoice = landed
   }
 
   // 6. Insert items. An article's revenue account is used only where

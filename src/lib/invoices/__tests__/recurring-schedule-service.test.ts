@@ -1417,8 +1417,9 @@ describe('executeRecurringSchedule dimension propagation', () => {
       expect(second!.id).not.toBe(first!.id)
     })
 
-    it('an insert that answers an error is kept for a caller that records, naming the id the row would have: the cron holds the schedule instead of retrying beside it', async () => {
+    it('an insert that answers an error and is not found under its id is kept for a caller that records: the run holds the schedule instead of retrying beside it', async () => {
       enqueueUntilInsertFails()
+      enqueue({ data: null, error: null }) // the read-back: no row under the run's id, yet
       const onInvoiceCreated = vi.fn()
 
       const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
@@ -1431,14 +1432,120 @@ describe('executeRecurringSchedule dimension propagation', () => {
       expect((failure as RecurringInvoiceKeptError).message).toBe(
         'failed to insert invoice from schedule: upstream connect error or disconnect/reset before headers',
       )
+      // Read back by the id the run gave it, in its company.
+      const readBack = calls.filter((c) => c.table === 'invoices').slice(-4).map((c) => [c.method, ...c.args])
+      expect(readBack).toEqual([
+        ['select', 'id'],
+        ['eq', 'id', insertedHeader().id],
+        ['eq', 'company_id', 'company-1'],
+        ['maybeSingle'],
+      ])
       // Nothing after the insert: no lines, no removal, no record.
       expect(onInvoiceCreated).not.toHaveBeenCalled()
       expect(inserted['invoice_items']).toBeUndefined()
       expect(findCalls('invoices', 'delete')).toHaveLength(0)
     })
 
-    it('without a caller that records ("Skapa faktura nu"), the failure as it is', async () => {
+    it('an insert that answers an error but landed: the read-back finds it under its id and the run goes on with it (accounted#213)', async () => {
       enqueueUntilInsertFails()
+      enqueue({ data: { id: 'inv-1' }, error: null }) // the read-back finds the row
+      enqueue({ data: null, error: null }) // invoice_items insert
+      enqueue({ data: { id: 'inv-1', invoice_number: null, customer, items: [] }, error: null }) // re-fetch
+      const onInvoiceCreated = vi.fn(async () => {})
+
+      const result = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated,
+      })
+
+      expect(result.invoiceId).toBe('inv-1')
+      expect(onInvoiceCreated).toHaveBeenCalledWith('inv-1')
+      expect(inserted['invoices']).toHaveLength(1)
+      expect((inserted['invoice_items']![0] as Array<{ invoice_id: string }>)[0]!.invoice_id).toBe('inv-1')
+    })
+
+    /** The insert answers `error`; the read-back by its id then answers `readBack`. */
+    function enqueueInsertAnswered(error: { code?: string; message: string }, readBack: { data: unknown; error: unknown }) {
+      enqueue({ data: customer, error: null }) // customers select
+      enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+      enqueue({ data: null, error }) // invoices insert
+      enqueue(readBack) // the read-back by the run's own id
+    }
+
+    it.each([
+      ['a constraint', '23514'],
+      ['a serialization failure rolled back', '40001'],
+      ['a deferred constraint at commit', '40002'],
+      ['a deadlock rolled back', '40P01'],
+      ['a row-level security refusal', '42501'],
+      ['a trigger', 'P0001'],
+      ['PostgREST could not connect', 'PGRST000'],
+      ['PostgREST had no schema cache', 'PGRST002'],
+      ['no pool connection in time', 'PGRST003'],
+    ])('a refusal by the database itself (%s, %s) and no row under the id: nothing landed, the failure as it is, even for a caller that records', async (_what, code) => {
+      enqueueInsertAnswered({ code, message: 'refused' }, { data: null, error: null })
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: vi.fn(),
+      }).catch((err: unknown) => err)
+
+      // Given back by the caller, so the next run retries.
+      expect(failure).not.toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as Error).message).toBe('failed to insert invoice from schedule: refused')
+      // Read back first, whatever the code (review of !1529).
+      expect(findCalls('invoices', 'maybeSingle')).toHaveLength(1)
+    })
+
+    it.each([
+      ['a client error: the connection lost mid-command, at COMMIT included', 'PGRST001'],
+      ['statement completion unknown', '40003'],
+      ['a statement timeout', '57014'],
+      ['a connection failure', '08006'],
+    ])('an answer that does not prove nothing landed (%s, %s) and no row under the id yet: kept, the caller holds the schedule', async (_what, code) => {
+      enqueueInsertAnswered({ code, message: 'unsure' }, { data: null, error: null })
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: vi.fn(),
+      }).catch((err: unknown) => err)
+
+      expect(failure).toBeInstanceOf(RecurringInvoiceKeptError)
+      expect((failure as RecurringInvoiceKeptError).invoiceId).toBe(insertedHeader().id)
+    })
+
+    it('a replayed insert answered 23505 on its own key: the read-back finds the row, and the run goes on with it', async () => {
+      enqueueInsertAnswered(
+        { code: '23505', message: 'duplicate key value violates unique constraint "invoices_pkey"' },
+        { data: { id: 'inv-1' }, error: null },
+      )
+      enqueue({ data: null, error: null }) // invoice_items insert
+      enqueue({ data: { id: 'inv-1', invoice_number: null, customer, items: [] }, error: null }) // re-fetch
+      const onInvoiceCreated = vi.fn(async () => {})
+
+      const result = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated,
+      })
+
+      expect(result.invoiceId).toBe('inv-1')
+      expect(onInvoiceCreated).toHaveBeenCalledWith('inv-1')
+    })
+
+    it('a refusal code with a read-back that fails is kept: the code alone does not prove the row absent', async () => {
+      enqueueInsertAnswered({ code: '23505', message: 'duplicate key' }, { data: null, error: { message: 'connection refused' } })
+
+      const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, {
+        suppressAutoSend: true,
+        onInvoiceCreated: vi.fn(),
+      }).catch((err: unknown) => err)
+
+      expect(failure).toBeInstanceOf(RecurringInvoiceKeptError)
+    })
+
+    it('without a caller that records, the failure as it is', async () => {
+      enqueueUntilInsertFails()
+      enqueue({ data: null, error: null }) // the read-back: no row
 
       const failure = await executeRecurringSchedule(client, makeTaggedSchedule(), today, { suppressAutoSend: true }).catch(
         (err: unknown) => err,

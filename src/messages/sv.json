@@ -7843,7 +7843,7 @@
     "delete_confirm": "Ta bort schemat \"{name}\"? Redan skapade fakturor påverkas inte.",
     "delete_confirm_title": "Ta bort schemat?",
     "run_now": "Skapa faktura nu",
-    "run_now_confirm": "Skapa en faktura för \"{name}\" nu? Om schemat har automatiskt utskick skickas den direkt till kunden. Nästa schemalagda körning påverkas inte.",
+    "run_now_confirm": "Skapa en faktura för \"{name}\" nu? Om schemat har automatiskt utskick skickas den direkt till kunden. Nästa schemalagda körning påverkas inte, utom om den är idag eller redan har passerat: då ersätter den här fakturan den körningen.",
     "run_now_confirm_title": "Skapa faktura nu?",
     "run_now_success_title": "Faktura skapad",
     "run_now_failed_title": "Kunde inte skapa faktura",

@@ -7843,7 +7843,7 @@
     "delete_confirm": "Remove schedule \"{name}\"? Already created invoices are not affected.",
     "delete_confirm_title": "Remove the schedule?",
     "run_now": "Create invoice now",
-    "run_now_confirm": "Create an invoice for \"{name}\" now? If the schedule has automatic sending, it is emailed to the customer immediately. The next scheduled run is not affected.",
+    "run_now_confirm": "Create an invoice for \"{name}\" now? If the schedule has automatic sending, it is emailed to the customer immediately. The next scheduled run is not affected, unless it is today or already past: then this invoice takes that run's place.",
     "run_now_confirm_title": "Create invoice now?",
     "run_now_success_title": "Invoice created",
     "run_now_failed_title": "Could not create invoice",

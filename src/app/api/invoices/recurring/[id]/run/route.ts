@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { executeRecurringSchedule } from '@/lib/invoices/recurring-schedule-service'
-import { advancePeriodStart } from '@/lib/invoices/recurring-placeholders'
-import { claimRecurringScheduleRun, releaseRecurringScheduleRun } from '@/lib/invoices/recurring-schedule-claim'
+import {
+  computeNextRunDate,
+  getStockholmDateHour,
+  RecurringInvoiceKeptError,
+  RecurringRecordNotLandedError,
+} from '@/lib/invoices/recurring-schedule-service'
+import { runRecurringSchedule } from '@/lib/invoices/recurring-schedule-run'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type { RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/types'
 
@@ -18,13 +22,22 @@ import type { RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/t
  * It runs regardless of status (active or paused): the user is clicking the
  * button themselves, so awareness is not in question.
  *
- * It deliberately does NOT touch next_run_date: a manual send is out-of-band
- * and must not disturb the monthly cadence.
+ * It makes the run the hourly cron makes (runRecurringSchedule): the same
+ * claim, so a second click from another tab, or the cron reaching the
+ * schedule meanwhile, gets 409 RECURRING_RUN_IN_PROGRESS instead of a second
+ * invoice (accounted#58); the same record on the schedule before the send,
+ * gated on its claim, and the same hold for a run that did not finish
+ * (accounted#213). The period moves on with the record.
  *
- * It claims the run like the cron does (claimRecurringScheduleRun): a second
- * click from another tab, or the hourly cron reaching the schedule while this
- * runs, gets 409 RECURRING_RUN_IN_PROGRESS instead of a second invoice
- * (accounted#58). A failed run gives the claim back.
+ * next_run_date moves only when this run is the one that was due: on or
+ * after the schedule's run date (a run the cron skipped, held for a person,
+ * or has not reached yet today). Left behind, the cron's stale roll said
+ * "Ingen faktura skapades" beside this invoice, and a person who acted on it
+ * billed the next period early. It moves one interval past the date this run
+ * replaces, the cron's own rule, and no further: a later date that has passed
+ * too is the stale roll's to report ("Ingen faktura skapades den ..."), not
+ * skipped unseen (accounted#213). A click ahead of the date is out of band
+ * and leaves the cadence alone.
  */
 export const POST = withRouteContext(
   'recurring_invoice.run_now',
@@ -59,59 +72,47 @@ export const POST = withRouteContext(
       ? await isSandboxCompany(supabase, companyId)
       : false
 
-    const claimTs = new Date().toISOString()
-    let claimed: boolean
+    const now = new Date()
+    const today = getStockholmDateHour(now).date
+    let outcome: Awaited<ReturnType<typeof runRecurringSchedule>>
     try {
-      claimed = await claimRecurringScheduleRun(supabase, typed, claimTs)
+      outcome = await runRecurringSchedule(supabase, typed, {
+        now,
+        suppressAutoSend,
+        // The run that was due is this one: the next is one interval past it,
+        // as the cron's own record moves it.
+        nextRunDate:
+          typed.next_run_date <= today
+            ? computeNextRunDate(new Date(`${typed.next_run_date}T00:00:00Z`), typed.day_of_month, typed.interval_months ?? 1)
+            : undefined,
+        // Given back, the schedule says what it said before the click.
+        givenBackWarning: () => typed.last_run_warning ?? null,
+        log,
+      })
     } catch (err) {
-      log.error('run-now could not claim the schedule', err as Error, { scheduleId: id })
+      if (err instanceof RecurringInvoiceKeptError) {
+        // The invoice is in place, or may be: a second click could make
+        // another for the same period. The schedule says what to check, and
+        // the run has logged the failure with the invoice id.
+        return errorResponseFromCode('RECURRING_RUN_INVOICE_KEPT', log, { requestId })
+      }
+      if (err instanceof RecurringRecordNotLandedError && !err.heldAt) {
+        // Another run (another tab, the hourly cron) claimed the schedule
+        // while this one created its invoice, and this run's draft is
+        // confirmed gone: the other run bills the period. "Try again" would
+        // bill the next one early (accounted#213).
+        log.info('run-now lost its claim to a concurrent run while creating its invoice', { scheduleId: id })
+        return errorResponseFromCode('RECURRING_RUN_IN_PROGRESS', log, { requestId })
+      }
+      log.error('run-now failed to generate invoice', err as Error, { scheduleId: id })
       return errorResponse(err, log, { requestId })
     }
-    if (!claimed) {
+    if (!outcome.claimed) {
       log.info('run-now lost the claim to a concurrent run', { scheduleId: id })
       return errorResponseFromCode('RECURRING_RUN_IN_PROGRESS', log, { requestId })
     }
 
-    let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
-    try {
-      result = await executeRecurringSchedule(supabase, typed, new Date(), { suppressAutoSend })
-    } catch (err) {
-      await releaseRecurringScheduleRun(supabase, typed, claimTs)
-      log.error('run-now failed to generate invoice', err as Error, { scheduleId: id })
-      return errorResponse(err, log, { requestId })
-    }
-
-    // Record the run for the list view (generated count, last invoice,
-    // warning) but leave next_run_date untouched: the monthly cadence runs
-    // independently of this manual send.
-    const { error: updateError } = await supabase
-      .from('recurring_invoice_schedules')
-      .update({
-        last_run_at: new Date().toISOString(),
-        last_invoice_id: result.invoiceId,
-        last_run_warning: result.warning,
-        generated_count: typed.generated_count + 1,
-        // Unlike next_run_date, the period DOES advance: the invoice just
-        // created covers it, and the cron must bill the next one. A draft
-        // removed before it is issued gives the period back
-        // (lib/invoices/recurring-draft-period.ts).
-        ...(typed.period_start
-          ? { period_start: advancePeriodStart(typed.period_start, typed.interval_months ?? 1) }
-          : {}),
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-
-    if (updateError) {
-      // The invoice exists; the tracking update failing is non-fatal. Log
-      // loudly and still return the created invoice.
-      log.error(
-        'invoice created but failed to update schedule after run-now',
-        updateError,
-        { scheduleId: id, invoiceId: result.invoiceId },
-      )
-    }
-
+    const { result } = outcome
     return NextResponse.json({
       data: {
         invoiceId: result.invoiceId,

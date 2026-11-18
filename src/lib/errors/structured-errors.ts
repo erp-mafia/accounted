@@ -3330,6 +3330,18 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'An invoice is already being created from this schedule. No new invoice was created. Reload and check for the invoice before trying again.',
   },
+  // "Skapa faktura nu" stopped with its invoice in place, or possibly in
+  // place (lib/invoices/recurring-schedule-run.ts): a retry could bill the
+  // period twice, so the person checks first. A schedule left waiting for a
+  // person shows a note that says what to do next; one whose record landed
+  // shows none, hence the condition.
+  RECURRING_RUN_INVOICE_KEPT: {
+    httpStatus: 500,
+    message_sv:
+      'Fakturan kan ha skapats, men körningen kunde inte slutföras. Kontrollera bland fakturorna om den finns innan du försöker igen. Visar schemat en anvisning, följ den.',
+    message_en:
+      'The invoice may have been created, but the run could not be completed. Check your invoices for it before trying again. If the schedule shows a note, follow it.',
+  },
   // Kundorder (sales orders): lib/sales-orders/*, app/api/sales-orders/*
   SALES_ORDER_NOT_FOUND: {
     httpStatus: 404,
