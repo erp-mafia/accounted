@@ -11,7 +11,7 @@ import {
 
 /**
  * Instance-side helpers for running the Skatteverket extension through the
- * hosted connector broker (/api/connect/skv on app.gnubok.se) instead of
+ * connector broker (/api/connect/skv at the Connect service) instead of
  * against Skatteverket directly.
  *
  * Active only when skatteverketConnectorMode() returns non-null: the instance

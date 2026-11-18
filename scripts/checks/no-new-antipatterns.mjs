@@ -2104,10 +2104,10 @@ if (baseline.providerHosts && newProviderHosts.length) {
   newProviderHosts.forEach((f) => console.error(`    ${f}`))
   console.error(
     '  → provider integration logic lives behind the connector, not in the open ledger:\n' +
-      '    route the call through the hosted connector (app/api/connect/*) and the\n' +
+      '    route the call through the Connect service and the\n' +
       '    instance-side connector-mode seam (lib/connect/instance/upstreams.ts), or\n' +
-      '    keep the manual file path. If this file IS the connector\'s own hosted adapter\n' +
-      '    side, re-baseline with --update and say so in the PR.',
+      '    keep the manual file path. If the file must name the host, re-baseline\n' +
+      '    with --update and say so in the PR.',
   )
 }
 

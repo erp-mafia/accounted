@@ -42,9 +42,8 @@
     "files": []
   },
   "providerHosts": {
-    "count": 22,
+    "count": 21,
     "files": [
-      "app/api/connect/bank/[...path]/route.ts",
       "extensions/general/bolagsverket/lib/client.ts",
       "extensions/general/enable-banking/index.ts",
       "extensions/general/enable-banking/lib/api-client.ts",
@@ -1078,9 +1077,6 @@
       "app/api/bank/return/route.ts": 1,
       "app/api/bookkeeping/fiscal-periods/[id]/bokslut-checklist/route.ts": 1,
       "app/api/bookkeeping/journal-entries/[id]/reverse/route.ts": 1,
-      "app/api/connect/bank/[...path]/route.ts": 3,
-      "app/api/connect/skv/api/[...path]/route.ts": 1,
-      "app/api/connect/skv/oauth/authorize-url/route.ts": 1,
       "app/api/digital-mailboxes/[provider]/receive/route.ts": 1,
       "app/api/extensions/skatteverket/vat/kvittenser/cron/route.ts": 1,
       "app/api/extensions/woocommerce/callback/route.ts": 1,
@@ -1293,7 +1289,6 @@
       "lib/company/client-profile.ts": 2,
       "lib/company/post-login-landing.ts": 1,
       "lib/company/tab-guard.ts": 2,
-      "lib/connect/hosted/with-connector-auth.ts": 1,
       "lib/core/bookkeeping/kontantmetod-cutoff.ts": 1,
       "lib/core/documents/document-service.ts": 1,
       "lib/core/documents/storage-proxy.ts": 4,

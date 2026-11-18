@@ -64,7 +64,6 @@ const OAUTH_CONNECT = 'third-party OAuth/consent connect runs in the browser'
 const ASSISTANT = 'in-app assistant runtime; external agents are the API customer'
 const CRON = 'machine endpoint: cron receiver'
 const WEBHOOK = 'machine endpoint: inbound webhook'
-const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated by a connector key'
 const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
 const BANK_CONSENT = 'BankID consent to read a bank account: the account holder gives it in person, no machine door consents'
 const SIGNATORY_LINK = 'token route of the signatory link (/koppla/<token>): the firmatecknare gives the bank consent in person, authenticated by the link, no machine door consents'
@@ -909,15 +908,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/webhooks/billo': machine(WEBHOOK),
   'POST /api/extensions/woocommerce/callback': machine(WEBHOOK),
   'POST /api/connector/sync': machine('machine endpoint: self-hosted entitlement sync trigger (operator)'),
-  'POST /api/connect/entitlements': machine(CONNECTOR),
-  'POST /api/connect/skv/oauth/authorize-url': machine(CONNECTOR),
-  'POST /api/connect/skv/oauth/token': machine(CONNECTOR),
-  'POST /api/connect/bank/:path*': machine(CONNECTOR),
-  'DELETE /api/connect/bank/:path*': machine(CONNECTOR),
-  'POST /api/connect/skv/api/:path*': machine(CONNECTOR),
-  'PUT /api/connect/skv/api/:path*': machine(CONNECTOR),
-  'PATCH /api/connect/skv/api/:path*': machine(CONNECTOR),
-  'DELETE /api/connect/skv/api/:path*': machine(CONNECTOR),
   'PUT /api/storage/:path*': machine('machine endpoint: signed-URL storage proxy that MCP document uploads PUT bytes to'),
 
   // ═══ Extension routes (dispatched by /api/extensions/ext/[...path]) ═══
