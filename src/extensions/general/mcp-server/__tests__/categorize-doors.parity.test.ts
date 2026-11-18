@@ -14,6 +14,13 @@
  * kontering posts.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The dashboard door's question about a filed momsperiod
+// (lib/transactions/filed-vat-categorize.ts) reads the row and the filing
+// record: none here, so every door's stubbed reads stay the booking's own.
+vi.mock('@/lib/transactions/filed-vat-categorize', () => ({
+  filedPeriodCategorizeWarning: async () => null,
+}))
 import { createTableMockSupabase } from '@/tests/helpers'
 import type { MappingResult, Transaction } from '@/types'
 

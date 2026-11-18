@@ -10380,6 +10380,8 @@
     "batch_categorize_partial_description": "{success, plural, one {1 transaction posted} other {# transactions posted}}, {failed} failed",
     "batch_categorize_failed_reason": "{count, plural, one {1 transaction} other {# transactions}}: {reason}",
     "batch_categorize_duplicates_held_back": "{count, plural, one {1 transaction was held back as a possible duplicate and is still in the list.} other {# transactions were held back as possible duplicates and are still in the list.}}",
+    "batch_categorize_filed_vat_held_back": "{count, plural, one {1 transaction was not booked because it changes the figures behind a filed VAT return, and is still in the list.} other {# transactions were not booked because they change the figures behind a filed VAT return, and are still in the list.}}",
+    "batch_filed_vat_intro": "{count, plural, one {1 of the rows changes the figures behind a VAT return already filed:} other {# of the rows change the figures behind a VAT return already filed:}}",
     "batch_undo_all": "Undo all",
     "batch_undo_all_alt": "Undo all posted transactions",
     "batch_undo_done_description": "{count, plural, one {1 posting undone} other {# postings undone}}",

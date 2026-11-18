@@ -62,11 +62,16 @@ export function describeFiledPeriods(
  * no momsdeklaration, the declaration would not read the verifikat, or no
  * ruta of a filed period moves. Throws when a read fails; the guard decides
  * what a failed check means for the booking.
+ *
+ * `subject` is what the text speaks of: a verifikat whose date the person
+ * chose (the default, with the way out of picking another date), or a bank
+ * row booked on the date the bank gave it, where there is no date to pick.
  */
 export async function filedPeriodVoucherWarning(
   supabase: SupabaseClient,
   companyId: string,
   input: VoucherBlockWarningInput,
+  subject: 'voucher' | 'bank_row' = 'voucher',
 ): Promise<VoucherWarning | null> {
   // What the booking posts: its own lines in, and for a rättelse the
   // original's lines out. A date not known yet (a rättelse sent without its
@@ -130,12 +135,16 @@ export async function filedPeriodVoucherWarning(
     code: 'VAT_PERIOD_ALREADY_FILED',
     message_sv: rattelse
       ? `Rättelsen ändrar ${filedSv}: ${namedSv}. Görs rättelsen ${maySv}.`
-      : `Verifikationen ändrar ${filedSv}: ${namedSv}. Bokförs den här ${maySv}. ` +
-        'Hör affärshändelsen till en senare period, välj ett datum där i stället.',
+      : subject === 'bank_row'
+        ? `Bokningen ändrar ${filedSv}: ${namedSv}. Bokförs raden ${maySv}.`
+        : `Verifikationen ändrar ${filedSv}: ${namedSv}. Bokförs den här ${maySv}. ` +
+          'Hör affärshändelsen till en senare period, välj ett datum där i stället.',
     message_en: rattelse
       ? `The correction changes ${filedEn}: ${namedEn}. If it is made, ${mayEn}.`
-      : `The voucher changes ${filedEn}: ${namedEn}. If it is booked here, ${mayEn}. ` +
-        'If the business event belongs to a later period, pick a date there instead.',
+      : subject === 'bank_row'
+        ? `The booking changes ${filedEn}: ${namedEn}. If the row is booked, ${mayEn}.`
+        : `The voucher changes ${filedEn}: ${namedEn}. If it is booked here, ${mayEn}. ` +
+          'If the business event belongs to a later period, pick a date there instead.',
     details: {
       entry_date: input.entry_date,
       filed_periods: changed,

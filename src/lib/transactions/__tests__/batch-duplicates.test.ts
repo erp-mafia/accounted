@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   foldDeferredRetries,
+  foldFiledVatRetries,
   runDeferredDuplicateRetries,
   tallyBatchOutcomes,
   type BatchCategorizeOutcome,
@@ -46,6 +47,7 @@ describe('tallyBatchOutcomes', () => {
       successCount: 2,
       failedCount: 1,
       deferredCount: 1,
+      filedVatHeldCount: 0,
       undoableIds: ['booked'],
       failureReasons: [],
     })
@@ -70,6 +72,7 @@ describe('tallyBatchOutcomes', () => {
       successCount: 1,
       failedCount: 1,
       deferredCount: 0,
+      filedVatHeldCount: 0,
       undoableIds: ['a'],
       failureReasons: [],
     })
@@ -181,6 +184,7 @@ describe('runDeferredDuplicateRetries', () => {
       successCount: 2,
       failedCount: 0,
       deferredCount: 0,
+      filedVatHeldCount: 0,
       undoableIds: ['a'],
       failureReasons: [],
     })
@@ -211,6 +215,7 @@ describe('runDeferredDuplicateRetries', () => {
       successCount: 0,
       failedCount: 0,
       deferredCount: 1,
+      filedVatHeldCount: 0,
       undoableIds: [],
       failureReasons: [],
     })
@@ -243,6 +248,7 @@ describe('runDeferredDuplicateRetries', () => {
       successCount: 0,
       failedCount: 0,
       deferredCount: 0,
+      filedVatHeldCount: 0,
       undoableIds: [],
       failureReasons: [],
     })
@@ -264,6 +270,7 @@ describe('foldDeferredRetries', () => {
       successCount: 2,
       failedCount: 1,
       deferredCount: 0,
+      filedVatHeldCount: 0,
       undoableIds: ['booked', 'flagged'],
       failureReasons: [],
     })
@@ -279,6 +286,7 @@ describe('foldDeferredRetries', () => {
       successCount: 0,
       failedCount: 1,
       deferredCount: 0,
+      filedVatHeldCount: 0,
       undoableIds: [],
       failureReasons: [],
     })
@@ -294,5 +302,56 @@ describe('foldDeferredRetries', () => {
       [{ ok: false, journalEntryId: null, deferredDuplicate: true }],
     )
     expect(foldDeferredRetries(base, retried).deferredCount).toBe(1)
+  })
+})
+
+describe('rows held for the filed-momsperiod question', () => {
+  it('counts a held row as neither booked nor failed, apart from the duplicates', () => {
+    const tally = tallyBatchOutcomes(
+      ['a', 'b', 'c', 'd'],
+      [
+        { ok: true, journalEntryId: 'je-a' },
+        { ok: false, journalEntryId: null, heldForFiledVat: true },
+        { ok: false, journalEntryId: null, deferredDuplicate: true },
+        { ok: false, journalEntryId: null, failureReason: 'Perioden är låst.' },
+      ],
+    )
+
+    expect(tally).toMatchObject({ successCount: 1, failedCount: 1, deferredCount: 1, filedVatHeldCount: 1, undoableIds: ['a'] })
+  })
+
+  it('replaces the held count with what the confirmed retries produced, and keeps the duplicates held back', () => {
+    const base = tallyBatchOutcomes(
+      ['a', 'b', 'c', 'd'],
+      [
+        { ok: true, journalEntryId: 'je-a' },
+        { ok: false, journalEntryId: null, heldForFiledVat: true },
+        { ok: false, journalEntryId: null, heldForFiledVat: true },
+        { ok: false, journalEntryId: null, deferredDuplicate: true },
+      ],
+    )
+    // One booked, one met the duplicate guard after its confirmation.
+    const retried = tallyBatchOutcomes(
+      ['b', 'c'],
+      [
+        { ok: true, journalEntryId: 'je-b' },
+        { ok: false, journalEntryId: null, deferredDuplicate: true },
+      ],
+    )
+
+    expect(foldFiledVatRetries(base, retried)).toMatchObject({
+      successCount: 2,
+      failedCount: 0,
+      deferredCount: 2,
+      filedVatHeldCount: 0,
+      undoableIds: ['a', 'b'],
+    })
+  })
+
+  it('carries a duplicate that turns out to be in a filed period over to that question', () => {
+    const base = tallyBatchOutcomes(['a'], [{ ok: false, journalEntryId: null, deferredDuplicate: true }])
+    const retried = tallyBatchOutcomes(['a'], [{ ok: false, journalEntryId: null, heldForFiledVat: true }])
+
+    expect(foldDeferredRetries(base, retried)).toMatchObject({ deferredCount: 0, filedVatHeldCount: 1 })
   })
 })

@@ -16,6 +16,13 @@
  * empty. The finding lives entirely in the arguments.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The question about a filed momsperiod (lib/transactions/filed-vat-categorize.ts)
+// reads the row and the filing record: none here, so the queued reads stay
+// the booking's own. Its own test and route.test.ts pin it.
+vi.mock('@/lib/transactions/filed-vat-categorize', () => ({
+  filedPeriodCategorizeWarning: async () => null,
+}))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createMockRequest, parseJsonResponse, createMockRouteParams, makeTransaction } from '@/tests/helpers'
 

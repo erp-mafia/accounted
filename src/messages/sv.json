@@ -10380,6 +10380,8 @@
     "batch_categorize_partial_description": "{success, plural, one {1 transaktion bokförd} other {# transaktioner bokförda}}, {failed} misslyckades",
     "batch_categorize_failed_reason": "{count, plural, one {1 transaktion} other {# transaktioner}}: {reason}",
     "batch_categorize_duplicates_held_back": "{count, plural, one {1 transaktion hölls tillbaka som möjlig dubblett och är kvar i listan.} other {# transaktioner hölls tillbaka som möjliga dubbletter och är kvar i listan.}}",
+    "batch_categorize_filed_vat_held_back": "{count, plural, one {1 transaktion bokfördes inte eftersom den ändrar underlaget för en inlämnad momsdeklaration, och är kvar i listan.} other {# transaktioner bokfördes inte eftersom de ändrar underlaget för en inlämnad momsdeklaration, och är kvar i listan.}}",
+    "batch_filed_vat_intro": "{count, plural, one {1 av raderna ändrar underlaget för en momsdeklaration som redan är inlämnad:} other {# av raderna ändrar underlaget för en momsdeklaration som redan är inlämnad:}}",
     "batch_undo_all": "Ångra alla",
     "batch_undo_all_alt": "Ångra alla bokförda transaktioner",
     "batch_undo_done_description": "{count, plural, one {1 bokföring ångrad} other {# bokföringar ångrade}}",

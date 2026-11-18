@@ -1194,6 +1194,16 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_bulk_book_transactions',
     },
   },
+  // The dashboard's categorize door asks before a bank row dated in a filed
+  // momsperiod is booked with lines the declaration reads
+  // (lib/transactions/filed-vat-categorize.ts).
+  TX_CATEGORIZE_VAT_PERIOD_FILED: {
+    httpStatus: 409,
+    message_sv:
+      'Bokningen ändrar underlaget för en momsdeklaration som redan är inlämnad. Bokför raden för sig för att bekräfta det.',
+    message_en:
+      'Booking this row changes the figures behind a VAT return already filed. Book the row on its own to confirm it.',
+  },
   TX_CATEGORIZE_REVIEW_REQUIRED: {
     httpStatus: 409,
     message_sv: 'Förslaget behöver granskas innan det bokförs. Öppna granskningen och bokför därifrån.',

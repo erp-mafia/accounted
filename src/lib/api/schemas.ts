@@ -2803,6 +2803,14 @@ export const DashboardCategorizeSchema = CategorizeTransactionSchema.safeExtend(
    * refused, never stamped as reviewed (accounted#130 step 2).
    */
   in_bulk: z.boolean().optional(),
+  /**
+   * The person's answer to TX_CATEGORIZE_VAT_PERIOD_FILED: the row is dated
+   * in a momsperiod whose declaration is filed and its booking changes the
+   * underlag for it (lib/transactions/filed-vat-categorize.ts). The check
+   * runs again on the confirmed send, and the booking is recorded as made
+   * past it.
+   */
+  confirm_filed_vat_period: z.boolean().optional(),
 })
 
 /**

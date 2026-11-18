@@ -18,11 +18,17 @@ export default function VoucherWarningsDialog({
   processing,
   onCancel,
   onConfirm,
+  cancelLabel,
+  intro,
 }: {
   warnings: VoucherWarning[] | null
   processing: boolean
   onCancel: () => void
   onConfirm: () => void
+  /** The way back, when there are no lines to correct (a bank row booked by category). Default: "Rätta verifikationen". */
+  cancelLabel?: string
+  /** The line above the warnings, when they are about several rows of a selection. Default: "Kontrollera det här innan du bokför:". */
+  intro?: string
 }) {
   const t = useTranslations('voucherWarnings')
   const locale = useLocale()
@@ -42,12 +48,12 @@ export default function VoucherWarningsDialog({
           </div>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">{t('intro')}</p>
+          <p className="text-sm text-muted-foreground">{intro ?? t('intro')}</p>
           <ul className="space-y-3">
-            {(warnings ?? []).map((warning) => {
+            {(warnings ?? []).map((warning, index) => {
               const voucherId = typeof warning.details.journal_entry_id === 'string' ? warning.details.journal_entry_id : null
               return (
-                <li key={warning.code} className="space-y-1 rounded-lg p-3 text-sm bg-control shadow-raised">
+                <li key={`${warning.code}-${index}`} className="space-y-1 rounded-lg p-3 text-sm bg-control shadow-raised">
                   <div>{locale === 'en' ? warning.message_en : warning.message_sv}</div>
                   {voucherId && (
                     <a
@@ -65,7 +71,7 @@ export default function VoucherWarningsDialog({
           </ul>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button variant="outline" onClick={onCancel} disabled={processing}>
-              {t('cancel')}
+              {cancelLabel ?? t('cancel')}
             </Button>
             <Button onClick={onConfirm} loading={processing}>
               {t('confirm')}

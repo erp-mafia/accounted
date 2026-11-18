@@ -49,9 +49,11 @@ import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
 import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import {
   foldDeferredRetries,
+  foldFiledVatRetries,
   runDeferredDuplicateRetries,
   tallyBatchOutcomes,
   type BatchCategorizeOutcome,
@@ -218,6 +220,13 @@ const SkattekontoLinkProposalsDialog = dynamic(
 )
 const DuplicateBookingDialog = dynamic(
   () => import('@/components/transactions/DuplicateBookingDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+// The confirm step of a booking-time warning (the typed verifikat's dialog):
+// here for a bank row whose category booking changes the underlag for a
+// momsdeklaration already filed.
+const VoucherWarningsDialog = dynamic(
+  () => import('@/components/bookkeeping/VoucherWarningsDialog'),
   { loading: DialogLoadingSkeleton },
 )
 const BatchDuplicateDialog = dynamic(
@@ -692,6 +701,21 @@ export default function TransactionsPage() {
     candidate: BookedDuplicateCandidate
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
+  // TX_CATEGORIZE_VAT_PERIOD_FILED: the row is dated in a filed momsperiod and
+  // its booking changes the underlag for that declaration. The person reads
+  // the warning and books anyway (retry sends confirm_filed_vat_period) or
+  // leaves the row. A row of a selection is not asked here: the batch names
+  // the reason once for the rows it holds back.
+  const [filedVatConfirm, setFiledVatConfirm] = useState<{
+    warnings: VoucherWarning[]
+    retry: () => Promise<unknown>
+  } | null>(null)
+  const [filedVatProcessing, setFiledVatProcessing] = useState(false)
+  // The same question for a selection, asked once after the pool settles
+  // (as the duplicate guard does, #2488): each held row parks its retry.
+  const batchFiledVatRef = useRef<Array<{ transactionId: string; warning: VoucherWarning; retry: () => Promise<BatchCategorizeOutcome> }>>([])
+  const batchFiledVatAnswerRef = useRef<((confirmed: boolean) => void) | null>(null)
+  const [batchFiledVatAsk, setBatchFiledVatAsk] = useState<{ warnings: VoucherWarning[]; count: number } | null>(null)
 
   // The same guard, asked once for a whole batch (#2488). The slot above holds
   // ONE answer, so N rows booking in parallel wrote it N times: only the last
@@ -2154,6 +2178,8 @@ export default function TransactionsPage() {
     confirmNoMatch: boolean
     /** The person's word that the VAT on the underlag is foreign VAT charged in error: sent as confirm_foreign_seller_vat (crm#1765). */
     confirmForeignSellerVat?: boolean
+    /** The person's answer to the filed-momsperiod warning: sent as confirm_filed_vat_period. */
+    confirmFiledVatPeriod?: boolean
     // Set after the user confirms the booking-time duplicate warning. force
     // bypasses the guard; the bypass is bound to the reviewed candidate's
     // voucher (journal_entry_id), present on both a sibling-transaction and a
@@ -2176,7 +2202,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, confirmForeignSellerVat, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, inBulk, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, confirmForeignSellerVat, confirmFiledVatPeriod, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2198,6 +2224,7 @@ export default function TransactionsPage() {
           ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
           ...(confirmNoMatch ? { confirm_no_match: true } : {}),
           ...(confirmForeignSellerVat ? { confirm_foreign_seller_vat: true } : {}),
+          ...(confirmFiledVatPeriod ? { confirm_filed_vat_period: true } : {}),
           ...(force && expectedDuplicateJournalEntryId
             ? { force: true, expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
             : {}),
@@ -2401,6 +2428,27 @@ export default function TransactionsPage() {
             return { ok: false, journalEntryId: null, deferredDuplicate: true }
           }
           setDuplicateWarning({ transactionId: id, retry, candidate })
+          setProcessingId(null)
+          return { ok: false, journalEntryId: null }
+        }
+        if (
+          result?.error?.code === 'TX_CATEGORIZE_VAT_PERIOD_FILED' &&
+          Array.isArray(result.error.details?.warnings) &&
+          result.error.details.warnings.length > 0
+        ) {
+          // Nothing was booked. The dialog shows the warning (the period and
+          // its filing date); "Bokför ändå" sends the same booking again with
+          // the confirmation, and the server asks its question once more.
+          const warnings = result.error.details.warnings as VoucherWarning[]
+          const retry = () => runCategorize({ ...args, confirmFiledVatPeriod: true })
+          if (silent) {
+            // A batch row: park it, and handleBatchCategorize asks once for
+            // every held row after the pool settles.
+            batchFiledVatRef.current.push({ transactionId: id, warning: warnings[0], retry })
+            setProcessingId(null)
+            return { ok: false, journalEntryId: null, heldForFiledVat: true }
+          }
+          setFiledVatConfirm({ warnings, retry })
           setProcessingId(null)
           return { ok: false, journalEntryId: null }
         }
@@ -4166,11 +4214,32 @@ export default function TransactionsPage() {
     resolve?.(confirmed)
   }
 
+  /**
+   * Show the filed-momsperiod warning for the rows a batch held back, each
+   * distinct warning once, and resolve with the person's answer.
+   */
+  function askBatchFiledVat(held: Array<{ warning: VoucherWarning }>): Promise<boolean> {
+    const distinct = new Map<string, VoucherWarning>()
+    for (const { warning } of held) if (!distinct.has(warning.message_sv)) distinct.set(warning.message_sv, warning)
+    return new Promise<boolean>((resolve) => {
+      batchFiledVatAnswerRef.current = resolve
+      setBatchFiledVatAsk({ warnings: [...distinct.values()], count: held.length })
+    })
+  }
+
+  function answerBatchFiledVat(confirmed: boolean) {
+    setBatchFiledVatAsk(null)
+    const resolve = batchFiledVatAnswerRef.current
+    batchFiledVatAnswerRef.current = null
+    resolve?.(confirmed)
+  }
+
   async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment, reverseChargeKind?: ReverseChargeKind) {
     const ids = Array.from(selectedIds)
     // Fresh collector per batch: rows the guard flags park here instead of
     // fighting over the single-row modal slot.
     batchDuplicatesRef.current = []
+    batchFiledVatRef.current = []
     setBatchProgress({ done: 0, total: ids.length })
     let completed = 0
     const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
@@ -4216,6 +4285,21 @@ export default function TransactionsPage() {
       setBatchProgress(null)
       tally = foldDeferredRetries(tally, retried)
     }
+    // The rows dated in a filed momsperiod whose booking changes the underlag
+    // for that declaration, a confirmed duplicate among them: one question,
+    // then every parked retry with its confirmation.
+    const heldFiledVat = batchFiledVatRef.current
+    batchFiledVatRef.current = []
+    if (heldFiledVat.length > 0 && (await askBatchFiledVat(heldFiledVat))) {
+      setBatchProgress({ done: 0, total: heldFiledVat.length })
+      const retried = await runDeferredDuplicateRetries(
+        heldFiledVat,
+        BATCH_CONCURRENCY,
+        (done, total) => setBatchProgress({ done, total }),
+      )
+      setBatchProgress(null)
+      tally = foldFiledVatRetries(tally, retried)
+    }
     // One Ångra-alla for the whole batch: it runs the same storno endpoint as
     // the per-row toast's Ångra, which requires a posted journal entry, so
     // only rows that actually got one are undoable. A successful flag-flip
@@ -4230,7 +4314,7 @@ export default function TransactionsPage() {
           {t('batch_undo_all')}
         </ToastAction>
       ) : undefined
-    if (tally.failedCount === 0 && tally.deferredCount === 0) {
+    if (tally.failedCount === 0 && tally.deferredCount === 0 && tally.filedVatHeldCount === 0) {
       toast({
         title: t('batch_done_title'),
         description: t('batch_categorize_done_description', { count: tally.successCount }),
@@ -4255,6 +4339,9 @@ export default function TransactionsPage() {
         ),
         ...(tally.deferredCount > 0
           ? [t('batch_categorize_duplicates_held_back', { count: tally.deferredCount })]
+          : []),
+        ...(tally.filedVatHeldCount > 0
+          ? [t('batch_categorize_filed_vat_held_back', { count: tally.filedVatHeldCount })]
           : []),
       ]
       toast({
@@ -5532,6 +5619,32 @@ export default function TransactionsPage() {
           </div>
         </DialogContent>
       </Dialog>}
+
+      {filedVatConfirm && <VoucherWarningsDialog
+        warnings={filedVatConfirm.warnings}
+        processing={filedVatProcessing}
+        cancelLabel={tCommon('cancel')}
+        onCancel={() => setFiledVatConfirm(null)}
+        onConfirm={async () => {
+          const retry = filedVatConfirm.retry
+          setFiledVatProcessing(true)
+          try {
+            await retry()
+          } finally {
+            setFiledVatProcessing(false)
+            setFiledVatConfirm(null)
+          }
+        }}
+      />}
+
+      {batchFiledVatAsk && <VoucherWarningsDialog
+        warnings={batchFiledVatAsk.warnings}
+        processing={false}
+        intro={t('batch_filed_vat_intro', { count: batchFiledVatAsk.count })}
+        cancelLabel={tCommon('cancel')}
+        onCancel={() => answerBatchFiledVat(false)}
+        onConfirm={() => answerBatchFiledVat(true)}
+      />}
 
       {duplicateWarning && <DuplicateBookingDialog
         candidate={duplicateWarning.candidate}

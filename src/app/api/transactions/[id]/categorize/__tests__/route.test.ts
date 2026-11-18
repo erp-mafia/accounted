@@ -139,6 +139,14 @@ async function useRealGuard() {
   mockAssertBookable.mockImplementation(actual.assertTransactionBookable)
 }
 
+// The question about a filed momsperiod (lib/transactions/filed-vat-categorize.ts)
+// reads the row and the filing record: none by default, so the queued reads
+// stay the booking's own. Its own test pins what it asks.
+const mockFiledVatWarning = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/transactions/filed-vat-categorize', () => ({
+  filedPeriodCategorizeWarning: mockFiledVatWarning,
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/transactions/[id]/categorize', () => {
@@ -167,6 +175,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Default: no booking-time duplicate. The dedicated guard test overrides this.
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
+    mockFiledVatWarning.mockResolvedValue(null)
     mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
     // Default: no covering period at all. The closed-period test overrides this.
     mockCheckPeriodLock.mockResolvedValue({ locked: false, reason: 'no_fiscal_period' })
@@ -530,6 +539,116 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(response.status).toBe(200)
     expect(seen).toEqual({ type: 'user', userId: 'user-1' })
     expect(defaultCommitMethod(seen)).toBe('user_accept')
+  })
+
+  describe('a row dated in a filed momsperiod', () => {
+    const FILED = {
+      code: 'VAT_PERIOD_ALREADY_FILED',
+      message_sv:
+        'Bokningen ändrar underlaget för en momsdeklaration som redan är inlämnad: 2026-Q3 (inlämnad 2026-11-11). Bokförs raden kan deklarationen behöva rättas.',
+      message_en:
+        'The booking changes the figures behind a VAT return already filed: 2026-Q3 (filed 2026-11-11). If the row is booked, the return may need correcting.',
+      details: { entry_date: '2026-09-27', filed_periods: [] },
+    }
+    const post = (body: Record<string, unknown>) =>
+      POST(createMockRequest('/api/transactions/tx-1/categorize', { method: 'POST', body }), createMockRouteParams({ id: 'tx-1' }))
+    /** The reads of a plain booking of tx-1, as in the happy path below. */
+    const queueBooking = () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'Loopia', journal_entry_id: null }), error: null })
+      enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: [{ id: 'period-1' }], error: null })
+      mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+      mockSaveUserMappingRule.mockResolvedValue(undefined)
+      enqueue({ data: [{ id: 'tx-1' }], error: null })
+    }
+
+    it('asks before booking when the booking changes the underlag for the filed declaration, and books nothing', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(
+        await post({ is_business: true, category: 'expense_software' }),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_VAT_PERIOD_FILED')
+      expect(body.error.details.warnings).toEqual([FILED])
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+      expect(mockFiledVatWarning).toHaveBeenCalledWith(
+        expect.anything(),
+        'user-1',
+        'company-1',
+        'tx-1',
+        expect.objectContaining({ is_business: true, category: 'expense_software' }),
+        expect.objectContaining({ onBooked: 'update_flags' }),
+      )
+    })
+
+    it('books once the person has confirmed, and records the booking as made past the warning', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+      queueBooking()
+
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(
+        await post({ is_business: true, category: 'expense_software', confirm_filed_vat_period: true }),
+      )
+
+      expect(status).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1')
+      expect(mockAppendProcessingHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'VoucherWarningsAcknowledged',
+          aggregateId: 'je-1',
+          payload: expect.objectContaining({ door: 'dashboard_categorize', codes: ['VAT_PERIOD_ALREADY_FILED'] }),
+        }),
+      )
+    })
+
+    it('records nothing when the confirmed booking posts no verifikat', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+      // A row a posted verifikat already books: its flags are updated, nothing is posted.
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: 'je-old' }), error: null })
+      mockAssertBookable.mockResolvedValue({ ok: false, via: 'pointer', journalEntryId: 'je-old' })
+
+      const { status, body } = await parseJsonResponse<{ journal_entry_created: boolean }>(
+        await post({ is_business: true, category: 'expense_software', confirm_filed_vat_period: true }),
+      )
+
+      expect(status).toBe(200)
+      expect(body.journal_entry_created).toBe(false)
+      expect(mockAppendProcessingHistory).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'VoucherWarningsAcknowledged' }))
+    })
+
+    it('refuses one of a selection, to be asked about once with the rest', async () => {
+      mockFiledVatWarning.mockResolvedValue(FILED)
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+        await post({ is_business: true, category: 'expense_software', in_bulk: true }),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_VAT_PERIOD_FILED')
+      expect(mockFiledVatWarning).toHaveBeenCalledWith(
+        expect.anything(), 'user-1', 'company-1', 'tx-1', expect.anything(),
+        expect.objectContaining({ withoutReview: true }),
+      )
+    })
+
+    it('books as before, with nothing recorded, when there is nothing to ask', async () => {
+      queueBooking()
+
+      const { status } = await parseJsonResponse(await post({ is_business: true, category: 'expense_software' }))
+
+      expect(status).toBe(200)
+      expect(mockAppendProcessingHistory).not.toHaveBeenCalledWith(expect.objectContaining({ eventType: 'VoucherWarningsAcknowledged' }))
+    })
+
+    it('never asks about a private marking: it carries no moms', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+
+      await post({ is_business: false })
+
+      expect(mockFiledVatWarning).not.toHaveBeenCalled()
+    })
   })
 
   it('creates journal entry for business expense', async () => {

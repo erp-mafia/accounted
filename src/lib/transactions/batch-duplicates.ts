@@ -32,6 +32,13 @@ export interface BatchCategorizeOutcome {
   journalEntryId: string | null
   deferredDuplicate?: boolean
   /**
+   * The same third state for the other question a batch asks once: the row
+   * is dated in a filed momsperiod and its booking changes the underlag for
+   * that declaration (TX_CATEGORIZE_VAT_PERIOD_FILED). Not booked, not
+   * failed, waiting for one answer.
+   */
+  heldForFiledVat?: boolean
+  /**
    * Why a failed row was refused, in the reader's language (the server's
    * answer through getErrorMessage). Absent on a row that already told the
    * person itself (its own dialog or toast) and on a booked row.
@@ -53,6 +60,9 @@ export interface DeferredDuplicateBooking {
   retry: () => Promise<BatchCategorizeOutcome>
 }
 
+/** A parked row as the retry pass needs it: which row, and how to book it after the answer. */
+export type DeferredBooking = Pick<DeferredDuplicateBooking, 'transactionId' | 'retry'>
+
 export interface BatchCategorizeTally {
   /** Rows the server accepted. */
   successCount: number
@@ -60,6 +70,8 @@ export interface BatchCategorizeTally {
   failedCount: number
   /** Rows held back for the duplicate confirmation. */
   deferredCount: number
+  /** Rows held back for the filed-momsperiod confirmation. */
+  filedVatHeldCount: number
   /** Accepted rows that actually got a verifikat: the "Ångra alla" set. */
   undoableIds: string[]
   /**
@@ -96,6 +108,7 @@ export function tallyBatchOutcomes(
     successCount: 0,
     failedCount: 0,
     deferredCount: 0,
+    filedVatHeldCount: 0,
     undoableIds: [],
     failureReasons: [],
   }
@@ -106,6 +119,8 @@ export function tallyBatchOutcomes(
       if (outcome.journalEntryId) tally.undoableIds.push(id)
     } else if (outcome?.deferredDuplicate) {
       tally.deferredCount++
+    } else if (outcome?.heldForFiledVat) {
+      tally.filedVatHeldCount++
     } else {
       tally.failedCount++
       const reason = outcome?.failureReason?.trim()
@@ -126,7 +141,7 @@ export function tallyBatchOutcomes(
  * and only once, so a new candidate never reopens the dialog in a loop.
  */
 export async function runDeferredDuplicateRetries(
-  deferred: readonly DeferredDuplicateBooking[],
+  deferred: readonly DeferredBooking[],
   concurrency: number,
   onProgress?: (done: number, total: number) => void,
 ): Promise<BatchCategorizeTally> {
@@ -173,6 +188,29 @@ export function foldDeferredRetries(
     successCount: base.successCount + retried.successCount,
     failedCount: base.failedCount + retried.failedCount,
     deferredCount: retried.deferredCount,
+    // A confirmed duplicate can turn out to be dated in a filed period: it
+    // joins the rows already held for that question.
+    filedVatHeldCount: base.filedVatHeldCount + retried.filedVatHeldCount,
+    undoableIds: [...base.undoableIds, ...retried.undoableIds],
+    failureReasons: mergeFailureReasons(base.failureReasons, retried.failureReasons),
+  }
+}
+
+/**
+ * Fold the retry pass of the filed-momsperiod question into the tally: the
+ * rows held for it were exactly the ones retried, so their count is replaced
+ * by what the pass produced. A retried row the duplicate guard then flags is
+ * past the one duplicate question and stays held back as a duplicate.
+ */
+export function foldFiledVatRetries(
+  base: BatchCategorizeTally,
+  retried: BatchCategorizeTally,
+): BatchCategorizeTally {
+  return {
+    successCount: base.successCount + retried.successCount,
+    failedCount: base.failedCount + retried.failedCount,
+    deferredCount: base.deferredCount + retried.deferredCount,
+    filedVatHeldCount: retried.filedVatHeldCount,
     undoableIds: [...base.undoableIds, ...retried.undoableIds],
     failureReasons: mergeFailureReasons(base.failureReasons, retried.failureReasons),
   }
