@@ -5158,6 +5158,7 @@
     "set_password_first": "Set a password first",
     "toast_password_updated_title": "Password updated",
     "toast_password_updated_description": "Your password has been changed.",
+    "toast_password_saved_unconfirmed_title": "Other devices may still be signed in",
     "toast_generic_error_title": "Something went wrong",
     "toast_try_again": "Please try again later.",
     "toast_unenroll_failed_title": "Could not disable 2FA",

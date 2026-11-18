@@ -19,6 +19,7 @@ import {
   signInWithPassword,
   signOut,
   signOutAndNavigate,
+  signOutEverywhereAndLeave,
   verifyOtp,
 } from '../session-client'
 
@@ -213,5 +214,30 @@ describe('signOut (CASA 6.6.1)', () => {
 
     const scopes = fetchMock.mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string).scope)
     expect(scopes).toEqual(['local', 'global'])
+  })
+
+  it('signOutEverywhereAndLeave ends every session and lands on /login', async () => {
+    fetchMock.mockResolvedValue(json(200, { data: { revoked: true } }))
+
+    await signOutEverywhereAndLeave()
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/api/auth/logout')
+    expect(JSON.parse(init.body as string)).toEqual({ scope: 'global' })
+    expect(assign).toHaveBeenCalledWith('/login')
+  })
+
+  it('signOutEverywhereAndLeave tells /login when the other devices are not confirmed signed out', async () => {
+    // The auth server refused the revocation, then the server was not reached at all.
+    fetchMock.mockResolvedValueOnce(json(200, { data: { revoked: false } }))
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    await signOutEverywhereAndLeave()
+    await signOutEverywhereAndLeave()
+
+    expect(assign.mock.calls).toEqual([
+      ['/login?reason=everywhere_unconfirmed'],
+      ['/login?reason=everywhere_unconfirmed'],
+    ])
   })
 })

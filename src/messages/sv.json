@@ -5158,6 +5158,7 @@
     "set_password_first": "Sätt ett lösenord först",
     "toast_password_updated_title": "Lösenord uppdaterat",
     "toast_password_updated_description": "Ditt lösenord har ändrats.",
+    "toast_password_saved_unconfirmed_title": "Andra enheter kan vara inloggade",
     "toast_generic_error_title": "Något gick fel",
     "toast_try_again": "Försök igen senare.",
     "toast_unenroll_failed_title": "Kunde inte inaktivera 2FA",

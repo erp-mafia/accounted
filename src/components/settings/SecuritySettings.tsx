@@ -20,6 +20,7 @@ import { AutoLogoutToggle } from '@/components/settings/AutoLogoutToggle'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
 import { SecurityKeySettings } from '@/components/settings/SecurityKeySettings'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { passwordSavedDespiteFailure } from '@/lib/auth/password-change-result'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   SettingsGroup,
@@ -105,6 +106,22 @@ export function SecuritySettings() {
           router.push(
             `/mfa/verify?returnTo=${encodeURIComponent('/settings/account')}`,
           )
+          return
+        }
+        // The password IS saved; the auth server did not confirm that the
+        // other devices were signed out. Say that, never "could not update",
+        // and empty the form: the same password sent again is refused as
+        // unchanged. "Logga ut från alla enheter", which the message names,
+        // is on this page under Session.
+        if (passwordSavedDespiteFailure(body)) {
+          toast({
+            title: t('toast_password_saved_unconfirmed_title'),
+            description: getUserErrorMessage(body, { locale: errorLocale }),
+            variant: 'destructive',
+          })
+          setNewPassword('')
+          setConfirmPassword('')
+          setHasPassword(true)
           return
         }
         toast({

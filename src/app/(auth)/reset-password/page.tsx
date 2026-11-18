@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
-import { fetchSessionUser, verifyOtp } from '@/lib/auth/session-client'
+import { fetchSessionUser, signOutEverywhereAndLeave, verifyOtp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
 import { handoffPendingInvite } from './invite-handoff'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { passwordSavedDespiteFailure } from '@/lib/auth/password-change-result'
 
 /**
  * Three entry modes:
@@ -38,6 +39,7 @@ function ResetPasswordInner() {
   const t = useTranslations('reset_password')
   const errorLocale = useLocale() as ErrorLocale
   const tInvite = useTranslations('invite')
+  const tCommon = useTranslations('common')
   const searchParams = useSearchParams()
   const tokenHash = searchParams.get('token_hash')
   const [mode, setMode] = useState<Mode>('loading')
@@ -49,6 +51,11 @@ function ResetPasswordInner() {
   // A failed step says so in the form, under the heading, never in a toast
   // that leaves the page looking untouched.
   const [formError, setFormError] = useState<string | null>(null)
+  // The password IS saved, but the auth server did not confirm that the other
+  // devices were signed out (POST /api/account/password answers that as an
+  // error). The form is gone then: the same password sent again is refused
+  // as unchanged. In its place is the way out the message names.
+  const [savedUnconfirmed, setSavedUnconfirmed] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
 
@@ -151,6 +158,7 @@ function ResetPasswordInner() {
             fallback: `${t('save_failed_title')}. ${t('save_failed_description')}`,
           }),
         )
+        if (passwordSavedDespiteFailure(body)) setSavedUnconfirmed(true)
         return
       }
 
@@ -198,6 +206,13 @@ function ResetPasswordInner() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleSignOutEverywhere = async () => {
+    setIsLoading(true)
+    // Leaves for /login with a full page load; a pending invitation is picked
+    // up there, after the sign-in with the new password.
+    await signOutEverywhereAndLeave()
   }
 
   const subtitle =
@@ -285,7 +300,18 @@ function ResetPasswordInner() {
             </form>
           )}
 
-          {mode === 'set-password' && (
+          {mode === 'set-password' && savedUnconfirmed && (
+            <Button
+              type="button"
+              size="lg" className="w-full"
+              onClick={handleSignOutEverywhere}
+              loading={isLoading}
+            >
+              {tCommon('logout_everywhere')}
+            </Button>
+          )}
+
+          {mode === 'set-password' && !savedUnconfirmed && (
             <form onSubmit={handleResetPassword} className="flex flex-col gap-3">
               <div className="space-y-2">
                 <Label htmlFor="password">{t('new_password_label')}</Label>

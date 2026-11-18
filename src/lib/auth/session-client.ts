@@ -2,6 +2,7 @@ import { clearBrowserAccessToken } from '@/lib/supabase/browser-session-token'
 import { clearBrowserStorage } from '@/lib/auth/clear-browser-storage'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
+import { SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON } from '@/lib/auth/session-timeout-shared'
 
 /**
  * Browser side of the server-held session.
@@ -367,4 +368,23 @@ export async function signOutAndNavigate(
   const result = await signOut(options)
   reloadTo(destination)
   return result
+}
+
+/**
+ * "Logga ut från alla enheter": end every session of the user at the auth
+ * server, this one included, and leave for /login. The other devices find
+ * out on their next request and land on /login with the "ended" reason.
+ * This browser is signed out either way; when the auth server did not
+ * confirm the rest (refused, rate limited, not reached), /login says the
+ * other devices may still be signed in, since this is what people press
+ * after losing a device, and what a password change that could not confirm
+ * the other devices sends them to (POST /api/account/password).
+ */
+export async function signOutEverywhereAndLeave(): Promise<void> {
+  const { error, revoked } = await signOut({ scope: 'global' })
+  reloadTo(
+    error || revoked === false
+      ? `/login?reason=${SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON}`
+      : '/login',
+  )
 }

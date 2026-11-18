@@ -8495,6 +8495,30 @@ const API_KEY: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// The user's own account (POST /api/account/password)
+// ─────────────────────────────────────────────────────────────────
+
+const ACCOUNT_SECURITY: Record<string, StructuredErrorEntry> = {
+  // The password WAS written, and the auth server did not confirm the logout
+  // of the user's other sessions that follows it (CASA 2.2.2). A 500 and
+  // never retryable: the same password sent again is refused as unchanged,
+  // so the way out is signing out everywhere, not another attempt.
+  // details.passwordChanged tells a client so (lib/auth/password-change-result.ts).
+  PASSWORD_CHANGED_REVOCATION_UNCONFIRMED: {
+    httpStatus: 500,
+    message_sv:
+      'Lösenordet är sparat, men vi kunde inte bekräfta att dina andra enheter loggades ut. Logga ut från alla enheter och logga in igen med det nya lösenordet.',
+    message_en:
+      'The password was saved, but your other devices could not be confirmed signed out. Sign out of all devices and sign in again with the new password.',
+    retryable: false,
+    remediation: {
+      description:
+        'Do not send the same password again: it is already set (details.passwordChanged is true) and an unchanged password is refused. Sign the user out of all devices, then sign in with the new password.',
+    },
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Service accounts (lib/service-accounts, migration 20261016120000)
 // ─────────────────────────────────────────────────────────────────
 
@@ -13586,6 +13610,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SALARY,
   ...COMPANY,
   ...API_KEY,
+  ...ACCOUNT_SECURITY,
   ...SERVICE_ACCOUNT,
   ...AGENT_IDENTITY,
   ...ASSISTANT_CHAT,

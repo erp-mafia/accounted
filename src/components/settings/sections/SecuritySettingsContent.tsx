@@ -5,8 +5,7 @@ import { useTranslations } from 'next-intl'
 import { ArrowRightStartOnRectangleIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { reloadTo, signOut, signOutAndNavigate } from '@/lib/auth/session-client'
-import { SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON } from '@/lib/auth/session-timeout-shared'
+import { signOutAndNavigate, signOutEverywhereAndLeave } from '@/lib/auth/session-client'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
 import { AccountDangerZone } from '@/components/settings/AccountDangerZone'
 import { DeletedCompaniesExport } from '@/components/settings/DeletedCompaniesExport'
@@ -41,18 +40,10 @@ export function SecuritySettingsContent() {
   }
 
   async function handleLogoutEverywhere() {
-    // Every session of the user at the auth server, this one included. The
-    // other devices find out on their next request and land on /login with
-    // the "ended" reason. This browser is signed out either way; when the
-    // auth server did not confirm the rest (refused, rate limited, not
-    // reached), /login says the other devices may still be signed in, since
-    // this is the button people press after losing a device.
-    const { error, revoked } = await signOut({ scope: 'global' })
-    reloadTo(
-      error || revoked === false
-        ? `/login?reason=${SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON}`
-        : '/login',
-    )
+    // Every session of the user at the auth server, this one included; /login
+    // says so when the auth server did not confirm the other devices. The
+    // same exit a password change that could not confirm them sends to.
+    await signOutEverywhereAndLeave()
   }
 
   return (
