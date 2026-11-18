@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as XLSX from 'xlsx'
 import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
+import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
 
 const { supabase: mockSupabase, reset } = createQueuedMockSupabase()
 
@@ -69,6 +70,17 @@ describe('POST /api/import/articles/parse', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
     expect(status).toBe(400)
     expect(body.error.code).toBe('REG_IMPORT_NO_FILE')
+  })
+
+  it('refuses a workbook the reader cannot open with what to do, not a 500', async () => {
+    const cut = new Uint8Array(streamedXlsx({ rows: [['Benämning'], ['Acme AB']] })).slice(0, 600)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string } }>(
+      await post(new File([cut], 'artiklar.xlsx')),
+    )
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_WORKBOOK_UNREADABLE')
+    expect(body.error.message).toContain('spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV')
+    expect(body.error.message_en).toContain('save it without a password as an Excel workbook (.xlsx) or as CSV')
   })
 
   it('refuses a file type the register import does not read', async () => {

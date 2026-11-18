@@ -5991,6 +5991,21 @@ const REGISTER_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte tolka filen.',
     message_en: 'Failed to parse the register file.',
   },
+  // The workbook reader could not open the file (UnreadableWorkbookError
+  // carries this code): broken, password-protected or a zip it cannot
+  // follow. The file's problem, so a refusal, not a 500. Answered by the
+  // customer, supplier, article and opening balance imports; a bank file
+  // answers BANK_FILE_WORKBOOK_UNREADABLE.
+  IMPORT_WORKBOOK_UNREADABLE: {
+    httpStatus: 400,
+    message_sv:
+      'Filen kunde inte läsas. Den kan vara skadad eller lösenordsskyddad. Öppna den i Excel, spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV och ladda upp den igen.',
+    message_en:
+      'The file could not be read. It may be damaged or password-protected. Open it in Excel, save it without a password as an Excel workbook (.xlsx) or as CSV and upload it again.',
+    remediation: {
+      description: 'Re-save the file as .xlsx without a password, or as CSV, and send it again.',
+    },
+  },
   REG_IMPORT_NO_ROWS: {
     httpStatus: 400,
     message_sv: 'Inga giltiga rader hittades i filen.',

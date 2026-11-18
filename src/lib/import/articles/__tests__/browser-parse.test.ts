@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import * as XLSX from 'xlsx'
 import { parseArticleFileInBrowser, ARTICLE_BROWSER_MAX_FILE_BYTES } from '../browser-parse'
 import { ARTICLE_MATCH_MAX_BYTES, ARTICLE_MATCH_MAX_ROWS } from '../types'
+import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 function xlsxFile(rows: (string | number)[][], name = 'prislista.xlsx'): File {
   const ws = XLSX.utils.aoa_to_sheet(rows)
@@ -109,6 +111,21 @@ describe('parseArticleFileInBrowser (crm#1383)', () => {
       ok: false,
       reason: 'too_large',
     })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('fails on a workbook the reader cannot open with the sentence the import step shows', async () => {
+    const cut = new Uint8Array(streamedXlsx({ rows: [['Benämning'], ['Skruv']] })).slice(0, 600)
+    const fetchImpl = vi.fn()
+    const thrown = await parseArticleFileInBrowser(
+      new File([cut], 'prislista.xlsx'),
+      undefined,
+      fetchImpl as unknown as typeof fetch,
+    ).catch((err: unknown) => err)
+
+    // RegisterImportFlow shows getErrorMessage(err) for a parse that threw.
+    expect(getErrorMessage(thrown)).toContain('Filen kunde inte läsas.')
+    expect(getErrorMessage(thrown)).toContain('spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV')
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 

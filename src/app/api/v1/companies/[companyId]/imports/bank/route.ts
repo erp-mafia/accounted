@@ -43,6 +43,7 @@ import { headerLikeCells, unrecognizedColumnsMessages } from '@/lib/import/bank-
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { archiveBankFileOriginal } from '@/lib/import/bank-file/arrival'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { apiKeyArrivalActor } from '@/lib/intake/arrivals'
 
 // The same per-row ingest and budget as the dashboard's execute route.
@@ -187,10 +188,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     let content: string
     try {
       content = (await decodeBankFile(buffer, file.name)).content
-    } catch {
+    } catch (err) {
+      ctx.log.warn('bank file workbook unreadable', err as Error)
+      // A workbook the reader cannot open. This endpoint has published
+      // VALIDATION_ERROR for it, and a changed code breaks a dated version
+      // (versioning policy), so the code stays. The sentences and the next
+      // step are the ones the app gives (BANK_FILE_WORKBOOK_UNREADABLE).
+      const answer = getErrorEntry('BANK_FILE_WORKBOOK_UNREADABLE')!
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'file', message: 'The file looks like an Excel workbook but could not be read.' },
+        messageSv: answer.message_sv,
+        messageEn: answer.message_en,
+        remediation: answer.remediation,
       })
     }
 

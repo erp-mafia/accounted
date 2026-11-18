@@ -539,13 +539,18 @@ describe('POST /api/v1/companies/:companyId/imports/bank (Excel files and unreco
     expect(ingestMock).not.toHaveBeenCalled()
   })
 
-  it('returns 400 for a file that is Excel by its bytes but cannot be read', async () => {
+  it('returns 400 for a file that is Excel by its bytes but cannot be read, saying what to do as the app does', async () => {
     const broken = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 1, 2, 3, 4]).buffer
     const res = await callWithBytes(broken, 'trasig.xls')
 
     expect(res.status).toBe(400)
     const body = await res.json()
+    // The published code stays; the sentences and the next step are the app's.
     expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details).toMatchObject({ field: 'file' })
+    expect(body.error.message).toContain('Excelfilen kunde inte läsas')
+    expect(body.error.message_en).toContain('The Excel file could not be read')
+    expect(body.error.recovery_hint).toContain('CSV')
     expect(ingestMock).not.toHaveBeenCalled()
   })
 })

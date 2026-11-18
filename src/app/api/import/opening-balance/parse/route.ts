@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { parseOpeningBalanceFile } from '@/lib/import/opening-balance/parser'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { UnreadableWorkbookError } from '@/lib/import/shared/workbook-reader'
 import type { DetectedColumns } from '@/lib/import/opening-balance/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -58,6 +59,9 @@ export const POST = withRouteContext(
       const result = await parseOpeningBalanceFile(buffer, file.name, columnOverrides)
       return NextResponse.json({ data: result })
     } catch (err) {
+      // A workbook the reader cannot open is the file's problem: the refusal
+      // the error names (400), not a server fault.
+      if (err instanceof UnreadableWorkbookError) return errorResponse(err, opLog, { requestId })
       opLog.error('opening balance parse failed', err as Error)
       return errorResponseFromCode('OB_PARSE_FAILED', opLog, {
         requestId,

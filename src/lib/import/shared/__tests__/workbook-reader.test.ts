@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx'
 import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
+import { classifyError } from '@/lib/errors/get-structured-error'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   readBestSheet,
+  readBestSheetValues,
   readWorkbookFromBuffer,
   UnreadableWorkbookError,
   withCentralDirectorySizes,
@@ -109,5 +112,42 @@ describe('a workbook from a streaming zip writer', () => {
   it('masks the numbers in the reason, which the log redaction would blank whole', () => {
     const err = new UnreadableWorkbookError(new Error('Bad compressed size: 816 != 1702240364'))
     expect(err.message).toBe('The workbook could not be read: Bad compressed size: # != #')
+  })
+
+  it('masks letters outside ASCII in the reason, which would pass for a sentence written for the user', () => {
+    const err = new UnreadableWorkbookError(new Error('Cannot find file xl/worksheets/Försäljning.xml in zip'))
+    expect(err.message).toBe('The workbook could not be read: Cannot find file xl/worksheets/F?rs?ljning.xml in zip')
+    expect(getErrorMessage(err)).toContain('Filen kunde inte läsas.')
+  })
+
+  // The xlsx reader swallows a sheet's own parse error: the sheet's name
+  // stays in SheetNames and the sheet is left out. Every caller reads
+  // Sheets[name], so the workbook is refused whole, whichever sheet it was.
+  it.each(['/xl/worksheets/sheet1.xml', '/xl/worksheets/sheet2.xml'])(
+    'throws UnreadableWorkbookError for a workbook whose sheet part %s is missing',
+    async (part) => {
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Kunder')
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Info']]), 'Info')
+      const zip = XLSX.CFB.read(new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' })), { type: 'array' })
+      XLSX.CFB.utils.cfb_del(zip, part)
+      const bytes = new Uint8Array(XLSX.CFB.write(zip, { type: 'array', fileType: 'zip' }) as ArrayBuffer)
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+
+      await expect(readBestSheet(buffer, 'kunder.xlsx')).rejects.toBeInstanceOf(UnreadableWorkbookError)
+      await expect(readBestSheetValues(buffer, 'budget.xlsx')).rejects.toBeInstanceOf(UnreadableWorkbookError)
+    },
+  )
+
+  // The error names its own registry answer: a door that hands it to
+  // errorResponse answers 400, and the browser that read the file itself
+  // (the article import) shows the same sentence, never the reader's English.
+  it('is a refusal with the way forward wherever it is caught', () => {
+    const err = new UnreadableWorkbookError(new Error('File is password-protected'))
+    expect(classifyError(err)).toMatchObject({ code: 'IMPORT_WORKBOOK_UNREADABLE', transient: false })
+    expect(getErrorMessage(err)).toBe(
+      'Filen kunde inte läsas. Den kan vara skadad eller lösenordsskyddad. Öppna den i Excel, spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV och ladda upp den igen.',
+    )
+    expect(getErrorMessage(err, { locale: 'en' })).toContain('save it without a password as an Excel workbook (.xlsx) or as CSV')
   })
 })

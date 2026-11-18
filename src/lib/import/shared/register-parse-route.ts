@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { UnreadableWorkbookError } from './workbook-reader'
 
 /** File types every register import accepts (Excel, CSV, OpenDocument). */
 export const REGISTER_IMPORT_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
@@ -131,6 +132,9 @@ export function registerParseRoute<TColumns, TRow, TAnnotated>(
 
       return NextResponse.json({ data: result })
     } catch (err) {
+      // A workbook the reader cannot open is the file's problem: the refusal
+      // the error names (400), not a server fault.
+      if (err instanceof UnreadableWorkbookError) return errorResponse(err, opLog, { requestId })
       opLog.error(`${config.register} import parse failed`, err as Error)
       return errorResponseFromCode('REG_IMPORT_PARSE_FAILED', opLog, {
         requestId,

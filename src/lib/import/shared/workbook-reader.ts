@@ -20,11 +20,24 @@ export function looksLikeMarkup(bytes: Uint8Array): boolean {
  * is the file's problem, not a server fault. `cause` is the reader's own
  * error. The message carries the reader's reason with every number masked
  * ("Bad compressed size: # != #"): the log keeps only name and message, and
- * its redaction blanks a whole message that holds a ten-digit run.
+ * its redaction blanks a whole message that holds a ten-digit run. Letters
+ * outside ASCII are masked too: a reason that names a sheet ("Försäljning")
+ * would pass getErrorMessage's test for a sentence written for the user.
+ *
+ * `code` is the registry answer (400, "save it again as .xlsx or CSV") that
+ * classifyError and getErrorMessage read off a thrown error, so a door that
+ * hands the error to errorResponse, and the browser that reads the file
+ * itself, say the same thing. The bank file doors answer their own
+ * BANK_FILE_WORKBOOK_UNREADABLE, whose way forward names the bank's export.
  */
 export class UnreadableWorkbookError extends Error {
+  readonly code = 'IMPORT_WORKBOOK_UNREADABLE'
+
   constructor(cause: unknown) {
-    const reason = (cause instanceof Error ? cause.message : String(cause)).replace(/\d+/g, '#').slice(0, 80)
+    const reason = (cause instanceof Error ? cause.message : String(cause))
+      .replace(/\d+/g, '#')
+      .replace(/[^\x20-\x7e]/g, '?')
+      .slice(0, 80)
     super(`The workbook could not be read: ${reason}`, { cause })
     this.name = 'UnreadableWorkbookError'
   }
@@ -108,7 +121,9 @@ export function withCentralDirectorySizes(buffer: ArrayBuffer): ArrayBuffer {
  * table named .xls) gets the same decode: read as an array, its
  * Windows-1252 bytes come out garbled.
  *
- * A file the reader cannot open throws UnreadableWorkbookError.
+ * A file the reader cannot open throws UnreadableWorkbookError, as does a
+ * workbook with a sheet it could not parse: the reader keeps that sheet's
+ * name and leaves the sheet itself out, which every caller would trip on.
  *
  * xlsx is imported here, when a file is read, not at module load.
  */
@@ -121,11 +136,16 @@ export async function readWorkbookFromBuffer(
   const ext = filename.toLowerCase().split('.').pop() ?? ''
   const text = ext === 'csv' || looksLikeMarkup(new Uint8Array(buffer))
   const input = text ? decodeFileContent(buffer) : withCentralDirectorySizes(buffer)
+  let workbook: WorkBook
   try {
-    return XLSX.read(input, { ...options, type: text ? 'string' : 'array' })
+    workbook = XLSX.read(input, { ...options, type: text ? 'string' : 'array' })
   } catch (err) {
     throw new UnreadableWorkbookError(err)
   }
+  if (workbook.SheetNames.some((name) => !workbook.Sheets[name])) {
+    throw new UnreadableWorkbookError(new Error('a sheet could not be parsed'))
+  }
+  return workbook
 }
 
 /**

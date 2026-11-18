@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Bank file import: an unreadable Excel file says what to do (2026-11)
+
+- **Fix: \`POST /imports/bank\` with an Excel workbook that cannot be opened** (2026-11-18: broken, password-protected) keeps its \`400 VALIDATION_ERROR\` with \`details.field\` \`file\`; \`message\` now says what to do and a \`recovery_hint\` is added (save the workbook again as .xlsx, or send the bank's CSV or camt.053 export). **Before**, \`message\` was the generic validation one and there was no \`recovery_hint\`. Additive; the API version date is unchanged.
+
 ### Documents: a locked year is a refusal, not a server error (2026-11)
 
 - **Fix: \`POST /documents\` with a \`journal_entry_id\` on a verifikat in a locked or closed fiscal year answers \`400 DOC_UPLOAD_PERIOD_LOCKED\`** (2026-11-18) and stores nothing; \`message\` says why and \`recovery_hint\` names the way forward (unlock or reopen the year, or upload without \`journal_entry_id\`). **Before**, it answered \`500 DOC_UPLOAD_STORAGE_FAILED\` with no reason. \`POST /documents/{id}/link\` keeps its documented \`400 PERIOD_LOCKED\` for the same case and now gives the same message and \`recovery_hint\`. Additive; the API version date is unchanged.
