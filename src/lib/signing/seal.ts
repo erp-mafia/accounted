@@ -12,6 +12,15 @@
  *     the hash inside each signature without us; it is the signed original
  *     the company keeps (BFL 7 kap: in the format and content it had).
  *
+ * With a seal certificate configured (./pades-seal.ts, SIGNING_SEAL_*) the
+ * signed PDF is also self-contained: it carries the original (up to
+ * SEALED_COPY_ORIGINAL_MAX_BYTES) and a manifest as attachments and is
+ * sealed and timestamped (PAdES), so whoever holds it can check it in a PDF
+ * reader without us. The manifest names each BankID signature by its
+ * SHA-256; the signatures themselves stay in the evidence package. A seal
+ * that fails holds the copy back for a retry, and after
+ * SEAL_GIVE_UP_AFTER_MS the copy is archived without it rather than never.
+ *
  * Both are written by the service role in the requester's name, once: the
  * request takes its sealed copies only while they are NULL (the guard of
  * migration 20261025200000). The original is re-hashed against
@@ -34,11 +43,23 @@ import type { SigningCertificateData } from './certificate-pdf'
 import { downloadDocumentBytes, sha256Hex } from './document'
 import { stockholmDay } from './format'
 import { resolveSigningLogo } from './logo'
+import { loadSigningSeal } from './pades-seal'
 import { describeRequester } from './requests'
-import { type SigningRequestRow } from './types'
+import { SIGNING_MAX_DOCUMENT_BYTES, type SigningRequestRow } from './types'
 
 /** A completed request whose seal has not landed for this long is sealed again on read. */
 const SEAL_RETRY_AFTER_MS = 2 * 60 * 1000
+/** A seal that still fails this long after the last signature no longer holds the signed copy back. */
+const SEAL_GIVE_UP_AFTER_MS = 15 * 60 * 1000
+/**
+ * The original rides along inside a sealed copy up to this size. The copy is
+ * mailed to every signer, and with a larger original inside it would outgrow
+ * what the largest signed copy already weighs; the manifest then still
+ * carries the original's SHA-256.
+ */
+const SEALED_COPY_ORIGINAL_MAX_BYTES = SIGNING_MAX_DOCUMENT_BYTES / 2
+/** What the BankID signatures are, as both manifests say it. */
+const SIGNING_METHOD = 'BankID (TIC Identity), XML-DSig with OCSP; userNonVisibleData carries {request, signer, sha256}'
 
 interface SealSigner {
   id: string
@@ -105,16 +126,25 @@ export function stampPlacement(
 
 type CertificateInput = Omit<SigningCertificateData, 'originalPageCount' | 'fonts'>
 
+/** A file carried inside the signed copy. */
+interface SignedPdfAttachment {
+  name: string
+  bytes: Uint8Array
+  mimeType: string
+  description: string
+}
+
 /**
  * The original's pages, each stamped in its bottom margin, then the
  * Signeringsbevis pages. The stamp is drawn after the page's own content,
  * which pdf-lib wraps in q/Q first, so a page that leaves its graphics
  * state changed cannot move or scale it. Nothing of the original is
- * covered: the stamp has no background.
+ * covered: the stamp has no background. A copy that will be sealed also
+ * carries its attachments.
  */
 async function buildSignedPdf(
   original: Uint8Array,
-  input: { certificate: CertificateInput; title: string },
+  input: { certificate: CertificateInput; title: string; attachments?: SignedPdfAttachment[] },
 ): Promise<{ bytes: Uint8Array; originalPageCount: number }> {
   const [{ PDFDocument, degrees }, certificateModule] = await Promise.all([import('pdf-lib'), import('./certificate-pdf')])
   const { STAMP_BOTTOM_OFFSET, STAMP_MIN_WIDTH, prepareSigningFonts, renderSigningCertificate, renderStampStrips, signersInitials, stampLine } = certificateModule
@@ -144,9 +174,14 @@ async function buildSignedPdf(
   const certificate = await PDFDocument.load(await renderSigningCertificate({ ...input.certificate, originalPageCount: pages.length, fonts }))
   for (const page of await pdf.copyPages(certificate, certificate.getPageIndices())) pdf.addPage(page)
 
+  const now = new Date()
+  for (const file of input.attachments ?? []) {
+    await pdf.attach(file.bytes, file.name, { mimeType: file.mimeType, description: file.description, creationDate: now, modificationDate: now })
+  }
+
   pdf.setTitle(`${input.title} (signerad)`)
   pdf.setProducer('Accounted')
-  pdf.setModificationDate(new Date())
+  pdf.setModificationDate(now)
   return { bytes: await pdf.save(), originalPageCount: pages.length }
 }
 
@@ -215,52 +250,105 @@ export async function sealSigningRequest(service: SupabaseClient, requestId: str
     companyOrgNumber(service, request.company_id),
   ])
   const verifyUrl = `${baseUrl}/verifiera`
-  const { bytes: signed, originalPageCount } = await buildSignedPdf(original, {
-    title: request.title,
-    certificate: {
-      requestId: request.id,
-      title: request.title,
-      companyName: sender.companyName,
-      orgNumber,
-      logo: brand.logo,
-      requester: sender.requester,
-      createdAt: request.created_at,
-      completedAt: request.completed_at ?? new Date().toISOString(),
-      fileName: document.file_name,
-      sha256: request.document_sha256,
-      signers: signers.map((s) => ({
+
+  const evidenceSigners = signers.map((s) => {
+    const p = privates.get(s.id)!
+    const xml = Buffer.from(p.signature_xml, 'base64')
+    const ocsp = Buffer.from(p.ocsp_response, 'base64')
+    return {
+      xml,
+      ocsp,
+      entry: {
+        position: s.position,
         name: s.name,
         role: s.role_label,
-        bankidGivenName: s.bankid_given_name,
-        bankidSurname: s.bankid_surname,
-        personnummerMasked: privates.get(s.id)?.personnummer_masked ?? null,
-        signedAt: s.signed_at,
-      })),
-      annualReportDate: request.annual_report_version_id && signers.length > 0 ? stockholmDay(signers.map((s) => s.signed_at).sort()[0]!) : null,
-      verifyUrl,
-      platformName: brand.platformName,
-    },
+        bankid_name: `${s.bankid_given_name} ${s.bankid_surname}`.trim(),
+        personnummer_masked: p.personnummer_masked,
+        signed_at: s.signed_at,
+        signature_file: `signatur-${s.position}.xml`,
+        signature_sha256: sha256Hex(xml),
+        ocsp_file: `ocsp-${s.position}.der`,
+      },
+    }
   })
+
+  const title = request.title
+  const certificate: CertificateInput = {
+    requestId: request.id,
+    title,
+    companyName: sender.companyName,
+    orgNumber,
+    logo: brand.logo,
+    requester: sender.requester,
+    createdAt: request.created_at,
+    completedAt: request.completed_at ?? new Date().toISOString(),
+    fileName: document.file_name,
+    sha256: request.document_sha256,
+    signers: signers.map((s) => ({
+      name: s.name,
+      role: s.role_label,
+      bankidGivenName: s.bankid_given_name,
+      bankidSurname: s.bankid_surname,
+      personnummerMasked: privates.get(s.id)?.personnummer_masked ?? null,
+      signedAt: s.signed_at,
+    })),
+    annualReportDate: request.annual_report_version_id && signers.length > 0 ? stockholmDay(signers.map((s) => s.signed_at).sort()[0]!) : null,
+    verifyUrl,
+    platformName: brand.platformName,
+  }
+
+  let sealedCopy: { bytes: Uint8Array; originalPageCount: number } | null = null
+  try {
+    const seal = await loadSigningSeal(log)
+    if (seal) {
+      const carriesOriginal = original.length <= SEALED_COPY_ORIGINAL_MAX_BYTES
+      const manifest = {
+        format: 'accounted.signing.sealed-copy/1',
+        signing_request_id: request.id,
+        title,
+        company: { name: sender.companyName, org_number: orgNumber },
+        document: { file_name: document.file_name, sha256: request.document_sha256, attachment: carriesOriginal ? 'original.pdf' : null },
+        annual_report_version_id: request.annual_report_version_id,
+        created_at: request.created_at,
+        completed_at: request.completed_at,
+        method: SIGNING_METHOD,
+        signers: evidenceSigners.map(({ entry, ocsp }) => ({
+          position: entry.position,
+          name: entry.name,
+          role: entry.role,
+          bankid_name: entry.bankid_name,
+          personnummer_masked: entry.personnummer_masked,
+          signed_at: entry.signed_at,
+          signature_sha256: entry.signature_sha256,
+          ocsp_sha256: sha256Hex(ocsp),
+        })),
+        evidence: 'Each BankID signature (XML-DSig, with the signer\'s full personnummer) and its OCSP response is kept in the sender\'s evidence package; signature_sha256 and ocsp_sha256 are the SHA-256 of those files.',
+      }
+      const built = await buildSignedPdf(original, {
+        title,
+        certificate: { ...certificate, sealed: { originalAttached: carriesOriginal } },
+        attachments: [
+          ...(carriesOriginal ? [{ name: 'original.pdf', bytes: original, mimeType: 'application/pdf', description: `Originalet som signerades: ${document.file_name}` }] : []),
+          { name: 'signeringsbevis.json', bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2)), mimeType: 'application/json', description: 'Signeringsbevis i maskinläsbar form' },
+        ],
+      })
+      sealedCopy = { bytes: await seal.apply(built.bytes), originalPageCount: built.originalPageCount }
+      log.info('signed copy sealed', { signingRequestId: request.id, bytes: sealedCopy.bytes.length })
+    }
+  } catch (err) {
+    const completedAt = request.completed_at ? new Date(request.completed_at).getTime() : Date.now()
+    if (Date.now() - completedAt < SEAL_GIVE_UP_AFTER_MS) throw err
+    log.error('signing seal kept failing, archiving the signed copy without it', err instanceof Error ? err : new Error(String(err)), { signingRequestId: request.id })
+  }
+  const { bytes: signed, originalPageCount } = sealedCopy ?? (await buildSignedPdf(original, { title, certificate }))
 
   const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
   zip.file('original.pdf', original)
-  const manifestSigners = signers.map((s) => {
-    const p = privates.get(s.id)!
-    const xml = Buffer.from(p.signature_xml, 'base64')
-    zip.file(`signatur-${s.position}.xml`, xml)
-    zip.file(`ocsp-${s.position}.der`, Buffer.from(p.ocsp_response, 'base64'))
-    return {
-      position: s.position,
-      name: s.name,
-      role: s.role_label,
-      bankid_name: `${s.bankid_given_name} ${s.bankid_surname}`.trim(),
-      personnummer_masked: p.personnummer_masked,
-      signed_at: s.signed_at,
-      signature_file: `signatur-${s.position}.xml`,
-      signature_sha256: sha256Hex(xml),
-      ocsp_file: `ocsp-${s.position}.der`,
-    }
+  const manifestSigners = evidenceSigners.map(({ xml, ocsp, entry }) => {
+    zip.file(entry.signature_file, xml)
+    zip.file(entry.ocsp_file, ocsp)
+    return entry
   })
   zip.file(
     'manifest.json',
@@ -274,7 +362,7 @@ export async function sealSigningRequest(service: SupabaseClient, requestId: str
         annual_report_version_id: request.annual_report_version_id,
         created_at: request.created_at,
         completed_at: request.completed_at,
-        method: 'BankID (TIC Identity), XML-DSig with OCSP; userNonVisibleData carries {request, signer, sha256}',
+        method: SIGNING_METHOD,
         signers: manifestSigners,
       },
       null,

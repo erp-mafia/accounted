@@ -129,7 +129,13 @@ const nextConfig: NextConfig = {
   // ("Two or more assets with different content were emitted to the same
   // output path"), which failed every production build from main. Loaded
   // from node_modules at runtime, the AWS SDK never enters the bundle.
-  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', '@anthropic-ai/bedrock-sdk'],
+  //
+  // @libpdf/core (lib/signing/pades-seal) is external because it reaches for
+  // two optional packages we do not install (@google-cloud/kms and
+  // secret-manager, for a signer we do not use) through import(): a bundler
+  // tries to resolve them at build time, Node only if that signer is asked
+  // for.
+  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', '@anthropic-ai/bedrock-sdk', '@libpdf/core'],
   experimental: {
     // recharts and date-fns are on Next's built-in list already. motion/react
     // re-exports framer-motion wholesale, so both barrels are listed.

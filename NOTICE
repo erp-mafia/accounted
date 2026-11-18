@@ -49,11 +49,11 @@ Copyleft and dual-license notes:
 
 --- BEGIN GENERATED: npm run notice:generate ---
 
-Shipped third-party packages (643): every package npm installs
+Shipped third-party packages (654): every package npm installs
 with --omit=dev, read from package-lock.json. Licenses are the SPDX
 expressions each package declares; dual-license choices are noted above.
 
-MIT (409)
+MIT (415)
   @anthropic-ai/bedrock-sdk 0.29.1
   @anthropic-ai/sdk 0.95.0
   @babel/runtime 7.28.6
@@ -78,6 +78,7 @@ MIT (409)
   @heroicons-animated/react 1.3.0
   @hookform/resolvers 5.4.0
   @img/colour 1.1.0
+  @libpdf/core 0.5.3
   @next/env 16.4.2
   @next/swc-darwin-arm64 16.4.2
   @next/swc-darwin-x64 16.4.2
@@ -88,7 +89,9 @@ MIT (409)
   @next/swc-win32-arm64-msvc 16.4.2
   @next/swc-win32-x64-msvc 16.4.2
   @noble/ciphers 1.3.0
+  @noble/ciphers 2.4.0
   @noble/hashes 1.8.0
+  @noble/hashes 2.4.0
   @nodable/entities 2.1.0
   @parcel/watcher 2.5.6
   @parcel/watcher-android-arm64 2.5.6
@@ -162,6 +165,7 @@ MIT (409)
   @react-pdf/types 2.11.1
   @reduxjs/toolkit 2.11.2
   @schummar/icu-type-parser 1.21.5
+  @scure/base 2.4.0
   @selderee/plugin-htmlparser2 0.12.0
   @stablelib/base64 1.0.1
   @standard-schema/spec 1.1.0
@@ -380,6 +384,8 @@ MIT (409)
   property-expr 2.0.6
   property-information 7.1.0
   punycode.js 2.3.1
+  pvtsutils 1.3.6
+  pvutils 1.2.0
   qrcode 1.5.4
   query-selector-shadow-dom 1.0.1
   queue 6.0.2
@@ -676,6 +682,16 @@ LGPL-3.0-or-later (10)
   @img/sharp-libvips-linuxmusl-arm64 1.3.4
   @img/sharp-libvips-linuxmusl-x64 1.3.4
 
+BSD-3-Clause (8)
+  asn1js 3.1.0
+  bytestreamjs 2.0.1
+  d3-ease 3.0.1
+  deepmerge-ts 8.0.2
+  intl-messageformat 11.2.12
+  jpeg-js 0.4.4
+  pkijs 3.4.3
+  source-map-js 1.2.2
+
 BSD-2-Clause (5)
   domelementtype 2.3.0
   domhandler 5.0.3
@@ -683,17 +699,14 @@ BSD-2-Clause (5)
   entities 4.5.0
   entities 7.0.1
 
-BSD-3-Clause (5)
-  d3-ease 3.0.1
-  deepmerge-ts 8.0.2
-  intl-messageformat 11.2.12
-  jpeg-js 0.4.4
-  source-map-js 1.2.2
-
 Apache-2.0 AND LGPL-3.0-or-later (3)
   @img/sharp-win32-arm64 0.35.5
   @img/sharp-win32-ia32 0.35.5
   @img/sharp-win32-x64 0.35.5
+
+(MIT AND Zlib) (2)
+  pako 1.0.11
+  pako 2.2.0
 
 0BSD (2)
   tslib 1.14.1
@@ -709,9 +722,6 @@ MIT-0 (2)
 (Apache-2.0 AND MIT) (1)
   posthog-js 1.407.3
 
-(MIT AND Zlib) (1)
-  pako 1.0.11
-
 (MIT OR CC0-1.0) (1)
   type-fest 2.19.0
 
@@ -726,6 +736,9 @@ MIT-0 (2)
 
 Apache-2.0 AND LGPL-3.0-or-later AND MIT (1)
   @img/sharp-wasm32 0.35.5
+
+BlueOak-1.0.0 (1)
+  lru-cache 11.5.3
 
 CC-BY-4.0 (1)
   caniuse-lite 1.0.30001810

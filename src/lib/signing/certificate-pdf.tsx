@@ -6,7 +6,8 @@
  *
  *   - The Signeringsbevis: the company, the document, who signed as what,
  *     with which BankID and when, the document's facts, what a BankID
- *     signature is, and where a copy is checked. Header and footer repeat
+ *     signature is (and, on a sealed copy, that the file is sealed and
+ *     carries the original), and where a copy is checked. Header and footer repeat
  *     on every page; a signer row never splits, so many signers paginate.
  *   - The stamp: one strip per page width, "Signerat med BankID av JW, EM ·
  *     ID 1569BCE7 · app.accounted.se/verifiera" between two hairlines, that
@@ -183,6 +184,8 @@ export interface SigningCertificateData {
   annualReportDate: string | null
   verifyUrl: string
   platformName: string
+  /** The copy gets an electronic seal (./pades-seal.ts), with or without the original attached: the page says so. */
+  sealed?: { originalAttached: boolean }
   fonts: SigningPdfFonts
 }
 
@@ -327,6 +330,8 @@ export function SigningCertificatePDF(data: SigningCertificateData) {
         <Text hyphenationCallback={noHyphens} style={styles.legal}>
           Varje underskrift är en BankID-signatur, en avancerad elektronisk underskrift enligt eIDAS, gjord över dokumentets kontrollsumma ovan. Signaturerna,
           originalfilen och BankID:s bekräftelse att certifikaten var giltiga finns i bevispaketet i {swedishGenitive(data.companyName)} arkiv.
+          {data.sealed ? ' Den här filen är elektroniskt förseglad och tidsstämplad: en PDF-läsare visar om något har ändrats efter förseglingen.' : null}
+          {data.sealed?.originalAttached ? ' Originalfilen ligger med som bilaga.' : null}
         </Text>
 
         <View wrap={false} style={styles.verify}>

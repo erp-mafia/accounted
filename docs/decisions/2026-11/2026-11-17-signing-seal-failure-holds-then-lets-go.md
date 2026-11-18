@@ -1,0 +1,1 @@
+[2026-11-17] A seal that fails holds the signed copy back for a retry; 15 minutes after the last signature the copy is archived without a seal and the log says so: a late copy without a seal beats none when a timestamp service or the certificate is down.
