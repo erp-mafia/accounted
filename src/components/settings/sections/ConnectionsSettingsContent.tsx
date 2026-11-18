@@ -54,6 +54,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
+import { paymentsConnectionRow, type PaymentsConnectionRow } from '@/lib/payments/orders/connection-row'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { skvConnectionState, type SkvStatusLike } from '@/lib/notices/predicates'
 import { peppolConnectionState } from '@/lib/invoices/peppol-access'
 import { firstSentence } from '@/lib/settings/first-sentence'
@@ -121,7 +123,6 @@ interface Status {
   peppol: 'receiving' | 'sending' | 'off'
   /** Null when the mailboxes could not be read (the row then shows no state). */
   mail: MailboxSummary | null
-  /** Bank payments are switched on for this company (the pilot list); the row shows only then. */
   /** The connected POS venue(s); null when none. */
   pos: { label: string; attention: boolean } | null
 }
@@ -315,17 +316,20 @@ export function ConnectionsSettingsContent() {
   }
 
   // Bank payments answer in well under a second; the row must not wait for
-  // the slowest of the other readouts (mail, Peppol) to appear.
-  const [bankPayments, setBankPayments] = useState<boolean | null>(null)
+  // the slowest of the other readouts (mail, Peppol) to appear. The row shows
+  // where payments are open to the company, and stays, pointing at
+  // Abonnemang, where a paid plan is all that is missing; every other answer
+  // leaves it out (lib/payments/orders/connection-row.ts). Null while loading.
+  const [bankPayments, setBankPayments] = useState<PaymentsConnectionRow | null>(null)
   useEffect(() => {
     if (!companyId) return
     let cancelled = false
     fetchPaymentsAvailability()
       .then((data) => {
-        if (!cancelled) setBankPayments(data.available)
+        if (!cancelled) setBankPayments(paymentsConnectionRow(data, { selfHosted: isSelfHosted() }))
       })
       .catch(() => {
-        if (!cancelled) setBankPayments(false)
+        if (!cancelled) setBankPayments(paymentsConnectionRow(null))
       })
     return () => {
       cancelled = true
@@ -586,13 +590,32 @@ export function ConnectionsSettingsContent() {
               connected: status?.skv === 'connected',
               attention: status?.skv === 'reconnect',
             })}
-          {bankPayments &&
+          {bankPayments === 'on' &&
             row({
               logo: <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('bank_payments'),
               help: t('bank_payments_help'),
               href: '/settings/bank-payments',
               connected: null,
+            })}
+          {/* Not on yet because the company has no paid plan: the row stays
+              so the feature can be found, says what switches it on and leads
+              to Abonnemang, like the card prompt on the bank row above. Only
+              the first sentence of the help: the rest describes the page the
+              row opens once payments are on. */}
+          {bankPayments === 'subscription' &&
+            row({
+              logo: <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              name: t('bank_payments'),
+              help: firstSentence(t('bank_payments_help')).first,
+              state: t('bank_payments_requires_subscription'),
+              href: '/settings/billing',
+              connected: false,
+              actions: (
+                <Button variant="outline" asChild>
+                  <Link href="/settings/billing">{t('bank_payments_add_card')}</Link>
+                </Button>
+              ),
             })}
         </SettingsGroup>
       ) : null}

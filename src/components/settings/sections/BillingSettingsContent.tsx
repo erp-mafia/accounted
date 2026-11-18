@@ -36,15 +36,18 @@ import { UPGRADE_REASONS, type UpgradeReason } from '@/lib/entitlements/upgrade-
 // capability in lib/entitlements/keys.ts (bank_sync, skatteverket,
 // email_send, and stripe_payments + woocommerce_sync + shopify_sync +
 // zettle_sync as one "payments and webshop" item). Keep in step with
-// PAID_CAPABILITIES when a key is added. collections and signing have their
-// own items (UNLOCK_COLLECTIONS_KEY, UNLOCK_SIGNING_KEY), listed only where
-// the feature is switched on for the viewing company, so merging them shows
-// nothing to anyone.
+// PAID_CAPABILITIES when a key is added. Bank payments have no key of their
+// own (they ride bank_sync, lib/payments/orders/switched-on.ts) but get an
+// item of their own, under the name Kopplingar gives them: "Bankkoppling"
+// only says that transactions are fetched. collections and signing have
+// their own items (UNLOCK_COLLECTIONS_KEY, UNLOCK_SIGNING_KEY), listed only
+// where the feature is switched on for the viewing company, so merging them
+// shows nothing to anyone.
 //
 // ai is deliberately not listed (owner, 2026-10-22): the assistant is meant
 // to be sold as an add-on later, so the page does not promise it as part of
 // the subscription. The capability itself is still granted with it.
-const UNLOCK_KEYS = ['unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
+const UNLOCK_KEYS = ['unlock_bank', 'unlock_bank_payments', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
 const UNLOCK_COLLECTIONS_KEY = 'unlock_collections'
 const UNLOCK_SIGNING_KEY = 'unlock_signing'
 

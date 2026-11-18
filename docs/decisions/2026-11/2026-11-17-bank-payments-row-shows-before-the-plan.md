@@ -1,0 +1,1 @@
+[2026-11-17] Kopplingar keeps the Betalningar via banken row when a paid plan is all that is missing, with the way to Abonnemang, and the plan card lists bank payments: a company on trial found the feature nowhere. Pilot, provider and sandbox refusals still show no row; the gate is unchanged.
