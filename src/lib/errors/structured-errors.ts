@@ -1054,9 +1054,9 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   VOUCHER_NEEDS_CONFIRMATION: {
     httpStatus: 409,
     message_sv:
-      'Verifikationen avviker från hur en sådan verifikation brukar se ut. Läs varningarna och bekräfta att den stämmer, eller rätta raderna.',
+      'Verifikationen behöver bekräftas innan den bokförs. Läs varningarna och bekräfta att den stämmer, eller rätta den.',
     message_en:
-      'The voucher deviates from what such a voucher normally looks like (details.warnings: code, message_sv, message_en, details). Show the warnings to the person; if they confirm the lines are right, send the same request again with acknowledged_warnings listing every code. Otherwise correct the lines.',
+      'The voucher needs a person\'s confirmation before it is booked (details.warnings: code, message_sv, message_en, details): it deviates from what such a voucher normally looks like, repeats something already booked, or changes the VAT of a period already declared. Show the warnings to the person; if they confirm, send the same request again with acknowledged_warnings listing every code. Otherwise correct the voucher.',
   },
   TX_CATEGORIZE_TX_NOT_FOUND: {
     httpStatus: 404,

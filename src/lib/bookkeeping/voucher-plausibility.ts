@@ -36,7 +36,10 @@ export interface PlausibilityLine {
   credit_amount: number
 }
 
-/** Every warning a typed verifikat can get, plausibility and duplicate checks alike. */
+/**
+ * Every warning a typed verifikat can get: the plausibility and duplicate
+ * checks, and the blocks' own (./voucher-block-warnings.ts).
+ */
 export const VOUCHER_WARNING_CODES = [
   'INPUT_VAT_ABOVE_RATE',
   'OUTPUT_VAT_ABOVE_RATE',
@@ -45,6 +48,7 @@ export const VOUCHER_WARNING_CODES = [
   'REVENUE_DEBITED_IN_PURCHASE',
   'POSSIBLE_DUPLICATE_VOUCHER',
   'BANK_MOVEMENT_ALREADY_BOOKED',
+  'VAT_PERIOD_ALREADY_FILED',
 ] as const
 
 export type VoucherWarningCode = (typeof VOUCHER_WARNING_CODES)[number]

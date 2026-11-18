@@ -162,7 +162,7 @@ describe('POST /api/pending-operations/:id/commit: a refused approval', () => {
     const warnings = [{ code: 'VOUCHER_DUPLICATE_IN_BOOKS', message_sv: 'Finns redan.', message_en: 'Exists.', details: {} }]
     const { status, body } = await approve('create_voucher', {
       status: 'failed',
-      error: 'Verifikationen avviker från hur en sådan verifikation brukar se ut. Läs varningarna och bekräfta att den stämmer, eller rätta raderna.',
+      error: 'Verifikationen behöver bekräftas innan den bokförs. Läs varningarna och bekräfta att den stämmer, eller rätta den.',
       http_status: 409,
       code: 'VOUCHER_NEEDS_CONFIRMATION',
       data: { warnings },

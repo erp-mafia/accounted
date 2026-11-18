@@ -8,6 +8,18 @@
  * source_type-not-staged invariant.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts) reads
+// the filing record at staging: none here, so the stubbed reads stay the
+// tool's own. The staged row it is asked with is kept: the note reads the
+// posting off that row, so the fields it reads are pinned below.
+const filedVatAsked = vi.hoisted(() => [] as unknown[])
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async (_supabase: unknown, _companyId: unknown, op: unknown) => {
+    filedVatAsked.push(op)
+    return null
+  },
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 // The booking-time voucher warnings have their own tests
@@ -1245,6 +1257,18 @@ describe('gnubok_correct_entry: the corrected entry\'s text', () => {
 
     expect(stagedParams(mock).description).toBe('Förbrukningsinventarier, rätt leverantör')
     expect(result.preview.correction.description).toBe('Förbrukningsinventarier, rätt leverantör')
+    // What the filed-momsperiod note reads off a staged rättelse: the new
+    // lines in the params, the original's date and lines in the preview.
+    expect(filedVatAsked.at(-1)).toMatchObject({
+      operation_type: 'correct_entry',
+      params: { lines: expect.arrayContaining([expect.objectContaining({ account_number: expect.any(String), debit_amount: expect.any(Number), credit_amount: expect.any(Number) })]) },
+      preview_data: {
+        original: {
+          entry_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+          lines: expect.arrayContaining([expect.objectContaining({ account_number: expect.any(String), debit_amount: expect.any(Number), credit_amount: expect.any(Number) })]),
+        },
+      },
+    })
   })
 
   it('stages no description when it is absent or blank, and previews the default text', async () => {

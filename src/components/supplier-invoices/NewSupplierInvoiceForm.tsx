@@ -34,6 +34,7 @@ import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amo
 import { isWholeKronaRoundingOf, rowNetFromInvoiceTotals } from '@/lib/supplier-invoices/total-first'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useFiledVatPeriod } from '@/lib/hooks/use-filed-vat-period'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -586,6 +587,10 @@ export default function NewSupplierInvoiceForm({
     !!bookedDateHere &&
     !periods.some((p) => bookedDateHere >= p.period_start && bookedDateHere <= p.period_end)
   const showNoPeriodWarning = willBookAtRegistration && invoiceDateOutsidePeriod
+  // The date the registration books on, against the filed momsdeklarationer:
+  // a late invoice dated in a filed period books there, and its moms then
+  // changes a declaration already filed.
+  const bookedDateFiledVat = useFiledVatPeriod(bookedDateHere, willBookAtRegistration && !invoiceDateOutsidePeriod)
 
   // Advisory nudge (#863 item 2): reverse charge purchases are normally booked
   // on cost accounts (4xxx/5xxx), so flag lines sitting on a class 1 or 6
@@ -2355,6 +2360,15 @@ export default function NewSupplierInvoiceForm({
                   <p className="mt-0.5">{t('no_period_help')}</p>
                 </div>
               </div>
+            )}
+            {bookedDateFiledVat && (
+              <p className="mt-4 text-xs text-muted-foreground">
+                {t('booked_date_filed_vat', {
+                  booked: formatDate(bookedDateHere),
+                  period: bookedDateFiledVat.tax_period,
+                  date: formatDate(bookedDateFiledVat.filed_on),
+                })}
+              </p>
             )}
           </section>
 

@@ -1,8 +1,9 @@
 /**
  * The confirm-before-posting guard for typed verifikat: the plausibility
- * checks (voucher-plausibility.ts) and the duplicate checks
- * (voucher-duplicate-check.ts) as one answer every typed door gives the same
- * way.
+ * checks (voucher-plausibility.ts), the duplicate checks
+ * (voucher-duplicate-check.ts) and the blocks' own warnings
+ * (voucher-block-warnings.ts: the moms of a period already declared) as one
+ * answer every typed door gives the same way.
  *
  * Without an acknowledgement covering every warning the door refuses with
  * VOUCHER_NEEDS_CONFIRMATION (409) and details.warnings. The person reads them
@@ -13,12 +14,13 @@
  * behandlingshistorik record on the verifikat (BFNAR 2013:2 p. 9.16), like a
  * dismissed bank duplicate does.
  *
- * Fail-open: a duplicate lookup that errors never blocks a booking; the pure
- * checks cannot fail.
+ * Fail-open: a duplicate lookup or a block's check that errors never blocks
+ * a booking; the pure checks cannot fail.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { VOUCHER_BLOCK_WARNINGS } from '@/lib/composition/voucher-block-warnings'
 import { checkVoucherPlausibility, type PlausibilityLine, type VoucherWarning } from './voucher-plausibility'
 import { detectVoucherDuplicates } from './voucher-duplicate-check'
 
@@ -26,6 +28,13 @@ export interface VoucherWarningsGuardInput {
   entry_date: string
   description: string
   lines: readonly PlausibilityLine[]
+  /**
+   * The verifikat a rättelse replaces (its date and lines as posted), so a
+   * block judges the pair the rättelse posts and not the new lines alone.
+   */
+  replaces?: { entry_date: string; lines: readonly PlausibilityLine[] } | null
+  /** The verifikat being corrected is an ingående balans. */
+  opening_balance?: boolean
 }
 
 export interface VoucherWarningsGuardOptions {
@@ -57,6 +66,20 @@ export async function runVoucherWarningsGuard(
       warnings.push(...(await detectVoucherDuplicates(supabase, companyId, input, { excludeJournalEntryId: options.excludeJournalEntryId })))
     } catch (err) {
       log.warn('voucher duplicate detection failed (continuing)', err as Error)
+    }
+  }
+  for (const block of VOUCHER_BLOCK_WARNINGS) {
+    try {
+      const warning = await block.warn(supabase, companyId, {
+        // A rättelse sent without its own date posts on its original's.
+        entry_date: input.entry_date || input.replaces?.entry_date || '',
+        lines: input.lines,
+        replaces: input.replaces ?? null,
+        ...(input.opening_balance ? { opening_balance: true } : {}),
+      })
+      if (warning) warnings.push(warning)
+    } catch (err) {
+      log.warn(`voucher block warning ${block.id} failed (continuing)`, err as Error)
     }
   }
   if (warnings.length === 0) return { ok: true, acknowledged: [] }

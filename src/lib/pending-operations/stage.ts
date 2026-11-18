@@ -23,6 +23,7 @@ import type { Logger } from '@/lib/logger'
 import type { PendingOperation, PendingOperationActorType } from '@/types'
 import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { agentReasonColumn, writeWithAgentReason } from './agent-reason'
+import { stagedFiledVatNote } from './filed-vat-note'
 import { getRiskLevel } from './risk-tiers'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 
@@ -70,9 +71,16 @@ export async function insertStagedOperation(
   assertNoPlaintextPersonnummer(input.params, 'params')
   assertNoPlaintextPersonnummer(input.previewData, 'preview_data')
 
-  const previewData = input.complianceNote
-    ? { ...input.previewData, compliance_warning: input.complianceNote }
-    : input.previewData
+  // An approval that would change a momsdeklaration already filed says so
+  // on the proposal, as the MCP staging path does (./filed-vat-note.ts).
+  const filedVatNote = await stagedFiledVatNote(
+    supabase,
+    input.companyId,
+    { operation_type: input.operationType, params: input.params, preview_data: input.previewData },
+    log,
+  )
+  const complianceNote = [input.complianceNote, filedVatNote].filter((note): note is string => !!note).join(' ')
+  const previewData = complianceNote ? { ...input.previewData, compliance_warning: complianceNote } : input.previewData
 
   // A hint for the client, never a gate: the dry run the operation staged
   // with already ran the commit's checks, and the DB triggers stay the

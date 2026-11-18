@@ -638,6 +638,7 @@ import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlemen
 import { findFiscalPeriod, validateBalance } from '@/lib/bookkeeping/engine'
 import { countUnbookedInPeriod, resolvePeriodLockForDate, type PeriodLockForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { stagedPeriodLockNote } from '@/lib/pending-operations/period-lock'
+import { stagedFiledVatNote } from '@/lib/pending-operations/filed-vat-note'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
@@ -2533,11 +2534,22 @@ async function stagePendingOperation(
   assertNoPlaintextPersonnummer(params, 'params')
   assertNoPlaintextPersonnummer(previewData, 'preview_data')
 
+  // An approval that would change the moms of a period already declared is
+  // said to the stager and the approver like any other advisory
+  // (lib/pending-operations/filed-vat-note.ts).
+  const filedVatNote = await stagedFiledVatNote(
+    supabase,
+    companyId,
+    { operation_type: operationType, params, preview_data: previewData },
+    log,
+  )
+  const complianceNote = [options.complianceNote, filedVatNote].filter((note): note is string => !!note).join(' ')
+
   // Fold the advisory compliance note into the preview so the agent response
   // and the persisted preview_data (rendered by the /pending approval card)
   // carry the same warning.
-  if (options.complianceNote) {
-    previewData = { ...previewData, compliance_warning: options.complianceNote }
+  if (complianceNote) {
+    previewData = { ...previewData, compliance_warning: complianceNote }
   }
 
   // params-aware: create/update_recurring_schedule escalate to 'high' when
@@ -2611,7 +2623,7 @@ async function stagePendingOperation(
       dry_run: true,
       risk_level: riskLevel,
       actor,
-      message: `Dry run: would stage "${operationType}" (risk: ${riskLevel})${toSupersede.length > 0 ? ` and supersede your pending proposal(s) ${toSupersede.join(', ')} for the same bank rows` : ''}. No changes made.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+      message: `Dry run: would stage "${operationType}" (risk: ${riskLevel})${toSupersede.length > 0 ? ` and supersede your pending proposal(s) ${toSupersede.join(', ')} for the same bank rows` : ''}. No changes made.${complianceNote ? ` WARNING: ${complianceNote}` : ''}`,
       ...(toSupersede.length > 0 ? { would_supersede_operation_ids: toSupersede } : {}),
       preview: previewData,
       ...(periodStatus ? { period_status: periodStatus } : {}),
@@ -2732,7 +2744,7 @@ async function stagePendingOperation(
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${periodLockNote ? ` ${periodLockNote}` : ''}${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''}${supersededTwins.length > 0 ? ` It replaces your identical earlier proposal(s) ${supersededTwins.join(', ')}, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel, actor.canApprove)}${actor.canApprove === false ? '' : ` The user can also approve at /pending in the ${branding} web app.`}${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${periodLockNote ? ` ${periodLockNote}` : ''}${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''}${supersededTwins.length > 0 ? ` It replaces your identical earlier proposal(s) ${supersededTwins.join(', ')}, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel, actor.canApprove)}${actor.canApprove === false ? '' : ` The user can also approve at /pending in the ${branding} web app.`}${complianceNote ? ` WARNING: ${complianceNote}` : ''}`,
     ...(superseded.length + supersededTwins.length > 0 ? { superseded_operation_ids: [...superseded, ...supersededTwins] } : {}),
     ...approveHint(data.id, companyId, actor),
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
@@ -5551,7 +5563,7 @@ function isNextActionHint(value: unknown): value is NextActionHint {
 
 const VOUCHER_CONFIRMATION_NEXT: NextActionHint = {
   description:
-    'Nothing was booked. Show the person data.warnings; only if they confirm the lines, stage the voucher again with acknowledged_warnings listing every code.',
+    'Nothing was booked. Show the person data.warnings; only if they confirm, stage the voucher again with acknowledged_warnings listing every code.',
   tool: 'gnubok_create_voucher',
 }
 
@@ -27131,7 +27143,7 @@ export const tools: McpTool[] = [
           })
       if (voucherGuard && !voucherGuard.ok) {
         throw Object.assign(
-          new Error('The voucher deviates from what such a voucher normally looks like: show the person error.details.warnings, and stage again with acknowledged_warnings only if they confirm the lines.'),
+          new Error('The voucher needs the person\'s confirmation before it is staged: show the person error.details.warnings, and stage again with acknowledged_warnings only if they confirm.'),
           { code: voucherGuard.code, details: voucherGuard.details },
         )
       }
@@ -27590,17 +27602,17 @@ export const tools: McpTool[] = [
         line_description: `Reversal: ${l.line_description ?? ''}`,
       }))
 
-      // If the original touches output/input VAT accounts (2610-2670), a storno
-      // is correct ONLY if the moms period covering entry_date has not yet been
-      // filed with Skatteverket. For filed periods the legal path is an
-      // omprövning (rättelse-omprövning per ML 2023:200, SFL 22 kap). Accounted
-      // doesn't track per-VAT-period filing status today, so we surface a
-      // soft warning rather than block: the human approver decides.
+      // The original touches moms accounts (2610-2670): its storno changes
+      // the declaration of the period it is dated in. A period on record as
+      // filed is named by the staging note
+      // (lib/pending-operations/filed-vat-note.ts); this line is for a period
+      // filed elsewhere and never marked here, which only the person knows
+      // of. Advice, never a block: the approver decides.
       const vatAccounts = originalLines
         .map((l) => l.account_number)
         .filter((acc) => /^26[1-7]\d$/.test(acc))
       const vatWarning = vatAccounts.length > 0
-        ? `Original innehåller momskonton (${[...new Set(vatAccounts)].join(', ')}). Om momsperioden är inlämnad till Skatteverket krävs omprövning (ML 2023:200): storno räcker inte. Bekräfta att perioden inte är inlämnad innan godkännande.`
+        ? `Original innehåller momskonton (${[...new Set(vatAccounts)].join(', ')}). Är momsdeklarationen för perioden redan inlämnad kan makuleringen ändra underlaget för den, och deklarationen kan då behöva rättas.`
         : null
       // The object the verifikat books, if any (advice, never a refusal): a
       // storno leaves it as it was (an invoice stays open, a later Kreditera

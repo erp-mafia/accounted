@@ -10,6 +10,18 @@
  * Companion suite: categorize-account-override.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts) reads
+// the filing record at staging: none here, so the stubbed reads stay the
+// tool's own. The staged row it is asked with is kept: the note reads the
+// posting off that row, so the fields it reads are pinned below.
+const filedVatAsked = vi.hoisted(() => [] as unknown[])
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async (_supabase: unknown, _companyId: unknown, op: unknown) => {
+    filedVatAsked.push(op)
+    return null
+  },
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
@@ -141,6 +153,17 @@ describe('gnubok_categorize_transaction: category presence guard (#1662)', () =>
     expect(insertArgs).toBeDefined()
     const payload = (insertArgs as unknown[])[0] as { params?: { category?: string } }
     expect(payload.params?.category).toBe('expense_other')
+    // What the filed-momsperiod note reads off a staged bank row: the row's
+    // own date and the lines the approval posts, both in the preview.
+    expect(filedVatAsked.at(-1)).toMatchObject({
+      operation_type: 'categorize_transaction',
+      preview_data: {
+        date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: expect.any(String), debit_amount: expect.any(Number), credit_amount: expect.any(Number) }),
+        ]),
+      },
+    })
   })
 })
 

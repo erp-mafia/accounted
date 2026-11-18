@@ -4,6 +4,13 @@
  * to suggestion_log. It is recorded only and never changes the booking.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts) reads
+// the filing record at staging: none here, so the stubbed reads stay the
+// tool's own. Its own tests and staging-approval-path.test.ts pin it.
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async () => null,
+}))
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 
 // The booking service's chart pre-validation and period-lock pre-check have

@@ -36,6 +36,7 @@
   "compositionSeams": {
     "importers": [
       "lib/bookkeeping/engine.ts -> lib/composition/reversal-hooks",
+      "lib/bookkeeping/voucher-warnings-guard.ts -> lib/composition/voucher-block-warnings",
       "lib/cash-accounts/ledger-change.ts -> lib/composition/ledger-move-twins",
       "lib/events/outbox-dispatcher.ts -> lib/composition/async-event-consumers",
       "lib/init.ts -> lib/composition/event-consumers",
@@ -97,7 +98,8 @@
       "lib/composition/reversal-hooks.ts -> lib/invoices/counterparty-setoff/reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/migrated-deduction-reversal",
       "lib/composition/reversal-hooks.ts -> lib/invoices/rot-rut-reclaim-reversal",
-      "lib/composition/unbooked-bank-lines.ts -> lib/transactions/unbooked"
+      "lib/composition/unbooked-bank-lines.ts -> lib/transactions/unbooked",
+      "lib/composition/voucher-block-warnings.ts -> lib/vat/voucher-filed-period-warning"
     ]
   }
 }

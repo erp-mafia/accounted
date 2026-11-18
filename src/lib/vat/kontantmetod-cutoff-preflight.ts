@@ -26,7 +26,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { checkPeriodLock, type PeriodLockVerdict } from '@/lib/api/v1/check-period-lock'
-import { listVatFilings } from '@/lib/vat/filing-record-store'
+import { distinctFiledVatPeriods, filedVatPeriodsOfDates } from '@/lib/vat/filed-period-for-date'
 import type { KontantmetodCarryPlan, PaidBeforePosting } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 
 export const KONTANTMETOD_CUTOFF_PERIOD_LOCKED = 'KONTANTMETOD_CUTOFF_PERIOD_LOCKED' as const
@@ -139,20 +139,14 @@ export async function kontantmetodCutoffPreflight(
     }
   }
 
-  const filings = await listVatFilings(supabase, companyId)
+  const filedByDate = await filedVatPeriodsOfDates(supabase, companyId, [...dates, ...manualDates])
   const filedCovering = (candidates: readonly string[]): CutoffFiledVatPeriod[] => {
     const hits = new Map<string, CutoffFiledVatPeriod>()
-    for (const filing of filings) {
-      if (!candidates.some((date) => filing.period_start <= date && date <= filing.period_end)) continue
-      if (hits.has(filing.tax_period)) continue
-      hits.set(filing.tax_period, {
-        tax_period: filing.tax_period,
-        period_start: filing.period_start,
-        period_end: filing.period_end,
-        filed_on: filing.filed_on,
-      })
+    for (const date of candidates) {
+      const period = filedByDate.get(date)
+      if (period) hits.set(date, period)
     }
-    return [...hits.values()].sort((a, b) => a.period_start.localeCompare(b.period_start))
+    return distinctFiledVatPeriods(hits)
   }
   const filed = filedCovering(dates)
   const acknowledged = new Set(opts.acknowledgedFiledVatPeriods ?? [])

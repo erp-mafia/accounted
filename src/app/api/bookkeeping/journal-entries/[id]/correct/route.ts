@@ -17,13 +17,30 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const validation = await validateBody(request, CorrectJournalEntryAppSchema)
     if (!validation.success) return validation.response
 
+    // The verifikat being corrected, as posted: a block judges the rättelse
+    // as the pair it posts (these lines out on this date, the new lines in),
+    // so one that leaves the moms of a filed period as it was is not warned
+    // about. A verifikat that is not there is correctEntry's refusal below.
+    const { data: original } = await supabase
+      .from('journal_entries')
+      .select('entry_date, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
     // The corrected lines are typed: the booking-time VAT and revenue
     // warnings apply. A rättelse mirrors its original on purpose, so the
     // duplicate half stays out (lib/bookkeeping/voucher-warnings-guard.ts).
     const voucherGuard = await runVoucherWarningsGuard(
       supabase,
       companyId,
-      { entry_date: validation.data.entry_date ?? '', description: validation.data.description ?? '', lines: validation.data.lines },
+      {
+        entry_date: validation.data.entry_date ?? '',
+        description: validation.data.description ?? '',
+        lines: validation.data.lines,
+        replaces: original ? { entry_date: original.entry_date, lines: original.lines ?? [] } : null,
+        opening_balance: original?.source_type === 'opening_balance',
+      },
       log,
       { acknowledged: validation.data.acknowledged_warnings, checkDuplicates: false },
     )

@@ -101,6 +101,13 @@ const noCompanyVatClassification = () => ({
   unconfiguredVatAccounts: new Map(),
 })
 
+// The blocks' booking-time warnings (the moms of a filed period): none by
+// default, so the queued reads stay the route's own.
+const mockBlockWarn = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/composition/voucher-block-warnings', () => ({
+  VOUCHER_BLOCK_WARNINGS: [{ id: 'vat-period-already-filed', module: 'vat', warn: mockBlockWarn }],
+}))
+
 import { POST } from '../route'
 import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 
@@ -130,6 +137,7 @@ describe('POST /api/transactions/[id]/book', () => {
     requireWriteMock.mockResolvedValue({ ok: true })
     // No booking-duplicate by default; guard tests override per-case.
     mockDetectDup.mockResolvedValue(null)
+    mockBlockWarn.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
     mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
     mockAssertBookable.mockResolvedValue({ ok: true })
@@ -362,6 +370,35 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
     expect(body.error.details.warnings.map((w) => w.code)).toEqual(['REVERSE_CHARGE_ONE_SIDED'])
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('asks for confirmation before booking a row that changes the moms of a filed period, before any draft', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -625, journal_entry_id: null }), error: null })
+    mockBlockWarn.mockResolvedValue({
+      code: 'VAT_PERIOD_ALREADY_FILED',
+      message_sv: 'Verifikationen ändrar momsen i en period som redan är deklarerad: 2025-01 (inlämnad 2025-03-12).',
+      message_en: 'The voucher changes the VAT of a period already declared: 2025-01 (filed 2025-03-12).',
+      details: { entry_date: '2025-01-15', filed_periods: [] },
+    })
+    const lines = [
+      { account_number: '6200', debit_amount: 500, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 125, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 625 },
+    ]
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: { ...validBody, lines } })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+    expect(body.error.details.warnings.map((w) => w.code)).toEqual(['VAT_PERIOD_ALREADY_FILED'])
+    expect(mockBlockWarn).toHaveBeenCalledWith(expect.anything(), expect.any(String), {
+      entry_date: '2025-01-15',
+      lines: expect.arrayContaining([expect.objectContaining({ account_number: '2641', debit_amount: 125 })]),
+      replaces: null,
+    })
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 

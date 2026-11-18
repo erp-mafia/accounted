@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { listVatFilings } from '@/lib/vat/filing-record-store'
+import { distinctFiledVatPeriods, filedVatPeriodsOfDates } from '@/lib/vat/filed-period-for-date'
 import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { isYearEndAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { resolvePeriodLockForDate } from '@/lib/core/bookkeeping/period-status'
@@ -450,10 +450,9 @@ async function appendWarnings(
   added: SIEAppendVoucher[],
 ): Promise<string[]> {
   const warnings: string[] = []
-  const filings = await listVatFilings(supabase, companyId)
-  for (const filing of filings.sort((a, b) => a.period_start.localeCompare(b.period_start))) {
-    const inside = dates.filter(date => date >= filing.period_start && date <= filing.period_end).length
-    if (!inside) continue
+  const filedByDate = await filedVatPeriodsOfDates(supabase, companyId, dates)
+  for (const filing of distinctFiledVatPeriods(filedByDate)) {
+    const inside = dates.filter(date => filedByDate.get(date)?.tax_period === filing.tax_period).length
     warnings.push(`Momsdeklarationen för ${filing.tax_period} är redan inlämnad, och ${inside} av de nya verifikationerna ` +
       'hamnar i den perioden. Kontrollera om deklarationen behöver rättas.')
   }

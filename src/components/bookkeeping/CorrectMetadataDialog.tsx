@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -15,6 +16,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { useFiledVatPeriod } from '@/lib/hooks/use-filed-vat-period'
+import { ISO_DATE_RE } from '@/lib/invariants'
+import { formatDate } from '@/lib/utils'
 import type { JournalEntry } from '@/types'
 
 interface Props {
@@ -22,6 +26,8 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCorrected: () => void
+  /** The filed momsperiod the verifikat is dated in, when its date is open and the record has one. */
+  filedVat?: { tax_period: string; filed_on: string; period_start: string; period_end: string } | null
 }
 
 /**
@@ -31,8 +37,9 @@ interface Props {
  * and shown in the verifikat's history. Stays Swedish (verifikat surface,
  * .claude/rules/i18n.md).
  */
-export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCorrected }: Props) {
+export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCorrected, filedVat }: Props) {
   const { toast } = useToast()
+  const t = useTranslations('journal_detail')
   const [description, setDescription] = useState('')
   const [entryDate, setEntryDate] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -46,6 +53,22 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
 
   const descriptionChanged = description.trim() !== (entry.description || '')
   const dateChanged = entryDate !== (entry.entry_date?.slice(0, 10) || '')
+  // A date moved across a momsperiod boundary changes the declarations on
+  // both sides. Only a filed one is worth a line: the period the verifikat
+  // lands in, else the one it leaves. Inside its own period nothing changes,
+  // and that is known without asking.
+  const dateMoved = dateChanged && ISO_DATE_RE.test(entryDate)
+  const staysInOwnPeriod =
+    !!filedVat && entryDate >= filedVat.period_start && entryDate <= filedVat.period_end
+  const movedInto = useFiledVatPeriod(entryDate, open && dateMoved && !staysInOwnPeriod)
+  const filedDateHint =
+    !dateMoved || staysInOwnPeriod
+      ? null
+      : movedInto
+        ? t('recordate_period_filed', { period: movedInto.tax_period, date: formatDate(movedInto.filed_on) })
+        : filedVat
+          ? t('correct_menu_period_filed', { period: filedVat.tax_period, date: formatDate(filedVat.filed_on) })
+          : null
   const hasChange = (descriptionChanged && description.trim().length > 0) || (dateChanged && entryDate.length > 0)
 
   async function handleSubmit() {
@@ -139,6 +162,7 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
                 Datumet på den här verifikationstypen kan inte ändras.
               </p>
             )}
+            {filedDateHint && <p className="text-xs text-muted-foreground">{filedDateHint}</p>}
           </div>
         </div>
 

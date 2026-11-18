@@ -88,6 +88,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useFiledVatPeriod } from '@/lib/hooks/use-filed-vat-period'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
@@ -3168,6 +3169,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           periods: fiscalPeriods,
         })
       : null
+  // The same date against the filed momsdeklarationer: an open date in a
+  // filed period books, and the declaration then needs correcting. Said
+  // beside the date, where it can still be changed.
+  const filedVatAsked = useFiledVatPeriod(watchInvoiceDate, !isSelfBilled && booksOnIssue)
+  const dateFiledVat = dateLock ? null : filedVatAsked
   // A momsregistrerad company without its VAT number cannot send a faktura
   // (ML 17 kap. 24 §; the send route refuses it after the create has numbered
   // it), so the editor says so before the confirm instead.
@@ -3185,6 +3191,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     deliveryDate: watchDeliveryDate || '',
     validUntil: watchValidUntil || '',
     dateLock,
+    dateFiledVat: !!dateFiledVat,
   })
   const detailsExpanded = detailsOpen || detailsReasons.length > 0
   const detailsChips = resolveDetailsChips({
@@ -4248,6 +4255,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       <p className="text-xs text-destructive">{errors.invoice_date.message}</p>
                     ) : dateLock ? (
                       <p className={FIELD_HINT_CLASS}>{tForm(`date_lock_${dateLock}`)}</p>
+                    ) : dateFiledVat ? (
+                      <p className={FIELD_HINT_CLASS}>
+                        {tForm('date_filed_vat', { period: dateFiledVat.tax_period, date: formatDate(dateFiledVat.filed_on) })}
+                      </p>
                     ) : null}
                   </div>
                 )}

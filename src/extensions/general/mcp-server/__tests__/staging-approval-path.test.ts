@@ -11,6 +11,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts),
+// stubbed so the queued reads stay the tool's own: none by default.
+const filedVat = vi.hoisted(() => ({ note: null as string | null, asked: [] as unknown[] }))
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async (_supabase: unknown, _companyId: unknown, op: unknown) => {
+    filedVat.asked.push(op)
+    return filedVat.note
+  },
+}))
 import type { ActorContext } from '../server'
 
 import { tools } from '../server'
@@ -59,7 +69,11 @@ function stageReversal() {
   return { ...mock, run }
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  filedVat.note = null
+  filedVat.asked.length = 0
+})
 
 describe('staging answer: who approves', () => {
   it('tells a key without the approve scope to send the user to the app, with no approve hint', async () => {
@@ -128,5 +142,55 @@ describe('staging answer: an identical reversal already open', () => {
 
     expect(result).not.toHaveProperty('superseded_operation_ids')
     expect(s.findCalls('pending_operations', 'update')).toHaveLength(0)
+  })
+})
+
+describe('staging answer: a proposal that changes a filed momsperiod', () => {
+  const NOTE =
+    'Momsdeklarationen för 2026-Q3 är redan inlämnad (2026-11-11), och makuleringen ändrar underlaget för den. ' +
+    'Godkänns förslaget kan deklarationen behöva rättas.'
+
+  it('tells the agent in the answer and the approver on the stored proposal', async () => {
+    filedVat.note = NOTE
+    const s = stageReversal()
+
+    const result = await s.run({ ...CONNECTOR, canApprove: true })
+
+    expect(result.staged).toBe(true)
+    expect(result.message).toContain(`WARNING: ${NOTE}`)
+    expect((result.preview as Record<string, unknown>).compliance_warning).toBe(NOTE)
+    const [inserted] = s.findCall('pending_operations', 'insert') as [{ preview_data: Record<string, unknown> }]
+    expect(inserted.preview_data.compliance_warning).toBe(NOTE)
+  })
+
+  it('is asked with the staged row: the type, the params and the preview the approver sees', async () => {
+    const s = stageReversal()
+
+    await s.run({ ...CONNECTOR, canApprove: true })
+
+    expect(filedVat.asked).toHaveLength(1)
+    expect(filedVat.asked[0]).toMatchObject({
+      operation_type: 'reverse_entry',
+      params: { entry_id: ENTRY_ID },
+      // The storno's own date and mirrored lines: what the note judges.
+      preview_data: {
+        reversal: {
+          entry_date: '2026-09-09',
+          lines: [
+            { account_number: '1710', debit_amount: 0, credit_amount: 1000 },
+            { account_number: '2440', debit_amount: 1000, credit_amount: 0 },
+          ],
+        },
+      },
+    })
+  })
+
+  it('adds nothing to the answer or the proposal when the approval changes no filed period', async () => {
+    const s = stageReversal()
+
+    const result = await s.run({ ...CONNECTOR, canApprove: true })
+
+    expect(result.message).not.toContain('WARNING')
+    expect(result.preview).not.toHaveProperty('compliance_warning')
   })
 })

@@ -25,6 +25,7 @@ import { changeCorrectionLineAccount, getSelectableCorrectionCatalog } from '@/l
 import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import { SpinnerIcon } from '@/components/icons'
+import { formatDate } from '@/lib/utils'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
 interface NewLine {
@@ -39,6 +40,8 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCorrected: () => void
+  /** The filed momsperiod the verifikat is dated in, when its date is open and the record has one. */
+  filedVat?: { tax_period: string; filed_on: string } | null
 }
 
 /**
@@ -48,7 +51,7 @@ interface Props {
  * in the verifikat via the immutable rättelse log. Stays Swedish
  * (verifikat surface, .claude/rules/i18n.md).
  */
-export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrected }: Props) {
+export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrected, filedVat }: Props) {
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
   // The full chart (deactivated rows included) comes from the session cache
@@ -243,6 +246,14 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
             De strukna raderna förblir synliga (överstrukna) i verifikatet.
           </DialogDescription>
         </DialogHeader>
+
+        {/* The button in the top bar opens this without passing the Rätta
+            menu, where the same sentence sits: said here too. */}
+        {filedVat && (
+          <p className="text-xs text-muted-foreground">
+            {t('correct_menu_period_filed', { period: filedVat.tax_period, date: formatDate(filedVat.filed_on) })}
+          </p>
+        )}
 
         {/* Original lines with strike checkboxes */}
         <div className="space-y-1">

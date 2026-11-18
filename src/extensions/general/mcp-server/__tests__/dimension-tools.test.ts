@@ -9,6 +9,13 @@
  * idempotency) lives in lib/pending-operations/__tests__/.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts) reads
+// the filing record at staging: none here, so the stubbed reads stay the
+// tool's own. Its own tests and staging-approval-path.test.ts pin it.
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async () => null,
+}))
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { tools } from '../server'

@@ -148,6 +148,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // company lock date: its trigger fires on entry_date only, so a note
   // behind it is still saved.
   const [noteLock, setNoteLock] = useState<'closed' | 'locked' | null>(null)
+  // The filed momsperiod the verifikat is dated in, from the same answer: a
+  // rättelse, a struck line, a new date or a storno there changes a
+  // declaration already filed, and the Rätta menu says so before the choice.
+  const [filedVat, setFiledVat] = useState<{
+    tax_period: string
+    filed_on: string
+    period_start: string
+    period_end: string
+  } | null>(null)
   // Monotonic id of the latest fetchData run. The period-status fetch is not
   // awaited, and fetchData re-runs on every id change and after every dialog
   // success, so an earlier response can resolve last; only the response that
@@ -233,6 +242,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       // strike button in the ⋯ menu only.
       setPeriodStatus(null)
       setNoteLock(null)
+      setFiledVat(null)
       const periodRequest = ++periodStatusRequestRef.current
       void fetch(
         `/api/bookkeeping/fiscal-periods/period-status?date=${encodeURIComponent(data.entry.entry_date)}`,
@@ -250,6 +260,16 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               : status === 'locked' && period?.period_id && !period?.lock_date
                 ? 'locked'
                 : null,
+          )
+          const filed = period?.filed_vat
+          setFiledVat(
+            filed &&
+              typeof filed.tax_period === 'string' &&
+              typeof filed.filed_on === 'string' &&
+              typeof filed.period_start === 'string' &&
+              typeof filed.period_end === 'string'
+              ? { tax_period: filed.tax_period, filed_on: filed.filed_on, period_start: filed.period_start, period_end: filed.period_end }
+              : null,
           )
         })
         .catch(() => {
@@ -728,6 +748,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                           {t('correct_menu_year_closed')}
                         </p>
                       )}
+                      {filedVat && periodStatus === 'open' && (
+                        <p className="max-w-64 px-2 pb-1.5 text-xs text-muted-foreground">
+                          {t('correct_menu_period_filed', { period: filedVat.tax_period, date: formatDate(filedVat.filed_on) })}
+                        </p>
+                      )}
                       {canInlineRattelse && (
                         <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite || yearClosed}>
                           <ScissorsIcon className="h-4 w-4" />
@@ -1151,6 +1176,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           entry={entry}
           open={showStrikeLines}
           onOpenChange={setShowStrikeLines}
+          filedVat={periodStatus === 'open' ? filedVat : null}
           onCorrected={() => {
             setShowStrikeLines(false)
             fetchData()
@@ -1162,6 +1188,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           entry={entry}
           open={showCorrectMetadata}
           onOpenChange={setShowCorrectMetadata}
+          filedVat={periodStatus === 'open' ? filedVat : null}
           onCorrected={() => {
             setShowCorrectMetadata(false)
             fetchData()

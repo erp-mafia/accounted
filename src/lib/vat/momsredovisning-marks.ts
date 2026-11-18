@@ -30,7 +30,7 @@ import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-status
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { fetchVatAccountTotals } from '@/lib/reports/vat-declaration'
-import { listVatFilings } from './filing-record-store'
+import { filedVatPeriodsOfDates } from './filed-period-for-date'
 
 export type MomsredovisningMarkErrorCode =
   | 'JOURNAL_ENTRY_NOT_FOUND'
@@ -257,10 +257,8 @@ async function markableEntry(
   const period = await resolvePeriodStatusForDate(supabase, companyId, row.entry_date)
   if (period.status !== 'open') return { ok: false, code: 'VAT_MARK_PERIOD_LOCKED' }
 
-  const filings = await listVatFilings(supabase, companyId)
-  if (filings.some((f) => f.period_start <= row.entry_date && row.entry_date <= f.period_end)) {
-    return { ok: false, code: 'VAT_MARK_PERIOD_FILED' }
-  }
+  const filed = await filedVatPeriodsOfDates(supabase, companyId, [row.entry_date])
+  if (filed.has(row.entry_date)) return { ok: false, code: 'VAT_MARK_PERIOD_FILED' }
   return { ok: true, entry: row }
 }
 

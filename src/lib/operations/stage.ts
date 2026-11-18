@@ -19,6 +19,7 @@
 import { z } from 'zod'
 import type { PeriodStatusForDate } from '@/lib/core/bookkeeping/period-status'
 import { AGENT_REASON_ARG, splitAgentReason } from '@/lib/pending-operations/agent-reason'
+import { stagedFiledVatNote } from '@/lib/pending-operations/filed-vat-note'
 import { insertStagedOperation, stagedRiskLevel } from '@/lib/pending-operations/stage'
 import {
   checkTransactionClaims,
@@ -147,10 +148,20 @@ export async function stageOperation(
   const toSupersede = claim.kind === 'supersede' ? claim.operations : []
 
   if (options.dryRun) {
+    // The proposal as its approver would read it: the advisories staging
+    // folds into preview_data.compliance_warning (insertStagedOperation),
+    // the filed-momsperiod note among them.
+    const filedVatNote = await stagedFiledVatNote(
+      ctx.supabase,
+      ctx.companyId,
+      { operation_type: plan.pendingType, params: plan.params, preview_data: plan.preview },
+      ctx.log,
+    )
+    const complianceNote = [plan.extras.complianceNote, filedVatNote].filter((note): note is string => !!note).join(' ')
     return {
       ok: true,
       dryRun: true,
-      plan,
+      plan: complianceNote ? { ...plan, preview: { ...plan.preview, compliance_warning: complianceNote } } : plan,
       riskLevel: stagedRiskLevel(plan.pendingType, plan.params),
       previewToken,
       ...(toSupersede.length > 0 ? { wouldSupersedeOperationIds: toSupersede.map((operation) => operation.id) } : {}),

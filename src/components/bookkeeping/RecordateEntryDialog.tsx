@@ -35,6 +35,8 @@ type PeriodStatus = {
   period_id: string | null
   lock_date: string | null
   period_name: string | null
+  /** The filed momsperiod the date lies in, when the record has one. */
+  filed_vat?: { tax_period: string; filed_on: string } | null
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -248,15 +250,27 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
             </div>
           )}
 
-          {/* Soft advisory: moving into a past period */}
-          {targetOpen && movingIntoPast && (
+          {/* The target date lies in a momsperiod on record as filed: said as
+              the fact it is. Without a record, the soft advisory for a past
+              date stays (a filing made elsewhere may not be on record). */}
+          {targetOpen && preview?.filed_vat ? (
+            <div className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
+              <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>
+                {t('recordate_period_filed', {
+                  period: preview.filed_vat.tax_period,
+                  date: formatDate(preview.filed_vat.filed_on),
+                })}
+              </span>
+            </div>
+          ) : targetOpen && movingIntoPast ? (
             <div className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
               <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 shrink-0" />
               <span>
                 Om momsen för perioden redan är inlämnad kan du behöva lämna en rättad momsdeklaration.
               </span>
             </div>
-          )}
+          ) : null}
         </div>
 
         <DialogFooter>

@@ -293,6 +293,10 @@ describe('POST /journal-entries/:id/correct-metadata', () => {
       old_entry_date: '2026-09-10',
       new_entry_date: '2026-09-12',
     })
+    // The fields the filed-momsperiod note reads off the staged row
+    // (lib/pending-operations/filed-vat-note.ts): renamed, the note drops
+    // without a sound.
+    expect(body.data.preview.journal_entry_id).toBe(ENTRY_ID)
     expect(wrote(client)).toBe(false)
   })
 
@@ -437,6 +441,10 @@ describe('POST /journal-entries/:id/strike-lines', () => {
     expect(preview.added_lines).toEqual([expect.objectContaining({ account_number: '5420', debit_amount: 500 })])
     expect(preview.resulting_lines.map((l: { account_number: string }) => l.account_number)).toEqual(['2641', '1930', '5420'])
     expect(preview).toMatchObject({ total_debit: 625, total_credit: 625, changed_amount_sek: 500, would_seed_accounts: [] })
+    // The fields the filed-momsperiod note reads off the staged row
+    // (lib/pending-operations/filed-vat-note.ts): renamed, the note drops
+    // without a sound.
+    expect(preview).toMatchObject({ journal_entry_id: ENTRY_ID, entry_date: '2026-09-10' })
     expect(wrote(client)).toBe(false)
     expect(backfillMock).not.toHaveBeenCalled()
   })
@@ -724,6 +732,14 @@ describe('POST /journal-entries/:id/redate', () => {
     expect(preview).toMatchObject({ voucher: 'A42', old_entry_date: '2026-09-10', new_entry_date: '2025-09-10', total_debit: 625 })
     expect(preview.storno.lines[0]).toMatchObject({ account_number: '5410', debit_amount: 0, credit_amount: 500 })
     expect(preview.corrected.lines[0]).toMatchObject({ account_number: '5410', debit_amount: 500, credit_amount: 0 })
+    // The fields the filed-momsperiod note reads off the staged row
+    // (lib/pending-operations/filed-vat-note.ts): renamed, the note drops
+    // without a sound.
+    expect(preview).toMatchObject({
+      journal_entry_id: ENTRY_ID,
+      storno: { entry_date: '2026-09-10' },
+      corrected: { entry_date: '2025-09-10' },
+    })
     expect(recordateEntryMock).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
   })

@@ -41,7 +41,7 @@ import {
   type MomsredovisningDetection,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
-import { listVatFilings } from './filing-record-store'
+import { filedVatPeriodsOfDates } from './filed-period-for-date'
 
 const log = createLogger('vat/voucher-vat-impact')
 
@@ -279,10 +279,7 @@ async function vatPeriodOfDate(
     supabase, companyId, momsPeriod, year, period, fiscalPeriodId ?? undefined,
   )
   const periodYear = momsPeriod === 'yearly' ? Number(end.slice(0, 4)) : year
-  // A record declares its own range (a helårsmoms record spans its
-  // räkenskapsår), so the one holding the date answers for any cadence.
-  const filings = await listVatFilings(supabase, companyId)
-  const filed = filings.find((f) => f.period_start <= entryDate && entryDate <= f.period_end)
+  const filed = (await filedVatPeriodsOfDates(supabase, companyId, [entryDate])).get(entryDate)
   return {
     type: momsPeriod,
     year: periodYear,
