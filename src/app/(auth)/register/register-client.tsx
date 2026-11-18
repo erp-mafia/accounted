@@ -48,6 +48,7 @@ import {
   isTurnstileSubmissionBlocked,
 } from '@/lib/auth/turnstile'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { INVITE_TOKEN_HEADER } from '@/lib/auth/invite-token-header'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { cn } from '@/lib/utils'
 import type { GoTrueAuthSettings } from '@/lib/auth/gotrue-providers'
@@ -176,7 +177,8 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
     const inviteToken = searchParams.get('invite')
     if (!inviteToken) return
 
-    fetch(`/api/team/accept?token=${encodeURIComponent(inviteToken)}`)
+    // The token rides in a header, never in the request URL.
+    fetch('/api/team/accept', { headers: { [INVITE_TOKEN_HEADER]: inviteToken }, cache: 'no-store' })
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data?.data?.email) {

@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { filterTeamClientCompanyIds } from '@/lib/company/member-company-access'
@@ -19,14 +20,176 @@ interface AuthUserLike {
   email?: string | null
 }
 
+type InvitationTable = 'company_invitations' | 'team_invitations'
+
+/** What a membership insert answers: its row when one was asked for, or its error. */
+interface MembershipInsertResult {
+  data: unknown
+  error: { code?: string } | null
+}
+
+/**
+ * What spending an invitation came to.
+ *
+ * - `accepted`        this call claimed the invitation and created the membership.
+ * - `already_member`  this call claimed it and the membership already existed
+ *                     (23505): the invitation is fulfilled and stays spent.
+ * - `gone`            the claim found nothing to take: the invitation was
+ *                     accepted, revoked or expired after it was read. Nothing
+ *                     was created.
+ * - `error`           the claim or the membership insert failed. Nothing was
+ *                     created, and a claim that was taken has been given back.
+ */
+type InvitationRedeemOutcome =
+  | { status: 'accepted'; membership: unknown }
+  | { status: 'already_member' }
+  | { status: 'gone' }
+  | { status: 'error' }
+
+/**
+ * Claim a pending invitation: the one write that spends its token.
+ *
+ * An invitation link is an out-of-band verifier, and a verifier is used once
+ * (CASA 1.3.2). Every acceptance path used to read the row, see `pending`,
+ * create the membership and only then write `accepted`, with nothing tying
+ * the last write to the first read: two requests carrying the same token both
+ * passed the read, and only the unique membership constraint kept the second
+ * from doing anything. The transition is now the gate itself. One UPDATE
+ * moves the row from `pending` to `accepted` only while it is still pending
+ * and unexpired, and returns the row it moved; Postgres lets exactly one of
+ * two concurrent statements match. No row back means there was nothing left
+ * to spend, and the caller creates nothing.
+ */
+async function claimPendingInvitation(
+  serviceClient: SupabaseClient,
+  table: InvitationTable,
+  invitationId: string,
+): Promise<'claimed' | 'gone' | 'error'> {
+  try {
+    const { data, error } = await serviceClient
+      .from(table)
+      .update({ status: 'accepted' })
+      .eq('id', invitationId)
+      .eq('status', 'pending')
+      .gt('expires_at', new Date().toISOString())
+      .select('id')
+
+    if (error) {
+      console.error('[pending-invites] invitation claim failed', { table, invitationId, error })
+      return 'error'
+    }
+    return Array.isArray(data) && data.length > 0 ? 'claimed' : 'gone'
+  } catch (err) {
+    console.error('[pending-invites] invitation claim failed', { table, invitationId, error: err })
+    return 'error'
+  }
+}
+
+/**
+ * Give a claim back: the membership it was taken for could not be created, so
+ * the invitation is pending again and its link still works. Only the row this
+ * request moved to `accepted` is touched; an invitation re-issued in between
+ * is already pending and matches nothing.
+ *
+ * The claim and the membership are two statements, so this is a compensation,
+ * not a rollback. If it fails too, the invitation is left spent with no
+ * membership: logged as an error, and healed by the inviter inviting the
+ * address again (both invite routes re-issue a spent invitation in place).
+ */
+async function releaseInvitationClaim(
+  serviceClient: SupabaseClient,
+  table: InvitationTable,
+  invitationId: string,
+): Promise<void> {
+  try {
+    const { error } = await serviceClient
+      .from(table)
+      .update({ status: 'pending' })
+      .eq('id', invitationId)
+      .eq('status', 'accepted')
+    if (!error) return
+    console.error(
+      '[pending-invites] could not give the invitation claim back: it is spent without a membership',
+      { table, invitationId, error },
+    )
+  } catch (err) {
+    console.error(
+      '[pending-invites] could not give the invitation claim back: it is spent without a membership',
+      { table, invitationId, error: err },
+    )
+  }
+}
+
+/**
+ * Spend an invitation on one membership: claim it, create the membership, and
+ * give the claim back if the membership could not be created.
+ *
+ * The order is the point. Claiming first is what makes a second use of the
+ * token create nothing; giving the claim back on a failed insert is what
+ * keeps a failure from stranding the invitation as accepted with nobody
+ * joined. A membership that already exists (23505) fulfils the invitation,
+ * so the claim stands. Never throws.
+ */
+async function redeemInvitation(
+  serviceClient: SupabaseClient,
+  table: InvitationTable,
+  invitationId: string,
+  insertMembership: () => PromiseLike<MembershipInsertResult>,
+): Promise<InvitationRedeemOutcome> {
+  const claim = await claimPendingInvitation(serviceClient, table, invitationId)
+  if (claim === 'gone') return { status: 'gone' }
+  if (claim === 'error') return { status: 'error' }
+
+  let inserted: MembershipInsertResult
+  try {
+    inserted = await insertMembership()
+  } catch (err) {
+    // Thrown instead of answered: a failed insert all the same.
+    console.error('[pending-invites] membership insert failed', err)
+    await releaseInvitationClaim(serviceClient, table, invitationId)
+    return { status: 'error' }
+  }
+
+  if (!inserted.error) return { status: 'accepted', membership: inserted.data }
+  if (inserted.error.code === '23505') return { status: 'already_member' }
+
+  console.error('[pending-invites] membership insert failed', inserted.error)
+  await releaseInvitationClaim(serviceClient, table, invitationId)
+  return { status: 'error' }
+}
+
+/**
+ * Redeem a company invitation for a user: the single claim-then-join used by
+ * POST /api/team/accept, the auth callback and the onboarding recovery below.
+ * The caller has already checked what only it can answer (the invitation is
+ * pending and unexpired, and its address is the signed-in user's); this
+ * spends the token and creates the direct membership, or does neither.
+ */
+export async function redeemCompanyInvitation(
+  serviceClient: SupabaseClient,
+  userId: string,
+  invite: { id: string; company_id: string; role: string },
+): Promise<InvitationRedeemOutcome['status']> {
+  const outcome = await redeemInvitation(serviceClient, 'company_invitations', invite.id, () =>
+    serviceClient.from('company_members').insert({
+      company_id: invite.company_id,
+      user_id: userId,
+      role: invite.role,
+      source: 'direct',
+    }),
+  )
+  return outcome.status
+}
+
 /**
  * Retry invite acceptance from a raw `gnubok-invite-token` cookie value.
  * Mirrors the acceptance in POST /api/team/accept: requires a pending,
- * unexpired invitation whose email matches the authenticated user.
+ * unexpired invitation whose email matches the authenticated user, and
+ * spends it through the same claim (redeemCompanyInvitation).
  * Returns true when the user is now a member of the invited company
- * (including the already-a-member case, which it settles by marking the
- * invitation accepted). Never throws; failures return false and leave the
- * normal onboarding flow to render.
+ * (including the already-a-member case, which settles the invitation as
+ * accepted). Never throws; failures, and a claim another request won, return
+ * false and leave the normal onboarding flow to render.
  */
 export async function acceptPendingInviteByToken(
   user: AuthUserLike,
@@ -58,18 +221,10 @@ export async function acceptPendingInviteByToken(
       return teamOutcome.status === 'accepted' || teamOutcome.status === 'already_member'
     }
 
-    const { error: memberError } = await serviceClient.from('company_members').insert({
-      company_id: invite.company_id,
-      user_id: user.id,
-      role: invite.role,
-      source: 'direct',
-    })
-
-    // 23505 = already a member: the invitation is fulfilled, settle it below.
-    if (memberError && memberError.code !== '23505') {
-      console.error('[pending-invites] membership insert failed', memberError)
-      return false
-    }
+    // Claim, then join. An existing membership fulfils the invitation and
+    // counts as success; a lost claim or a failed insert created nothing.
+    const outcome = await redeemCompanyInvitation(serviceClient, user.id, invite)
+    if (outcome !== 'accepted' && outcome !== 'already_member') return false
 
     // Non-fatal on failure: middleware falls back to the membership.
     const { error: prefError } = await serviceClient
@@ -81,11 +236,6 @@ export async function acceptPendingInviteByToken(
     if (prefError) {
       console.error('[pending-invites] failed to set active company', prefError)
     }
-
-    await serviceClient
-      .from('company_invitations')
-      .update({ status: 'accepted' })
-      .eq('id', invite.id)
 
     return true
   } catch (err) {
@@ -121,10 +271,12 @@ export type TeamInviteAcceptOutcome =
  *
  * Mirrors the company-invite acceptance above: requires a pending, unexpired
  * invitation on a team whose `kind='byra'`, whose email matches the
- * authenticated user. Inserts `team_members` with the capped role (invites
+ * authenticated user. Claims the invitation (the same single-use claim as a
+ * company invitation), inserts `team_members` with the capped role (invites
  * never mint owners), grants the invitation's chosen companies when it names
- * some, points a company-less user at the first company they can reach, and
- * marks the invite accepted. Never throws.
+ * some, and points a company-less user at the first company they can reach.
+ * A claim another request won reads as `invalid`, the answer for any
+ * invitation that is no longer pending. Never throws.
  */
 export async function acceptPendingTeamInviteByToken(
   user: AuthUserLike,
@@ -182,25 +334,29 @@ export async function acceptPendingTeamInviteByToken(
         ? invite.company_ids
         : null
 
-    const { data: memberRow, error: memberError } = await serviceClient
-      .from('team_members')
-      .insert({
-        team_id: invite.team_id,
-        user_id: user.id,
-        role: memberRole,
-        all_companies: chosenIds === null,
-      })
-      .select('id')
-      .single()
+    // Claim, then join. The claim is what spends the token: a second use of
+    // it finds nothing to claim and inserts nothing.
+    const redeemed = await redeemInvitation(serviceClient, 'team_invitations', invite.id, () =>
+      serviceClient
+        .from('team_members')
+        .insert({
+          team_id: invite.team_id,
+          user_id: user.id,
+          role: memberRole,
+          all_companies: chosenIds === null,
+        })
+        .select('id')
+        .single(),
+    )
 
-    if (memberError) {
-      // 23505 = already a member. Left unsettled to preserve the route's
-      // long-standing 409 contract; the caller still treats it as success
-      // because the membership exists.
-      if (memberError.code === '23505') return { status: 'already_member' }
-      console.error('[pending-invites] team membership insert failed', memberError)
-      return { status: 'error' }
-    }
+    // Lost claim: the invitation is no longer pending.
+    if (redeemed.status === 'gone') return { status: 'invalid' }
+    if (redeemed.status === 'error') return { status: 'error' }
+    // 23505 = already a member: the invitation is fulfilled and stays spent.
+    // Reported on its own to keep the route's long-standing 409 contract; the
+    // caller still treats it as success because the membership exists.
+    if (redeemed.status === 'already_member') return { status: 'already_member' }
+    const memberRow = redeemed.membership
 
     // The chosen companies still on the team: one archived or moved since the
     // invitation was sent is dropped rather than failing the acceptance. A
@@ -261,11 +417,6 @@ export async function acceptPendingTeamInviteByToken(
         }
       }
     }
-
-    await serviceClient
-      .from('team_invitations')
-      .update({ status: 'accepted' })
-      .eq('id', invite.id)
 
     return {
       status: 'accepted',

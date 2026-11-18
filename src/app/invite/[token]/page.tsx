@@ -11,6 +11,8 @@ import { fetchSessionUser, reloadTo, signOut } from '@/lib/auth/session-client'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
+import { INVITE_TTL_SECONDS } from '@/lib/auth/invite-ttl'
+import { INVITE_TOKEN_HEADER } from '@/lib/auth/invite-token-header'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { inviteGoneReason, type InviteGoneReason } from '@/lib/auth/invite-gone'
 
@@ -26,25 +28,26 @@ const branding = getBranding()
  * in the database, with no way for the invitee to recover: the cookie is the
  * only copy the browser holds.
  *
- * The value is the invite TTL, `INVITE_TTL_DAYS` in lib/auth/invite-tokens.ts,
- * which is what actually bounds the token: `getInviteExpiry()` stamps
- * `company_invitations.expires_at` 7 days out at issue time and POST
- * /api/team/accept rejects anything past it with 410. `INVITE_TTL_DAYS` is a
- * module-private const in a server-only module (it imports Node's `crypto`),
- * so the number is restated here rather than imported;
- * app/invite/[token]/__tests__/invite-cookie.test.ts reads the real TTL back
- * out of `getInviteExpiry()` and fails if the two drift.
+ * The value is the invitation lifetime itself, `INVITE_TTL_SECONDS` from
+ * lib/auth/invite-ttl.ts (24 hours), which is what actually bounds the token:
+ * `getInviteExpiry()` stamps `expires_at` that far out at issue time and POST
+ * /api/team/accept rejects anything past it with 410. The constant lives in
+ * an import-free module so this client component can read it; it used to be
+ * restated here as a number. app/invite/[token]/__tests__/invite-cookie.test.ts
+ * reads the real lifetime back out of `getInviteExpiry()` and fails if the
+ * cookie and the invitation drift.
  *
- * Widening the cookie does not widen authority. Every acceptance attempt is
+ * A long-lived cookie does not widen authority. Every acceptance attempt is
  * re-authorized server-side by `requireAuth()` plus an email equality check
  * against the invitation, and the `status` transition is single-use, so a
- * surviving cookie confers nothing on its own. If the invitation expires
- * before the cookie does (the invitee sat on the mail for six days), the next
- * attempt gets a 410, which `consumeInviteCookie()` classifies as `spent` and
- * clears. Never set this beyond the invite TTL: a cookie outliving the
- * server-side bound would be lifetime the server does not honour.
+ * surviving cookie confers nothing on its own. The cookie is written when the
+ * invitee clicks, not when the invitation was issued, so it can outlast the
+ * invitation by up to its own lifetime: the next attempt then gets a 410,
+ * which `consumeInviteCookie()` classifies as `spent` and clears. Never set
+ * this beyond the invitation lifetime: that would be lifetime the server
+ * does not honour.
  */
-const INVITE_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+const INVITE_COOKIE_MAX_AGE_SECONDS = INVITE_TTL_SECONDS
 
 /**
  * The single construction site for the invite cookie. Three hops write it
@@ -117,7 +120,8 @@ export default function InvitePage() {
         // Load invite info and current session in parallel: the page needs
         // both to decide which CTA to render.
         const [inviteRes, sessionUser] = await Promise.all([
-          fetch(`/api/team/accept?token=${encodeURIComponent(token)}`),
+          // The token rides in a header, never in the request URL.
+          fetch('/api/team/accept', { headers: { [INVITE_TOKEN_HEADER]: token }, cache: 'no-store' }),
           fetchSessionUser(),
         ])
 

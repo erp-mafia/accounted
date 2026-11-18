@@ -2,9 +2,13 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, type NextRequest } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
-import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
+import {
+  acceptPendingTeamInviteByToken,
+  redeemCompanyInvitation,
+} from '@/lib/company/pending-invites'
 import { readPreparedProfile } from '@/lib/company/client-profile'
 import type { InviteGoneReason } from '@/lib/auth/invite-gone'
+import { INVITE_TOKEN_HEADER } from '@/lib/auth/invite-token-header'
 
 interface TeamInviteRow {
   id: string
@@ -75,8 +79,13 @@ async function answerSettledInvite(
 }
 
 /**
- * GET /api/team/accept?token=xxx
+ * GET /api/team/accept, with the token in the X-Invite-Token header
  * Validates an invite token and returns invite info (for the invite page).
+ * The token is read from the header only (lib/auth/invite-token-header.ts):
+ * a request that carries `token` in its query string is refused, so the
+ * token never lands in a URL this application serves (CASA 2.1.1). Every
+ * answer is no-store: the URL is the same for every invitation now, so a
+ * cache keyed on it must never keep one invitation's answer for the next.
  * Handles both company invitations and byrå-team invitations (WL-08 invite
  * unfreeze). Team invitations resolve only for teams with kind='byra':
  * personal teams are uninvitable, so a token pointing at one is invalid.
@@ -85,7 +94,20 @@ async function answerSettledInvite(
  * 200 `alreadyMember` for the signed-in person who already joined.
  */
 export async function GET(request: NextRequest) {
-  const token = request.nextUrl.searchParams.get('token')
+  const response = await describeInvitation(request)
+  response.headers.set('Cache-Control', 'private, no-store')
+  response.headers.set('Vary', INVITE_TOKEN_HEADER)
+  return response
+}
+
+async function describeInvitation(request: NextRequest): Promise<NextResponse> {
+  if (request.nextUrl.searchParams.has('token')) {
+    return NextResponse.json(
+      { error: 'Ogiltig förfrågan: inbjudans kod skickas inte i adressen.' },
+      { status: 400 },
+    )
+  }
+  const token = request.headers.get(INVITE_TOKEN_HEADER)?.trim()
   if (!token) {
     return NextResponse.json({ error: 'Token saknas.' }, { status: 400 })
   }
@@ -181,6 +203,13 @@ export async function GET(request: NextRequest) {
  * POST /api/team/accept
  * Accepts a company or byrå-team invite after the user has signed up.
  *
+ * An invitation is used once. Both kinds are spent through the same claim
+ * (lib/company/pending-invites.ts): one conditional UPDATE moves the row from
+ * pending to accepted and only the request that moved it creates a
+ * membership. A second accept of the same token, concurrent or later, finds
+ * nothing to claim, is refused as an invitation that is no longer pending,
+ * and creates nothing.
+ *
  * Team acceptance inserts a team_members row; the DB sync trigger
  * (sync_team_member_to_companies) then grants membership in every company
  * attached to the team, or the shared helper grants the invitation's chosen
@@ -237,7 +266,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** The pre-existing company-invite acceptance flow, unchanged. */
+/**
+ * Company-invite acceptance. The checks only this request can answer come
+ * first (still pending, not expired, the signed-in account is the invited
+ * address); then the invitation is claimed and the membership created, or
+ * neither.
+ */
 async function acceptCompanyInvite(
   serviceClient: ReturnType<typeof createServiceClient>,
   user: { id: string; email?: string | null },
@@ -266,20 +300,23 @@ async function acceptCompanyInvite(
     return NextResponse.json({ error: 'E-postadressen matchar inte inbjudan.' }, { status: 403 })
   }
 
-  // Add user to company
-  const { error: memberError } = await serviceClient
-    .from('company_members')
-    .insert({
-      company_id: companyInvite.company_id,
-      user_id: user.id,
-      role: companyInvite.role,
-      source: 'direct',
-    })
+  // Claim the invitation, then add the user to the company. The claim is
+  // what spends the token: the status check above only reads, so two requests
+  // can both pass it, but only one can move the row out of 'pending'.
+  const outcome = await redeemCompanyInvitation(serviceClient, user.id, companyInvite)
 
-  if (memberError) {
-    if (memberError.code === '23505') {
-      return NextResponse.json({ error: 'Du är redan medlem.' }, { status: 409 })
-    }
+  // Lost claim: accepted, revoked or expired since the read. The same answer
+  // as any invitation that is no longer pending, and nothing was created.
+  if (outcome === 'gone') {
+    return NextResponse.json({ error: 'Inbjudan är ogiltig.' }, { status: 400 })
+  }
+  // The membership already existed: the invitation is fulfilled and spent.
+  if (outcome === 'already_member') {
+    return NextResponse.json({ error: 'Du är redan medlem.' }, { status: 409 })
+  }
+  // The claim or the insert failed: no membership, and the invitation is
+  // pending again so the link still works.
+  if (outcome === 'error') {
     return NextResponse.json({ error: 'Kunde inte lägga till medlem.' }, { status: 500 })
   }
 
@@ -296,12 +333,6 @@ async function acceptCompanyInvite(
   if (prefError) {
     console.error('[team/accept] failed to set active company', prefError)
   }
-
-  // Mark invite as accepted
-  await serviceClient
-    .from('company_invitations')
-    .update({ status: 'accepted' })
-    .eq('id', companyInvite.id)
 
   return NextResponse.json({
     data: { type: 'company', companyId: companyInvite.company_id },

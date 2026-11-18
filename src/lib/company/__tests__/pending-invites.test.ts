@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase: serviceSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+const { supabase: serviceSupabase, enqueue, reset, findCalls, calls } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => serviceSupabase,
@@ -15,6 +15,7 @@ import {
   acceptPendingInviteByToken,
   acceptPendingTeamInviteByToken,
   hasPendingInviteForEmail,
+  redeemCompanyInvitation,
 } from '../pending-invites'
 
 const user = { id: 'user-1', email: 'invitee@test.se' }
@@ -43,26 +44,150 @@ const teamInvite = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 })
 
+/** The claim won: the invitation moved from pending to accepted and came back. */
+const claimed = (id: string) => ({ data: [{ id }] })
+/** The claim lost: nothing was pending any more, so no row came back. */
+const claimLost = { data: [] }
+
+/** Every write, in order, as `table.method`. */
+const writes = () =>
+  calls
+    .filter((c) => ['insert', 'update', 'upsert'].includes(c.method))
+    .map((c) => `${c.table}.${c.method}`)
+
+let errorLog: ReturnType<typeof vi.spyOn>
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+})
+
+afterEach(() => {
+  errorLog.mockRestore()
+})
+
+// The claim that makes an invitation single-use (CASA 1.3.2). The behaviour
+// across two requests is in app/api/team/accept/__tests__/single-use.test.ts;
+// these pin the statements themselves.
+describe('redeemCompanyInvitation', () => {
+  const invite = { id: 'inv-1', company_id: 'co-1', role: 'admin' }
+
+  it('claims the invitation, then creates the membership', async () => {
+    enqueue(claimed('inv-1'))
+    enqueue({}) // company_members insert
+
+    await expect(redeemCompanyInvitation(serviceSupabase as never, 'user-1', invite)).resolves.toBe('accepted')
+
+    expect(writes()).toEqual(['company_invitations.update', 'company_members.insert'])
+    expect(findCalls('company_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
+    expect(findCalls('company_invitations', 'eq')).toEqual([
+      ['id', 'inv-1'],
+      ['status', 'pending'],
+    ])
+    expect(findCalls('company_invitations', 'gt')[0]![0]).toBe('expires_at')
+    expect(findCalls('company_members', 'insert')[0]![0]).toEqual({
+      company_id: 'co-1',
+      user_id: 'user-1',
+      role: 'admin',
+      source: 'direct',
+    })
+  })
+
+  it('creates nothing when the claim comes back empty', async () => {
+    enqueue(claimLost)
+
+    await expect(redeemCompanyInvitation(serviceSupabase as never, 'user-1', invite)).resolves.toBe('gone')
+
+    expect(writes()).toEqual(['company_invitations.update'])
+  })
+
+  it('creates nothing when the claim itself fails, and gives nothing back', async () => {
+    enqueue({ error: { message: 'boom' } })
+
+    await expect(redeemCompanyInvitation(serviceSupabase as never, 'user-1', invite)).resolves.toBe('error')
+
+    // Not claimed by this request, so there is no claim of its own to undo.
+    expect(writes()).toEqual(['company_invitations.update'])
+  })
+
+  it('gives the claim back when the membership insert fails', async () => {
+    enqueue(claimed('inv-1'))
+    enqueue({ error: { code: '42501', message: 'denied' } }) // company_members insert
+    enqueue({}) // release
+
+    await expect(redeemCompanyInvitation(serviceSupabase as never, 'user-1', invite)).resolves.toBe('error')
+
+    expect(writes()).toEqual([
+      'company_invitations.update',
+      'company_members.insert',
+      'company_invitations.update',
+    ])
+    expect(findCalls('company_invitations', 'update')).toEqual([
+      [{ status: 'accepted' }],
+      [{ status: 'pending' }],
+    ])
+    // The release only takes back a row this request left accepted.
+    expect(findCalls('company_invitations', 'eq').slice(2)).toEqual([
+      ['id', 'inv-1'],
+      ['status', 'accepted'],
+    ])
+  })
+
+  it('keeps the claim when the membership already exists (23505)', async () => {
+    enqueue(claimed('inv-1'))
+    enqueue({ error: { code: '23505', message: 'duplicate' } })
+
+    await expect(redeemCompanyInvitation(serviceSupabase as never, 'user-1', invite)).resolves.toBe(
+      'already_member',
+    )
+
+    expect(findCalls('company_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
+  })
+
+  it('reports a release that fails too, without throwing', async () => {
+    enqueue(claimed('inv-1'))
+    enqueue({ error: { code: '42501', message: 'denied' } })
+    enqueue({ error: { message: 'still down' } }) // release
+
+    await expect(redeemCompanyInvitation(serviceSupabase as never, 'user-1', invite)).resolves.toBe('error')
+
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining('could not give the invitation claim back'),
+      expect.objectContaining({ table: 'company_invitations', invitationId: 'inv-1' }),
+    )
+  })
 })
 
 describe('acceptPendingInviteByToken', () => {
   it('accepts a valid pending invite', async () => {
     enqueue({ data: pendingInvite() }) // invitation lookup
+    enqueue(claimed('inv-1')) // invitation claim
     enqueue({}) // company_members insert
     enqueue({}) // user_preferences upsert
-    enqueue({}) // invitation status update
     await expect(acceptPendingInviteByToken(user, 'tok')).resolves.toBe(true)
+    expect(writes()).toEqual([
+      'company_invitations.update',
+      'company_members.insert',
+      'user_preferences.upsert',
+    ])
   })
 
   it('treats an existing membership (23505) as fulfilled', async () => {
     enqueue({ data: pendingInvite() })
+    enqueue(claimed('inv-1'))
     enqueue({ error: { code: '23505', message: 'duplicate' } })
     enqueue({})
-    enqueue({})
     await expect(acceptPendingInviteByToken(user, 'tok')).resolves.toBe(true)
+    // Fulfilled and spent: the claim is not given back.
+    expect(findCalls('company_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
+  })
+
+  it('returns false and creates nothing when another request won the claim', async () => {
+    enqueue({ data: pendingInvite() })
+    enqueue(claimLost)
+    await expect(acceptPendingInviteByToken(user, 'tok')).resolves.toBe(false)
+    expect(writes()).toEqual(['company_invitations.update'])
   })
 
   it('rejects when the invitation is not found', async () => {
@@ -87,7 +212,7 @@ describe('acceptPendingInviteByToken', () => {
 
   it('matches emails case-insensitively', async () => {
     enqueue({ data: pendingInvite({ email: 'Invitee@Test.se' }) })
-    enqueue({})
+    enqueue(claimed('inv-1'))
     enqueue({})
     enqueue({})
     await expect(acceptPendingInviteByToken(user, 'tok')).resolves.toBe(true)
@@ -97,18 +222,25 @@ describe('acceptPendingInviteByToken', () => {
     await expect(acceptPendingInviteByToken({ id: 'user-1' }, 'tok')).resolves.toBe(false)
   })
 
-  it('returns false on a non-duplicate membership insert error', async () => {
+  it('returns false on a non-duplicate membership insert error, with the invitation pending again', async () => {
     enqueue({ data: pendingInvite() })
+    enqueue(claimed('inv-1'))
     enqueue({ error: { code: '42501', message: 'denied' } })
+    enqueue({}) // release
     await expect(acceptPendingInviteByToken(user, 'tok')).resolves.toBe(false)
+    expect(findCalls('company_invitations', 'update')).toEqual([
+      [{ status: 'accepted' }],
+      [{ status: 'pending' }],
+    ])
+    expect(findCalls('user_preferences', 'upsert')).toHaveLength(0)
   })
 
   it('falls back to the team invite when the token is not a company invite', async () => {
     enqueue({ data: null, error: { message: 'not found' } }) // company lookup miss
     enqueue({ data: teamInvite() }) // team invitation lookup
+    enqueue(claimed('ti-1')) // team invitation claim
     enqueue({}) // team_members insert
     enqueue({ data: { active_company_id: 'existing-co' } }) // prefs already set: no company lookup
-    enqueue({}) // team_invitations status update
     await expect(acceptPendingInviteByToken(user, 'tok')).resolves.toBe(true)
   })
 })
@@ -116,25 +248,47 @@ describe('acceptPendingInviteByToken', () => {
 describe('acceptPendingTeamInviteByToken', () => {
   it('accepts a valid byrå-team invite and points a company-less user at the first company', async () => {
     enqueue({ data: teamInvite() }) // team invitation lookup
+    enqueue(claimed('ti-1')) // team invitation claim
     enqueue({}) // team_members insert
     enqueue({ data: { active_company_id: null } }) // prefs: none set
     enqueue({ data: { id: 'co-1' } }) // first company lookup
     enqueue({}) // prefs upsert
-    enqueue({}) // team_invitations status update
 
     await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toEqual({
       status: 'accepted',
       teamId: 'team-1',
       teamName: 'Byrån',
     })
+
+    // Claimed before the membership exists, and only while pending and unexpired.
+    expect(writes()).toEqual([
+      'team_invitations.update',
+      'team_members.insert',
+      'user_preferences.upsert',
+    ])
+    expect(findCalls('team_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
+    expect(findCalls('team_invitations', 'eq')).toEqual([
+      ['token_hash', 'hash-tok'],
+      ['id', 'ti-1'],
+      ['status', 'pending'],
+    ])
+    expect(findCalls('team_invitations', 'gt')[0]![0]).toBe('expires_at')
+  })
+
+  it('reports invalid and creates nothing when another request won the claim', async () => {
+    enqueue({ data: teamInvite() })
+    enqueue(claimLost)
+
+    await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toEqual({ status: 'invalid' })
+    expect(writes()).toEqual(['team_invitations.update'])
   })
 
   it('accepts a byrå with no companies without setting an active company', async () => {
     enqueue({ data: teamInvite() })
+    enqueue(claimed('ti-1'))
     enqueue({}) // team_members insert
     enqueue({ data: { active_company_id: null } }) // prefs: none set
     enqueue({ data: null }) // no company for the team
-    enqueue({}) // team_invitations status update
 
     await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toEqual({
       status: 'accepted',
@@ -145,11 +299,11 @@ describe('acceptPendingTeamInviteByToken', () => {
 
   it('drops chosen companies that left the team and grants the rest', async () => {
     enqueue({ data: teamInvite({ role: 'member', company_ids: ['co-1', 'co-gone'] }) })
+    enqueue(claimed('ti-1'))
     enqueue({ data: { id: 'tm-1' } }) // team_members insert
     enqueue({ data: [{ id: 'co-1' }] }) // only co-1 is still a client of the team
     enqueue({}) // set_team_member_companies
     enqueue({ data: { active_company_id: 'existing' } })
-    enqueue({}) // status update
 
     await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toMatchObject({
       status: 'accepted',
@@ -162,11 +316,11 @@ describe('acceptPendingTeamInviteByToken', () => {
 
   it('fails closed when the chosen companies cannot be granted: no company, no fallback to all', async () => {
     enqueue({ data: teamInvite({ role: 'member', company_ids: ['co-1'] }) })
+    enqueue(claimed('ti-1'))
     enqueue({ data: { id: 'tm-1' } }) // team_members insert
     enqueue({ data: [{ id: 'co-1' }] })
     enqueue({ error: { message: 'boom' } }) // set_team_member_companies fails
     enqueue({ data: { active_company_id: null } }) // prefs: none set
-    enqueue({}) // status update
 
     await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toMatchObject({
       status: 'accepted',
@@ -178,9 +332,9 @@ describe('acceptPendingTeamInviteByToken', () => {
 
   it('ignores chosen companies on an admin invite: admins have every company', async () => {
     enqueue({ data: teamInvite({ role: 'admin', company_ids: ['co-1'] }) })
+    enqueue(claimed('ti-1'))
     enqueue({}) // team_members insert
     enqueue({ data: { active_company_id: 'existing' } })
-    enqueue({}) // status update
 
     await acceptPendingTeamInviteByToken(user, 'tok')
     expect(findCalls('team_members', 'insert')[0]?.[0]).toMatchObject({
@@ -192,20 +346,22 @@ describe('acceptPendingTeamInviteByToken', () => {
 
   it('caps the role: a member invite never becomes owner', async () => {
     enqueue({ data: teamInvite({ role: 'owner' }) })
+    enqueue(claimed('ti-1'))
     enqueue({}) // insert
     enqueue({ data: { active_company_id: 'existing' } })
-    enqueue({}) // status update
     await acceptPendingTeamInviteByToken(user, 'tok')
     // The insert wrote 'member' (owner is never granted via invite).
     expect(findCalls('team_members', 'insert')[0]?.[0]).toMatchObject({ role: 'member' })
   })
 
-  it('reports already_member on a duplicate membership (23505)', async () => {
+  it('reports already_member on a duplicate membership (23505), with the invitation spent', async () => {
     enqueue({ data: teamInvite() })
+    enqueue(claimed('ti-1'))
     enqueue({ error: { code: '23505', message: 'duplicate' } })
     await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toEqual({
       status: 'already_member',
     })
+    expect(findCalls('team_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
   })
 
   it('reports expired and marks the invite expired', async () => {
@@ -234,10 +390,16 @@ describe('acceptPendingTeamInviteByToken', () => {
     await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toEqual({ status: 'invalid' })
   })
 
-  it('reports error on a non-duplicate membership insert failure', async () => {
+  it('reports error on a non-duplicate membership insert failure, with the invitation pending again', async () => {
     enqueue({ data: teamInvite() })
+    enqueue(claimed('ti-1'))
     enqueue({ error: { code: '42501', message: 'denied' } })
+    enqueue({}) // release
     await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toEqual({ status: 'error' })
+    expect(findCalls('team_invitations', 'update')).toEqual([
+      [{ status: 'accepted' }],
+      [{ status: 'pending' }],
+    ])
   })
 
   it('reports invalid when the user has no email', async () => {

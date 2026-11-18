@@ -127,15 +127,24 @@ export const POST = withRouteContext(
       }
     }
 
-    // Check for existing pending invite
+    // Check for an existing invitation. One that is still pending AND still
+    // valid blocks a second send. A pending one whose link has run out does
+    // not: with a 24 hour lifetime (lib/auth/invite-ttl.ts) inviting the same
+    // address again is the natural next step, so it falls through to the
+    // update below, which issues a fresh link in place like the re-send
+    // button does.
     const { data: existingInvite } = await serviceClient
       .from('company_invitations')
-      .select('id, status')
+      .select('id, status, expires_at')
       .eq('company_id', companyId)
       .eq('email', email)
       .single()
 
-    if (existingInvite && existingInvite.status === 'pending') {
+    const existingStillValid =
+      existingInvite?.status === 'pending' &&
+      typeof existingInvite.expires_at === 'string' &&
+      new Date(existingInvite.expires_at) > new Date()
+    if (existingStillValid) {
       return NextResponse.json({ error: 'En inbjudan har redan skickats till denna e-post.' }, { status: 409 })
     }
 

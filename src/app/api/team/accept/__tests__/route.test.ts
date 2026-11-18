@@ -5,7 +5,7 @@ import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 // team/accept uses the service client for all DB work (invite acceptance can
 // run before the user has any company membership). requireAuth only gates the
 // caller's identity + MFA.
-const { supabase: serviceSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+const { supabase: serviceSupabase, enqueue, reset, findCalls, calls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -78,17 +78,30 @@ describe('POST /api/team/accept', () => {
         expires_at: future,
       },
     })
-    // 2. company_members insert
+    // 2. company_invitations claim: pending -> accepted, the row comes back
+    enqueue({ data: [{ id: 'inv-1' }] })
+    // 3. company_members insert
     enqueue({ error: null })
-    // 3. user_preferences upsert
-    enqueue({ error: null })
-    // 4. company_invitations update -> accepted
+    // 4. user_preferences upsert
     enqueue({ error: null })
 
     const res = await POST(makeReq({ token: 'abc' }))
     const { status, body } = await parseJsonResponse<{ data: { type: string; companyId: string } }>(res)
     expect(status).toBe(200)
     expect(body.data).toEqual({ type: 'company', companyId: 'company-1' })
+
+    // The one write to the invitation is the claim, and it is conditional:
+    // only a row that is still pending and unexpired moves to accepted.
+    expect(findCalls('company_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
+    expect(findCalls('company_invitations', 'eq')).toContainEqual(['status', 'pending'])
+    const [column, notAfter] = findCalls('company_invitations', 'gt')[0]!
+    expect(column).toBe('expires_at')
+    expect(Math.abs(new Date(notAfter as string).getTime() - Date.now())).toBeLessThan(5_000)
+    // The claim comes before the membership.
+    const order = calls
+      .filter((c) => c.method === 'update' || c.method === 'insert')
+      .map((c) => `${c.table}.${c.method}`)
+    expect(order).toEqual(['company_invitations.update', 'company_members.insert'])
   })
 
   it('returns 403 when the invite email does not match the user', async () => {
@@ -141,11 +154,11 @@ describe('POST /api/team/accept', () => {
 // invitations. from() consumption order for the team path:
 //   1. company_invitations lookup (miss)
 //   2. team_invitations lookup
-//   3. team_members insert
-//   4. user_preferences read (active company?)
-//   5. companies read (first team company)      [only when no active company]
-//   6. user_preferences upsert                  [only when a company was found]
-//   7. team_invitations update -> accepted
+//   3. team_invitations claim: pending -> accepted, the row comes back
+//   4. team_members insert
+//   5. user_preferences read (active company?)
+//   6. companies read (first team company)      [only when no active company]
+//   7. user_preferences upsert                  [only when a company was found]
 describe('POST /api/team/accept (byrå-team invitations)', () => {
   const future = new Date(Date.now() + 86_400_000).toISOString()
 
@@ -159,15 +172,17 @@ describe('POST /api/team/accept (byrå-team invitations)', () => {
     teams: { name: 'Siffran AB', kind: 'byra' },
     ...overrides,
   })
+  /** The claim won: the invitation moved from pending to accepted. */
+  const claimed = { data: [{ id: 'tinv-1' }] }
 
   it('accepts a valid byrå invite and points a company-less user at a team company', async () => {
     enqueue({ data: null, error: { code: 'PGRST116' } }) // no company invite
     enqueue({ data: teamInvite() })
+    enqueue(claimed)
     enqueue({ error: null }) // team_members insert
     enqueue({ data: null }) // user_preferences read: no active company
     enqueue({ data: { id: 'company-9' } }) // first team company
     enqueue({ error: null }) // user_preferences upsert
-    enqueue({ error: null }) // invitation -> accepted
 
     const res = await POST(makeReq({ token: 'abc' }))
     const { status, body } = await parseJsonResponse<{
@@ -186,18 +201,23 @@ describe('POST /api/team/accept (byrå-team invitations)', () => {
       all_companies: true,
     })
     expect(findCalls('user_preferences', 'upsert')).toHaveLength(1)
+
+    // The one write to the invitation is the conditional claim.
+    expect(findCalls('team_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
+    expect(findCalls('team_invitations', 'eq')).toContainEqual(['status', 'pending'])
+    expect(findCalls('team_invitations', 'gt')[0]![0]).toBe('expires_at')
   })
 
   it('grants only the companies the invitation chose', async () => {
     enqueue({ data: null, error: { code: 'PGRST116' } }) // no company invite
     enqueue({ data: teamInvite({ company_ids: ['company-2', 'company-3'] }) })
+    enqueue(claimed)
     enqueue({ data: { id: 'tm-1' } }) // team_members insert
     enqueue({ data: [{ id: 'company-2' }, { id: 'company-3' }] }) // still on the team
     enqueue({ error: null }) // set_team_member_companies
     enqueue({ data: null }) // user_preferences read: no active company
     enqueue({ data: { id: 'company-2' } }) // first chosen company
     enqueue({ error: null }) // user_preferences upsert
-    enqueue({ error: null }) // invitation -> accepted
 
     const res = await POST(makeReq({ token: 'abc' }))
     const { status } = await parseJsonResponse(res)
@@ -215,9 +235,9 @@ describe('POST /api/team/accept (byrå-team invitations)', () => {
   it('never hijacks an existing active company', async () => {
     enqueue({ data: null, error: { code: 'PGRST116' } })
     enqueue({ data: teamInvite() })
+    enqueue(claimed)
     enqueue({ error: null }) // team_members insert
     enqueue({ data: { active_company_id: 'my-own-firma' } }) // has active company
-    enqueue({ error: null }) // invitation -> accepted
 
     const res = await POST(makeReq({ token: 'abc' }))
     const { status } = await parseJsonResponse(res)
@@ -228,9 +248,9 @@ describe('POST /api/team/accept (byrå-team invitations)', () => {
   it('never mints a team owner from an invitation row', async () => {
     enqueue({ data: null, error: { code: 'PGRST116' } })
     enqueue({ data: teamInvite({ role: 'owner' }) }) // hand-edited row
+    enqueue(claimed)
     enqueue({ error: null })
     enqueue({ data: { active_company_id: 'my-own-firma' } })
-    enqueue({ error: null })
 
     const res = await POST(makeReq({ token: 'abc' }))
     expect(res.status).toBe(200)
@@ -270,21 +290,25 @@ describe('POST /api/team/accept (byrå-team invitations)', () => {
     expect(updates[0]![0]).toEqual({ status: 'expired' })
   })
 
-  it('returns 409 when already a team member', async () => {
+  it('returns 409 when already a team member, and the invitation stays spent', async () => {
     enqueue({ data: null, error: { code: 'PGRST116' } })
     enqueue({ data: teamInvite() })
+    enqueue(claimed)
     enqueue({ error: { code: '23505' } }) // duplicate membership
 
     const res = await POST(makeReq({ token: 'abc' }))
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(409)
     expect(body.error).toBe('Du är redan medlem.')
+    // The membership exists, so the invitation is fulfilled: the claim is
+    // not given back.
+    expect(findCalls('team_invitations', 'update')).toEqual([[{ status: 'accepted' }]])
   })
 })
 
 describe('GET /api/team/accept (byrå-team invitations)', () => {
   function makeGetReq(token: string) {
-    return new NextRequest(`http://localhost/api/team/accept?token=${token}`)
+    return new NextRequest('http://localhost/api/team/accept', { headers: { 'X-Invite-Token': token } })
   }
 
   it('returns team invite info with companyName doubling as the team name', async () => {
@@ -343,9 +367,41 @@ describe('GET /api/team/accept (byrå-team invitations)', () => {
   })
 })
 
+describe('GET /api/team/accept takes the token from a header, never from the URL', () => {
+  it('refuses a token sent in the query string, before any lookup', async () => {
+    const res = await GET(new NextRequest('http://localhost/api/team/accept?token=gnubok_inv_abc'))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(400)
+    expect(body.error).toContain('skickas inte i adressen')
+    expect(findCalls('company_invitations', 'select')).toEqual([])
+  })
+
+  it('refuses a query-string token even when the header is sent too', async () => {
+    const res = await GET(
+      new NextRequest('http://localhost/api/team/accept?token=gnubok_inv_abc', {
+        headers: { 'X-Invite-Token': 'gnubok_inv_abc' },
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('answers 400 without a token', async () => {
+    const res = await GET(new NextRequest('http://localhost/api/team/accept'))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(400)
+    expect(body.error).toBe('Token saknas.')
+  })
+
+  it('marks every answer no-store, since the URL no longer tells invitations apart', async () => {
+    const res = await GET(new NextRequest('http://localhost/api/team/accept'))
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(res.headers.get('Vary')).toBe('X-Invite-Token')
+  })
+})
+
 describe('GET /api/team/accept (company invitations)', () => {
   function makeGetReq(token: string) {
-    return new NextRequest(`http://localhost/api/team/accept?token=${token}`)
+    return new NextRequest('http://localhost/api/team/accept', { headers: { 'X-Invite-Token': token } })
   }
   const companyInvite = {
     id: 'inv-1',
@@ -391,7 +447,7 @@ describe('GET /api/team/accept (company invitations)', () => {
 // off to ask for a new one.
 describe('GET /api/team/accept (an invitation that is no longer pending)', () => {
   function makeGetReq(token: string) {
-    return new NextRequest(`http://localhost/api/team/accept?token=${token}`)
+    return new NextRequest('http://localhost/api/team/accept', { headers: { 'X-Invite-Token': token } })
   }
   const anonymous = () =>
     requireAuthMock.mockResolvedValue({

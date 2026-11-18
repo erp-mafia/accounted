@@ -35,9 +35,11 @@ vi.mock('@/lib/auth/invite-tokens', () => ({
 }))
 
 const acceptPendingTeamInviteByTokenMock = vi.fn()
+const redeemCompanyInvitationMock = vi.fn()
 vi.mock('@/lib/company/pending-invites', () => ({
   acceptPendingTeamInviteByToken: (...args: unknown[]) =>
     acceptPendingTeamInviteByTokenMock(...args),
+  redeemCompanyInvitation: (...args: unknown[]) => redeemCompanyInvitationMock(...args),
 }))
 
 // Default '/' keeps every pre-WL-14 expectation intact: the helper resolving
@@ -50,6 +52,7 @@ vi.mock('@/lib/company/landing-server', () => ({
 
 import { GET, POST } from '../route'
 import { clickEmailLink } from './click-email-link'
+import { INVITE_TTL_SECONDS } from '@/lib/auth/invite-ttl'
 
 // Shared by the MCP OAuth consent and WL-14 describe blocks: an SSR client
 // whose team_members lookup finds an existing membership.
@@ -250,6 +253,8 @@ describe('/auth/callback: admin invite flow (type=invite)', () => {
     expect(response.headers.get('set-cookie') ?? '').toContain(
       'gnubok-invite-token=gnubok_inv_tok123'
     )
+    // The cookie lives exactly as long as the invitation it carries.
+    expect(response.cookies.get('gnubok-invite-token')?.maxAge).toBe(INVITE_TTL_SECONDS)
   })
 
   it('routes a verified invite without an invite path in next to /reset-password without the cookie', async () => {
@@ -370,6 +375,109 @@ describe('/auth/callback: WL-14 cockpit landing', () => {
 
     expect(response.headers.get('location')).toBe(`http://localhost:3000${consent}`)
     expect(resolveLandingDestinationMock).not.toHaveBeenCalled()
+  })
+})
+
+// The company invitation in the pre-auth cookie is spent through the same
+// single-use claim as POST /api/team/accept (redeemCompanyInvitation, covered
+// in lib/company/__tests__/pending-invites.test.ts). The callback used to
+// insert the membership itself, ignore the insert's error and then mark the
+// invitation accepted whatever had happened.
+describe('/auth/callback: company invite acceptance', () => {
+  const invite = {
+    id: 'inv-1',
+    company_id: 'company-1',
+    email: 'Invitee@test.se',
+    role: 'member',
+    status: 'pending',
+    expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+  }
+
+  /** An SSR/service client whose company_invitations lookup finds `row`. */
+  function clientWithCompanyInvite(row: Record<string, unknown> | null) {
+    const client = clientWithTeamMembership()
+    const tableChain = (table: string) => {
+      const chain: Record<string, ReturnType<typeof vi.fn>> = {
+        select: vi.fn(() => chain),
+        eq: vi.fn(() => chain),
+        limit: vi.fn(() => chain),
+        maybeSingle: vi.fn().mockResolvedValue({ data: { team_id: 'team-1' }, error: null }),
+        single: vi.fn().mockResolvedValue({
+          data: table === 'company_invitations' ? row : null,
+          error: null,
+        }),
+        upsert: vi.fn().mockResolvedValue({ error: null }),
+      }
+      return chain
+    }
+    client.from = vi.fn((table: string) => tableChain(table)) as never
+    client.auth.getUser = vi
+      .fn()
+      .mockResolvedValue({ data: { user: { id: 'user-1', email: 'invitee@test.se' } } })
+    return client
+  }
+
+  const confirmWithInviteCookie = () =>
+    clickEmailLink('http://localhost:3000/auth/callback?token_hash=abc&type=signup', {
+      headers: { cookie: 'gnubok-invite-token=gnubok_inv_company' },
+    })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    verifyOtp.mockResolvedValue({ error: null })
+    acceptPendingTeamInviteByTokenMock.mockResolvedValue({ status: 'invalid' })
+    resolveLandingDestinationMock.mockResolvedValue('/')
+    vi.mocked(createServerClient).mockImplementation(() => clientWithCompanyInvite(invite) as never)
+  })
+
+  it('claims the invitation, lands the invitee in the company and clears the cookie', async () => {
+    redeemCompanyInvitationMock.mockResolvedValue('accepted')
+
+    const response = await confirmWithInviteCookie()
+
+    expect(redeemCompanyInvitationMock).toHaveBeenCalledTimes(1)
+    expect(redeemCompanyInvitationMock).toHaveBeenCalledWith(expect.anything(), 'user-1', invite)
+    expect(response.headers.get('location')).toBe('http://localhost:3000/')
+    expect(response.cookies.get('gnubok-company-id')?.value).toBe('company-1')
+    expect(response.headers.get('set-cookie') ?? '').toContain('gnubok-invite-token=;')
+  })
+
+  it('treats an existing membership as joined', async () => {
+    redeemCompanyInvitationMock.mockResolvedValue('already_member')
+
+    const response = await confirmWithInviteCookie()
+
+    expect(response.cookies.get('gnubok-company-id')?.value).toBe('company-1')
+    expect(response.headers.get('set-cookie') ?? '').toContain('gnubok-invite-token=;')
+  })
+
+  it.each(['gone', 'error'] as const)(
+    'does not treat the invitee as joined when the claim came to %s',
+    async (outcome) => {
+      redeemCompanyInvitationMock.mockResolvedValue(outcome)
+
+      const response = await confirmWithInviteCookie()
+
+      // No company context is handed out, and the cookie is left for the
+      // /onboarding retry instead of being cleared as if the invite was spent.
+      expect(response.cookies.get('gnubok-company-id')).toBeUndefined()
+      expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-invite-token=;')
+    },
+  )
+
+  it.each([
+    { name: 'no longer pending', overrides: { status: 'accepted' } },
+    { name: 'expired', overrides: { expires_at: new Date(Date.now() - 3_600_000).toISOString() } },
+    { name: 'sent to another address', overrides: { email: 'someone-else@test.se' } },
+  ])('never tries to claim an invitation that is $name', async ({ overrides }) => {
+    vi.mocked(createServerClient).mockImplementation(
+      () => clientWithCompanyInvite({ ...invite, ...overrides }) as never,
+    )
+
+    const response = await confirmWithInviteCookie()
+
+    expect(redeemCompanyInvitationMock).not.toHaveBeenCalled()
+    expect(response.cookies.get('gnubok-company-id')).toBeUndefined()
   })
 })
 

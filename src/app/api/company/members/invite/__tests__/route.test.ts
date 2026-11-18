@@ -203,6 +203,41 @@ describe('POST /api/company/members/invite', () => {
     expect(status).toBe(400)
   })
 
+  it('refuses a second send with 409 while the pending invitation is still valid', async () => {
+    enqueue({ data: { role: 'owner' } }) // caller membership
+    enqueue({ data: [] }) // existing members
+    enqueue({
+      data: { id: 'inv-1', status: 'pending', expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+    }) // existing invite, one hour left
+
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await post({ email: 'client@example.com', role: 'viewer' })
+    )
+
+    expect(status).toBe(409)
+    expect(body.error).toBe('En inbjudan har redan skickats till denna e-post.')
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('re-issues a pending invitation whose link has expired instead of answering 409', async () => {
+    enqueue({ data: { role: 'owner' } }) // caller membership
+    enqueue({ data: [] }) // existing members
+    enqueue({
+      data: { id: 'inv-1', status: 'pending', expires_at: new Date(Date.now() - 3_600_000).toISOString() },
+    }) // existing invite, ran out an hour ago
+    enqueue({ data: { name: 'Acme AB' } }) // company name
+    enqueue({ data: null }) // update invitation in place
+
+    const { status, body } = await parseJsonResponse<{
+      data: { email: string; email_sent: boolean; inviteUrl: string }
+    }>(await post({ email: 'client@example.com', role: 'viewer' }))
+
+    expect(status).toBe(200)
+    expect(body.data.email_sent).toBe(true)
+    expect(body.data.inviteUrl).toBe('https://app.accounted.test/invite/tok-plain')
+    expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({ to: 'client@example.com' }))
+  })
+
   it('creates the invitation and reports email_sent', async () => {
     enqueue({ data: { role: 'owner' } }) // caller membership
     enqueue({ data: [] }) // existing members

@@ -7,10 +7,14 @@ import {
 } from '@/lib/auth/confirm-link'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
+import { INVITE_TTL_SECONDS } from '@/lib/auth/invite-ttl'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { resolveLandingDestination } from '@/lib/company/landing-server'
-import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
+import {
+  acceptPendingTeamInviteByToken,
+  redeemCompanyInvitation,
+} from '@/lib/company/pending-invites'
 import {
   expiredCookieOptions,
   httpOnlyCookieOptions,
@@ -403,14 +407,15 @@ async function completeCallback(
         // Mirrors buildInviteCookie in app/invite/[token]/page.tsx: readable
         // by the client auth surfaces (not httpOnly: consumeInviteCookie
         // reads it and posts it to /api/team/accept), lifetime matching the
-        // 7-day invite TTL that the server re-checks on every acceptance. An
-        // invitation token bound to the invitee's address, not a session.
+        // invitation lifetime (INVITE_TTL_SECONDS) that the server re-checks
+        // on every acceptance. An invitation token bound to the invitee's
+        // address, not a session.
         response.cookies.set(INVITE_COOKIE_NAME, inviteTokenMatch[1], {
           path: '/',
           httpOnly: false,
           secure: shouldUseSecureCookies(requestProtocol),
           sameSite: 'lax',
-          maxAge: 7 * 24 * 60 * 60,
+          maxAge: INVITE_TTL_SECONDS,
         })
       }
       return response
@@ -450,20 +455,21 @@ async function completeCallback(
             .eq('token_hash', tokenHash)
             .single()
 
-          if (
+          // Claim the invitation and add the user to the company: the same
+          // single-use claim as POST /api/team/accept. A membership that
+          // already existed fulfils the invitation too. A lost claim or a
+          // failed insert created nothing: the flow continues below, and the
+          // cookie survives for the /onboarding retry when the invitation is
+          // still pending.
+          const redeemed =
             invite &&
             invite.status === 'pending' &&
             new Date(invite.expires_at) > new Date() &&
             user.email?.toLowerCase() === invite.email.toLowerCase()
-          ) {
-            // Add user to company
-            await serviceClient.from('company_members').insert({
-              company_id: invite.company_id,
-              user_id: user.id,
-              role: invite.role,
-              source: 'direct',
-            })
+              ? await redeemCompanyInvitation(serviceClient, user.id, invite)
+              : null
 
+          if (invite && (redeemed === 'accepted' || redeemed === 'already_member')) {
             // Set active company. Non-fatal on failure (middleware falls
             // back to the membership created above) but log so silent
             // persistence failures (#701) are observable.
@@ -475,12 +481,6 @@ async function completeCallback(
             if (prefError) {
               console.error('[auth/callback] failed to set active company', prefError)
             }
-
-            // Mark invite as accepted
-            await serviceClient
-              .from('company_invitations')
-              .update({ status: 'accepted' })
-              .eq('id', invite.id)
 
             // Invited user goes straight to dashboard: no onboarding needed
             redirectPath = '/'
