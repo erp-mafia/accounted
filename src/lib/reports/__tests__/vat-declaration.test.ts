@@ -1887,3 +1887,91 @@ describe('revenueAccountsWithoutRuta: parity with the declaration (#3387)', () =
     expect(revenueAccountsWithoutRuta(totals, {})).toEqual([])
   })
 })
+
+// ============================================================
+// Ruta 08: BAS 3913 (Frivilligt momspliktiga hyresintäkter) is the BAS
+// account for rent under frivillig skattskyldighet. Revenue booked on it by a
+// voucher (SIE import, manual verifikat) reaches ruta 08 from the ledger with
+// no configured momskod, the same way 3001 reaches ruta 05.
+// ============================================================
+
+describe('calculateVatDeclaration: ruta 08 from BAS 3913', () => {
+  it('files 3913 in ruta 08 without a configured momskod, consistent with its 2613 VAT', async () => {
+    seedLedger(
+      [
+        { account_number: '3001', debit_amount: 0, credit_amount: 2000 },
+        { account_number: '2611', debit_amount: 0, credit_amount: 500 },
+        { account_number: '3913', debit_amount: 0, credit_amount: 40000 },
+        { account_number: '2613', debit_amount: 0, credit_amount: 10000 },
+        { account_number: '3004', debit_amount: 0, credit_amount: 3000 },
+        { account_number: '2641', debit_amount: 1500, credit_amount: 0 },
+      ],
+      ['sie_import', 'manual'],
+    )
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'quarterly', 2024, 3)
+
+    expect(result.rutor.ruta05).toBe(2000)
+    expect(result.rutor.ruta08).toBe(40000)
+    expect(result.rutor.ruta42).toBe(3000)
+    expect(result.rutor.ruta10).toBe(10500)
+    expect(result.rutor.ruta48).toBe(1500)
+    expect(result.rutor.ruta49).toBe(9000)
+    expect(result.revenueAccountsWithoutRuta).toEqual([])
+    // ruta 10 is exactly 25 % of rutor 05 + 08: no consistency finding.
+    expect(
+      runVatDeclarationChecks(result.rutor, undefined, {
+        revenueAccountsWithoutRuta: result.revenueAccountsWithoutRuta,
+      }),
+    ).toEqual([])
+  })
+
+  it('files 3913 in ruta 08 when the chart gives it a momssats but no momskod', async () => {
+    // Before, a 25 % rate without a momskod put 3913 in no ruta and named it
+    // nowhere: excluded from ruta 05, and classified, so not listed as
+    // unconfigured either.
+    chartAccounts = [
+      { account_number: '3913', account_name: 'Frivilligt momspliktiga hyresintäkter', default_vat_rate: 0.25 },
+    ]
+    seedLedger([
+      { account_number: '3913', debit_amount: 0, credit_amount: 8000 },
+      { account_number: '2613', debit_amount: 0, credit_amount: 2000 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+    expect(result.rutor.ruta08).toBe(8000)
+    expect(result.rutor.ruta10).toBe(2000)
+  })
+
+  it('lets a configured momskod on 3913 win, counted once', async () => {
+    chartAccounts = [
+      {
+        account_number: '3913',
+        account_name: 'Frivilligt momspliktiga hyresintäkter',
+        default_vat_rate: null,
+        default_vat_treatment: 'exempt',
+      },
+    ]
+    seedLedger([{ account_number: '3913', debit_amount: 0, credit_amount: 5000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta08).toBe(0)
+    expect(result.rutor.ruta42).toBe(5000)
+  })
+
+  it('leaves 3911 (Hyresintäkter) to its momskod: unconfigured, it is named, not guessed', async () => {
+    chartAccounts = [{ account_number: '3911', account_name: 'Hyresintäkter', default_vat_rate: null }]
+    seedLedger([{ account_number: '3911', debit_amount: 0, credit_amount: 6000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta08).toBe(0)
+    expect(result.rutor.ruta42).toBe(0)
+    expect(result.revenueAccountsWithoutRuta).toEqual([
+      { account_number: '3911', account_name: 'Hyresintäkter', amount: 6000 },
+    ])
+  })
+})

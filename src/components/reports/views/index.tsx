@@ -2233,9 +2233,10 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                       {/* The other three bases in section A of SKV 4700. Shown
                           only when used, like ruta 05: most companies have
                           none, and an always-visible row of zeroes is noise.
-                          Rutor 07 and 08 have no entry in ACCOUNT_RUTA at all,
-                          so they can only arrive through the vmb and
-                          rental_voluntary treatments. */}
+                          Ruta 07 has no entry in ACCOUNT_RUTA at all, so it
+                          can only arrive through the vmb treatment; ruta 08
+                          comes from BAS 3913 or the rental_voluntary
+                          treatment. */}
                       {data.rutor.ruta06 !== 0 && (
                         <VatRutaRow
                           ruta="06"

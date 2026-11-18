@@ -26,6 +26,12 @@ describe('ACCOUNT_TO_BOX', () => {
     expect(ACCOUNT_TO_BOX['3305']).toBe('40')
   })
 
+  it('maps rent under frivillig skattskyldighet (3913) to ruta 08', () => {
+    expect(ACCOUNT_TO_BOX['3913']).toBe('08')
+    expect(ACCOUNT_TO_BOX['3911']).toBeUndefined()
+    expect(ACCOUNT_TO_BOX['3912']).toBeUndefined()
+  })
+
   it('maps domestic reverse-charge sales accounts to ruta 41', () => {
     expect(ACCOUNT_TO_BOX['3231']).toBe('41')
     expect(ACCOUNT_TO_BOX['3232']).toBe('41')

@@ -77,6 +77,9 @@ export const ACCOUNT_TO_BOX: Record<string, MomsBox> = {
   '3105': '36',  // Försäljning varor export utanför EU
   '3522': '36',  // Fakturerade frakter export
 
+  // Rent under frivillig skattskyldighet → Box 08
+  '3913': '08',  // Frivilligt momspliktiga hyresintäkter
+
   // Triangular trade → Box 38
   '3109': '38',  // Mellanmans försäljning trepartshandel
 

@@ -11,7 +11,7 @@ import {
 
 const TAXABLE_RATES = [0.25, 0.12, 0.06]
 export const RUTA_05_EXCLUDED_ACCOUNTS = new Set([
-  '3211', '3212', '3220', '3913',
+  '3211', '3212', '3220',
 ])
 const RUTA_05_STATIC_RATE_ACCOUNTS = new Set(['3000'])
 const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = { '1': 0.25, '2': 0.12, '3': 0.06 }
