@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import yaml from 'js-yaml'
 import { discoverAtoms } from '../lib/atom-discovery'
 import { buildMigrationSql } from '../generate-skill-bodies'
-import { publicSkillFiles, stampMit, syncPublicSkills } from '../sync-public-skills'
+import { PUBLIC_REPO, publicSkillFiles, skillSummary, stampMit, syncPublicSkills } from '../sync-public-skills'
+import { COMMUNITY_REPO } from '@/lib/agent-skills/community-repo-name'
 
 const directories: string[] = []
 async function directory() { const dir = await mkdtemp(join(tmpdir(), 'accounted-skills-test-')); directories.push(dir); return dir }
@@ -64,6 +65,29 @@ describe('public mirror', () => {
     await writeFile(join(target, '.claude/skills/swedish-vat/SKILL.md'), 'Drift')
     expect(await syncPublicSkills(process.cwd(), target, true)).toEqual(['.claude/skills/swedish-vat/SKILL.md'])
     expect(await readFile(join(target, '.claude/skills/swedish-vat/SKILL.md'), 'utf8')).toBe('Drift')
+  })
+  it('cuts a description to one table row: the first sentence, no parenthesis left open, at most 160 characters', () => {
+    expect(skillSummary('Swedish VAT (moms) compliance reference. Covers momsredovisning.')).toBe('Swedish VAT (moms) compliance reference')
+    expect(skillSummary('Mileage incl. förmånsbil and the 2012:1 rule')).toBe('Mileage incl. förmånsbil and the 2012:1 rule')
+    const cut = skillSummary(`Reporting: structure (${'noter, '.repeat(12)}underskrifter), filing (deadlines, ${'fees, '.repeat(20)}audit)`)
+    expect(cut.endsWith('underskrifter)')).toBe(true)
+    expect(cut.length).toBeLessThanOrEqual(160)
+  })
+  it('lists every mirrored skill in the README, with an install line that names the public repository', async () => {
+    const files = await publicSkillFiles(process.cwd())
+    const readme = files.get('README.md') ?? ''
+    expect(PUBLIC_REPO).toBe(COMMUNITY_REPO)
+    expect(readme).toContain(`npx skills add ${PUBLIC_REPO}`)
+    const skills = [...files.keys()].filter((file) => /^\.claude\/skills\/swedish-[a-z0-9-]+\/SKILL\.md$/.test(file))
+    expect(skills.length).toBeGreaterThan(0)
+    for (const file of skills) expect(readme).toContain(`](${file}) | `)
+    const rows = readme.split('\n').filter((line) => line.startsWith('| [`'))
+    expect(rows).toHaveLength(skills.length)
+    for (const row of rows) {
+      const summary = row.slice(row.indexOf(') | ') + 4, -2)
+      expect(summary.length).toBeGreaterThan(0)
+      expect(summary.length).toBeLessThanOrEqual(160)
+    }
   })
   it('refuses the source checkout as a destination', async () => {
     await expect(syncPublicSkills(process.cwd(), process.cwd())).rejects.toThrow('separate')

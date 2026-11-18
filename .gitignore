@@ -90,7 +90,9 @@ scripts/*.csv
 # it must never live in the repo / CI / cron.
 scripts/reopen-bokslut.sql
 
-.agents
+.agents/*
+# The Codex plugin marketplace is published from here; the rest of .agents is local.
+!.agents/plugins/
 .codex
 # PostHog wizard scratch: vendor reference docs downloaded by
 # `npx @posthog/wizard`, useful locally (and for `wizard audit`) but not

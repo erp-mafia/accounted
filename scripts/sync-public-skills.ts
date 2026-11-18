@@ -31,6 +31,73 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 `
 
+/** The public repository the mirror is pushed to, and the name its install lines use. */
+export const PUBLIC_REPO = 'erp-mafia/accounted-skills'
+const SUMMARY_MAX = 160
+
+/**
+ * One table row's worth of a skill description: its first sentence, cut to fit
+ * in 160 characters at the last comma that leaves no parenthesis open (or, with
+ * no such comma, at the last word). A period inside a sentence ("incl. x",
+ * "2012:1") is not a stop; only one followed by a capital is.
+ */
+export function skillSummary(description: string): string {
+  const flat = description.replace(/\s+/g, ' ').trim()
+  const stop = flat.search(/\.\s+(?=[A-ZÅÄÖ])/)
+  const sentence = (stop === -1 ? flat : flat.slice(0, stop)).replace(/\.$/, '')
+  if (sentence.length <= SUMMARY_MAX) return sentence
+  const cut = sentence.slice(0, SUMMARY_MAX)
+  for (let comma = cut.lastIndexOf(','); comma > 0; comma = cut.lastIndexOf(',', comma - 1)) {
+    const head = cut.slice(0, comma)
+    if (head.split('(').length === head.split(')').length) return head
+  }
+  return cut.slice(0, cut.lastIndexOf(' '))
+}
+
+/** The mirror's README: what the skills are, one install line per way in, and every skill in a table. */
+export function publicReadme(skills: { name: string; path: string; description: string }[]): string {
+  return [
+    '# Swedish accounting skills',
+    '',
+    'Agent skills for Swedish bookkeeping law, tax and reporting: reference knowledge an AI agent loads when the question comes up.',
+    'They work in any agent that reads the Agent Skills format (Claude Code, Codex, Cursor, OpenClaw and others) and need no Accounted account.',
+    '',
+    '## Install',
+    '',
+    '```bash',
+    `npx skills add ${PUBLIC_REPO}                      # choose from the list`,
+    `npx skills add ${PUBLIC_REPO} --skill swedish-vat  # one skill`,
+    `npx skills add ${PUBLIC_REPO} -a codex             # into one agent: claude-code, codex, cursor, openclaw, ...`,
+    '```',
+    '',
+    'Or clone the repository: Claude Code loads `.claude/skills/` when you work inside the directory.',
+    '',
+    '## Skills',
+    '',
+    '| Skill | Covers |',
+    '| --- | --- |',
+    ...skills.map((skill) => `| [\`${skill.name}\`](${skill.path}) | ${skillSummary(skill.description).replace(/\|/g, '\\|')} |`),
+    '',
+    '## Community',
+    '',
+    "Instructions shared by Accounted's users and others live in [`community/`](community/README.md): workflows, knowledge and analyses, each reviewed by Accounted before it is merged.",
+    'Browse them at [accounted.se/instruktioner](https://accounted.se/instruktioner). To share your own, see [CONTRIBUTING.md](CONTRIBUTING.md).',
+    '',
+    '## Source',
+    '',
+    "Generated from Accounted's canonical Swedish accounting skills.",
+    'Edit the source in erp-mafia/accounted; the skill files in this repository are a read-only mirror.',
+    '',
+    'For live corrected instructions, connect your AI to Accounted over MCP.',
+    'A checkout is a snapshot and does not receive withdrawals until updated.',
+    '',
+    '## License',
+    '',
+    'MIT. See [LICENSE](LICENSE).',
+    '',
+  ].join('\n')
+}
+
 export function stampMit(body: string): string {
   const normalized = body.replace(/\r\n/g, '\n')
   const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(normalized)
@@ -47,7 +114,7 @@ export async function publicSkillFiles(root: string): Promise<Map<string, string
     files.set(path, stampMit(await readFile(join(root, atom.body_path), 'utf8')))
   }
   files.set('LICENSE', LICENSE)
-  files.set('README.md', `# Swedish accounting agents\n\nGenerated from Accounted's canonical Swedish accounting skills.\nEdit the source in erp-mafia/accounted; this repository is a read-only mirror.\n\n## Skills\n\n${atoms.filter((atom) => !atom.parent_atom_id).map((atom) => `- [${atom.title}](${atom.body_path})`).join('\n')}\n\n## License\n\nMIT. See [LICENSE](LICENSE).\n\nFor live corrected instructions, connect your AI to Accounted over MCP.\nA checkout is a snapshot and does not receive withdrawals until updated.\n`)
+  files.set('README.md', publicReadme(atoms.filter((atom) => !atom.parent_atom_id).map((atom) => ({ name: atom.slug, path: atom.body_path.split(sep).join('/'), description: atom.description }))))
   files.set(MANIFEST, JSON.stringify([...files.keys()].sort(), null, 2) + '\n')
   return files
 }

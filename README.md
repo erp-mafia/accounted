@@ -33,9 +33,86 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **Document archive** -- SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
 - **SIE import/export** -- Standard Swedish accounting interchange format
 - **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini and Cursor over OAuth 2.1
-- **Claude connector and plugin** -- Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md)
+- **Claude connector and plugin** -- Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md); the same plugin installs in Codex and Cursor
 - **Command line** -- `npm install -g accounted` runs every tool from a terminal, a script or a coding agent's shell, with the same permissions and staged approvals
 - **Extension system** -- Opt-in plugins for AI document extraction, bank sync, email, calendar, and more
+
+## Agent skills
+
+Accounted's workflows and its Swedish accounting knowledge ship as [Agent Skills](https://agentskills.io): folders with a `SKILL.md` that Claude Code, Codex, Cursor, OpenClaw and other agents load when the task calls for them. There are three sets.
+
+### Bookkeeping flows
+
+The [Accounted plugin](packages/claude-plugin/README.md) bundles the MCP connection with these flows. Each one works from the company's live data and stages every write for your approval. They need an Accounted account, hosted or self-hosted; the sign-in screen creates one.
+
+| Skill | What it does |
+| --- | --- |
+| `start` | Connect, orient, and surface what needs attention |
+| `bookkeep` | Clear unbooked bank transactions and receipts |
+| `check` | Read-only health check with a prioritized fix list |
+| `month-close` | Close the month against the product's checklist |
+| `vat` | Prepare and reconcile the momsdeklaration |
+| `payroll` | Monthly salary run and AGI underlag |
+| `year-end` | Bokslut, readiness-gated |
+| `clients` | Every company on the connection in one table; run one task for all of them |
+
+```text
+# Claude Code
+/plugin marketplace add erp-mafia/accounted
+/plugin install accounted@accounted
+
+# Codex, then install "accounted" from the plugin list
+codex plugin marketplace add erp-mafia/accounted
+```
+
+Cursor and every other MCP client: see the [plugin README](packages/claude-plugin/README.md#install).
+
+### Integration skills
+
+For building against Accounted, or driving it from a shell. They live in [`skills/`](skills/).
+
+| Skill | What it does |
+| --- | --- |
+| `accounted-api` | Build against the REST API: auth, conventions and every endpoint |
+| `accounted-cli` | Work in the books from a shell with the `accounted` command |
+| `accounted-gather` | Find and upload the documents the archive says are missing |
+| `openapi-to-skill` | Turn any OpenAPI spec into an agent skill |
+
+```bash
+npx skills add erp-mafia/accounted --skill accounted-api
+```
+
+Add `-a codex`, `-a cursor`, `-a openclaw` or another agent name to choose where the skill is installed.
+
+### Swedish accounting knowledge
+
+Reference skills on Swedish bookkeeping law, tax and reporting. They are MIT licensed, work without an Accounted account, and are published in [erp-mafia/accounted-skills](https://github.com/erp-mafia/accounted-skills). An agent connected to Accounted loads the current versions with `accounted_load_skill`.
+
+| Skill | Covers |
+| --- | --- |
+| `swedish-accounting-compliance` | BFL, BFNAR, BAS kontoplan, K2/K3, verifikationer, bokföringsskyldighet |
+| `swedish-asset-accounting` | Anläggningsredovisning, planenlig avskrivning and överavskrivning, BAS 10xx-12xx/78xx |
+| `swedish-cash-register` | Kassaregister, personalliggare, dagskassor, kassadifferens, dricks, presentkort |
+| `swedish-daily-bookkeeping` | Kontering of everyday transactions: payment providers, foreign purchases, skattekonto, owner transactions, receipts |
+| `swedish-e-invoicing` | Peppol BIS Billing 3, EN 16931, the B2G mandate, Swedish CIUS rules, ViDA |
+| `swedish-ef-skatteplanering` | Enskild firma: räntefördelning, expansionsfond, egenavgifter, NE-bilaga, EF vs AB |
+| `swedish-financial-reporting` | Årsredovisning, Bolagsverket filing, INK2/INK2R/INK2S, noter |
+| `swedish-inventory` | Varulager: lägsta värdets princip, FIFU, inkurans, inventering |
+| `swedish-invoice-compliance` | Mandatory invoice fields (ML 17 kap), kreditfaktura, ROT/RUT, reverse charge |
+| `swedish-k3-k4-judgment` | K3 (BFNAR 2012:1) in depth, K4 at a high level, switching from K2 to K3 |
+| `swedish-payroll` | AGI, arbetsgivaravgifter, skatteavdrag, förmånsbeskattning, semesterlöneskuld, BAS 7xxx |
+| `swedish-project-accounting` | Projektredovisning, pågående arbeten, revenue recognition under K2 and K3, SIE dimensions |
+| `swedish-sie-import-export` | SIE4 parsing, validation, generation, encoding |
+| `swedish-sru-filing` | SRU files for Skatteverket (INFO.SRU and BLANKETTER.SRU), INK2 field codes |
+| `swedish-tax-planning` | Aktiebolag: periodiseringsfond, överavskrivningar, koncernbidrag, 3:12-reglerna |
+| `swedish-travel-expenses` | Tjänsteresor: traktamente, milersättning, logi, tremånadersregeln |
+| `swedish-vat` | Momsdeklaration rutor, EU VAT, reverse charge, BAS 26xx, ML 2023:200 |
+| `swedish-year-end-closing` | Bokslut for AB and enskild firma, closing entries, tax provisions, filing |
+
+```bash
+npx skills add erp-mafia/accounted-skills                      # choose from the list
+npx skills add erp-mafia/accounted-skills --skill swedish-vat  # one skill
+```
 
 ## Self-Hosting
 
@@ -76,7 +153,7 @@ The Kivra and Billo integrations are Accounted's own code, built on the provider
 | Path | Purpose |
 | --- | --- |
 | [`src/`](src/README.md) | Application routes, components, accounting services, translations, and extensions |
-| [`packages/`](packages/) | MCP bridges, the `accounted` command-line client, connector contract, and Claude Code plugin |
+| [`packages/`](packages/) | MCP bridges, the `accounted` command-line client, connector contract, and the agent plugin (Claude Code, Codex, Cursor) |
 | [`supabase/`](supabase/) | Database configuration and migration history |
 | [`tests/`](tests/) | Shared fixtures, database suites, and cross-cutting tests; unit tests also live beside their code |
 | [`scripts/`](scripts/README.md), [`docker/`](docker/) | Development tools and self-hosting internals |

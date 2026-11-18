@@ -90,4 +90,18 @@ describe('claude-plugin wrapper references', () => {
       }
     }
   })
+
+  it('is one plugin under three manifests: same name and version, same MCP server, every marketplace pointing at this folder', () => {
+    const pluginDir = join(repoRoot, 'packages', 'claude-plugin')
+    const json = (...parts: string[]) => JSON.parse(readFileSync(join(...parts), 'utf8'))
+    const claude = json(pluginDir, '.claude-plugin', 'plugin.json')
+    for (const manifest of [json(pluginDir, 'plugin.json'), json(pluginDir, '.cursor-plugin', 'plugin.json')]) {
+      expect(manifest.name).toBe(claude.name)
+      expect(manifest.version).toBe(claude.version)
+    }
+    expect(json(pluginDir, 'mcp.json').mcpServers.accounted.url).toBe(json(pluginDir, '.mcp.json').mcpServers.accounted.url)
+    expect(json(repoRoot, '.claude-plugin', 'marketplace.json').plugins[0].source.path).toBe('packages/claude-plugin')
+    expect(json(repoRoot, '.agents', 'plugins', 'marketplace.json').plugins[0].source.path).toBe('./packages/claude-plugin')
+    expect(json(repoRoot, '.cursor-plugin', 'marketplace.json').plugins[0].source).toBe('packages/claude-plugin')
+  })
 })
