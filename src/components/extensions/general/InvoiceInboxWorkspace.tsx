@@ -2066,6 +2066,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         open={createSupplierInvoiceOpen}
         onOpenChange={setCreateSupplierInvoiceOpen}
         inboxItemId={selected.id}
+        documentId={selected.document_id}
         onCreated={async () => {
           // Stay in the inbox (the whole point of the modal): close, then
           // refresh the list + the selected item so it shows as converted.

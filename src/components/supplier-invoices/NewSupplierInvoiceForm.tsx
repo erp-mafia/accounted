@@ -206,6 +206,12 @@ export interface NewSupplierInvoiceFormProps {
    * the account empty.
    */
   prefillAccount?: string | null
+  /**
+   * Dialog mode, without an inbox item: told the document id of the file
+   * dropped into Underlag once it is stored (null when it is removed), so
+   * the dialog can show it beside the form. Pass a stable function.
+   */
+  onUnderlagDocument?: (documentId: string | null) => void
 }
 
 export default function NewSupplierInvoiceForm({
@@ -215,6 +221,7 @@ export default function NewSupplierInvoiceForm({
   onCreated,
   onCancel,
   prefillAccount = null,
+  onUnderlagDocument,
 }: NewSupplierInvoiceFormProps = {}) {
   const router = useRouter()
   const { canWrite } = useCanWrite()
@@ -461,6 +468,9 @@ export default function NewSupplierInvoiceForm({
   const documentUploadInProgress = documentFiles.some((file) => file.status === 'uploading')
   const documentUploadFailed = documentFiles.some((file) => file.status === 'error')
   const uploadedDocumentId = documentFiles.find((file) => file.status === 'uploaded')?.id
+  useEffect(() => {
+    onUnderlagDocument?.(uploadedDocumentId ?? null)
+  }, [uploadedDocumentId, onUnderlagDocument])
 
   // Settle-tint bookkeeping: applyInboxItem reports every field it fills.
   const markSettled = useCallback((field: string) => {

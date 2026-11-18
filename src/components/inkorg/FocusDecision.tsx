@@ -649,6 +649,7 @@ export function FocusDecision({
           if (!next) setOpen(null)
         }}
         inboxItemId={item.id}
+        documentId={item.document_id}
         // Settled on registration against the bank row it looks paid by (POST /api/inkorg/items/:id/register-and-settle).
         settleWith={open === 'settle' ? settleWith : null}
         // The account of what was bought, as one click would book it, on every line the reading gives.

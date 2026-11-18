@@ -1,7 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { documentPreviewKind } from '@/lib/documents/preview-kind'
+import { documentPreviewKind, isUnpreviewableType } from '@/lib/documents/preview-kind'
+
+describe('isUnpreviewableType', () => {
+  it('is true only for a recorded type no viewer draws', () => {
+    expect(isUnpreviewableType('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(true)
+    expect(isUnpreviewableType('application/msword')).toBe(true)
+    expect(isUnpreviewableType('text/csv')).toBe(true)
+  })
+
+  it('is false for what a viewer draws', () => {
+    expect(isUnpreviewableType('application/pdf')).toBe(false)
+    expect(isUnpreviewableType('image/heic')).toBe(false)
+    expect(isUnpreviewableType('text/html')).toBe(false)
+  })
+
+  it('is false while the type is unrecorded: the file may still be a PDF or a photo', () => {
+    expect(isUnpreviewableType(null)).toBe(false)
+    expect(isUnpreviewableType(undefined)).toBe(false)
+    expect(isUnpreviewableType('')).toBe(false)
+    expect(isUnpreviewableType('application/octet-stream')).toBe(false)
+  })
+})
 
 describe('documentPreviewKind', () => {
   it('reads the stored type first', () => {

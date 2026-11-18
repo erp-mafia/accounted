@@ -1,0 +1,1 @@
+[2026-11-17] Registrera leverantörsfaktura shows the underlag beside the form, as two panes where the dialog has room and a Uppgifter/Underlag switch where it has not: supplier, amounts and accounts are checked against the invoice, and the dialog covered the inbox's own preview.
