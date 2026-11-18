@@ -10,11 +10,11 @@ name: CI
 # it covers succeeded: a job that is skipped because a job it needs failed
 # does not fail its dependents, and a skipped required check counts as passed.
 #
-# Pull requests run everything. Pushes to main run everything except the two
-# jobs that diff a pull request against its base (pg-coverage-gate,
-# pg-upgrade), and they are the only runs that write caches: GitHub scopes a
-# cache entry to the ref that wrote it, and entries written on main are
-# readable from every pull request.
+# Pull requests run everything. Pushes to main and merge groups run everything
+# except the jobs that read a pull request (pr-privacy, pg-coverage-gate,
+# pg-upgrade). Pushes to main are the only runs that write caches: GitHub
+# scopes a cache entry to the ref that wrote it, and entries written on main
+# are readable from every pull request.
 #
 # Runners: every job runs on a GitHub-hosted runner unless a repository
 # variable names another one. TYPECHECK_RUNNER is the label of a runner that
@@ -31,15 +31,22 @@ on:
   pull_request:
   push:
     branches: [main]
+  # A merge queue, when the repository uses one, tests the queued commit here
+  # before it lands on main.
+  merge_group:
 
 permissions:
   contents: read
 
-# A newer push to a pull request cancels the run it supersedes. Pushes to main
-# group by commit, so every merge gets a complete run.
+# A newer push to a pull request cancels the run it supersedes. On main one
+# run is in progress at a time and it always finishes; of the pushes that
+# arrive meanwhile only the newest waits, and GitHub cancels the waiting runs
+# it replaces. The newest commit holds every earlier merge, so main is still
+# tested after a burst of merges, once, not once per merge. The price: a red
+# main after a burst names the burst, not the merge.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NEXT_TELEMETRY_DISABLED: '1'
