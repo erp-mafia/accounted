@@ -70,6 +70,12 @@ interface CompanyContextValue {
    */
   assistantChatEnabled?: boolean
   /**
+   * The last day a company that keeps the built-in chat has it
+   * (ASSISTANT_CHAT_UNTIL, YYYY-MM-DD), as the layout read it; null or absent
+   * when no day is set. The chat's own notice names it.
+   */
+  assistantChatUntil?: string | null
+  /**
    * Trial expiry while the trial is the company's only source of paid access;
    * null when paying/comped or after the trial lapsed. Drives the countdown
    * touchpoint in the sidebar.

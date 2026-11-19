@@ -25,9 +25,9 @@ export default async function ChatNewPage({ searchParams }: PageProps) {
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
-  // Switched off (ASSISTANT_CHAT_ENABLED), no conversation starts, whatever
-  // ?intent= says.
-  leaveWhenChatSwitchedOff()
+  // Switched off for the company (ASSISTANT_CHAT_ENABLED), no conversation
+  // starts, whatever ?intent= says.
+  leaveWhenChatSwitchedOff(companyId)
 
   const sp = await searchParams
   const requested = typeof sp.intent === 'string' && sp.intent.trim() ? sp.intent.trim() : 'general.help'

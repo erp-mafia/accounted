@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useLocale, useTranslations } from 'next-intl'
+import { useTranslations } from 'next-intl'
 import { useAgentSheet } from './AgentSheetProvider'
 import { usePathname, useRouter } from 'next/navigation'
 import { SpinnerIcon, XMarkIcon } from '@/components/icons'
@@ -12,9 +12,7 @@ import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { billingHref } from '@/lib/entitlements/upgrade-reason'
-import { useToast } from '@/components/ui/use-toast'
-import { ToastAction } from '@/components/ui/toast'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { useFabHidden } from './use-fab-hidden'
 
 // Floating trigger sits above the page bottom-right, opens the AgentSheet when
 // clicked. Hidden when the sheet is already open so the icon doesn't double up.
@@ -98,75 +96,12 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   }, [isOpen, hasAi])
 
   const t = useTranslations('settings_assistant')
-  const errorLocale = useLocale() as ErrorLocale
-  const { toast } = useToast()
-
   // The pill's own X writes the same user_preferences opt-out as the settings
-  // switch (crm#245: that switch sits on a page the settings rail no longer
-  // lists, so "turn it off in settings" was not a way a user could find). The
-  // override hides or restores the pill at once instead of waiting for
-  // router.refresh() to re-render the layout. It is keyed to the prop value it
-  // was set against, so once the server-rendered prop changes (the refresh, or
-  // the settings switch), the prop is the truth again without an effect.
-  const [hideOverride, setHideOverride] = useState<{ value: boolean; against: boolean } | null>(null)
-  const effectiveHidden =
-    hideOverride && hideOverride.against === hidden ? hideOverride.value : hidden
-
-  async function saveFabHidden(nextHide: boolean): Promise<boolean> {
-    try {
-      const res = await fetch('/api/user/preferences', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hide_assistant_fab: nextHide }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => null)
-        toast({
-          title: t('fab_save_failed'),
-          description: getErrorMessage(body, { statusCode: res.status, locale: errorLocale }),
-          variant: 'destructive',
-        })
-        return false
-      }
-    } catch (err) {
-      toast({
-        title: t('fab_save_failed'),
-        description: getErrorMessage(err, { locale: errorLocale }),
-        variant: 'destructive',
-      })
-      return false
-    }
-    // Outside the try: a refresh that throws must not report a failed save,
-    // the write has landed by then.
-    router.refresh()
-    return true
-  }
-
-  // Runs from the toast's Ångra, a closure older than the refresh that hid the
-  // pill, so it cannot read the current prop. Undo only follows a saved hide,
-  // so the stored value it overrides is "hidden"; before that refresh lands
-  // the prop is still false and the pill shows either way.
-  async function restoreFab() {
-    setHideOverride({ value: false, against: true })
-    if (!(await saveFabHidden(false))) setHideOverride(null)
-  }
-
-  async function hideFab() {
-    setHideOverride({ value: true, against: hidden })
-    if (!(await saveFabHidden(true))) {
-      setHideOverride(null)
-      return
-    }
-    toast({
-      title: t('fab_hidden_title'),
-      description: t('fab_hidden_description'),
-      action: (
-        <ToastAction altText={t('fab_hidden_undo')} onClick={() => void restoreFab()}>
-          {t('fab_hidden_undo')}
-        </ToastAction>
-      ),
-    })
-  }
+  // switch (use-fab-hidden.tsx).
+  const { effectiveHidden, hideFab } = useFabHidden(hidden, {
+    title: t('fab_hidden_title'),
+    description: t('fab_hidden_description'),
+  })
 
   // User opt-out (the pill's X, or Inställningar → Assistenten): the sidebar
   // entry stays, the floating button goes. A collapsed session keeps its

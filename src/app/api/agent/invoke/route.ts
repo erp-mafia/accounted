@@ -13,7 +13,8 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
+import { assistantChatEnabledFor, assistantChatOffForEveryone } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
 import { localeFromCookieHeader } from '@/i18n/config'
 
@@ -106,10 +107,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Unknown intent: ${body.intent_id}` }, { status: 400 })
   }
 
-  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): no turn
-  // runs, for any intent. The onboarding interview (onboarding.intake) goes
-  // with the rest.
-  if (!assistantChatEnabled()) {
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED) with no
+  // company keeping it: no turn runs, for any intent, and nothing is read
+  // first. The onboarding interview (onboarding.intake) goes with the rest.
+  if (assistantChatOffForEveryone(todayIsoStockholm())) {
     return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
   }
 
@@ -131,6 +132,12 @@ export async function POST(request: Request) {
   // seed data and the assistant is gated to a "look, don't touch" preview.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked
+
+  // The chat switched off with some companies keeping it
+  // (ASSISTANT_CHAT_COMPANY_IDS): a member of a company that is not one of
+  // them gets the same answer as when it is off for everyone, for every
+  // intent, the onboarding interview included.
+  if (!assistantChatEnabledFor(companyId, todayIsoStockholm())) return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
 
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
   if (capBlocked) return capBlocked

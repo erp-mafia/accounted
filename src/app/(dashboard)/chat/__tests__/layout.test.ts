@@ -73,8 +73,9 @@ function sidebarOf(layout: unknown): unknown {
   return slot ? (slot as { type: unknown }).type : undefined
 }
 
-// ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts). Switched off, the
-// layout leads to Koppla en agent like each of its pages (chat-switch.ts,
+// ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts). Switched off for
+// the company, the layout draws no chat around its page: /chat shows what
+// took the chat's place and the other pages lead there (chat-switch.ts,
 // pages.test.ts), before the build gate and before the conversation list.
 describe('ChatLayout with the chat switched off', () => {
   beforeEach(() => {
@@ -86,20 +87,34 @@ describe('ChatLayout with the chat switched off', () => {
     vi.unstubAllEnvs()
   })
 
-  it('does not send a company without an agent into the build: it leads to Koppla en agent', async () => {
+  it('does not send a company without an agent into the build: the page is shown as it is', async () => {
     getResolvedDashboardAgentProfile.mockResolvedValue(null)
-    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/settings/api')
-    expect(redirect).not.toHaveBeenCalledWith('/onboarding/agent')
+    const out = await ChatLayout({ children: 'the page' })
+    expect((out as { props: { children: unknown } }).props.children).toBe('the page')
+    expect(redirect).not.toHaveBeenCalled()
   })
 
-  it('leads a company with a built agent to Koppla en agent too, and does not read the conversation list', async () => {
+  it('draws no sidebar for a company with a built agent either, and does not read the conversation list', async () => {
     getResolvedDashboardAgentProfile.mockResolvedValue({
       display_name: 'Anna',
       avatar_id: null,
       verified_at: '2026-10-10T14:04:42Z',
     })
-    await expect(ChatLayout({ children: null })).rejects.toThrow('NEXT_REDIRECT:/settings/api')
+    await ChatLayout({ children: null })
     expect(conversations).not.toHaveBeenCalled()
     expect(ChatSidebar).not.toHaveBeenCalled()
+    expect(redirect).not.toHaveBeenCalled()
+  })
+
+  it('is the chat as before for a company that keeps it', async () => {
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'company-1')
+    getResolvedDashboardAgentProfile.mockResolvedValue({
+      display_name: 'Anna',
+      avatar_id: null,
+      verified_at: '2026-10-10T14:04:42Z',
+    })
+    const out = await ChatLayout({ children: null })
+    expect(conversations).toHaveBeenCalledTimes(1)
+    expect(sidebarOf(out)).toBe(ChatSidebar)
   })
 })

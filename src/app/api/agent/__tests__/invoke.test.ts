@@ -430,6 +430,57 @@ describe('POST /api/agent/invoke with the chat switched off', () => {
   })
 })
 
+// ASSISTANT_CHAT_COMPANY_IDS: the companies that keep the chat while it is
+// switched off, through ASSISTANT_CHAT_UNTIL.
+describe('POST /api/agent/invoke with the chat switched off and some companies keeping it', () => {
+  beforeEach(() => {
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'false')
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'company-1')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('runs a turn for a company that keeps the chat', async () => {
+    enqueuePreamble()
+    enqueue({
+      data: { id: CONVERSATION_ID, user_id: 'user-1', company_id: 'company-1', intent_id: 'general.help' },
+    })
+    enqueueAcceptedTail()
+    const res = await POST(
+      createMockRequest('/api/agent/invoke', { method: 'POST', body: body({ conversation_id: CONVERSATION_ID }) }),
+    )
+    expect(res.status).toBe(200)
+    await res.text()
+    expect(runChatTurnMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers 409 ASSISTANT_CHAT_OFF for a company that does not, once it is a member, and runs no turn', async () => {
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'another-company')
+    enqueuePreamble()
+    const res = await POST(createMockRequest('/api/agent/invoke', { method: 'POST', body: body() }))
+    const { status, body: json } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(409)
+    expect(json.error.code).toBe('ASSISTANT_CHAT_OFF')
+    expect(runChatTurnMock).not.toHaveBeenCalled()
+  })
+
+  it('tells a non-member nothing about the list: 403 as for any company', async () => {
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'another-company')
+    enqueue({ data: null }) // company_members: no row
+    const res = await POST(createMockRequest('/api/agent/invoke', { method: 'POST', body: body() }))
+    expect(res.status).toBe(403)
+  })
+
+  it('answers 409 for the companies that kept it too, from the day after the last day, before anything is read', async () => {
+    vi.stubEnv('ASSISTANT_CHAT_UNTIL', '2000-01-31')
+    const res = await POST(createMockRequest('/api/agent/invoke', { method: 'POST', body: body() }))
+    expect(res.status).toBe(409)
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(runChatTurnMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /api/agent/invoke with the chat switch unset or on', () => {
   afterEach(() => {
     vi.unstubAllEnvs()

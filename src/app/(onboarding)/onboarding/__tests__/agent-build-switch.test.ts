@@ -4,7 +4,7 @@ import { billingHref } from '@/lib/entitlements/upgrade-reason'
 // /onboarding/agent under ASSISTANT_CHAT_ENABLED (lib/env/assistant-chat-switch.ts).
 // The page builds the built-in assistant and ends in the interview on
 // /chat/intake. Switched off there is neither,
-// so the page leads to Koppla en agent (/settings/api) before the paywall and
+// so the page leads to /chat, which shows what took its place, before the paywall and
 // before anything is fetched or built. Unset or on, it runs as before.
 
 const redirect = vi.fn((url: string) => {
@@ -52,14 +52,14 @@ describe.each(['false', '0', 'off', 'no', 'OFF'])('/onboarding/agent with ASSIST
     vi.stubEnv('ASSISTANT_CHAT_ENABLED', value)
   })
 
-  it('leads to Koppla en agent, with nothing fetched or built', async () => {
-    await expect(AgentOnboardingPage()).rejects.toThrow('NEXT_REDIRECT:/settings/api')
+  it('leads to /chat, with nothing fetched or built', async () => {
+    await expect(AgentOnboardingPage()).rejects.toThrow('NEXT_REDIRECT:/chat')
     expect(from).not.toHaveBeenCalled()
     expect(ensureTicSnapshot).not.toHaveBeenCalled()
   })
 
   it('does not send a company without the ai capability to billing for an assistant that is not there', async () => {
-    await expect(AgentOnboardingPage()).rejects.toThrow('NEXT_REDIRECT:/settings/api')
+    await expect(AgentOnboardingPage()).rejects.toThrow('NEXT_REDIRECT:/chat')
     expect(hasCapability).not.toHaveBeenCalled()
     expect(redirect).not.toHaveBeenCalledWith(billingHref('assistant'))
   })
@@ -86,6 +86,6 @@ describe.each([
   it('goes on to the paywall: a company without the ai capability is sent to billing', async () => {
     await expect(AgentOnboardingPage()).rejects.toThrow(`NEXT_REDIRECT:${billingHref('assistant')}`)
     expect(hasCapability).toHaveBeenCalledTimes(1)
-    expect(redirect).not.toHaveBeenCalledWith('/settings/api')
+    expect(redirect).not.toHaveBeenCalledWith('/chat')
   })
 })

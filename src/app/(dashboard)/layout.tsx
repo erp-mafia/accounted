@@ -12,6 +12,7 @@ import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { computeIdentityHash } from '@/lib/analytics/identity-hash'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
+import { SupportAskTrigger } from '@/components/support/SupportAskTrigger'
 import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SupportDialogHost } from '@/components/support/SupportDialogHost'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
@@ -40,7 +41,8 @@ import {
   switchedOffPackageIds,
 } from '@/lib/modules/capabilities'
 import { getAiStatus } from '@/lib/ai'
-import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
+import { assistantChatEnabled, assistantChatEnabledFor, assistantChatUntil } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
 import { resolveRequestBrand } from '@/lib/branding/request-brand'
@@ -131,9 +133,11 @@ export default async function DashboardLayout({
   // instead of leading the user into its 503 (#2204).
   const assistantAvailable = getAiStatus().assistantAvailable
   // Installation-level too: is the built-in chat switched on
-  // (ASSISTANT_CHAT_ENABLED, on unless switched off)? Handed to every
-  // CompanyProvider below so the doors into the chat go with it; the menu
-  // row follows the same switch through navRollouts.
+  // (ASSISTANT_CHAT_ENABLED, on unless switched off)? Handed to the
+  // CompanyProviders of the shells without an active company; the company
+  // shell asks for its own company below (some companies keep the chat while
+  // it is switched off), and the menu row follows the same answer through
+  // navRollouts.
   const assistantChatOn = assistantChatEnabled()
 
   // Resolve active company from user_preferences (authoritative). The
@@ -586,6 +590,10 @@ export default async function DashboardLayout({
 
   const isSandbox = settings?.is_sandbox === true
 
+  // The built-in chat for this company: on unless switched off, and then only
+  // for the companies that keep it (ASSISTANT_CHAT_COMPANY_IDS).
+  const companyChatOn = assistantChatEnabledFor(companyId, todayIsoStockholm())
+
   // Multi-user seat gate, switcher side: which of the user's OTHER companies
   // are frozen for them (non-owner membership, multi_user lapsed past grace).
   // Zero queries for the common owner-of-everything user; the grants read
@@ -662,7 +670,8 @@ export default async function DashboardLayout({
     capabilities: entitlements.capabilities,
     // The assistant reads the whole company: never offered to the invoicer.
     assistantAvailable: assistantAvailable && !isInvoicer,
-    assistantChatEnabled: assistantChatOn,
+    assistantChatEnabled: companyChatOn,
+    assistantChatUntil: assistantChatUntil(),
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
@@ -806,8 +815,13 @@ export default async function DashboardLayout({
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
             invoice) set `inert` on the shell while open, and the assistant
             entry point must stay clickable then, like the sheet itself.
-            Not rendered where the chat is switched off. */}
-        {assistantChatOn && <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />}
+            Where the company has no chat, a person who had the button (a
+            built assistant) gets the support assistant's in the same corner. */}
+        {companyChatOn ? (
+          <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
+        ) : companyContextValue.supportAssistant && agentProfileIdentity?.verified_at ? (
+          <SupportAskTrigger hidden={userPrefs?.hide_assistant_fab === true} />
+        ) : null}
         {!isSandbox && (
           <AnalyticsIdentify
             user={{

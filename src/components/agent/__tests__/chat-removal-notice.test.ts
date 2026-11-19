@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderInLocale, visibleText } from '@/tests/i18n-render'
 
@@ -8,7 +8,11 @@ import { renderInLocale, visibleText } from '@/tests/i18n-render'
 const { enabledExtensions } = vi.hoisted(() => ({ enabledExtensions: new Set<string>(['mcp-server']) }))
 vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({ ENABLED_EXTENSION_IDS: enabledExtensions }))
 
+import { CompanyProvider } from '@/contexts/CompanyContext'
 import { ChatRemovalNotice } from '../ChatRemovalNotice'
+
+// createElement takes the page as its third argument: the provider's own props type asks for it as a prop.
+const Provider = CompanyProvider as (props: { value: never; children?: ReactNode }) => ReturnType<typeof CompanyProvider>
 
 const render = (locale: 'sv' | 'en') => renderInLocale(createElement(ChatRemovalNotice), locale)
 
@@ -57,5 +61,26 @@ describe('ChatRemovalNotice', () => {
     expect(visibleText(html)).toEqual(['Den här chatten kommer att tas bort.'])
     expect(html).not.toContain('href=')
     expect(visibleText(render('en'))).toEqual(['This chat will be removed.'])
+  })
+
+  // A company that keeps the chat after it is switched off for the rest
+  // (ASSISTANT_CHAT_UNTIL): the layout hands the day to the page.
+  const renderWithDay = (locale: 'sv' | 'en') =>
+    renderInLocale(
+      createElement(Provider, { value: { assistantChatUntil: '2027-01-31' } as never }, createElement(ChatRemovalNotice)),
+      locale,
+    )
+
+  it('names the last day where one is set, in both languages', () => {
+    expect(sentence(renderWithDay('sv'))).toBe(
+      'Den här chatten tas bort den 31 jan. 2027. Bokföringen sköter du med din egen assistent, till exempel Claude, som du kopplar under Agenter > Koppla en agent. Frågor om appen ställer du till supporten.',
+    )
+    expect(sentence(renderWithDay('en'))).toContain('This chat will be removed on ')
+    expect(sentence(renderWithDay('en'))).toContain('2027')
+  })
+
+  it('names the day on an installation without Koppla en agent too', () => {
+    enabledExtensions.clear()
+    expect(visibleText(renderWithDay('sv'))).toEqual(['Den här chatten tas bort den 31 jan. 2027.'])
   })
 })

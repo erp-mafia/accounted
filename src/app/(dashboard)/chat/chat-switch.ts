@@ -1,21 +1,29 @@
 import { redirect } from 'next/navigation'
-import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { assistantChatEnabledFor } from '@/lib/env/assistant-chat-switch'
 
 /**
- * What the built-in assistant's pages do about the installation's switch
- * (ASSISTANT_CHAT_ENABLED, lib/env/assistant-chat-switch.ts), in one place.
+ * What the built-in assistant's pages do about its switch
+ * (ASSISTANT_CHAT_ENABLED and the companies that keep the chat,
+ * lib/env/assistant-chat-switch.ts), in one place.
  *
- * Switched off, every one of them sends its visitor to where a person's own
- * assistant connects: the chat's start page, a new conversation, a stored
- * conversation, the interview on /chat/intake and the build before it on
- * /onboarding/agent. The chat layout asks, and each chat page asks again: a
- * layout is not rendered again when the visitor moves between its pages.
+ * For a company without the chat, /chat shows what took its place
+ * (components/agent/ChatReplaced.tsx) and every other page of the assistant
+ * leads there: a new conversation, a stored conversation, the interview on
+ * /chat/intake and the build before it on /onboarding/agent. The chat layout
+ * asks, and each chat page asks again: a layout is not rendered again when
+ * the visitor moves between its pages.
  */
 
-/** Agenter > Koppla en agent: where the assistant's pages lead while it is switched off. */
-export const CHAT_SWITCHED_OFF_HREF = '/settings/api'
+/** Where a company without the chat is shown what took its place. */
+export const CHAT_REPLACED_HREF = '/chat'
 
-/** Leaves for Koppla en agent when the built-in assistant is switched off. */
-export function leaveWhenChatSwitchedOff(): void {
-  if (!assistantChatEnabled()) redirect(CHAT_SWITCHED_OFF_HREF)
+/** Whether this company has the built-in assistant today. */
+export function chatSwitchedOnFor(companyId: string | null | undefined): boolean {
+  return assistantChatEnabledFor(companyId, todayIsoStockholm())
+}
+
+/** Leaves for /chat when the company has no chat: every page of the assistant but /chat itself. */
+export function leaveWhenChatSwitchedOff(companyId: string | null | undefined): void {
+  if (!chatSwitchedOnFor(companyId)) redirect(CHAT_REPLACED_HREF)
 }

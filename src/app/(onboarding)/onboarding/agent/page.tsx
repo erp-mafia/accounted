@@ -23,11 +23,12 @@ export default async function AgentOnboardingPage() {
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
-  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): there is no
-  // assistant to build and no interview after it, so this page leads to
-  // Koppla en agent. Before the paywall, so nobody is sent to billing for an
-  // assistant that is not there, and before anything is fetched or built.
-  leaveWhenChatSwitchedOff()
+  // The built-in assistant switched off for the company
+  // (ASSISTANT_CHAT_ENABLED): there is no assistant to build and no interview
+  // after it, so this page leads to /chat, which shows what took the chat's
+  // place. Before the paywall, so nobody is sent to billing for an assistant
+  // that is not there, and before anything is fetched or built.
+  leaveWhenChatSwitchedOff(companyId)
 
   // Paywall: the build flow drives the gated composer stream (ai capability).
   // Without the ai capability, redirect to billing instead of a build

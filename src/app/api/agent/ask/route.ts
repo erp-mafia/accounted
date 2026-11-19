@@ -24,7 +24,8 @@ import {
 } from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
+import { assistantChatEnabledFor, assistantChatOffForEveryone } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 
 const log = createLogger('api.agent.ask')
@@ -109,9 +110,10 @@ export async function POST(request: Request): Promise<Response> {
   const { user, supabase, error } = await requireAuth()
   if (error) return error
 
-  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED): every
-  // question this route answers is the chat's question box, so none runs.
-  if (!assistantChatEnabled()) return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED) with no
+  // company keeping it: every question this route answers is the chat's
+  // question box, so none runs, and nothing is read or counted first.
+  if (assistantChatOffForEveryone(todayIsoStockholm())) return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
 
   const rate = await checkAgentRateLimit(supabase, user.id)
   if (!rate.ok) return NextResponse.json(agentRateLimitResponseBody(rate), { status: 429 })
@@ -140,6 +142,12 @@ export async function POST(request: Request): Promise<Response> {
   // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
   // assistant: it runs as the service role and reads the whole company.
   if (isInvoicerRole(membership.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  // Switched off with some companies keeping it: this company's own answer,
+  // asked once the company is known and the caller is a member of it.
+  if (!assistantChatEnabledFor(companyId, todayIsoStockholm())) {
+    return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
+  }
 
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked

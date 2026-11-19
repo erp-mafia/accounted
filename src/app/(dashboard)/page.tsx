@@ -14,7 +14,8 @@ import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { decideHemGate } from '@/lib/onboarding/hem-gate'
 import { agentPromoOffered } from '@/lib/onboarding/agent-promo-gate'
-import { assistantChatEnabled } from '@/lib/env/assistant-chat-switch'
+import { assistantChatEnabledFor } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { readAiConnection, readFirstTaskClient } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
@@ -208,7 +209,7 @@ export default async function DashboardPage({
   // (ASSISTANT_CHAT_ENABLED): there is nothing to build then.
   const agentConnected = aiConnection.connected && !firstTask
   const promo = agentPromoOffered({
-    assistantChatEnabled: assistantChatEnabled(),
+    assistantChatEnabled: assistantChatEnabledFor(companyId, todayIsoStockholm()),
     agentBuilt,
     agentConnected,
     setupClosed: Boolean(initialSetup.dismissedAt || initialSetup.completedAt),

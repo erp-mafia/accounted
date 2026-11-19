@@ -353,6 +353,49 @@ describe('POST /api/agent/ask with the chat switched off', () => {
   })
 })
 
+// ASSISTANT_CHAT_COMPANY_IDS: the companies that keep the chat while it is
+// switched off, through ASSISTANT_CHAT_UNTIL.
+describe('POST /api/agent/ask with the chat switched off and some companies keeping it', () => {
+  beforeEach(() => {
+    vi.stubEnv('ASSISTANT_CHAT_ENABLED', 'off')
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'another-company,company-1')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('answers a company that keeps the chat', async () => {
+    const res = await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body() }))
+    expect(res.status).toBe(200)
+    expect(answer).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers 409 ASSISTANT_CHAT_OFF for a company that does not, with no answer and nothing written', async () => {
+    vi.stubEnv('ASSISTANT_CHAT_COMPANY_IDS', 'another-company')
+    const res = await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body({ persist: true }) }))
+    const { status, body: b } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(409)
+    expect(b.error.code).toBe('ASSISTANT_CHAT_OFF')
+    expect(answer).not.toHaveBeenCalled()
+    expect(resolveConv).not.toHaveBeenCalled()
+    expect(persistUser).not.toHaveBeenCalled()
+  })
+
+  it('answers 409 for the companies that kept it too, from the day after the last day, before anything is counted', async () => {
+    vi.stubEnv('ASSISTANT_CHAT_UNTIL', '2000-01-31')
+    const res = await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body() }))
+    expect(res.status).toBe(409)
+    expect(checkRate).not.toHaveBeenCalled()
+    expect(answer).not.toHaveBeenCalled()
+  })
+
+  it('answers them through the last day', async () => {
+    vi.stubEnv('ASSISTANT_CHAT_UNTIL', '2099-01-31')
+    const res = await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body() }))
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('POST /api/agent/ask with the chat switch unset or on', () => {
   afterEach(() => {
     vi.unstubAllEnvs()

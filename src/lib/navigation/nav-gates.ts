@@ -52,9 +52,10 @@ export interface NavGateContext {
   /** The MCP server extension is built in (ENABLED_EXTENSION_IDS): the Koppla en agent row. Absent reads as off. */
   mcpExtensionEnabled?: boolean
   /**
-   * The built-in chat is switched on in this installation
-   * (lib/env/assistant-chat-switch.ts): the Chatt row. Absent reads as ON,
-   * unlike the rollouts above: the chat is there until someone switches it off.
+   * The Chatt row (lib/env/assistant-chat-switch.ts assistantChatRowShown):
+   * there until the built-in chat is gone for every company. Absent reads as
+   * ON, unlike the rollouts above: the chat is there until someone switches
+   * it off.
    */
   assistantChatEnabled?: boolean
   capabilities: readonly string[]
