@@ -315,6 +315,66 @@ describe('POST /transactions/:id/attach-document', () => {
     expect(wrote(client)).toBe(false)
   })
 
+  // #248: the dry run (and so staging) previewed an attach the write can only
+  // refuse; it asks the period of the verifikat the document would join.
+  const LOCKED_YEAR = { data: [{ id: JE_ID, fiscal_period: { is_closed: false, locked_at: '2026-02-01T00:00:00Z' } }], error: null }
+
+  it('a dry run on a booked row in a locked year refuses with the document answer, and writes nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [{ data: { id: TX_ID, document_id: null, journal_entry_id: JE_ID }, error: null }, NO_OTHER_ROW],
+      document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: null }, error: null },
+      journal_entries: LOCKED_YEAR,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    const { error } = await res.json()
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(res.status).toBe(400)
+    expect(error.code).toBe('PERIOD_LOCKED')
+    expect(error.message).toBe(answer.message_sv)
+    expect(error.message_en).toBe(answer.message_en)
+    expect(error.recovery_hint).toBe(answer.remediation!.description)
+    expect(error.details).toMatchObject({ journal_entry_id: JE_ID })
+    expect(client.calls).toContainEqual(expect.objectContaining({ table: 'journal_entries', method: 'in', args: ['id', [JE_ID]] }))
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run adding beside the pin in a locked year refuses as the write does', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [{ data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID }, error: null }, NO_OTHER_ROW],
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null },
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+      ],
+      journal_entries: LOCKED_YEAR,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatchObject({
+      code: 'PERIOD_LOCKED',
+      message_en: getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_en,
+    })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run re-attaching the document already on the row\'s verifikat reads no period and previews', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [{ data: { id: TX_ID, document_id: DOC_ID, journal_entry_id: JE_ID }, error: null }, NO_OTHER_ROW],
+      document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: JE_ID }, error: null },
+      journal_entries: LOCKED_YEAR,
+      pending_operations: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect(client.calls.some((c) => c.table === 'journal_entries')).toBe(false)
+    expect(wrote(client)).toBe(false)
+  })
+
   it('409 DOC_ATTACH_OTHER_VERIFIKAT when the document is another verifikat\'s underlag', async () => {
     const client = makeClient({
       company_members: MEMBER,

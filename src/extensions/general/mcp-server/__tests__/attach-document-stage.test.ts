@@ -23,6 +23,7 @@ import { tools } from '../server'
 import { findUnknownArgKeys, listArgKeys } from '../arg-guard'
 import { toToolError } from '../tool-result'
 import { ALL_OPERATIONS } from '@/lib/operations/registry'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const tool = tools.find((t) => t.name === 'gnubok_attach_document_to_transaction')!
 
@@ -279,6 +280,23 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
     await expect(
       tool.execute({ transaction_id: TX, document_id: DOC }, 'company-1', 'user-1', supabase as never),
     ).rejects.toMatchObject({ code: 'DOC_ATTACH_REPLACES_POSTED' })
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  // #248: the attach was staged and approved, and only the approval refused.
+  it('refuses at staging a booked row whose verifikat is in a locked year, with the document answer and its next step', async () => {
+    const ENTRY = 'b0b0b0b0-0000-4000-8000-000000000002'
+    const { supabase } = db({
+      transactions: [{ data: { ...TX_ROW, journal_entry_id: ENTRY } }, { data: [] }],
+      journal_entries: { data: [{ id: ENTRY, fiscal_period: { is_closed: true, locked_at: null } }] },
+    })
+    const refusal = await tool
+      .execute({ transaction_id: TX, document_id: DOC }, 'company-1', 'user-1', supabase as never)
+      .then(() => null, (e: unknown) => e)
+
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(refusal).toMatchObject({ code: 'PERIOD_LOCKED', message: answer.message_sv, details: { journal_entry_id: ENTRY } })
+    expect(toToolError(refusal).error.remediation?.description).toBe(answer.remediation!.description)
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
 

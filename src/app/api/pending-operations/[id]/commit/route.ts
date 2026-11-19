@@ -7,6 +7,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { personRefusalText, stripAgentWording } from '@/lib/pending-operations/approval-refusal'
+import { commitRefusalAnswer } from '@/lib/pending-operations/refusal-answer'
 import type { PendingOperation } from '@/types'
 import { z } from 'zod'
 
@@ -135,10 +136,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       const authored = personRefusalText(result.error)
       const operationStatus = result.operation_status
       if (result.code && hasErrorEntry(result.code)) {
+        // A refusal that brought its own sentences and next step (a document
+        // on a locked year) answers with them; its Swedish is the registry
+        // answer it speaks, written for a person. Else the registry's for
+        // the code, under the executor's Swedish when there is one.
+        const own = commitRefusalAnswer(result)
         return errorResponseFromCode(result.code, log, {
           status,
           reason: result.error,
           ...(authored ? { messageSv: authored } : {}),
+          ...own,
           details: { ...(result.data ?? {}), ...(operationStatus ? { operation_status: operationStatus } : {}) },
         })
       }

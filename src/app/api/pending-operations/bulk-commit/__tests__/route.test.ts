@@ -6,6 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 
@@ -555,6 +556,30 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       skipped: 0,
       rejected: 1,
     })
+  })
+
+  // #248: the per-item answer is one Swedish sentence for the person; a
+  // refusal that speaks another entry's answer than its code's (a document on
+  // a locked year, PERIOD_LOCKED) reaches the item with its own sentence.
+  it('answers a refusal with its own Swedish sentence, not the one for its code', async () => {
+    enqueue({ data: [makeOp({ id: VALID_ID_1, operation_type: 'attach_document_to_transaction' })] })
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    mockCommit.mockResolvedValue({
+      status: 'failed',
+      error: answer.message_sv,
+      http_status: 400,
+      code: 'PERIOD_LOCKED',
+      data: { journal_entry_id: 'je-1', message_en: answer.message_en, remediation: answer.remediation },
+      operation_status: 'rejected',
+    })
+    const request = createMockRequest('/api/pending-operations/bulk-commit', {
+      method: 'POST',
+      body: { ids: [VALID_ID_1] },
+    })
+    const { body } = await parseJsonResponse<{ data: { results: Array<{ id: string; status: string; error?: string }> } }>(
+      await POST(request, emptyParams),
+    )
+    expect(body.data.results).toEqual([{ id: VALID_ID_1, status: 'failed', error: answer.message_sv }])
   })
 
   it('reports commit failures as failed and aggregates a mixed summary', async () => {

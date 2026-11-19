@@ -383,8 +383,21 @@ export async function attachDocumentToTransaction(
     }
   }
   const movedFrom = holders.map((holder) => holder.transactionId)
+  // The verifikat the document joins on a booked row: the pin's, beside it,
+  // or the row's own booking. Null while the row is unbooked.
+  const joinsEntryId = besidePinOn ?? (tx.journal_entry_id as string | null) ?? null
 
   if (options.dryRun) {
+    // A verifikat in a closed or locked period takes no new underlag, so the
+    // write can only refuse: the dry run (a staged attach, a v1 dry_run) asks
+    // the period first and refuses the same way, nothing written.
+    if (
+      joinsEntryId &&
+      docJournalEntryId !== joinsEntryId &&
+      (await lockedJournalEntryIds(supabase, companyId, [joinsEntryId])).has(joinsEntryId)
+    ) {
+      return lockedYearRefusal(joinsEntryId)
+    }
     // What the document says (the hints the pairing was chosen on), and who
     // else already holds it: one document backs one purchase.
     const replacesPin = previousDocumentId != null && previousDocumentId !== documentId && besidePinOn == null
@@ -456,7 +469,6 @@ export async function attachDocumentToTransaction(
     // A verifikat in a closed or locked period takes no new underlag, so the
     // period is asked before the document leaves its row: moved first, it
     // would sit on a row whose verifikat can never reference it.
-    const joinsEntryId = besidePinOn ?? (tx.journal_entry_id as string | null) ?? null
     if (joinsEntryId && (await lockedJournalEntryIds(supabase, companyId, [joinsEntryId])).has(joinsEntryId)) {
       return lockedYearRefusal(joinsEntryId)
     }

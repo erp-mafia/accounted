@@ -22,6 +22,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { approvePendingOperationAsApiKey } from '@/lib/pending-operations/api-approval'
+import { commitRefusalAnswer } from '@/lib/pending-operations/refusal-answer'
 import { webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import {
   PENDING_OPERATION_VIEW_EXAMPLE,
@@ -180,6 +181,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         return v1ErrorResponseFromCode(registered ? result.code! : 'PENDING_OPERATION_COMMIT_FAILED', ctx.log, {
           requestId: ctx.requestId,
           status: refusalStatus(result),
+          // The refusal's own message, message_en and recovery_hint when it
+          // brought them (a document on a locked year); else the registry's.
+          ...commitRefusalAnswer(result),
           details: {
             ...(result.error ? { reason: result.error } : {}),
             ...(result.code && !registered ? { commit_error_code: result.code } : {}),

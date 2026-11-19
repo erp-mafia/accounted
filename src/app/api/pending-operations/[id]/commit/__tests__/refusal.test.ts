@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockRequest, createMockRouteParams, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 import type { CommitResult } from '@/lib/pending-operations/commit'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 
@@ -119,6 +120,41 @@ describe('POST /api/pending-operations/:id/commit: a refused approval', () => {
       'Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura F-12. ' +
         'Matcha banktransaktionen mot fakturan i stället för att bokföra en separat betalning.',
     )
+  })
+
+  // #248: a document on a locked year keeps PERIOD_LOCKED but speaks the
+  // document answer; its English and next step were the registry's for the
+  // code (change the entry date).
+  it('answers a refusal\'s own English and next step for its code, not the registry\'s', async () => {
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    const { status, body } = await approve('attach_document_to_transaction', {
+      status: 'failed',
+      error: answer.message_sv,
+      http_status: 400,
+      code: 'PERIOD_LOCKED',
+      data: { journal_entry_id: 'je-9', message_en: answer.message_en, remediation: answer.remediation },
+      operation_status: 'rejected',
+    })
+    expect(status).toBe(400)
+    expect(body.error).toMatchObject({
+      code: 'PERIOD_LOCKED',
+      message: answer.message_sv,
+      message_en: answer.message_en,
+      remediation: answer.remediation,
+      details: { journal_entry_id: 'je-9', operation_status: 'rejected' },
+    })
+  })
+
+  it('answers the registry\'s English and next step for a refusal that brings none', async () => {
+    const { body } = await approve('attach_document_to_transaction', {
+      status: 'failed',
+      error: 'Bokföringen är låst för denna period.',
+      http_status: 400,
+      code: 'PERIOD_LOCKED',
+      operation_status: 'rejected',
+    })
+    const registry = getErrorEntry('PERIOD_LOCKED')!
+    expect(body.error).toMatchObject({ code: 'PERIOD_LOCKED', message_en: registry.message_en, remediation: registry.remediation })
   })
 
   it('answers the registry sentence for the code when the executor sentence is only a raw code', async () => {
