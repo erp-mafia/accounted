@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
@@ -15,6 +15,8 @@ import {
   XMarkIcon,
 } from '@/components/icons'
 import {
+  DIALOG_DESCRIPTION_CLASS,
+  DIALOG_TITLE_CLASS,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -23,6 +25,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { POPOVER_ENTER_UP_CLASS } from '@/components/ui/popover-surface'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
@@ -58,6 +61,7 @@ import {
 } from '@/lib/support/conversations'
 import { dialogMaxHeight, dialogViewportStyle, fitTextarea, useVisualViewport } from '@/components/support/composer-fit'
 import { mergeIntoDraft } from '@/lib/support/assistant-handoff'
+import { openSupportDock } from '@/lib/support/dock'
 import { stockholmYearMonth } from '@/lib/dates/iso'
 
 // The AI assistant's panel is fetched when the dialog first shows it: this
@@ -89,6 +93,18 @@ interface SupportLinkProps {
    * mail's link). Default: the assistant first, where the company has it.
    */
   assistant?: boolean
+  /**
+   * 'panel' is the dock's own instance (components/support/SupportDock.tsx):
+   * the same support, drawn as a panel in the corner beside the page and not
+   * as a dialog over it. No door passes this.
+   */
+  presentation?: 'dialog' | 'panel'
+  /**
+   * The door opened the docked panel and no dialog of its own. For a door in
+   * a menu, which stays open for a dialog mounted inside it and has no reason
+   * to once the support is somewhere else.
+   */
+  onDocked?: () => void
 }
 
 type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
@@ -134,8 +150,12 @@ export function SupportLink({
   open: openProp,
   onOpenChange,
   assistant = true,
+  presentation = 'dialog',
+  onDocked,
 }: SupportLinkProps) {
   const t = useTranslations('support_link')
+  const tCommon = useTranslations('common')
+  const titleId = useId()
   const locale = useLocale()
   const { toast } = useToast()
   const companyCtx = useCompanyOptional()
@@ -365,6 +385,14 @@ export function SupportLink({
   }
 
   function handleOpenChange(next: boolean) {
+    // A door to the assistant opens the docked panel where the page has one
+    // and the screen has room: an answer that says where to go stays readable
+    // while the user goes there (lib/support/dock.ts). Without a dock, on a
+    // phone, and for a door to the staff, the dialog opens as before.
+    if (next && presentation === 'dialog' && assistantOn && openSupportDock({ subject })) {
+      onDocked?.()
+      return
+    }
     setOpen(next)
     if (!next) {
       resetAttachments()
@@ -708,31 +736,16 @@ export function SupportLink({
     </form>
   )
 
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
-      {/* Told the visual viewport: an on-screen keyboard shrinks only that
-          one, so a dialog measured from the layout viewport sits half behind
-          the keyboard on a tablet (PH 216). Where it sits and how tall it may
-          be stays the shared dialog's own rule. */}
-      <DialogContent size={view === 'ask' ? 'form' : 'confirm'}
- ref={panelRef}
- 
- style={dialogViewportStyle(viewport)}
- onInteractOutside={guardDismiss}
- onEscapeKeyDown={guardDismiss}
->
-        <DialogHeader>
-          <DialogTitle>{t('dialog_title')}</DialogTitle>
-          <DialogDescription>
-            {view === 'ask'
-              ? t('ask_description')
-              : view === 'thread' || view === 'list'
-                ? t('thread_description')
-                : t('dialog_description')}
-          </DialogDescription>
-        </DialogHeader>
+  const description =
+    view === 'ask'
+      ? t('ask_description')
+      : view === 'thread' || view === 'list'
+        ? t('thread_description')
+        : t('dialog_description')
 
+  // Everything under the header: the same in the dialog and in the panel.
+  const views = (
+    <>
         {view === 'loading' && (
           <div className="flex flex-col gap-2" aria-busy="true">
             <Skeleton className="h-12 w-full rounded-lg" />
@@ -747,7 +760,9 @@ export function SupportLink({
             onShowTickets={() => void showStaff()}
             onWriteToSupport={() => void showStaff()}
             onHandoff={handOffToStaff}
-            onNavigate={() => handleOpenChange(false)}
+            // A link in an answer leads to a page: the dialog gets out of its
+            // way, the panel is beside it and stays.
+            onNavigate={presentation === 'panel' ? undefined : () => handleOpenChange(false)}
           />
         )}
 
@@ -884,6 +899,80 @@ export function SupportLink({
             )}
           </div>
         )}
+    </>
+  )
+
+  if (presentation === 'panel') {
+    if (!open) return null
+    return (
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-labelledby={titleId}
+        // Beside the page, never over it: a click or a key in here must not
+        // dismiss a non-modal dialog the user is filling in while reading
+        // (DialogContent counts data-agent-ui as inside itself).
+        data-agent-ui=""
+        // Escape closes the panel only from inside it, and never with unsent
+        // text: pressed anywhere else it belongs to whatever is open there.
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing) return
+          if (hasUnsentInput) return
+          handleOpenChange(false)
+        }}
+        className={cn(
+          // The dialog's surface and insets, anchored where the floating
+          // button is (components/support/SupportAskTrigger.tsx), under the
+          // veil of a modal dialog (z-50) and lifted over a page's bottom bar
+          // the way the button is. From md up: a narrower screen has no room
+          // beside the page, and the doors open the dialog there (dock.ts).
+          'fixed bottom-4 right-4 z-[45] hidden max-h-[min(720px,calc(100dvh-6rem))] w-[420px] grid-cols-[minmax(0,1fr)] gap-5 overflow-y-auto scrollbar-visible rounded-xl bg-popover px-5 pb-5 pt-5 text-popover-foreground shadow-float md:grid md:[body:has([data-page-bottom-bar])_&]:bottom-20',
+          POPOVER_ENTER_UP_CLASS,
+        )}
+      >
+        <DialogHeader>
+          <h2 id={titleId} data-ph-unmask="" className={DIALOG_TITLE_CLASS}>
+            {t('dialog_title')}
+          </h2>
+          <p data-ph-unmask="" className={DIALOG_DESCRIPTION_CLASS}>
+            {description}
+          </p>
+        </DialogHeader>
+        {views}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={tCommon('close')}
+          data-attr="support-panel-close"
+          className="absolute right-3 top-4 text-muted-foreground"
+          onClick={() => handleOpenChange(false)}
+        >
+          <XMarkIcon className="h-4 w-4" />
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
+      {/* Told the visual viewport: an on-screen keyboard shrinks only that
+          one, so a dialog measured from the layout viewport sits half behind
+          the keyboard on a tablet (PH 216). Where it sits and how tall it may
+          be stays the shared dialog's own rule. */}
+      <DialogContent
+        size={view === 'ask' ? 'form' : 'confirm'}
+        ref={panelRef}
+        style={dialogViewportStyle(viewport)}
+        onInteractOutside={guardDismiss}
+        onEscapeKeyDown={guardDismiss}
+      >
+        <DialogHeader>
+          <DialogTitle>{t('dialog_title')}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        {views}
       </DialogContent>
     </Dialog>
   )

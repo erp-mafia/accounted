@@ -296,6 +296,14 @@ const DialogConsequence = ({
 )
 DialogConsequence.displayName = "DialogConsequence"
 
+/**
+ * The look of a dialog's title and of the context line under it, for a
+ * surface that carries the same header without being a Radix dialog (the
+ * docked support panel, components/ui/support-link.tsx).
+ */
+const DIALOG_TITLE_CLASS = "break-words text-[15px] font-medium leading-[22px] tracking-[-0.006em] text-strong"
+const DIALOG_DESCRIPTION_CLASS = "break-words text-[12px] leading-4 text-muted-foreground"
+
 const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
@@ -305,10 +313,7 @@ const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     data-ph-unmask=""
-    className={cn(
-      "break-words text-[15px] font-medium leading-[22px] tracking-[-0.006em] text-strong",
-      className
-    )}
+    className={cn(DIALOG_TITLE_CLASS, className)}
     {...props}
   />
 ))
@@ -321,7 +326,7 @@ const DialogDescription = React.forwardRef<
   <DialogPrimitive.Description
     ref={ref}
     data-ph-unmask=""
-    className={cn("break-words text-[12px] leading-4 text-muted-foreground", className)}
+    className={cn(DIALOG_DESCRIPTION_CLASS, className)}
     {...props}
   />
 ))
@@ -344,4 +349,6 @@ export {
   DialogConsequence,
   DialogTitle,
   DialogDescription,
+  DIALOG_TITLE_CLASS,
+  DIALOG_DESCRIPTION_CLASS,
 }

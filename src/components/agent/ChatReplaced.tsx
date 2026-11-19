@@ -12,6 +12,7 @@ import { SupportLink } from '@/components/ui/support-link'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useFormat } from '@/lib/hooks/use-format'
+import { openSupportDock } from '@/lib/support/dock'
 
 /** Agenter > Koppla en agent: where a person's own AI is connected. */
 const CONNECT_HREF = '/settings/api'
@@ -64,7 +65,12 @@ export function ChatReplaced({ until }: { until: string | null }) {
 
   const hasAssistant = company?.supportAssistant === true
   const canConnect = ENABLED_EXTENSION_IDS.has('mcp-server')
-  const ask = () => setSupport('ask')
+  // The assistant answers in the docked panel where the page has one
+  // (lib/support/dock.ts); on a phone, and for the form, the dialog below.
+  const ask = () => {
+    if (hasAssistant && openSupportDock()) return
+    setSupport('ask')
+  }
 
   return (
     <div className={PADDED_CANVAS_CLASS}>

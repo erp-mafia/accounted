@@ -12,7 +12,7 @@ import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { computeIdentityHash } from '@/lib/analytics/identity-hash'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
-import { SupportAskTrigger } from '@/components/support/SupportAskTrigger'
+import { SupportDock } from '@/components/support/SupportDock'
 import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SupportDialogHost } from '@/components/support/SupportDialogHost'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
@@ -815,12 +815,16 @@ export default async function DashboardLayout({
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
             invoice) set `inert` on the shell while open, and the assistant
             entry point must stay clickable then, like the sheet itself.
-            Where the company has no chat, a person who had the button (a
-            built assistant) gets the support assistant's in the same corner. */}
+            Where the company has no chat, the corner is the support's: the
+            panel every door to the AI assistant opens, with its floating
+            button for a person who had the chat's (a built assistant). */}
         {companyChatOn ? (
           <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
-        ) : companyContextValue.supportAssistant && agentProfileIdentity?.verified_at ? (
-          <SupportAskTrigger hidden={userPrefs?.hide_assistant_fab === true} />
+        ) : companyContextValue.supportAssistant ? (
+          <SupportDock
+            pill={Boolean(agentProfileIdentity?.verified_at)}
+            pillHidden={userPrefs?.hide_assistant_fab === true}
+          />
         ) : null}
         {!isSandbox && (
           <AnalyticsIdentify

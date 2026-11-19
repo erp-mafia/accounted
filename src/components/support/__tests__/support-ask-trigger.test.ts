@@ -1,5 +1,5 @@
 /**
- * The floating button that opens the support assistant for a person whose
+ * The floating button that opens the support panel for a person whose
  * built-in assistant is gone: what it says in each language, where it is not
  * shown, and that it is another thing than the assistant's own button.
  */
@@ -13,13 +13,11 @@ import en from '@/messages/en.json'
 const pathname = vi.fn(() => '/invoices')
 vi.mock('next/navigation', () => ({ usePathname: () => pathname(), useRouter: () => ({ refresh: vi.fn() }) }))
 vi.mock('@/components/ui/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }))
-const supportLink = vi.fn((_props: Record<string, unknown>) => null)
-vi.mock('@/components/ui/support-link', () => ({ SupportLink: (props: Record<string, unknown>) => supportLink(props) }))
 
 import { SupportAskTrigger } from '../SupportAskTrigger'
 
-const render = (locale: 'sv' | 'en', hidden = false) =>
-  renderInLocale(createElement(SupportAskTrigger, { hidden }), locale)
+const render = (locale: 'sv' | 'en', props: { hidden?: boolean; open?: boolean } = {}) =>
+  renderInLocale(createElement(SupportAskTrigger, { open: false, onOpen: () => {}, ...props }), locale)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -34,7 +32,7 @@ describe('SupportAskTrigger', () => {
     expect(english.filter((line) => looksSwedish(line))).toEqual([])
   })
 
-  it('is another thing than the assistant\'s own button: no name, no face, no dark pill', () => {
+  it('is another thing than the built-in button: no name, no face, no dark pill', () => {
     const html = render('sv')
     expect(html).not.toContain('<img')
     expect(html).not.toContain('bg-foreground')
@@ -43,23 +41,17 @@ describe('SupportAskTrigger', () => {
     expect(html).toContain('data-agent-fab')
   })
 
-  it('opens the support dialog on the assistant, closed until it is pressed', () => {
-    render('sv')
-    expect(supportLink).toHaveBeenCalledTimes(1)
-    const props = supportLink.mock.calls[0][0]
-    expect(props).toMatchObject({ variant: 'hidden', open: false })
-    // The assistant first, where the company has it: nothing turns it off here.
-    expect(props.assistant).toBeUndefined()
+  it('is not drawn for a person who hid the floating button', () => {
+    expect(render('sv', { hidden: true })).toBe('')
   })
 
-  it('is not drawn for a person who hid the floating button, though the dialog stays mounted', () => {
-    expect(visibleText(render('sv', true))).toEqual([])
-    expect(supportLink).toHaveBeenCalledTimes(1)
+  it('is not drawn while the panel it opens is open: the panel sits in its place', () => {
+    expect(render('sv', { open: true })).toBe('')
   })
 
   it.each(['/chat', '/chat/new', '/bookkeeping/11111111-1111-4111-8111-111111111111'])('is not drawn on %s', (path) => {
     pathname.mockReturnValue(path)
-    expect(visibleText(render('sv'))).toEqual([])
+    expect(render('sv')).toBe('')
   })
 
   it.each(['/bookkeeping', '/bookkeeping/new', '/bookkeeping/year-end', '/'])('is drawn on %s', (path) => {

@@ -42,8 +42,11 @@ interface SupportAskProps {
   onWriteToSupport: () => void
   /** To the form to a person, opened with the conversation as its message. */
   onHandoff: (message: string) => void
-  /** A link in an answer was followed: the dialog gets out of the page's way. */
-  onNavigate: () => void
+  /**
+   * A link in an answer was followed: the dialog gets out of the page's way.
+   * Left out by the docked panel, which is beside the page and stays.
+   */
+  onNavigate?: () => void
 }
 
 const ANSWER_PROSE =
@@ -236,7 +239,7 @@ export function SupportAsk({
           className="flex max-h-[45dvh] flex-col gap-4 overflow-y-auto pr-1"
           onClick={(event) => {
             const link = (event.target as HTMLElement).closest('a')
-            if (link?.getAttribute('href')?.startsWith('/')) onNavigate()
+            if (link?.getAttribute('href')?.startsWith('/')) onNavigate?.()
           }}
         >
           {turns.map((turn, index) =>

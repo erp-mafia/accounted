@@ -401,7 +401,9 @@ export default function UserMenu({
                 <DiscordLogo className="h-4 w-4 flex-shrink-0" />
                 {tNav('discord_community')}
               </a>
-              <SupportLink variant="muted" className={menuRow} />
+              {/* The menu stays for a dialog mounted in it, and closes when
+                  the support opened as the docked panel instead. */}
+              <SupportLink variant="muted" className={menuRow} onDocked={close} />
               <div className="-mx-1 my-1 border-t-hairline" />
               <button
                 type="button"
