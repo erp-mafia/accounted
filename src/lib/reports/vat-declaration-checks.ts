@@ -709,9 +709,10 @@ export function runVatDeclarationChecks(
   // (rutor 05-08 vs ruta10/0.25 + ruta11/0.12 + ruta12/0.06) is NOT sound on
   // the sales side as a filing-blocking ERROR, because ACCOUNT_RUTA's two
   // halves are not a closed set:
-  //   - rutor 07 (VMB) and 08 (frivillig uthyrning) have NO source accounts at
-  //     all, while their output VAT (2616/2626/2636, 2613/2623/2633) does feed
-  //     rutor 10-12, so the implied base permanently exceeds the reported one;
+  //   - ruta 07 (VMB) has NO source accounts at all, and ruta 08 (frivillig
+  //     uthyrning) only BAS 3913 plus accounts with that momskod, while their
+  //     output VAT (2616/2626/2636, 2613/2623/2633) does feed rutor 10-12, so
+  //     the implied base can exceed the reported one;
   //   - ruta 05 recognises only 3001/3002/3003, but an invoice line may carry
   //     any revenue_account override (3590, 3910, ...) while its moms still
   //     lands on 2611/2621/2631;
@@ -719,8 +720,8 @@ export function runVatDeclarationChecks(
   //     full moms untouched on 2611 (invoice-entries.ts), then credit 3001 with
   //     no moms in each dissolution month, so both directions drift by design.
   // Any of those would turn a proportional check into a permanent filing-
-  // blocking ERROR (isFilingBlocked) on a correct declaration. Making rutor 07
-  // and 08 mappable and reconciling the revenue_account override is the
+  // blocking ERROR (isFilingBlocked) on a correct declaration. Making ruta 07
+  // mappable and reconciling the revenue_account override is the
   // prerequisite; see the report accompanying this change.
   //
   // ONE direction is proportionally checkable without blocking: see

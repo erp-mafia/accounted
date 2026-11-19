@@ -9,6 +9,7 @@ const getAuthorizationHeader = vi.fn(() => 'Bearer test-jwt')
 vi.mock('../jwt', () => ({
   generateJWT: vi.fn(() => 'test-jwt'),
   getAuthorizationHeader: () => getAuthorizationHeader(),
+  hasSigningCredentials: () => true,
   _resetTokenCache: vi.fn(),
 }))
 

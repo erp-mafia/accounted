@@ -272,6 +272,10 @@ export interface UserUiState {
   // ISO timestamp of when the user closed it or clicked through. Per user,
   // not per company: it is one community.
   discord_invite_dismissed_at?: string
+  // The floating support button (components/support/SupportAskTrigger)
+  // hidden by this person, with its X or under Inställningar > Ditt konto.
+  // Its own choice: hide_assistant_fab is the built-in assistant's button.
+  support_fab_hidden?: boolean
 }
 
 export type AgentPanelMode = 'docked' | 'floating'
@@ -2722,6 +2726,8 @@ export interface BookingTemplateLibraryLine {
   type: 'business' | 'vat' | 'settlement'
   ratio?: number
   vat_rate?: number
+  /** SIE dimension map on cost/revenue lines only, e.g. {"1":"KS01","6":"P001"}. */
+  dimensions?: Record<string, string>
 }
 
 // Booking template library entry (system, team, or company-scoped)

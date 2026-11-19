@@ -816,15 +816,12 @@ export default async function DashboardLayout({
             invoice) set `inert` on the shell while open, and the assistant
             entry point must stay clickable then, like the sheet itself.
             Where the company has no chat, the corner is the support's: the
-            panel every door to the AI assistant opens, with its floating
-            button for a person who had the chat's (a built assistant). */}
+            panel every door to the AI assistant opens, and its floating
+            button. */}
         {companyChatOn ? (
           <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
         ) : companyContextValue.supportAssistant ? (
-          <SupportDock
-            pill={Boolean(agentProfileIdentity?.verified_at)}
-            pillHidden={userPrefs?.hide_assistant_fab === true}
-          />
+          <SupportDock pillHidden={uiState.support_fab_hidden === true} />
         ) : null}
         {!isSandbox && (
           <AnalyticsIdentify

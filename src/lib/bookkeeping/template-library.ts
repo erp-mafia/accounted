@@ -9,6 +9,7 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
+import { mergeDimensionBags } from '@/lib/bookkeeping/dimension-resolver'
 import { formatAmountInput, roundOre } from '@/lib/money'
 import { grossVat, netVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import {
@@ -75,6 +76,8 @@ export async function libraryLinesForCompanySkattekonto(
  *      Ruta 30-32 and Ruta 48 by rate/(1+rate) (25% became 20%).
  *   3. Settlement lines: amount = totalAmount (the full payment)
  *   4. Business lines: amount = totalAmount × ratio (cost/revenue net of VAT handled separately)
+ *   5. Business lines: the line's dimensions bag, when it has one, is copied
+ *      onto the form line. A settlement or VAT line never gets one.
  *
  * For simple two-line templates (no VAT), the ratio is typically 1.0
  * on both sides and totalAmount is used directly.
@@ -101,12 +104,14 @@ export function applyTemplate(
       amount = roundOre(totalAmount * (line.ratio ?? 1))
     }
 
-    result.push({
+    const formLine: FormLine = {
       account_number: line.account,
       debit_amount: line.side === 'debit' ? formatAmountInput(amount, '.') : '',
       credit_amount: line.side === 'credit' ? formatAmountInput(amount, '.') : '',
       line_description: line.label,
-    })
+    }
+    const dimensions = line.type === 'business' ? mergeDimensionBags(null, line.dimensions) : undefined
+    result.push(dimensions ? { ...formLine, dimensions } : formLine)
   }
 
   return result
@@ -123,6 +128,18 @@ export function getTemplateScope(template: {
   if (template.is_system) return 'system'
   if (template.team_id) return 'team'
   return 'company'
+}
+
+/**
+ * The lines without their dimensions: how a team template is stored and
+ * edited. A dimension tag is one company's own cost centre or project code,
+ * and a team template is booked by every company of the team, so it carries
+ * none.
+ */
+export function linesWithoutDimensions<L extends { dimensions?: unknown }>(
+  lines: readonly L[],
+): Array<Omit<L, 'dimensions'>> {
+  return lines.map(({ dimensions: _dimensions, ...line }) => line)
 }
 
 /**
@@ -210,6 +227,8 @@ export interface BookingRowInput {
   account_number: string
   debit_amount: string
   credit_amount: string
+  /** The row's dimensions bag; kept on derived business lines only. */
+  dimensions?: Record<string, string>
 }
 
 /**
@@ -310,7 +329,9 @@ export function templateAccountNames(
  *     on when the booking has one (fiktivRateFromBasis), else the total's
  *   - the non-VAT line closest to the total → the settlement leg (the bank /
  *     counter account), ratio 1; on a tie the bank or cash line (BAS 19xx)
- *   - every other non-VAT line → a business (cost/revenue) line, ratio = amount/total
+ *   - every other non-VAT line → a business (cost/revenue) line, ratio = amount/total,
+ *     with the row's dimensions bag when it has one; a VAT or settlement
+ *     line carries none
  *
  * Which non-VAT leg is tagged settlement vs business does not change the
  * accounts: a template books its literal accounts regardless of the tag (see
@@ -332,7 +353,7 @@ export function deriveTemplateLinesFromBooking(
       const debit = Math.abs(parseFloat(row.debit_amount) || 0)
       const credit = Math.abs(parseFloat(row.credit_amount) || 0)
       const side: 'debit' | 'credit' = debit >= credit ? 'debit' : 'credit'
-      return { account, side, amount: Math.max(debit, credit) }
+      return { account, side, amount: Math.max(debit, credit), dimensions: mergeDimensionBags(null, row.dimensions) }
     })
     .filter((row) => /^\d{4}$/.test(row.account) && row.amount > 0)
 
@@ -398,6 +419,7 @@ export function deriveTemplateLinesFromBooking(
       side: row.side,
       type: 'business',
       ratio: Math.round((row.amount / total) * 10000) / 10000,
+      ...(row.dimensions ? { dimensions: row.dimensions } : {}),
     }
   })
 }
