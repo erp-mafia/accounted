@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { KPIFreshness } from '@/components/kpi/KPIFreshness'
 import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
 import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import {
@@ -45,7 +46,7 @@ export default function TrialBalanceView({
   // IB is the balance the day before fromDate, Förändring the activity in
   // the range, UB the balance at toDate.
   const reportQs = reportQuery(periodId, dateRange)
-  const { data, loading, error, refetch } = useReportData<{
+  const { data, dataStatus, loading, error, refetch } = useReportData<{
     rows: TrialBalanceRow[]
     totalDebit: number
     totalCredit: number
@@ -95,6 +96,8 @@ export default function TrialBalanceView({
   return (
     <div className="space-y-4">
       <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/trial-balance/xlsx?${reportQs}` }]} />
+      {/* How far these figures can be trusted, as on Nyckeltal. */}
+      {dataStatus && <KPIFreshness status={dataStatus} />}
       <TrialBalanceChart rows={data.rows} />
       <Card>
         <CardHeader>

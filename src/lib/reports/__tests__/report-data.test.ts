@@ -164,6 +164,34 @@ describe('report data', () => {
       })
     })
 
+    it('carries the data_status the route returns beside its data', async () => {
+      const dataStatus = { unavailable: true, reason: 'bank connection read failed' }
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(JSON.stringify({ data: { rows: [] }, data_status: dataStatus }))),
+      )
+
+      const outcome = await fetchReportData('/api/reports/x', 'Kunde inte hämta')
+
+      expect(outcome).toEqual({ data: { rows: [] }, error: null, dataStatus })
+      // And the view of that request hands it on with the figures.
+      const key = reportRequestKey('/api/reports/x', 0)
+      expect(viewReportData({ key, ...outcome }, key)).toEqual({
+        data: { rows: [] },
+        error: null,
+        loading: false,
+        dataStatus,
+      })
+    })
+
+    it('has no data status when the route returns none', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: { rows: [] } }))))
+
+      const outcome = await fetchReportData('/api/reports/x', 'Kunde inte hämta')
+
+      expect(outcome).not.toHaveProperty('dataStatus')
+    })
+
     it('reads a missing data field as no data', async () => {
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({}))))
 

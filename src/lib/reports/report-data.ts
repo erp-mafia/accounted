@@ -19,12 +19,15 @@
  */
 
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import type { ReportDataStatusResult } from '@/lib/reports/data-status'
 
 /** A finished request, tagged with the key it was requested under. */
 export interface SettledReport<T> {
   key: string
   data: T | null
   error: string | null
+  /** The route's data_status beside its data, when the route returns one. */
+  dataStatus?: ReportDataStatusResult
 }
 
 /** What a report view renders from: data, error, or still loading. */
@@ -32,6 +35,11 @@ export interface ReportDataView<T> {
   data: T | null
   error: string | null
   loading: boolean
+  /**
+   * How far the figures can be trusted (lib/reports/data-status.ts), from the
+   * same answer as `data`; absent when the route returns none.
+   */
+  dataStatus?: ReportDataStatusResult
 }
 
 /**
@@ -44,22 +52,27 @@ export function reportRequestKey(url: string, attempt: number): string {
 }
 
 /**
- * Fetches one report route and unwraps its `{ data }` envelope. An error
- * envelope becomes its user-facing message (getErrorMessage); a network or
- * parse failure becomes `fallbackError`, the view's own line. Never rejects.
+ * Fetches one report route and unwraps its `{ data }` envelope, with the
+ * `data_status` beside it when the route returns one. An error envelope
+ * becomes its user-facing message (getErrorMessage); a network or parse
+ * failure becomes `fallbackError`, the view's own line. Never rejects.
  */
 export async function fetchReportData<T>(
   url: string,
   fallbackError: string,
   signal?: AbortSignal,
-): Promise<{ data: T | null; error: string | null }> {
+): Promise<{ data: T | null; error: string | null; dataStatus?: ReportDataStatusResult }> {
   try {
     const res = await fetch(url, { signal })
     const body = await res.json()
     // `body.error` is the canonical envelope OBJECT: rendering it bare threw
     // "Objects are not valid as a React child" and blanked the report page.
     if (body?.error) return { data: null, error: getErrorMessage(body) }
-    return { data: (body?.data ?? null) as T | null, error: null }
+    return {
+      data: (body?.data ?? null) as T | null,
+      error: null,
+      ...(body?.data_status ? { dataStatus: body.data_status as ReportDataStatusResult } : {}),
+    }
   } catch {
     return { data: null, error: fallbackError }
   }
@@ -94,7 +107,12 @@ export function viewReportData<T>(
 ): ReportDataView<T> {
   if (key === null) return { data: null, error: null, loading: false }
   if (settled === null || settled.key !== key) return { data: null, error: null, loading: true }
-  return { data: settled.data, error: settled.error, loading: false }
+  return {
+    data: settled.data,
+    error: settled.error,
+    loading: false,
+    ...(settled.dataStatus ? { dataStatus: settled.dataStatus } : {}),
+  }
 }
 
 /** The page URLs a paged view has asked for under one base URL, in order. */

@@ -2,6 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -11,6 +12,10 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * balance the day before from_date, the period columns the activity in the
  * range and UB the balance at to_date (generateTrialBalance). Both dates are
  * optional and validated against the period like every ranged report.
+ *
+ * Returns data_status beside the report (lib/reports/data-status.ts). IB and
+ * UB carry every row from the period start, so the status covers the period
+ * start to to_date, like the balance sheet's.
  */
 export const GET = withRouteContext('report.trial_balance', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -37,8 +42,11 @@ export const GET = withRouteContext('report.trial_balance', async (request, { su
   }
 
   try {
-    const result = await generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include', ...range })
-    return NextResponse.json({ data: result })
+    const [trialBalance, dataStatus] = await Promise.all([
+      generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include', ...range }),
+      buildReportDataStatus(supabase, companyId, { periodId, toDate: range.toDate }),
+    ])
+    return NextResponse.json({ data: trialBalance, data_status: dataStatus })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to generate trial balance' },

@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { KPIFreshness } from '@/components/kpi/KPIFreshness'
 import {
   ReportEmptyState,
   ReportErrorCard,
@@ -28,7 +29,7 @@ const IncomeExpenseChart = dynamic(
 
 export default function IncomeStatementView({ periodId, dateRange, dimensionFilter = null, drilldown }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; drilldown: AccountDrilldown }) {
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
-  const { data, loading, error, refetch } = useReportData<IncomeStatementReport>(
+  const { data, dataStatus, loading, error, refetch } = useReportData<IncomeStatementReport>(
     `/api/reports/income-statement?${reportQs}`,
     'Kunde inte hämta resultaträkning',
   )
@@ -69,6 +70,11 @@ export default function IncomeStatementView({ periodId, dateRange, dimensionFilt
           { format: 'xlsx', href: `/api/reports/income-statement/xlsx?${reportQs}` },
         ]}
       />
+
+      {/* How far these figures can be trusted, from the same answer: shown
+          with the figures it describes and printed with the page, as on
+          Nyckeltal. */}
+      {dataStatus && <KPIFreshness status={dataStatus} />}
 
       {!monthlyLoading && monthlyData.length > 0 && (
         <IncomeExpenseChart months={monthlyData} />

@@ -3,6 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatusGlyph } from '@/components/ui/status-glyph'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { KPIFreshness } from '@/components/kpi/KPIFreshness'
 import {
   ReportEmptyState,
   ReportErrorCard,
@@ -18,7 +19,7 @@ import type { AccountDrilldown } from '@/components/reports/drilldown-click'
 
 export default function BalanceSheetView({ periodId, dateRange, drilldown }: { periodId: string; dateRange: DateRangeValue; drilldown: AccountDrilldown }) {
   const reportQs = reportQuery(periodId, dateRange)
-  const { data, loading, error, refetch } = useReportData<BalanceSheetReport>(
+  const { data, dataStatus, loading, error, refetch } = useReportData<BalanceSheetReport>(
     `/api/reports/balance-sheet?${reportQs}`,
     'Kunde inte hämta balansräkning',
   )
@@ -50,6 +51,9 @@ export default function BalanceSheetView({ periodId, dateRange, drilldown }: { p
           { format: 'xlsx', href: `/api/reports/balance-sheet/xlsx?${reportQs}` },
         ]}
       />
+
+      {/* How far these figures can be trusted, as on Nyckeltal. */}
+      {dataStatus && <KPIFreshness status={dataStatus} />}
 
       {/* Assets */}
       <Card>

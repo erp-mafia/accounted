@@ -6,9 +6,10 @@ import { cn, formatDateTime } from '@/lib/utils'
 import type { ReportDataStatusResult } from '@/lib/reports/data-status'
 
 /**
- * How current the nyckeltal are: unbooked bank rows in the period and the bank
- * feed's last sync, read from the report data status the KPI route returns
- * (lib/reports/data-status.ts, the block the MCP tool hands agents). Without
+ * How current a report's figures are: unbooked bank rows in the period and the
+ * bank feed's last sync, read from the report data status the route returns
+ * (lib/reports/data-status.ts, the block the MCP tools hand agents). Shown on
+ * Nyckeltal and on Resultaträkning, Balansräkning and Saldobalans. Without
  * it, Kassa reads as current even when the bank feed stopped weeks ago.
  *
  * A muted meta line normally. When the feed leaves rows out of the period
