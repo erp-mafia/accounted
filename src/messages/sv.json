@@ -7258,7 +7258,6 @@
     "delivery_cc_label": "Kopia",
     "delivery_pdf_label": "Bifogad PDF",
     "delivery_pdf_fallback": "faktura.pdf",
-    "delivery_provider_label": "E-posttjänst",
     "delivery_error_label": "Fel",
     "convert_to_invoice": "Konvertera till faktura",
     "quote_accept": "Acceptera",
@@ -7553,7 +7552,7 @@
     "delivery_provider_status_label": "Leveransstatus",
     "delivery_provider_reason_label": "Besked från mottagaren",
     "delivery_recipient_statuses_label": "Status per mottagare",
-    "delivery_recipient_statuses_summary": "Den övergripande statusen visar det allvarligaste beskedet. Resultatet för varje mottagare visas nedan.",
+    "delivery_recipient_statuses_summary": "Här visas det sämsta beskedet för utskicket. Hur det gick för varje mottagare står nedan.",
     "delivery_recipient_status_unknown": "Inget leveransbesked ännu",
     "delivery_status_unmatched_recipient_note": "Beskedet pekar inte på någon av mottagarna ovan. Vid en studs är den vanliga orsaken vidarebefordran eller ett filter hos mottagaren, som avvisade mailet efter att servern tagit emot det.",
     "not_found": "Fakturan hittades inte"
