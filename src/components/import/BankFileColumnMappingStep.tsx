@@ -68,11 +68,13 @@ export default function BankFileColumnMappingStep({
   // Auto-detect the most likely delimiter by counting field splits on the first line.
   // Runs once per file. Users can still override via the dropdown.
   const detectedDelimiter = useMemo(() => {
-    const firstLine = rawFileContent.split(/\r?\n/).find((l) => l.trim() !== '') ?? ''
+    // getCSVPreview finds the first line the way the parse does: past a BOM,
+    // blank lines and Excel's sep= hint line.
+    const fieldCount = (d: string) => getCSVPreview(rawFileContent, d, 1)[0]?.length ?? 0
     const candidates: Array<{ d: string; count: number }> = [
-      { d: ',', count: getCSVPreview(firstLine, ',', 1)[0]?.length ?? 0 },
-      { d: ';', count: getCSVPreview(firstLine, ';', 1)[0]?.length ?? 0 },
-      { d: '\t', count: getCSVPreview(firstLine, '\t', 1)[0]?.length ?? 0 },
+      { d: ',', count: fieldCount(',') },
+      { d: ';', count: fieldCount(';') },
+      { d: '\t', count: fieldCount('\t') },
     ]
     const best = candidates.reduce((a, b) => (b.count > a.count ? b : a))
     return best.count > 1 ? best.d : ','

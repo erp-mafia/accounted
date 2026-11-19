@@ -1133,6 +1133,113 @@ describe('POST /api/transactions/bulk-book: default_dimensions on business lines
     }
   })
 
+  it('template path: a tag the mall sets on its business line wins over the header default, per key', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Försäljning 25%',
+        lines: [
+          { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+          { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 0.8, dimensions: { '6': 'P777' } },
+          { account: '2611', label: 'Utg moms 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
+        ],
+        is_active: true,
+        is_system: false,
+        company_id: 'company-1',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '2611', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
+    // As applyTemplate answers: the mall's bag on its business line only.
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
+      { account_number: '3001', debit_amount: '', credit_amount: String(total * 0.8), line_description: 'Försäljning', dimensions: { '6': 'P777' } },
+      { account_number: '2611', debit_amount: '', credit_amount: String(total * 0.2), line_description: 'Utg moms 25%' },
+    ])
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: {
+          tx_ids: [TX1],
+          template_id: TPL,
+          mode: 'sum_per_account',
+          entry_description: 'Samlingsverifikation 2026-06-05',
+          default_dimensions: { '1': 'KS01', '6': 'P001' },
+        },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', undefined],
+      ['3001', { '1': 'KS01', '6': 'P777' }],
+      ['2611', undefined],
+    ])
+  })
+
+  it('template path: the mall\'s own tags are booked without a header default', async () => {
+    enqueue({
+      data: [{ id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Försäljning',
+        lines: [
+          { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+          { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 1, dimensions: { '6': 'P777' } },
+        ],
+        is_active: true,
+        is_system: false,
+        company_id: 'company-1',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
+      { account_number: '3001', debit_amount: '', credit_amount: String(total), line_description: 'Försäljning', dimensions: { '6': 'P777' } },
+    ])
+    enqueueCommit()
+
+    const response = await POST(
+      createMockRequest('/api/transactions/bulk-book', {
+        method: 'POST',
+        body: { tx_ids: [TX1], template_id: TPL, mode: 'sum_per_account', entry_description: 'Samlingsverifikation 2026-06-05' },
+      }),
+      emptyParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect(postedLines().map((l) => [l.account_number, l.dimensions])).toEqual([
+      ['1930', undefined],
+      ['3001', { '6': 'P777' }],
+    ])
+  })
+
   it('manual path: the bank line and the moms line stay untagged', async () => {
     enqueue({ data: [{ id: TX1, amount: 125, currency: 'SEK', description: 'Swish', date: '2026-06-05', cash_account_id: null }], error: null })
     enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)

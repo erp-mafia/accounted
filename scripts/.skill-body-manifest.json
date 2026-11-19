@@ -72,20 +72,20 @@
     "version": 9
   },
   "horizontal/swedish-e-invoicing/consumer-and-b2c": {
-    "hash": "ed754b28401ddd4da7e11831d6b9c8856a7056260e62cae8621fbc03b897561f",
-    "version": 2
+    "hash": "981105e42e0c067bed8643f1b24142f2859707d135eb810586e1cf2090f82470",
+    "version": 3
   },
   "horizontal/swedish-e-invoicing/european-mandates": {
-    "hash": "2fbd3eb9d15b5fbf8971fe3a241626fce85c10b24046d5a9bdc0d6637a6fac7b",
-    "version": 3
+    "hash": "584dc0ff8cd09f995e94dd120640e3d04e7f3c49430756ec79b39f2144662009",
+    "version": 4
   },
   "horizontal/swedish-e-invoicing/legal-and-regulatory": {
-    "hash": "1e57ee4c00b5315ed003009deb0fafaa8ea8437294378e5a49a174344730ade5",
-    "version": 3
+    "hash": "9d39f613db69d95afcd19924a762798276b9ba1b81ad1aef3f7a1144b756f188",
+    "version": 4
   },
   "horizontal/swedish-e-invoicing/swedish-cius-and-specifics": {
-    "hash": "9772b41027ef993566d4b7f958d979f7521b08676955107dedb62356ecca12ff",
-    "version": 4
+    "hash": "1c184e10f633ee23a56758576c8aacace85dfe64afeb5464ea82598104b07ce9",
+    "version": 5
   },
   "horizontal/swedish-ef-skatteplanering": {
     "hash": "ada339fa01a85e180882f2c5a0ad16dc657714e76a06944dc7b6f206572f4aaa",
@@ -188,8 +188,8 @@
     "version": 1
   },
   "horizontal/swedish-k3-k4-judgment/k3-transition": {
-    "hash": "ddc4730dfbd7a80c103570845c96103831b372f7b1bb5f008be24101588ddc0b",
-    "version": 1
+    "hash": "cc850626dc4060b659c8de6a133d5df8f753c81c646084f902a8d5bac955f297",
+    "version": 2
   },
   "horizontal/swedish-k3-k4-judgment/k4-rfr2": {
     "hash": "8011ac296babee9b74a9b557aa1389d3a9135385d1d5951474804b71f78628c9",
@@ -204,8 +204,8 @@
     "version": 1
   },
   "horizontal/swedish-payroll": {
-    "hash": "a1bd2d213ff14d7ffe642bcbbe682c5a44e34737d63f187eb1c0d952e7bcfb0d",
-    "version": 8
+    "hash": "d2bb7218a2887b01954b7eed4a3f6e35a95100fde4b0110c6514d292b1af3b63",
+    "version": 9
   },
   "horizontal/swedish-payroll/agi-filing": {
     "hash": "5a491218da623d2fd1a1fd865be40a3be168cce27465bb3c90bf507c9c11ff45",
@@ -252,8 +252,8 @@
     "version": 3
   },
   "horizontal/swedish-project-accounting": {
-    "hash": "d180b9e0507b4657888f74eb77b5b8e66110e307284a6bba6b0f3a15268c02fd",
-    "version": 6
+    "hash": "47dfb6ee9d04cd6a67a930ff500fed01ed941fee3b3d877abba0865a75b28758",
+    "version": 7
   },
   "horizontal/swedish-project-accounting/accounts-and-entries": {
     "hash": "70008104fbb2c3208e9e726213acdbdd7a74ac941a59d7bc61167e54ddbb68ad",

@@ -308,6 +308,28 @@ describe('POST /api/user/ui-state', () => {
     })
   })
 
+  it('stores the hidden support button beside the existing keys, and shows it again', async () => {
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] } } } })
+    enqueue({ data: null })
+    const hidden = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ support_fab_hidden: true })),
+    )
+    expect(hidden.status).toBe(200)
+    expect(hidden.body.data.ui_state).toEqual({ tx_columns: { hidden: ['date'] }, support_fab_hidden: true })
+
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] }, support_fab_hidden: true } } })
+    enqueue({ data: null })
+    const shown = await parseJsonResponse<{ data: { ui_state: Record<string, unknown> } }>(
+      await POST(request({ support_fab_hidden: false })),
+    )
+    expect(shown.body.data.ui_state).toEqual({ tx_columns: { hidden: ['date'] }, support_fab_hidden: false })
+  })
+
+  it('returns 400 when support_fab_hidden is not a boolean', async () => {
+    const res = await POST(request({ support_fab_hidden: 'yes' }))
+    expect(res.status).toBe(400)
+  })
+
   it('returns 400 when discord_invite_dismissed_at is not an ISO timestamp', async () => {
     const res = await POST(request({ discord_invite_dismissed_at: 'yes' }))
     expect(res.status).toBe(400)

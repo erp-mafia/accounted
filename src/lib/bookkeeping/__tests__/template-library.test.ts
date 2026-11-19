@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, templateAccountNames, templateShareLines } from '../template-library'
+import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, linesWithoutDimensions, templateAccountNames, templateShareLines } from '../template-library'
+import { BookingTemplateLineSchema } from '../booking-template-schemas'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -22,6 +23,32 @@ function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Par
 }
 
 describe('applyTemplate', () => {
+  it('copies dimensions onto business lines only', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      {
+        account: '5410',
+        label: 'Förbrukning',
+        side: 'debit',
+        type: 'business',
+        ratio: 1,
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      },
+      // A bag on a settlement line is not a template's to set: it is dropped.
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1, dimensions: { '6': 'P001' } },
+    ]
+    const result = applyTemplate(lines, 1000)
+    expect(result[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(result[1].dimensions).toBeUndefined()
+  })
+
+  it('adds no dimensions key to a line without a bag, or with an empty one', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business', ratio: 1, dimensions: { '1': ' ' } },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    for (const line of applyTemplate(lines, 1000)) expect(line).not.toHaveProperty('dimensions')
+  })
+
   it('creates simple two-line debit/credit entries', () => {
     const lines: BookingTemplateLibraryLine[] = [
       { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1.0 },
@@ -204,6 +231,35 @@ describe('applyTemplate', () => {
 })
 
 describe('deriveTemplateLinesFromBooking', () => {
+  it('preserves dimensions on derived business lines only', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      {
+        account_number: '5420',
+        debit_amount: '385.40',
+        credit_amount: '',
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      },
+      { account_number: '2641', debit_amount: '96.40', credit_amount: '', dimensions: { '1': 'KS01' } },
+      { account_number: '2893', debit_amount: '', credit_amount: '481.80', dimensions: { '1': 'KS01' } },
+    ])
+    expect(lines.find((l) => l.account === '5420')!.dimensions).toEqual({
+      '1': 'KS01',
+      '6': 'P001',
+    })
+    expect(lines.find((l) => l.account === '2641')).not.toHaveProperty('dimensions')
+    expect(lines.find((l) => l.account === '2893')).not.toHaveProperty('dimensions')
+  })
+
+  it('a derived template gives the booking its tags back when applied', () => {
+    const derived = deriveTemplateLinesFromBooking([
+      { account_number: '5420', debit_amount: '400.00', credit_amount: '', dimensions: { '6': 'P001' } },
+      { account_number: '1930', debit_amount: '', credit_amount: '400.00' },
+    ])
+    const applied = applyTemplate(derived, 250)
+    expect(applied.find((l) => l.account_number === '5420')!.dimensions).toEqual({ '6': 'P001' })
+    expect(applied.find((l) => l.account_number === '1930')).not.toHaveProperty('dimensions')
+  })
+
   it('classifies cost + input VAT + settlement (the Bokför direkt shape)', () => {
     // Mirrors the screenshot: 2641 D 96.40, 5420 D 385.40, 2893 K 481.80.
     const lines = deriveTemplateLinesFromBooking(
@@ -448,6 +504,25 @@ describe('templateShareLines', () => {
   })
 })
 
+describe('linesWithoutDimensions', () => {
+  it('drops the dimensions of every line and keeps the rest of the line', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business', ratio: 1, dimensions: { '1': 'KS01', '6': 'P001' } },
+      { account: '2641', label: 'Ingående moms', side: 'debit', type: 'vat', vat_rate: 0.25 },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1, dimensions: {} },
+    ]
+    const stripped = linesWithoutDimensions(lines)
+    expect(stripped).toEqual([
+      { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business', ratio: 1 },
+      { account: '2641', label: 'Ingående moms', side: 'debit', type: 'vat', vat_rate: 0.25 },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1 },
+    ])
+    for (const line of stripped) expect(line).not.toHaveProperty('dimensions')
+    // The lines handed in are left as they were.
+    expect(lines[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+  })
+})
+
 describe('getTemplateScope', () => {
   it('identifies system templates', () => {
     expect(getTemplateScope({ is_system: true, team_id: null, company_id: null })).toBe('system')
@@ -662,5 +737,24 @@ describe('system templates on the company skattekonto account (PH 175)', () => {
     ]
     expect(libraryLinesTouchSkattekonto(sale)).toBe(false)
     expect(libraryLinesForSkattekonto(sale, '2012')).toBe(sale)
+  })
+})
+
+describe('BookingTemplateLineSchema', () => {
+  const line = { account: '5410', label: 'Förbrukning', side: 'debit', type: 'business' }
+
+  it('accepts optional dimensions on template lines and keeps them', () => {
+    const parsed = BookingTemplateLineSchema.safeParse({ ...line, dimensions: { '1': 'KS01', '6': 'P001' } })
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+  })
+
+  it('still accepts a line without dimensions', () => {
+    expect(BookingTemplateLineSchema.safeParse(line).success).toBe(true)
+  })
+
+  it('refuses a bag the journal lines would refuse', () => {
+    expect(BookingTemplateLineSchema.safeParse({ ...line, dimensions: { projekt: 'P001' } }).success).toBe(false)
+    expect(BookingTemplateLineSchema.safeParse({ ...line, dimensions: { '6': 'P{1}' } }).success).toBe(false)
   })
 })

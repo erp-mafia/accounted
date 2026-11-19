@@ -271,6 +271,65 @@ describe('PUT /api/settings/booking-templates/[id]', () => {
     expect(updatePayload(calls)).toEqual({ lines: validLines })
   })
 
+  it('stores the dimensions a line carries', async () => {
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    auth(supabase)
+    const lines = [{ ...validLines[0], dimensions: { '1': 'KS01', '6': 'P001' } }, validLines[1]]
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { lines },
+    })
+    expect((await PUT(req, idParams)).status).toBe(200)
+    expect(updatePayload(calls)).toEqual({ lines })
+  })
+
+  it('stores a team template without the dimensions a line was sent with', async () => {
+    // A tag is one company's own code; a team template is booked by every
+    // company of the team, so it never carries one, whoever sends the lines.
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { id: 'tpl-1', company_id: null, team_id: 'team-1', is_system: false } },
+      { data: { team_id: 'team-1' } }, // companies lookup
+      { data: { id: 'tpl-1' } }, // update
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: {
+        name: 'Hyra',
+        lines: [{ ...validLines[0], dimensions: { '1': 'KS01', '6': 'P001' } }, validLines[1]],
+      },
+    })
+    expect((await PUT(req, idParams)).status).toBe(200)
+    expect(updatePayload(calls)).toEqual({ name: 'Hyra', lines: validLines })
+  })
+
+  it('leaves a team template update without lines as the caller sent it', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { id: 'tpl-1', company_id: null, team_id: 'team-1', is_system: false } },
+      { data: { team_id: 'team-1' } }, // companies lookup
+      { data: { id: 'tpl-1' } }, // update
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { description: 'Delad mall' },
+    })
+    expect((await PUT(req, idParams)).status).toBe(200)
+    expect(Object.keys(updatePayload(calls))).toEqual(['description'])
+  })
+
+  it('returns 400 for a dimensions bag a journal line could not carry', async () => {
+    const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
+    auth(supabase)
+    const req = createMockRequest('/api/settings/booking-templates/tpl-1', {
+      method: 'PUT',
+      body: { lines: [{ ...validLines[0], dimensions: { projekt: 'P001' } }, validLines[1]] },
+    })
+    const { status } = await parseJsonResponse(await PUT(req, idParams))
+    expect(status).toBe(400)
+    expect(calls.find((c) => c.method === 'update')).toBeUndefined()
+  })
+
   it('drops unknown keys instead of forwarding them to the update', async () => {
     const { supabase, calls } = createCapturingSupabase([OWN_TEMPLATE, { data: { id: 'tpl-1' } }])
     auth(supabase)
