@@ -10,6 +10,10 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 
 [Use Accounted](https://app.accounted.se) · [Self-host](docs/SELF-HOSTING.md) · [Documentation](docs/README.md) · [What's new](https://github.com/erp-mafia/accounted/releases) · [Contribute](.github/CONTRIBUTING.md)
 
+<p align="center">
+  <img src="docs/assets/app-vouchers.png" alt="The vouchers list in Accounted, showing the books of a simulated company" width="900">
+</p>
+
 ## Why Accounted?
 
 **Compliant by construction.** Accounted implements double-entry bookkeeping under Swedish accounting law (Bokföringslagen). Voucher immutability, sequential voucher numbering, period locks, and 7-year document retention are enforced by database triggers, not by convention. See the [architecture guide](docs/architecture.md) for the engine, enforcement, and audited correction paths.
