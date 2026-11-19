@@ -324,7 +324,7 @@ export const webshopOrdersBook = defineOperation({
   docs: {
     summary: 'Book one webshop order or refund with your own lines, linked to the order with its orderunderlag.',
     description:
-      'Posts one verifikat for the order row through the bookkeeping engine (source_type webshop_order, linked to the order) with the lines you send, exactly as the Orders page books it: the order stops showing as unbooked, and the orderunderlag (line items, VAT, country, payment method) is archived on the verifikat. entry_date defaults to the paid date (else the order date), fiscal_period_id to the open period covering it, description to the Orders page\'s. Refused when the order is booked, invoiced, marked as booked, unpaid or already in the transactions feed. Dry-runnable.',
+      'Posts one verifikat for the order row through the bookkeeping engine (source_type webshop_order, linked to the order) with the lines you send, exactly as the Orders page books it: the order stops showing as unbooked, and the orderunderlag (line items, VAT, country, payment method) is archived on the verifikat. entry_date defaults to the paid date (else the order date), fiscal_period_id to the open period covering it, description to the Orders page\'s. With transaction_id, the bank row that paid the order is linked to the verifikat once it is posted, in the same call. Refused when the order is booked, invoiced, marked as booked, unpaid or already in the transactions feed. Dry-runnable.',
     useWhen: 'An order has booking_status to_book and you know its accounts, e.g. OSS or VOEC accounts picked from its country and VAT rate.',
     doNotUseFor: 'Orders that should become a customer invoice, booking a payout from the payment provider (book that against the clearing account from the bank row), or correcting a booked order (storno).',
     pitfalls: [
@@ -332,6 +332,7 @@ export const webshopOrdersBook = defineOperation({
       'The account choice is yours: Accounted only checks balance, period, lock and that the accounts exist. Shopify\'s amounts and VAT are the source; the lines should add up to them.',
       COUNTRY_PITFALL,
       'A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.',
+      'transaction_id links the bank row that paid the order (a Swish payment on the bank account, a Stripe charge on 1686) to the verifikat in the same approval. Refused before anything is posted unless the row is unbooked and unlinked, its amount is the order total in its currency (negative for a refund) and the lines book exactly that amount on the row\'s account. A link refused after posting leaves the booking standing: transaction_link.linked is false with the refusal; link the row with POST /transactions/{id}/link-journal-entry.',
     ],
     example: {
       request: {
@@ -362,6 +363,13 @@ export const webshopOrdersBook = defineOperation({
     description: description.optional().describe('Defaults to "Order <number> (<payment method>)".'),
     voucher_series,
     notes,
+    transaction_id: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        'The bank row that paid the order (Swish on the bank account, a Stripe charge on 1686), linked to the verifikat once it is posted. Its amount must be the order total in its currency, booked by your lines on its account.',
+      ),
   }),
   output: z.object({
     webshop_order_id: z.string().uuid(),
@@ -370,6 +378,14 @@ export const webshopOrdersBook = defineOperation({
     voucher_number: z.number().nullable(),
     entry_date: z.string(),
     underlag_archived: z.boolean(),
+    transaction_link: z
+      .object({
+        transaction_id: z.string().uuid(),
+        linked: z.boolean(),
+        refusal: z.object({ code: z.string(), message_sv: z.string(), message_en: z.string() }).nullable(),
+      })
+      .optional()
+      .describe('Present when transaction_id was given: whether the bank row was linked, else the link\'s refusal (the booking stands).'),
   }),
   errorCodes: [
     'WEBSHOP_ORDER_NOT_FOUND',
@@ -387,6 +403,13 @@ export const webshopOrdersBook = defineOperation({
     'PERIOD_LOCKED',
     'ACCOUNTS_NOT_IN_CHART',
     'WEBSHOP_ORDER_BOOKING_FAILED',
+    'TX_CATEGORIZE_TX_NOT_FOUND',
+    'LINK_TX_TX_ALREADY_LINKED',
+    'BANK_ROW_IGNORED',
+    'BANK_ROW_READ_FAILED',
+    'BANK_BOOKING_CURRENCY_MISMATCH',
+    'WEBSHOP_ORDER_TRANSACTION_AMOUNT_MISMATCH',
+    'WEBSHOP_ORDER_TRANSACTION_ACCOUNT_MISMATCH',
   ],
   http: {
     method: 'POST',
@@ -397,8 +420,8 @@ export const webshopOrdersBook = defineOperation({
     name: 'gnubok_book_webshop_order',
     title: 'Book Webshop Order',
     description:
-      'Stage booking one webshop order or refund with your lines (e.g. OSS/VOEC accounts by country): linked to the order, orderunderlag archived, as on the Orders page. Get suggested lines from gnubok_get_webshop_order. Approval books it.',
-    keywords: ['bokför order', 'bokför webshop', 'shopify', 'woocommerce', 'orderunderlag', 'oss', 'voec', 'e-handel'],
+      'Stage booking one webshop order or refund with your lines (e.g. OSS/VOEC accounts by country): linked to the order, orderunderlag archived, as on the Orders page. Lines: gnubok_get_webshop_order. transaction_id links its bank row too. Approval books it.',
+    keywords: ['bokför order', 'bokför webshop', 'shopify', 'woocommerce', 'orderunderlag', 'oss', 'voec', 'e-handel', 'koppla bankrad'],
     stage: {
       pendingType: 'book_webshop_order',
       title: (_input, preview) =>

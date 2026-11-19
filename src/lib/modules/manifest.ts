@@ -542,7 +542,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'process',
     // The accounts per destination country read EU membership and the
     // momsdeklaration boxes (lib/webshop-orders/country-routing.ts).
-    uses: ['vat'],
+    // transactions: a booking that names its bank row links it to the
+    // verifikat through the link door (lib/webshop-orders/order-bank-row.ts).
+    uses: ['transactions', 'vat'],
     libFolders: ['webshop-orders'],
     operationPrefixes: ['webshop-orders'],
     v1Segments: ['webshop-orders'],

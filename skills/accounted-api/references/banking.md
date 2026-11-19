@@ -5180,7 +5180,7 @@ Example response `200`:
 **Book one webshop order or refund with your own lines, linked to the order with its orderunderlag.**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run`
 
-Posts one verifikat for the order row through the bookkeeping engine (source_type webshop_order, linked to the order) with the lines you send, exactly as the Orders page books it: the order stops showing as unbooked, and the orderunderlag (line items, VAT, country, payment method) is archived on the verifikat. entry_date defaults to the paid date (else the order date), fiscal_period_id to the open period covering it, description to the Orders page's. Refused when the order is booked, invoiced, marked as booked, unpaid or already in the transactions feed. Dry-runnable.
+Posts one verifikat for the order row through the bookkeeping engine (source_type webshop_order, linked to the order) with the lines you send, exactly as the Orders page books it: the order stops showing as unbooked, and the orderunderlag (line items, VAT, country, payment method) is archived on the verifikat. entry_date defaults to the paid date (else the order date), fiscal_period_id to the open period covering it, description to the Orders page's. With transaction_id, the bank row that paid the order is linked to the verifikat once it is posted, in the same call. Refused when the order is booked, invoiced, marked as booked, unpaid or already in the transactions feed. Dry-runnable.
 
 **Use when:** An order has booking_status to_book and you know its accounts, e.g. OSS or VOEC accounts picked from its country and VAT rate.
 **Do not use for:** Orders that should become a customer invoice, booking a payout from the payment provider (book that against the clearing account from the bank row), or correcting a booked order (storno).
@@ -5190,6 +5190,7 @@ Posts one verifikat for the order row through the bookkeeping engine (source_typ
 - The account choice is yours: Accounted only checks balance, period, lock and that the accounts exist. Shopify's amounts and VAT are the source; the lines should add up to them.
 - customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
 - A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.
+- transaction_id links the bank row that paid the order (a Swish payment on the bank account, a Stripe charge on 1686) to the verifikat in the same approval. Refused before anything is posted unless the row is unbooked and unlinked, its amount is the order total in its currency (negative for a refund) and the lines book exactly that amount on the row's account. A link refused after posting leaves the booking standing: transaction_link.linked is false with the refusal; link the row with POST /transactions/{id}/link-journal-entry.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -5206,7 +5207,8 @@ Request body:
   fiscal_period_id?: string,
   description?: string,
   voucher_series?: string,
-  notes?: string
+  notes?: string,
+  transaction_id?: string
 }
 ```
 
@@ -5242,7 +5244,8 @@ Response `200`:
     voucher_series: string | null,
     voucher_number: number | null,
     entry_date: string,
-    underlag_archived: boolean
+    underlag_archived: boolean,
+    transaction_link?: { transaction_id: string, linked: boolean, refusal: { code: string, message_sv: string, message_en: string } | null }
   },
   meta: {
     request_id: string,

@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Webshop orders: a booking links the bank row that paid it (2026-11)
+
+- **New: \`transaction_id\` on \`POST /webshop-orders/{orderId}/book\`** (2026-11-19), optional: the bank row that paid the order (a Swish payment on the bank account, a Stripe charge on 1686) is linked to the verifikat once it is posted, in the same call or approval. Before anything is posted it is refused unless the row is the company's, unbooked, unlinked and not ignored (\`404 TX_CATEGORIZE_TX_NOT_FOUND\`, \`400 LINK_TX_TX_ALREADY_LINKED\`, \`409 BANK_ROW_IGNORED\`), its amount is the order total in its currency (\`409 WEBSHOP_ORDER_TRANSACTION_AMOUNT_MISMATCH\`), and the lines book exactly that amount on the row's own account (\`409 WEBSHOP_ORDER_TRANSACTION_ACCOUNT_MISMATCH\`). The dry run previews the row (\`transaction_date\`, \`transaction_amount\`, \`transaction_currency\`, \`transaction_description\`, \`bank_account\`). The answer has \`transaction_link\`: \`linked: true\`, or \`linked: false\` with the link's \`refusal\` (and warning \`WEBSHOP_ORDER_TRANSACTION_NOT_LINKED\`) when the link is refused after posting; the booking stands then, and the row is linked with \`POST /transactions/{id}/link-journal-entry\`. Without \`transaction_id\` nothing changes. Additive; the API version date is unchanged.
+
 ### Bank file import: an unreadable Excel file says what to do (2026-11)
 
 - **Fix: \`POST /imports/bank\` with an Excel workbook that cannot be opened** (2026-11-18: broken, password-protected) keeps its \`400 VALIDATION_ERROR\` with \`details.field\` \`file\`; \`message\` now says what to do and a \`recovery_hint\` is added (save the workbook again as .xlsx, or send the bank's CSV or camt.053 export). **Before**, \`message\` was the generic validation one and there was no \`recovery_hint\`. Additive; the API version date is unchanged.

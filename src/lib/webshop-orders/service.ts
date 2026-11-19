@@ -23,6 +23,7 @@ import {
 } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
+import { checkOrderBankRow, type OrderBankRow } from '@/lib/webshop-orders/order-bank-row'
 import type {
   CreateJournalEntryLineInput,
   WebshopOrder,
@@ -272,6 +273,15 @@ export interface BookWebshopOrderOperationInput {
   description?: string
   voucher_series?: string
   notes?: string
+  /** The bank row that paid the order, linked to the verifikat once it is posted (crm#1993). */
+  transaction_id?: string
+}
+
+export interface BookWebshopOrderTransactionLink {
+  transaction_id: string
+  linked: boolean
+  /** Why the row was not linked: the link door's refusal. Null when it was. */
+  refusal: { code: string; message_sv: string; message_en: string } | null
 }
 
 export interface BookWebshopOrderResult {
@@ -281,6 +291,8 @@ export interface BookWebshopOrderResult {
   voucher_number: number | null
   entry_date: string
   underlag_archived: boolean
+  /** Present when transaction_id was given. */
+  transaction_link?: BookWebshopOrderTransactionLink
 }
 
 /**
@@ -382,6 +394,8 @@ function bookFailure(outcome: Extract<BookWebshopOrderOutcome, { ok: false }>, c
       }
     case 'fx_unresolved':
       return { ok: false, code: 'WEBSHOP_ORDER_FX_UNRESOLVED', details: { currency: outcome.currency } }
+    case 'bank_row_refused':
+      return { ok: false, code: outcome.code, details: outcome.details }
     case 'claimed_elsewhere':
       return { ok: false, code: 'WEBSHOP_ORDER_ALREADY_BOOKED' }
     case 'claim_error':
@@ -407,6 +421,15 @@ export async function bookWebshopOrderWithLines(
   const { order, fiscalPeriodId, entryDate, description } = prepared
 
   if (options.dryRun) {
+    // The bank row the approval links: the same check the commit runs
+    // before it posts (bookWebshopOrder), so the dry run refuses what the
+    // approval would.
+    let bankRow: OrderBankRow | null = null
+    if (input.transaction_id) {
+      const checked = await checkOrderBankRow(ctx.supabase, ctx.companyId, order, input.lines, input.transaction_id, ctx.log)
+      if (!checked.ok) return { ok: false, code: checked.code, details: checked.details }
+      bankRow = checked.row
+    }
     const settings = await loadStoreSettings(ctx, order)
     return {
       ok: true,
@@ -420,6 +443,16 @@ export async function bookWebshopOrderWithLines(
         currency: order.currency,
         total: order.total,
         total_sek: order.total_sek,
+        ...(bankRow
+          ? {
+              transaction_id: bankRow.transactionId,
+              transaction_date: bankRow.date,
+              transaction_amount: bankRow.amount,
+              transaction_currency: bankRow.currency,
+              transaction_description: bankRow.description,
+              bank_account: bankRow.accountNumber,
+            }
+          : {}),
         journal_entry: toEntryPreview({
           fiscal_period_id: fiscalPeriodId,
           entry_date: entryDate,
@@ -431,7 +464,9 @@ export async function bookWebshopOrderWithLines(
           lines: input.lines,
         }),
         warnings: webshopOrderWarnings(order, settings).map((w) => w.code),
-        will: 'post this verifikat (source_type webshop_order) linked to the order, and archive the orderunderlag on it',
+        will: bankRow
+          ? 'post this verifikat (source_type webshop_order) linked to the order, archive the orderunderlag on it, and link the bank transaction to it'
+          : 'post this verifikat (source_type webshop_order) linked to the order, and archive the orderunderlag on it',
       },
     }
   }
@@ -450,8 +485,28 @@ export async function bookWebshopOrderWithLines(
       notes: input.notes,
     },
     ctx.log,
+    { transactionId: input.transaction_id },
   )
   if (!outcome.ok) return bookFailure(outcome, ctx)
+
+  const warnings: OperationWarning[] = []
+  if (!outcome.underlagArchived) {
+    warnings.push({
+      code: 'WEBSHOP_ORDER_UNDERLAG_NOT_ARCHIVED',
+      message_sv: 'Verifikatet bokfördes men orderunderlaget kunde inte arkiveras. Bifoga ett underlag från listan Saknar underlag.',
+      message_en: 'The voucher was booked but the order underlag could not be archived. Attach one from the missing-underlag list.',
+    })
+  }
+  // The booking stands whatever the link answers: a refused link is said in
+  // the answer (data and warning), and the row is linked by hand afterwards.
+  const link = outcome.transactionLink
+  if (link && !link.linked) {
+    warnings.push({
+      code: 'WEBSHOP_ORDER_TRANSACTION_NOT_LINKED',
+      message_sv: `Verifikatet bokfördes, men banktransaktionen kopplades inte till det: ${link.messageSv} Koppla transaktionen till verifikatet när det är åtgärdat.`,
+      message_en: `The voucher was booked, but the bank transaction was not linked to it: ${link.messageEn} Link it with gnubok_link_transaction_to_journal_entry once that is resolved.`,
+    })
+  }
 
   return {
     ok: true,
@@ -463,17 +518,16 @@ export async function bookWebshopOrderWithLines(
       voucher_number: outcome.journalEntry?.voucher_number ?? null,
       entry_date: entryDate,
       underlag_archived: outcome.underlagArchived,
-    },
-    ...(outcome.underlagArchived
-      ? {}
-      : {
-          warnings: [
-            {
-              code: 'WEBSHOP_ORDER_UNDERLAG_NOT_ARCHIVED',
-              message_sv: 'Verifikatet bokfördes men orderunderlaget kunde inte arkiveras. Bifoga ett underlag från listan Saknar underlag.',
-              message_en: 'The voucher was booked but the order underlag could not be archived. Attach one from the missing-underlag list.',
+      ...(link
+        ? {
+            transaction_link: {
+              transaction_id: link.transactionId,
+              linked: link.linked,
+              refusal: link.linked ? null : { code: link.code, message_sv: link.messageSv, message_en: link.messageEn },
             },
-          ],
-        }),
+          }
+        : {}),
+    },
+    ...(warnings.length > 0 ? { warnings } : {}),
   }
 }

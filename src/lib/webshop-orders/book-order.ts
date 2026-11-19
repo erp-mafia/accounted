@@ -8,6 +8,7 @@ import { postingPort } from '@/lib/posting/port'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
+import { checkOrderBankRow, linkOrderBankRow, type OrderBankRowLink } from '@/lib/webshop-orders/order-bank-row'
 import type {
   CreateJournalEntryLineInput,
   Currency,
@@ -392,10 +393,16 @@ export async function loadWebshopOrder(
 }
 
 export type BookWebshopOrderOutcome =
-  | (Extract<BookOrderEngineOutcome, { ok: true }> & { order: WebshopOrder })
+  | (Extract<BookOrderEngineOutcome, { ok: true }> & {
+      order: WebshopOrder
+      /** Set when the caller named a bank row: whether it was linked to the posted verifikat. */
+      transactionLink?: OrderBankRowLink
+    })
   | { ok: false; kind: 'not_found' }
   | { ok: false; kind: 'not_bookable'; failure: OrderBookableFailure }
   | { ok: false; kind: 'fx_unresolved'; currency: string }
+  /** The named bank row cannot be this order's payment (checkOrderBankRow); nothing was posted. */
+  | { ok: false; kind: 'bank_row_refused'; code: string; details: Record<string, unknown> }
   | Exclude<BookOrderEngineOutcome, { ok: true }>
 
 /**
@@ -404,6 +411,11 @@ export type BookWebshopOrderOutcome =
  * write path for a single order, whoever asks (the dashboard dialog or an
  * agent through the operation registry); each door only translates the
  * outcome into its own envelope.
+ *
+ * `transactionId` names the bank row that paid the order (crm#1993): it is
+ * checked before anything is posted (checkOrderBankRow) and linked to the
+ * posted verifikat after it (linkOrderBankRow). A link that fails then
+ * leaves the booking standing and is answered in transactionLink.
  */
 export async function bookWebshopOrder(
   supabase: SupabaseClient,
@@ -412,6 +424,7 @@ export async function bookWebshopOrder(
   orderId: string,
   input: BookOrderEngineInput,
   log: Logger,
+  options: { transactionId?: string } = {},
 ): Promise<BookWebshopOrderOutcome> {
   const order = await loadWebshopOrder(supabase, companyId, orderId)
   if (!order) return { ok: false, kind: 'not_found' }
@@ -424,6 +437,15 @@ export async function bookWebshopOrder(
   const resolvedOrder = await resolveOrderFx(supabase, companyId, order, log)
   if (!resolvedOrder) return { ok: false, kind: 'fx_unresolved', currency: order.currency }
 
+  const { transactionId } = options
+  if (transactionId) {
+    const bankRow = await checkOrderBankRow(supabase, companyId, resolvedOrder, input.lines, transactionId, log)
+    if (!bankRow.ok) return { ok: false, kind: 'bank_row_refused', code: bankRow.code, details: bankRow.details }
+  }
+
   const outcome = await bookOrderThroughEngine(supabase, companyId, userId, resolvedOrder, input, log)
-  return outcome.ok ? { ...outcome, order: resolvedOrder } : outcome
+  if (!outcome.ok) return outcome
+  if (!transactionId) return { ...outcome, order: resolvedOrder }
+  const transactionLink = await linkOrderBankRow(supabase, companyId, userId, transactionId, outcome.journalEntryId, log)
+  return { ...outcome, order: resolvedOrder, transactionLink }
 }

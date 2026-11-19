@@ -11185,6 +11185,22 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en: 'The order underlag could not be created. Try again shortly.',
     retryable: true,
   },
+  // transaction_id on webshop-orders.book (checkOrderBankRow): the named bank
+  // row is not this order's payment. Refused before anything is posted.
+  WEBSHOP_ORDER_TRANSACTION_AMOUNT_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Banktransaktionens belopp är inte orderns belopp i transaktionens valuta, så den kan inte kopplas till orderns verifikat. Inget bokfördes. Välj transaktionen som betalade ordern, eller bokför ordern utan transaktion.',
+    message_en:
+      "The bank transaction's amount is not the order's amount in the transaction's currency, so it cannot be linked to the order's voucher. Nothing was booked. Pick the transaction that paid the order, or book the order without one.",
+  },
+  WEBSHOP_ORDER_TRANSACTION_ACCOUNT_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Raderna bokför inte transaktionens belopp på dess bankkonto, så transaktionen kan inte kopplas till orderns verifikat. Inget bokfördes. Bokför betalningen med transaktionens belopp på transaktionens bankkonto.',
+    message_en:
+      "The lines do not book the transaction's amount on its bank account, so it cannot be linked to the order's voucher. Nothing was booked. Book the payment on the transaction's account (details.account_number).",
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

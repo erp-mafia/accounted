@@ -53,6 +53,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             requestId,
             details: { currency: outcome.currency },
           })
+        // Only when a bank row is named, which this route never does.
+        case 'bank_row_refused':
+          return errorResponseFromCode(outcome.code, log, { requestId, details: outcome.details })
         case 'claimed_elsewhere':
           return errorResponseFromCode('WEBSHOP_ORDER_ALREADY_BOOKED', log, { requestId })
         case 'claim_error':
