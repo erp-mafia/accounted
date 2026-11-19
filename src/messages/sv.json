@@ -3951,7 +3951,11 @@
     "op_group": "Ny bankkoppling",
     "op_connect_label": "Koppla banken med BankID",
     "op_connect_help": "Bankdata hämtas via Open Payments Europe AB, betalningsinstitut under Finansinspektionens tillsyn. Kopplingen kan bara läsa, aldrig flytta pengar.",
-    "op_connect_button": "Koppla bank"
+    "op_connect_button": "Koppla bank",
+    "eb_connect_open": "Anslut en bank via den tidigare kopplingen",
+    "eb_only_uncovered": "Här finns bara de banker som {button} under {group} inte når än. SEB, Swedbank, Handelsbanken, Nordea och de flesta andra banker kopplar du där.",
+    "eb_bank_elsewhere_one": "{bank} kopplar du med {button} under {group} ovan.",
+    "eb_bank_elsewhere_many": "Fler banker som matchar kopplar du med {button} under {group} ovan."
   },
   "settings_skattekonto_account": {
     "group_label": "Skattekontot i bokföringen",

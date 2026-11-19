@@ -88,3 +88,19 @@ export function bankNameForAlias(query: string): string | null {
   const hits = BANK_SEARCH_ALIASES.filter((alias) => alias.terms.includes(q))
   return hits.length === 1 ? hits[0].bank : null
 }
+
+/**
+ * The banks `query` finds that this list leaves out: the ones a filtered
+ * picker sends elsewhere (the earlier connection's list offers only the banks
+ * the BankID connection does not reach, so a search for "SEB" there would
+ * otherwise answer "no match" for a bank that connects fine one section up).
+ * Empty without a query or without a filter.
+ */
+export function banksFoundElsewhere<T extends { name: string }>(
+  banks: readonly T[],
+  offered: ((bank: T) => boolean) | undefined,
+  query: string,
+): T[] {
+  if (!offered || !normalize(query)) return []
+  return banks.filter((bank) => !offered(bank) && bankMatchesQuery(bank, query))
+}
