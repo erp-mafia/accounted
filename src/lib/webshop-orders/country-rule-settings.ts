@@ -4,7 +4,11 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { resolveRevenueDeclarationBox } from '@/lib/reports/vat-revenue-accounts'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { WebshopCountryAccountRule, WebshopPlatform } from '@/types'
-import { COUNTRY_PRESET_ACCOUNTS, OSS_REVENUE_ACCOUNT } from './country-routing'
+import {
+  COUNTRY_PRESET_ACCOUNTS,
+  OSS_REVENUE_ACCOUNT,
+  servicesRevenueAccountOf,
+} from './country-routing'
 import {
   countryRuleProblems,
   ossRevenueAccounts,
@@ -26,7 +30,9 @@ export type PrepareCountryRulesOutcome =
  *   (country-rule-checks.ts); a preset account the chart lacks is checked as
  *   the row ensureCountryPresetAccounts is about to create;
  * - the preset accounts (3106 with VAT code OSS, 2670, 3105) are added when
- *   missing;
+ *   missing, and the services account for a goods account a rule names
+ *   (3305 for 3105, 3308 for 3108), which an order with nothing to ship
+ *   books instead;
  * - an OSS revenue account without a VAT code gets 'oss', so the
  *   momsdeklaration keeps it out of every ruta on purpose instead of listing
  *   it as revenue without one;
@@ -62,6 +68,9 @@ export async function prepareCountryRules(
       continue
     }
     accounts.add(rule.revenue_account)
+    // The services account an order with nothing to ship books instead of
+    // a goods account (3305 for 3105): created with the rule's own.
+    accounts.add(servicesRevenueAccountOf(rule.revenue_account))
     if (rule.vat_account) accounts.add(rule.vat_account)
   }
   for (const account of accounts) lookup.add(account)

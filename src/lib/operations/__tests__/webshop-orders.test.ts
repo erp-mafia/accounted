@@ -50,6 +50,7 @@ function order(overrides: Partial<WebshopOrder> = {}): WebshopOrder {
     customer_email: null,
     customer_orgnr: null,
     customer_country: 'SE',
+    ships_nothing: false,
     payment_method: 'shopify_payments',
     payment_method_title: null,
     gateway_reference: null,

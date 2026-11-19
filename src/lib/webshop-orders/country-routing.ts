@@ -1,5 +1,6 @@
 import { isEuMemberCountry } from '@/lib/vat/eu-countries'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { getRevenueAccount } from '@/lib/bookkeeping/invoice-accounts'
 import type { WebshopCountryAccountRule, WebshopVatBreakdownLine } from '@/types'
 
 /**
@@ -9,8 +10,11 @@ import type { WebshopCountryAccountRule, WebshopVatBreakdownLine } from '@/types
  * Why this exists: the line builder used to pick accounts from the VAT rate
  * alone, so a Danish or Norwegian order at 25 % booked as Swedish sales on
  * 3001 and Swedish output VAT on 2611 (rutor 05 and 10), and the bulk sweep
- * only stopped rates that are not Swedish. Shopify rows carry the destination
- * country (crm#1032); these rules turn country plus rate into the accounts.
+ * only stopped rates that are not Swedish. Shopify rows carry the country the
+ * sale is taxed in (crm#1032): the destination of a goods order, the billing
+ * country of an order with nothing to ship (#98). These rules turn country
+ * plus rate into the accounts, and an order with nothing to ship books the
+ * services account where a rule names a goods account (servicesRevenueAccountOf).
  *
  * Sweden takes one kind of rule, Swedish VAT on the store's own sales account
  * (crm#1449): a company that keeps its webshop sales apart from its other
@@ -40,15 +44,43 @@ export const OSS_VAT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'oss_outp
 export const EXPORT_REVENUE_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'export_goods_sales')
 
 /**
- * The accounts the presets name. The settings route adds a missing one to the
- * chart (3106 with VAT code OSS, so the momsdeklaration leaves it out), the
- * same way ensureWebshopPrefillAccounts repairs the Swedish prefill set.
+ * The services account for each goods account of a sale taxed outside
+ * Sweden, from the one treatment-to-account resolver (getRevenueAccount):
+ * export 3105 (ruta 36) to 3305 Försäljning tjänster till land utanför EU
+ * (ruta 40), EU 3108 (ruta 35) to 3308 Försäljning tjänster till annat
+ * EU-land (ruta 39).
+ */
+const SERVICES_ACCOUNT_BY_GOODS_ACCOUNT: ReadonlyMap<string, string> = new Map(
+  (['export', 'reverse_charge'] as const).map((treatment) => [
+    getRevenueAccount(treatment, undefined, { goods: true }),
+    getRevenueAccount(treatment, undefined, { goods: false }),
+  ]),
+)
+
+/**
+ * The accounts the presets name, and the services accounts an order with
+ * nothing to ship books instead of a goods account a rule names. The
+ * settings route adds a missing one to the chart (3106 with VAT code OSS, so
+ * the momsdeklaration leaves it out), the same way
+ * ensureWebshopPrefillAccounts repairs the Swedish prefill set.
  */
 export const COUNTRY_PRESET_ACCOUNTS: readonly string[] = [
   OSS_REVENUE_ACCOUNT,
   OSS_VAT_ACCOUNT,
   EXPORT_REVENUE_ACCOUNT,
+  ...SERVICES_ACCOUNT_BY_GOODS_ACCOUNT.values(),
 ]
+
+/**
+ * The account a rule's revenue account books an order with nothing to ship
+ * on: the services account for a goods account of a sale abroad (3105 to
+ * 3305, 3108 to 3308), any other account unchanged. A service sold to a
+ * buyer outside Sweden is no export or EU supply of goods; it is declared as
+ * a service taxed abroad (ruta 40, or ruta 39 for an EU business).
+ */
+export function servicesRevenueAccountOf(account: string): string {
+  return SERVICES_ACCOUNT_BY_GOODS_ACCOUNT.get(account) ?? account
+}
 
 /**
  * "We report OSS": EU orders with VAT book on 3106/2670, outside the
@@ -188,21 +220,24 @@ export function sameCountryRules(
 }
 
 /**
- * The order fields the rules read. Both optional: an order without them is
- * simply never routed.
+ * The order fields the rules read. All optional: an order without a country
+ * is simply never routed, and one without ships_nothing books as goods.
  */
 export interface RoutableOrder {
   platform?: string | null
   customer_country?: string | null
+  /** webshop_orders.ships_nothing: no line of the order needs shipping. */
+  ships_nothing?: boolean | null
 }
 
 /**
- * The destination country the rules key on, or null when they do not apply:
- * a Shopify row (whose column is the shipping country) going to a known
- * country outside Sweden. Orders to Sweden, without a country, or from
- * another platform keep the Swedish booking: the store's Sverige row for a
- * Shopify order, see routeOrderBuckets (an order without a country in a store
- * with rules for abroad is flagged: isDestinationUnknown).
+ * The country the rules key on, or null when they do not apply: a Shopify
+ * row (whose column is the destination country of a goods order, the billing
+ * country of an order with nothing to ship) in a known country outside
+ * Sweden. Orders to Sweden, without a country, or from another platform keep
+ * the Swedish booking: the store's Sverige row for a Shopify order, see
+ * routeOrderBuckets (an order without a country in a store with rules for
+ * abroad is flagged: isDestinationUnknown).
  */
 export function routedCountryOf(order: RoutableOrder): string | null {
   if (order.platform !== 'shopify') return null
@@ -292,11 +327,13 @@ export interface OrderRouting {
  * Route every VAT bucket of an order through the store's country rules. A
  * rule without a VAT account does not cover a bucket that carries tax (a 0 %
  * rule meeting a bucket with VAT on it), so that bucket stays unrouted
- * rather than losing its VAT line. An order the rules do not route abroad is
- * never unrouted: a Shopify order to Sweden or without a country books each
- * bucket the store's Sverige row covers on that row (for an order without a
- * country in a store with rules for abroad, an editable guess the bulk sweep
- * refuses), the rest on the default Swedish accounts.
+ * rather than losing its VAT line. An order with nothing to ship books a
+ * rule's goods account as the services account (servicesRevenueAccountOf).
+ * An order the rules do not route abroad is never unrouted: a Shopify order
+ * to Sweden or without a country books each bucket the store's Sverige row
+ * covers on that row (for an order without a country in a store with rules
+ * for abroad, an editable guess the bulk sweep refuses), the rest on the
+ * default Swedish accounts.
  */
 export function routeOrderBuckets(
   order: RoutableOrder,
@@ -322,6 +359,10 @@ export function routeOrderBuckets(
   const buckets = breakdown.map((bucket) => {
     let rule = resolveCountryRule(rules ?? [], country, bucket.rate)
     if (rule && rule.mode === 'accounts' && !rule.vat_account && bucket.tax !== 0) rule = null
+    if (rule && rule.mode === 'accounts' && order.ships_nothing === true) {
+      const revenue = servicesRevenueAccountOf(rule.revenue_account)
+      if (revenue !== rule.revenue_account) rule = { ...rule, revenue_account: revenue }
+    }
     if (!rule) unrouted.add(bucket.rate)
     return { bucket, rule }
   })

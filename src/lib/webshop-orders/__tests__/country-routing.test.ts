@@ -11,6 +11,7 @@ import {
   routeOrderBuckets,
   routedCountryOf,
   sameCountryRules,
+  servicesRevenueAccountOf,
   usesRevenueTemplate,
   usesSwedishAccounts,
 } from '../country-routing'
@@ -175,6 +176,61 @@ describe('routeOrderBuckets', () => {
     expect(usesSwedishAccounts(routing.buckets[0])).toBe(true)
     expect(usesRevenueTemplate(routing.buckets[0])).toBe(false)
     expect(usesRevenueTemplate({ bucket: routing.buckets[0].bucket, rule: null })).toBe(true)
+  })
+})
+
+describe('an order with nothing to ship (#88)', () => {
+  const digital = (customer_country: string | null) => ({ ...shopify(customer_country), ships_nothing: true })
+  const EU_ZERO_GOODS: WebshopCountryAccountRule = {
+    country: 'EU',
+    vat_rate: 0,
+    mode: 'accounts',
+    revenue_account: '3108',
+    vat_account: null,
+  }
+
+  it('maps the goods accounts of a sale abroad to the services accounts and leaves the rest', () => {
+    expect(servicesRevenueAccountOf('3105')).toBe('3305')
+    expect(servicesRevenueAccountOf('3108')).toBe('3308')
+    expect(servicesRevenueAccountOf('3106')).toBe('3106')
+    expect(servicesRevenueAccountOf('3013')).toBe('3013')
+  })
+
+  it('books a VAT-free sale outside the EU on 3305 (ruta 40), not as export of goods on 3105', () => {
+    const routing = routeOrderBuckets(digital('US'), [{ rate: 0, net: 100, tax: 0 }], OSS_PRESET_RULES)
+    expect(routing.unroutedRates).toEqual([])
+    expect(routing.buckets[0].rule).toEqual({ ...OSS_PRESET_RULES[1], revenue_account: '3305' })
+    // The store's saved rule is not changed.
+    expect(OSS_PRESET_RULES[1]).toMatchObject({ revenue_account: '3105' })
+  })
+
+  it('keeps export of goods on 3105 for an order that ships, or that does not say', () => {
+    const breakdown = [{ rate: 0, net: 100, tax: 0 }]
+    expect(routeOrderBuckets(shopify('US'), breakdown, OSS_PRESET_RULES).buckets[0].rule).toBe(OSS_PRESET_RULES[1])
+    expect(
+      routeOrderBuckets({ ...shopify('US'), ships_nothing: false }, breakdown, OSS_PRESET_RULES).buckets[0].rule,
+    ).toBe(OSS_PRESET_RULES[1])
+  })
+
+  it('keeps OSS on 3106/2670 for an EU sale with VAT', () => {
+    const routing = routeOrderBuckets(digital('DE'), [{ rate: 19, net: 100, tax: 19 }], OSS_PRESET_RULES)
+    expect(routing.buckets[0].rule).toBe(OSS_PRESET_RULES[0])
+  })
+
+  it('books a VAT-free EU sale a rule puts on 3108 (ruta 35) on 3308 (ruta 39)', () => {
+    const routing = routeOrderBuckets(digital('DE'), [{ rate: 0, net: 100, tax: 0 }], [EU_ZERO_GOODS])
+    expect(routing.buckets[0].rule).toEqual({ ...EU_ZERO_GOODS, revenue_account: '3308' })
+  })
+
+  it('books a Norwegian VOEC sale on 3305 with its VAT account unchanged', () => {
+    const routing = routeOrderBuckets(digital('NO'), [{ rate: 25, net: 100, tax: 25 }], [NO_VOEC])
+    expect(routing.buckets[0].rule).toEqual({ ...NO_VOEC, revenue_account: '3305' })
+  })
+
+  it("keeps a rule's own account and a Sverige row as they are", () => {
+    expect(routeOrderBuckets(digital('DE'), [{ rate: 19, net: 100, tax: 19 }], [DE_OWN]).buckets[0].rule).toBe(DE_OWN)
+    const sweden: WebshopCountryAccountRule = { country: 'SE', vat_rate: null, mode: 'swedish', revenue_account: '3011' }
+    expect(routeOrderBuckets(digital('SE'), [{ rate: 25, net: 100, tax: 25 }], [sweden]).buckets[0].rule).toBe(sweden)
   })
 })
 

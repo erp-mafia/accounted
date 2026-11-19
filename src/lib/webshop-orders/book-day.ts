@@ -170,6 +170,7 @@ type DerivationRow = Pick<
   | 'payment_method'
   | 'is_paid'
   | 'customer_country'
+  | 'ships_nothing'
 >
 
 function derivationFingerprint(row: DerivationRow): string {
@@ -187,6 +188,7 @@ function derivationFingerprint(row: DerivationRow): string {
     row.payment_method,
     row.is_paid,
     row.customer_country,
+    row.ships_nothing ?? false,
   ])
 }
 
@@ -551,7 +553,7 @@ export async function bookWebshopDay(
   const derivedFrom = new Map(included.map(({ order }) => [order.id, derivationFingerprint(order)]))
   const { data: claimedRows, error: verifyError } = await supabase
     .from('webshop_orders')
-    .select('id, row_type, currency, total, total_tax, total_sek, exchange_rate, vat_breakdown, paid_date, order_date, payment_method, is_paid, customer_country')
+    .select('id, row_type, currency, total, total_tax, total_sek, exchange_rate, vat_breakdown, paid_date, order_date, payment_method, is_paid, customer_country, ships_nothing')
     .eq('company_id', companyId)
     .eq('journal_entry_id', draft.id)
   const changed = ((claimedRows ?? []) as unknown as DerivationRow[])

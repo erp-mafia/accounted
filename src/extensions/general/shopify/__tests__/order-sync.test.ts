@@ -427,6 +427,7 @@ describe('mapOrderToWebshopRow', () => {
         customer_email: null,
         customer_orgnr: null,
         customer_country: 'SE',
+        ships_nothing: false,
         payment_method: 'Klarna',
         payment_method_title: 'Klarna',
         gateway_reference: null,
@@ -542,6 +543,26 @@ describe('mapOrderToWebshopRow', () => {
     // The rest of the row is the ordinary order row.
     expect(row.total).toBe(1250)
     expect(row.vat_breakdown).toEqual([{ rate: 25, net: 1000, tax: 250 }])
+  })
+
+  it('marks an order with nothing to ship, and its refunds, as ships_nothing (#88)', () => {
+    const digital = makeOrder({
+      shippingAddress: null,
+      billingAddress: { countryCodeV2: 'US' },
+      lineItems: conn([digitalLine('E-bok', '1250.00')]),
+    })
+    expect(mapOrderToWebshopRow(connection, 's', digital)[0].ships_nothing).toBe(true)
+    expect(mapRefundToWebshopRow(connection, 's', digital, makeRefund())[0].ships_nothing).toBe(true)
+  })
+
+  it('does not mark an order with a line that ships, an unknown line or a truncated page', () => {
+    const mixed = conn([digitalLine('Kurs', '100.00'), lineItem('Bok', 1, '1150.00')])
+    const { requiresShipping: _flag, ...unflagged } = digitalLine('Kurs', '1250.00')
+    for (const lineItems of [mixed, conn([unflagged]), conn([digitalLine('Kurs', '1250.00')], true)]) {
+      const order = makeOrder({ lineItems })
+      expect(mapOrderToWebshopRow(connection, 's', order)[0].ships_nothing).toBe(false)
+      expect(mapRefundToWebshopRow(connection, 's', order, makeRefund())[0].ships_nothing).toBe(false)
+    }
   })
 
   it('keeps the country null when the store withholds the billing address of a digital order', () => {
@@ -665,6 +686,7 @@ describe('mapRefundToWebshopRow', () => {
         customer_email: null,
         customer_orgnr: null,
         customer_country: 'SE',
+        ships_nothing: false,
         payment_method: 'Klarna',
         payment_method_title: 'Klarna',
         gateway_reference: null,

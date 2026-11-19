@@ -4833,6 +4833,14 @@ export interface WebshopOrder {
    * null for a local pickup or when the store withholds addresses.
    */
   customer_country: string | null
+  /**
+   * Shopify: true when the store reported that no line of the order needs
+   * shipping (digital products, services), on the order row and its refund
+   * rows. The country rules then book a sale abroad as services
+   * (country-routing.ts). False when a line ships, when that is not known,
+   * and for every other platform.
+   */
+  ships_nothing: boolean
   payment_method: string | null
   payment_method_title: string | null
   gateway_reference: string | null

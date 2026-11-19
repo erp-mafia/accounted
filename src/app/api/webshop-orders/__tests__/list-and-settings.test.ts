@@ -335,17 +335,20 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
       putSettings(createMockRequest('/api/webshop-orders/settings', { method: 'PUT', body }))
 
     it('stores the OSS preset and adds the preset accounts the chart lacks', async () => {
-      enqueue({ data: [] }) // chart lookup: none of 3106/2670/3105 yet
+      enqueue({ data: [] }) // chart lookup: none of 3106/2670/3105/3305 yet
       enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES } })
       const { status } = await parseJsonResponse(
         await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES }),
       )
       expect(status).toBe(200)
       expect(mockEnsurePresetAccounts).toHaveBeenCalledTimes(1)
+      // 3305: the services account an order with nothing to ship books
+      // instead of 3105 (#88).
       expect([...(mockEnsurePresetAccounts.mock.calls[0][3] as string[])].sort()).toEqual([
         '2670',
         '3105',
         '3106',
+        '3305',
       ])
       // 3106 is created with VAT code OSS by the ensure step; nothing else to mark.
       expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
@@ -545,8 +548,9 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
       )
       expect(status).toBe(200)
       const lookup = findCall('chart_of_accounts', 'in')
-      expect([...((lookup?.[1] as string[]) ?? [])].sort()).toEqual(['3012', '3105'])
-      expect(mockEnsurePresetAccounts.mock.calls[0][3]).toEqual([])
+      expect([...((lookup?.[1] as string[]) ?? [])].sort()).toEqual(['3012', '3105', '3305'])
+      // Only the services account for 3105 the chart lacks (#88), never 3012.
+      expect(mockEnsurePresetAccounts.mock.calls[0][3]).toEqual(['3305'])
       expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
       const upsert = findCall('webshop_store_settings', 'upsert')![0] as Record<string, unknown>
       expect(upsert.country_account_rules).toEqual(rules)
@@ -585,6 +589,7 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
               default_vat_rate: 0,
               default_vat_treatment: 'export_goods',
             }),
+            chartRow('3305', 'Försäljning tjänster till land utanför EU'),
           ],
         })
         enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: rules } })

@@ -51,6 +51,7 @@ function makeOrder(overrides: Partial<WebshopOrder> = {}): WebshopOrder {
     customer_email: 'anna@example.se',
     customer_orgnr: null,
     customer_country: 'SE',
+    ships_nothing: false,
     payment_method: 'swish',
     payment_method_title: 'Swish',
     gateway_reference: 'SW-123',

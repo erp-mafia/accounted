@@ -380,6 +380,7 @@ export function shippingCountryOf(order: Pick<ShopifyOrder, 'shippingAddress'>):
  * Whether nothing on the order is physical: the line-item page is complete
  * and every line is a variant that needs no shipping (digital products,
  * services). A truncated page or a line without the flag counts as shipping.
+ * Stored as webshop_orders.ships_nothing on the order and its refunds.
  */
 function shipsNothing(order: Pick<ShopifyOrder, 'lineItems'>): boolean {
   const { pageInfo, nodes } = order.lineItems
@@ -459,6 +460,7 @@ export function mapOrderToWebshopRow(
       // for an order with nothing to ship (#98). Null for a local pickup or
       // when the store withholds addresses from the app.
       customer_country: orderCountryOf(order),
+      ships_nothing: shipsNothing(order),
       payment_method: order.paymentGatewayNames[0] ?? null,
       payment_method_title: order.paymentGatewayNames.join(', ') || null,
       gateway_reference: null,
@@ -502,8 +504,10 @@ export function mapRefundToWebshopRow(
       customer_email: null,
       customer_orgnr: null,
       // A refund reverses its order's sale, so it takes the order's
-      // country (the Refund object carries no address of its own).
+      // country and goods-or-services reading (the Refund object carries no
+      // address of its own).
       customer_country: orderCountryOf(order),
+      ships_nothing: shipsNothing(order),
       payment_method: order.paymentGatewayNames[0] ?? null,
       payment_method_title: order.paymentGatewayNames.join(', ') || null,
       gateway_reference: null,

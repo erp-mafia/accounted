@@ -46,8 +46,9 @@ export async function ensureWebshopPrefillAccounts(
 
 /**
  * The same repair for the accounts the country presets name (3106, 2670,
- * 3105), run when a store saves rules that use them: the minimal seeded chart
- * has none of the three. 3106 is created with VAT code OSS so the
+ * 3105) and the services accounts an order with nothing to ship books
+ * instead of a goods account (3305, 3308), run when a store saves rules that
+ * use them: the minimal seeded chart has none of them. 3106 is created with VAT code OSS so the
  * momsdeklaration keeps it out of every ruta instead of listing it as revenue
  * without one. Only that closed set; an account the user typed in a rule must
  * already exist (the settings route says which one does not).

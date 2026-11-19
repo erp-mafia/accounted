@@ -501,6 +501,33 @@ describe('buildOrderBookingLines with country rules (crm#1032)', () => {
     ])
   })
 
+  it('books a VAT-free order outside the EU with nothing to ship as services on 3305 (#88)', () => {
+    const vatFree = { total_tax: 0, vat_breakdown: [{ rate: 0, net: 500, tax: 0 }] }
+    const lines = buildOrderBookingLines({
+      order: toCountry('US', { ...vatFree, ships_nothing: true }),
+      settings: shopifySettings,
+    })
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 500, 0],
+      ['3305', 0, 500],
+    ])
+    // Its refund reverses it on the same account.
+    const refund = buildOrderBookingLines({
+      order: toCountry('US', {
+        ...vatFree,
+        row_type: 'refund',
+        total: -500,
+        total_sek: -500,
+        ships_nothing: true,
+      }),
+      settings: shopifySettings,
+    })
+    expect(refund.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 0, 500],
+      ['3305', 500, 0],
+    ])
+  })
+
   it('ignores the rules for a WooCommerce order (billing country)', () => {
     const lines = buildOrderBookingLines({
       order: makeOrder({ platform: 'woocommerce', customer_country: 'DK' }),

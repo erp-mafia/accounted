@@ -322,6 +322,56 @@ describe('upsertWebshopOrders', () => {
     })
   })
 
+  describe('ships_nothing (#88)', () => {
+    it('stores it on insert, false when the platform does not send it', async () => {
+      mock.enqueueMany([
+        { data: [] },
+        { data: [] },
+        {
+          data: [
+            { id: 'new-1', external_id: 'a' },
+            { id: 'new-2', external_id: 'b' },
+          ],
+        },
+      ])
+
+      await upsertWebshopOrders(supabase(), COMPANY, USER, [
+        makeUpsert({ external_id: 'a', ships_nothing: true }),
+        makeUpsert({ external_id: 'b' }),
+      ])
+
+      const payloads = mock.findCall('webshop_orders', 'insert')![0] as Record<string, unknown>[]
+      expect(payloads.map((p) => p.ships_nothing)).toEqual([true, false])
+    })
+
+    it('updates an unbooked row whose reading changed and nothing else', async () => {
+      mock.enqueueMany([{ data: [existingRow({ ships_nothing: false })] }, { data: [] }, { data: null }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert({ ships_nothing: true })])
+
+      expect(result).toMatchObject({ updated: 1, unchanged: 0 })
+      const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+      expect(update.ships_nothing).toBe(true)
+    })
+
+    it('counts a row synced before the column as unchanged when nothing ships', async () => {
+      mock.enqueueMany([{ data: [existingRow()] }, { data: [] }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert({ ships_nothing: false })])
+
+      expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+    })
+
+    it('leaves a booked row alone', async () => {
+      mock.enqueueMany([{ data: [existingRow({ journal_entry_id: 'je-1', ships_nothing: false })] }, { data: [] }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert({ ships_nothing: true })])
+
+      expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+      expect(mock.findCall('webshop_orders', 'update')).toBeUndefined()
+    })
+  })
+
   it('fills in the country on a booked row that has none (crm#1032)', async () => {
     mock.enqueueMany([
       { data: [existingRow({ journal_entry_id: 'je-1', customer_country: null })] },
