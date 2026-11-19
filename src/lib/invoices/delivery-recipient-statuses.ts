@@ -112,3 +112,20 @@ export function annotateUnmatchedReportDetail(
     : `(reported for ${unmatched.map(maskAddressToDomain).join(', ')})`
   return detail ? `${detail} ${note}` : note
 }
+
+/**
+ * Whether the per-recipient list adds anything to the overall status. With
+ * several recipients it always does. With one, it only repeats the overall
+ * status, unless the two differ (a forward target bounced while the listed
+ * recipient's server accepted the mail).
+ */
+export function showsRecipientBreakdown(
+  overall: string,
+  statuses: InvoiceDeliveryRecipientStatuses,
+  recipientCount: number,
+): boolean {
+  const reported = Object.values(statuses)
+  if (reported.length === 0) return false
+  if (recipientCount > 1) return true
+  return reported.some((outcome) => outcome?.status !== overall)
+}
