@@ -33,7 +33,7 @@ import {
   type OAuthFlow,
 } from '@/lib/auth/oauth-flows'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
-import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal, skvUnreachable } from './lib/api-client'
+import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal, skvUnreachable, skvUnavailableAnswer } from './lib/api-client'
 import { skvAuthCodeToStructured } from './lib/error-map'
 import {
   buildMomsuppgift,
@@ -169,9 +169,8 @@ function skvConsentErrorMessage(code: string): string {
   return SKV_CONSENT_FAILED_MESSAGE
 }
 
-// The two sentences every other Skatteverket door answers for a failure no
-// branch has words for (handleSkvError, mapServiceError).
-const SKV_TIMEOUT_MESSAGE = 'Skatteverket svarade inte i tid. Försök igen om en stund.'
+// The sentence every other Skatteverket door answers for a failure no branch
+// has words for (handleSkvError, mapServiceError).
 const SKV_UNEXPECTED_FAILURE_MESSAGE =
   'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.'
 
@@ -184,7 +183,7 @@ const SKV_UNEXPECTED_FAILURE_MESSAGE =
  * of these doors, not only from the callback (crm#1944).
  */
 function skvUnexpectedFailureMessage(err: unknown): string {
-  if (isTimeoutError(err)) return SKV_TIMEOUT_MESSAGE
+  if (isTimeoutError(err)) return skvUnavailableAnswer().messageSv
   return userFacingFailure(err, SKV_UNEXPECTED_FAILURE_MESSAGE)
 }
 
@@ -2950,6 +2949,15 @@ function handleSkvError(err: unknown): NextResponse {
     return errorResponseFromCode(err.code, log)
   }
 
+  // Skatteverket gave no answer: its side, not a fault of ours, so a warning
+  // with the registry's code and status (skvUnavailableAnswer), in the
+  // { error, code } shape the panels read from every branch here.
+  if (skvUnreachable(err)) {
+    log.warn('skatteverket did not answer', { cause: err.cause instanceof Error ? err.cause.message : String(err.cause) })
+    const answer = skvUnavailableAnswer()
+    return NextResponse.json({ error: answer.messageSv, code: answer.code }, { status: answer.httpStatus })
+  }
+
   log.error('API error', err)
   return NextResponse.json(
     { error: skvUnexpectedFailureMessage(err) },
@@ -3059,6 +3067,28 @@ async function commitBookSkattekontoRows(
 }
 
 /**
+ * An approval that met no answer from Skatteverket, or Skatteverket's own
+ * 502, 503 or 504: the registry's code, status and retryable flag
+ * (skvUnavailableAnswer), so the operation stays pending and the same
+ * approval can be given again. `error` keeps the sentence a door words for
+ * Skatteverket's own answer; without one the person reads the registry's.
+ */
+function skvUnavailableSubmitResult(
+  error?: string,
+  details?: Record<string, unknown>,
+): Extract<SkvSubmitResult, { ok: false }> {
+  const answer = skvUnavailableAnswer()
+  return {
+    ok: false,
+    code: answer.code,
+    http_status: answer.httpStatus,
+    recoverable: answer.retryable,
+    error: error ?? answer.messageSv,
+    ...(details ? { details } : {}),
+  }
+}
+
+/**
  * Translate a thrown error inside a submit commit service to a SkvSubmitResult.
  *
  * Recoverable, so the op stays reviewable and the same approval can be given
@@ -3086,12 +3116,9 @@ function mapServiceError(
   if (skvUnreachable(err)) {
     log.warn(`skatteverket did not answer the ${declaration} submit`, {
       companyId,
-      error: err instanceof Error ? err.message : String(err),
+      cause: err.cause instanceof Error ? err.cause.message : String(err.cause),
     })
-    return {
-      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504,
-      recoverable: true, error: skvUnexpectedFailureMessage(err),
-    }
+    return skvUnavailableSubmitResult()
   }
   // The thrown text is for the log, and this is its only record: the approver
   // (a person in the app, or an agent) reads a sentence.
@@ -3153,10 +3180,7 @@ async function commitSubmitVatDeclaration(
       // nothing about the declaration: the operation waits and the same
       // approval can be given again. Every other refusal consumes it.
       if (result.skv && SERVICE_DOWN_STATUSES.has(result.skv.skv_status)) {
-        return {
-          ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: result.httpStatus,
-          recoverable: true, error: result.error, details,
-        }
+        return skvUnavailableSubmitResult(result.error, details)
       }
       return {
         ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: result.httpStatus,
@@ -3207,10 +3231,7 @@ async function commitSubmitAgi(
           status: result.httpStatus,
           answer: result.error,
         })
-        return {
-          ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: result.httpStatus,
-          recoverable: true, error: SKV_SERVICE_FAILING_SV,
-        }
+        return skvUnavailableSubmitResult(SKV_SERVICE_FAILING_SV)
       }
       return {
         ok: false,

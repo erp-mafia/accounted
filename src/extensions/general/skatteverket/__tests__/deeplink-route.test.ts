@@ -51,6 +51,8 @@ vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: (...a: unknown[]) => mo
 
 import { skatteverketExtension } from '../index'
 import { OmbudApiError } from '../lib/ombud-client'
+import { asSkvUnavailable } from '../lib/api-client'
+import { NO_ANSWER } from './skv-no-answer-fixture'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { createMockRequest, createQueuedMockSupabase, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -277,8 +279,8 @@ describe('POST /system-connection/deeplink', () => {
   it.each([
     ['a 502', new OmbudApiError('Ombudshantering svarade 502 (djuplank/utseombud)', 'OBR_HTTP_ERROR', 502)],
     ['a 504', new OmbudApiError('Ombudshantering svarade 504 (djuplank/utseombud)', 'OBR_HTTP_ERROR', 504)],
-    ['no answer within the timeout', new DOMException('The operation was aborted due to timeout', 'TimeoutError')],
-    ['no connection at all', new TypeError('fetch failed')],
+    // What the transport throws for no answer at all (skv-no-answer-fixture).
+    ...NO_ANSWER.map(([label, platform]): [string, unknown] => [`no answer: ${label}`, asSkvUnavailable(platform())]),
   ])('%s reads the same', async (_case, failure) => {
     mockCreateDeepLink.mockRejectedValue(failure)
     const res = await findRoute().handler(request(), makeContext())

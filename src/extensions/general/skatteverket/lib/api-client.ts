@@ -8,6 +8,7 @@ import {
 import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import { requireHttpsUrl } from '@/lib/http/require-https'
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout'
+import { getErrorEntry, type StructuredErrorRemediation } from '@/lib/errors/structured-errors'
 import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from './connector-mode'
 import { refreshAccessToken } from './oauth'
 import { SKV_REFRESH_TOKEN_OBSERVED_LIFETIME_MS } from '@/lib/skatteverket/session-lifetime'
@@ -725,7 +726,7 @@ export async function skvRequestWithAuth(
     }
     const thrown = withFetchFaultNamed(err, audit)
     if (trace.sent) await recordCall(audit, auth.mode, trace, outcomeOfError(thrown, trace))
-    throw thrown
+    throw asSkvUnavailable(thrown)
   }
   await recordCall(audit, auth.mode, trace, await outcomeOfResponse(response, audit))
   return response
@@ -1298,14 +1299,75 @@ function withFetchFaultNamed(err: unknown, audit: SkvAudit): unknown {
 }
 
 /**
- * No answer at all: the call's timeout ran out, or no connection (undici's
- * "fetch failed" for a cause that waiting can cure, or one the runtime does
- * not state). A failed fetch skvFetchFault names is a fault, not this. The
- * transport rethrows a timeout and an unreachable host as the platform
- * raised them, so every door that words a failure asks here whether it was
- * this one.
+ * The one answer every door gives when Skatteverket did not answer: the
+ * registry entry SKATTEVERKET_UNAVAILABLE (status, retryable, the Swedish
+ * sentence, the English one and the next step). The MCP tools, the v1 read,
+ * the approval of a momsdeklaration or an AGI and the extension's dashboard
+ * routes all read it here.
  */
-export function skvUnreachable(err: unknown): boolean {
+export interface SkvUnavailableAnswer {
+  code: 'SKATTEVERKET_UNAVAILABLE'
+  httpStatus: number
+  retryable: boolean
+  messageSv: string
+  messageEn: string
+  remediation?: StructuredErrorRemediation
+}
+
+const SKV_UNAVAILABLE_CODE = 'SKATTEVERKET_UNAVAILABLE'
+
+export function skvUnavailableAnswer(): SkvUnavailableAnswer {
+  const entry = getErrorEntry(SKV_UNAVAILABLE_CODE)
+  if (!entry) throw new Error(`${SKV_UNAVAILABLE_CODE} is missing from the structured-errors registry`)
+  return {
+    code: SKV_UNAVAILABLE_CODE,
+    httpStatus: entry.httpStatus,
+    retryable: entry.retryable === true,
+    messageSv: entry.message_sv,
+    messageEn: entry.message_en,
+    ...(entry.remediation ? { remediation: entry.remediation } : {}),
+  }
+}
+
+/**
+ * What the transport throws when Skatteverket gave no answer: the call's
+ * timeout ran out, or no connection. The platform's error is its `cause`;
+ * `code` is the registry code, so a door with no branch of its own for it
+ * (getStructuredError) still answers SKATTEVERKET_UNAVAILABLE.
+ */
+export class SkatteverketUnavailableError extends Error {
+  readonly code = SKV_UNAVAILABLE_CODE
+
+  constructor(cause: unknown) {
+    super(skvUnavailableAnswer().messageEn, { cause })
+    this.name = 'SkatteverketUnavailableError'
+  }
+}
+
+/**
+ * The platform's own errors for no answer at all: the timeout's
+ * DOMException, or undici's "fetch failed" for a cause that waiting can cure
+ * (a connection refused or reset, a lookup that did not answer) or one the
+ * runtime does not state. A failed fetch skvFetchFault names is a fault, not
+ * this.
+ */
+function platformGaveNoAnswer(err: unknown): boolean {
   if (isTimeoutError(err)) return true
   return err instanceof TypeError && err.message === 'fetch failed' && skvFetchFault(err) === null
+}
+
+/**
+ * The transport's conversion of a failed call: a platform no-answer becomes
+ * SkatteverketUnavailableError; anything else is returned as it was raised.
+ */
+export function asSkvUnavailable(err: unknown): unknown {
+  return platformGaveNoAnswer(err) ? new SkatteverketUnavailableError(err) : err
+}
+
+/**
+ * Whether a failed Skatteverket call got no answer at all, the one test every
+ * door that words a failure asks.
+ */
+export function skvUnreachable(err: unknown): err is SkatteverketUnavailableError {
+  return err instanceof SkatteverketUnavailableError
 }

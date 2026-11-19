@@ -198,6 +198,7 @@ When the user wants to pay the moms from the bank, \`gnubok_prepare_payments({ c
 - **409 / conflict** (an operation already consumed, a duplicate submission): re-read state (\`gnubok_list_pending_operations\`, \`gnubok_vat_declaration_status\`) before doing anything else. Never stage the same submission twice.
 - **Staged for approval**: that is success, not an error. Nothing is committed until the user approves.
 - **\`capability_blocked\` (403) on approval**: the company's plan does not include Skatteverket filing. Tell the user; they file manually at skatteverket.se.
+- **\`SKATTEVERKET_UNAVAILABLE\`**: Skatteverket did not answer, or its service was down; nothing was filed and the operation stays pending. Approve the same operation again in a few minutes; do not ask the user to reconnect.
 - **\`SKATTEVERKET_SUBMIT_REJECTED\`** or \`SKATTEVERKET_API_ERROR\`: show Skatteverket's message verbatim, do not retry a write blindly, re-run step 6.
 
 ## Stop conditions: this needs a human

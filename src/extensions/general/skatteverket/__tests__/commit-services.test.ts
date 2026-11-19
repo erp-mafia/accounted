@@ -57,7 +57,8 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { skatteverketExtension } from '../index'
-import { SkatteverketAuthError } from '../lib/api-client'
+import { SkatteverketAuthError, asSkvUnavailable } from '../lib/api-client'
+import { NO_ANSWER } from './skv-no-answer-fixture'
 import { vatDeclarationFixture } from './vat-declaration-fixture'
 
 const MARCH = { type: 'monthly' as const, year: 2025, period: 3, start: '2025-03-01', end: '2025-03-31' }
@@ -144,27 +145,25 @@ describe('commitSubmitAgi', () => {
   // Skatteverket's service being down says nothing about the AGI: the
   // operation waits and the same approval can be given again, as an approved
   // momsdeklaration does (#212). Until then the proposal was consumed.
-  it.each([
-    ['no answer within the timeout', new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'Skatteverket svarade inte i tid. Försök igen om en stund.'],
-    ['no connection', new TypeError('fetch failed'), 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.'],
-  ])('%s → recoverable, in Swedish, the operation is kept', async (_label, thrown, sentence) => {
+  it.each(NO_ANSWER)('%s → the one no-answer answer, retryable, the operation is kept', async (_label, platform) => {
     const { supabase } = createQueuedMockSupabase()
-    mockAgiPostUnderlag.mockRejectedValue(thrown)
+    mockAgiPostUnderlag.mockRejectedValue(asSkvUnavailable(platform()))
 
     const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
 
     expect(result).toEqual({
-      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504, recoverable: true, error: sentence,
+      ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, recoverable: true,
+      error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
     })
   })
 
   it('no answer at the signing link, after the underlag was taken, keeps the operation too', async () => {
     const { supabase } = createQueuedMockSupabase()
-    mockAgiSkapaGranskningsunderlag.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+    mockAgiSkapaGranskningsunderlag.mockRejectedValue(asSkvUnavailable(NO_ANSWER[0][1]()))
 
     const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
 
-    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504, recoverable: true })
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, recoverable: true })
   })
 
   // What the client hands on for a gateway's 503 is not a sentence
@@ -180,7 +179,7 @@ describe('commitSubmitAgi', () => {
     const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
 
     expect(result).toEqual({
-      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: status, recoverable: true,
+      ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, recoverable: true,
       error: 'Skatteverkets tjänst har ett tekniskt fel just nu. Försök igen om en stund.',
     })
   })
@@ -191,7 +190,7 @@ describe('commitSubmitAgi', () => {
 
     const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
 
-    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 503, recoverable: true })
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, recoverable: true })
     expect(mockAgiSkapaGranskningsunderlag).not.toHaveBeenCalled()
   })
 
@@ -201,7 +200,7 @@ describe('commitSubmitAgi', () => {
 
     const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
 
-    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 503, recoverable: true })
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, recoverable: true })
   })
 
   it.each([400, 500])('a %i from Skatteverket is still a refusal, in its own words: the operation is consumed', async (status) => {
@@ -344,7 +343,7 @@ describe('commitSubmitVatDeclaration', () => {
 
     const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
 
-    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: status, recoverable: true })
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, recoverable: true })
     expect(result.error).toBe(
       'Skatteverket tog inte emot utkastet: Tekniskt fel. Skatteverkets detalj: Service unavailable. ' +
         'Skatteverkets tjänst har ett tekniskt fel just nu. Försök igen om en stund.',
@@ -372,16 +371,14 @@ describe('commitSubmitVatDeclaration', () => {
     expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: 502, recoverable: false })
   })
 
-  it.each([
-    ['no answer within the timeout', new DOMException('The operation was aborted due to timeout', 'TimeoutError'), 'Skatteverket svarade inte i tid. Försök igen om en stund.'],
-    ['no connection', new TypeError('fetch failed'), 'Ett tekniskt fel uppstod i kontakten med Skatteverket. Försök igen om en stund.'],
-  ])('%s → recoverable, in Swedish, the operation is kept', async (_label, thrown, sentence) => {
-    mockSkvRequest.mockRejectedValueOnce(thrown)
+  it.each(NO_ANSWER)('%s → the one no-answer answer, retryable, the operation is kept', async (_label, platform) => {
+    mockSkvRequest.mockRejectedValueOnce(asSkvUnavailable(platform()))
 
     const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
 
     expect(result).toEqual({
-      ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 504, recoverable: true, error: sentence,
+      ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, recoverable: true,
+      error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
     })
   })
 

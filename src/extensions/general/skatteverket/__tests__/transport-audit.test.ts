@@ -79,7 +79,7 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
 
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
-import { skvRequestWithAuth, SkatteverketAuthError, skvUnreachable } from '../lib/api-client'
+import { skvRequestWithAuth, SkatteverketAuthError, SkatteverketUnavailableError, skvUnreachable } from '../lib/api-client'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { getSaldo, getTransaktioner } from '../lib/skattekonto-client'
 import { listOmbudGrants } from '../lib/ombud-client'
@@ -267,11 +267,25 @@ describe('transport: one audit row per outbound call', () => {
     )
   })
 
-  it('rethrows a fetch failure waiting can cure as the platform raised it, with no error log line', async () => {
-    const platform = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) })
+  it.each<[string, () => Error]>([
+    ['the time limit ran out', () => new DOMException('The operation was aborted due to timeout', 'TimeoutError')],
+    [
+      'the connection was refused',
+      () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }),
+    ],
+  ])('no answer (%s): one SkatteverketUnavailableError, the row keeps the platform words, no error log line', async (_label, make) => {
+    const platform = make()
     answers = [platform]
-    await expect(skvRequestWithAuth(USER, 'GET', '/x', TARGET)).rejects.toBe(platform)
-    expect(skvUnreachable(platform)).toBe(true)
+    const thrown = await skvRequestWithAuth(USER, 'GET', '/x', TARGET).catch((e: unknown) => e)
+
+    expect(thrown).toBeInstanceOf(SkatteverketUnavailableError)
+    expect((thrown as Error).cause).toBe(platform)
+    expect(skvUnreachable(thrown)).toBe(true)
+    // A door with no branch of its own answers the registry entry.
+    expect(getStructuredError(thrown)).toMatchObject({ code: 'SKATTEVERKET_UNAVAILABLE', retryable: true })
+    expect(rows()).toEqual([
+      expect.objectContaining({ outcome: 'internal_error', responseStatus: null, errorMessage: platform.message }),
+    ])
     expect(records.filter((r) => r.level === 'error')).toEqual([])
   })
 

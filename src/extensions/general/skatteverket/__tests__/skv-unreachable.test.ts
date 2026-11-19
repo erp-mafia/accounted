@@ -1,16 +1,17 @@
 /**
- * skvUnreachable: which failed calls mean "Skatteverket did not answer, try
- * again" (a timeout, a failed fetch whose cause waiting can cure, or whose
- * cause the runtime does not state) and which are a fault that waiting does
- * not cure (a refused redirect, a host that does not resolve, a certificate
- * error, an invalid URL). The errors are built the way the runtime builds
- * them; the last block makes real fetches so a runtime that words a cause
- * differently turns this red.
+ * The transport's conversion (asSkvUnavailable) read by skvUnreachable: which
+ * failed calls mean "Skatteverket did not answer, try again" (a timeout, a
+ * failed fetch whose cause waiting can cure, or whose cause the runtime does
+ * not state) and which are a fault that waiting does not cure (a refused
+ * redirect, a host that does not resolve, a certificate error, an invalid
+ * URL). The errors are built the way the runtime builds them; the last block
+ * makes real fetches so a runtime that words a cause differently turns this
+ * red.
  */
 import http from 'node:http'
 import net from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { skvUnreachable } from '../lib/api-client'
+import { asSkvUnavailable, skvUnreachable } from '../lib/api-client'
 
 /** undici's TypeError('fetch failed') with the cause the runtime attaches. */
 function fetchFailed(cause?: unknown): TypeError {
@@ -37,7 +38,7 @@ describe('skvUnreachable: transient, Skatteverket did not answer', () => {
     ['a cause with an unknown code', fetchFailed(causeWithCode('UND_ERR_SOMETHING_NEW'))],
     ['a cause that is not an object', fetchFailed('string cause')],
   ])('%s', (_label, err) => {
-    expect(skvUnreachable(err)).toBe(true)
+    expect(skvUnreachable(asSkvUnavailable(err))).toBe(true)
   })
 })
 
@@ -58,7 +59,12 @@ describe('skvUnreachable: a fault waiting does not cure', () => {
     ],
     ['any other error', new Error('fetch failed')],
   ])('%s', (_label, err) => {
-    expect(skvUnreachable(err)).toBe(false)
+    expect(skvUnreachable(asSkvUnavailable(err))).toBe(false)
+  })
+
+  it('a platform no-answer error that did not come through the transport', () => {
+    expect(skvUnreachable(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))).toBe(false)
+    expect(skvUnreachable(fetchFailed(causeWithCode('ECONNREFUSED')))).toBe(false)
   })
 })
 
@@ -98,10 +104,10 @@ describe('skvUnreachable over real fetches (the runtime words the cause)', () =>
   }
 
   it('a 307 answer is a fault, not "did not answer"', async () => {
-    expect(skvUnreachable(await failureOf(redirectUrl))).toBe(false)
+    expect(skvUnreachable(asSkvUnavailable(await failureOf(redirectUrl)))).toBe(false)
   })
 
   it('a refused connection did not answer', async () => {
-    expect(skvUnreachable(await failureOf(closedUrl))).toBe(true)
+    expect(skvUnreachable(asSkvUnavailable(await failureOf(closedUrl)))).toBe(true)
   })
 })

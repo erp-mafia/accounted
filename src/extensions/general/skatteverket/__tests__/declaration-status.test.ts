@@ -57,7 +57,9 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchVatDeclarationStatus } from '../lib/declaration-status'
-import { SkatteverketAuthError } from '../lib/api-client'
+import { SkatteverketAuthError, asSkvUnavailable } from '../lib/api-client'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { NO_ANSWER } from './skv-no-answer-fixture'
 
 const supabase = {} as SupabaseClient
 const USER_AUTH = { mode: 'user', supabase, userId: 'user-2', companyId: 'company-1' }
@@ -248,25 +250,22 @@ describe('fetchVatDeclarationStatus', () => {
     expect(mockSkvRequestWithAuth.mock.calls[0][3]).toMatchObject({ expectJson: true })
   })
 
-  // The transport rethrows what the platform raises when its 15 seconds run
-  // out, or when the call reaches nobody. Thrown on, it reached an agent as
-  // UNKNOWN_ERROR and the v1 route as a 500 (12 MCP calls on 2026-11-05).
-  it('no answer from Skatteverket → SKATTEVERKET_UNAVAILABLE 503, in Swedish', async () => {
-    for (const failure of [
-      new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
-      new TypeError('fetch failed'),
-    ]) {
-      mockSkvRequestWithAuth.mockRejectedValue(failure)
-      const result = await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
-        periodType: 'monthly', year: 2026, period: 3,
-      })
-      expect(result).toEqual({
-        ok: false,
-        code: 'SKATTEVERKET_UNAVAILABLE',
-        http_status: 503,
-        error: 'Skatteverket svarar inte just nu. Försök igen om en stund.',
-      })
-    }
+  // What the transport throws when its 15 seconds run out, or when the call
+  // reaches nobody. Thrown on, it reached an agent as UNKNOWN_ERROR and the
+  // v1 route as a 500 (12 MCP calls on 2026-11-05).
+  it.each(NO_ANSWER)('no answer from Skatteverket (%s) → SKATTEVERKET_UNAVAILABLE 503, retryable, in Swedish', async (_label, platform) => {
+    mockSkvRequestWithAuth.mockRejectedValue(asSkvUnavailable(platform()))
+    const result = await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+      periodType: 'monthly', year: 2026, period: 3,
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: 'SKATTEVERKET_UNAVAILABLE',
+      http_status: 503,
+      error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
+    })
+    // The v1 envelope carries the code; retryable is the registry's.
+    expect(getErrorEntry('SKATTEVERKET_UNAVAILABLE')?.retryable).toBe(true)
   })
 
   it('any other failure is still thrown for the route wrapper', async () => {

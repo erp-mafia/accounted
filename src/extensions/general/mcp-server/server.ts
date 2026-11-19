@@ -788,7 +788,7 @@ import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fi
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
 // components/. The two submit tools stage ops whose commit dispatches back into
 // the skatteverket extension via the registry (lib/pending-operations/commit.ts).
-import { skvRequest, SkatteverketAuthError, isApigwClientRefusal, skvUnreachable } from '@/extensions/general/skatteverket/lib/api-client'
+import { skvRequest, SkatteverketAuthError, isApigwClientRefusal, skvUnreachable, skvUnavailableAnswer } from '@/extensions/general/skatteverket/lib/api-client'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
@@ -3000,16 +3000,17 @@ function mapSkatteverketError(err: unknown, whenUnavailable: string): Error {
 
 /**
  * Skatteverket gave no answer: the transport's timeout ran out, or no
- * connection. The transport rethrows the platform's own error, which reached
- * the agent as UNKNOWN_ERROR, not retryable, "The operation was aborted due
- * to timeout" (12 calls on 2026-11-05): no word on who had not answered or
- * what to do. The registry entry says who was silent, that the call can be
- * made again and that the connection is not the problem, so the agent does
- * not send the user to BankID for an outage on Skatteverket's side.
+ * connection. As the platform's own error it reached the agent as
+ * UNKNOWN_ERROR, not retryable, "The operation was aborted due to timeout"
+ * (12 calls on 2026-11-05): no word on who had not answered or what to do.
+ * The one answer every door gives (skvUnavailableAnswer) says who was silent,
+ * that the call can be made again and that the connection is not the
+ * problem, so the agent does not send the user to BankID for an outage on
+ * Skatteverket's side.
  */
 function skvUnavailableRefusal(whenUnavailable: string): Error {
-  const code = 'SKATTEVERKET_UNAVAILABLE'
-  return codedRefusal(code, `${getErrorEntry(code)?.message_en} ${whenUnavailable}`)
+  const answer = skvUnavailableAnswer()
+  return codedRefusal(answer.code, `${answer.messageEn} ${whenUnavailable}`)
 }
 
 /**

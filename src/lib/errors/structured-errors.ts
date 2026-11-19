@@ -10073,13 +10073,16 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     retryable: true,
   },
   // No answer from Skatteverket at all: the call's timeout ran out, or no
-  // connection. It says nothing about the request or the company's
-  // connection, so the same call can be made again later. As the platform's
-  // own error it reached agents as UNKNOWN_ERROR, "The operation was aborted
-  // due to timeout" (12 calls in five minutes on 2026-11-05).
+  // connection; on an approval, also Skatteverket's own 502, 503 or 504. It
+  // says nothing about the request or the company's connection, so the same
+  // call can be made again later. As the platform's own error it reached
+  // agents as UNKNOWN_ERROR, "The operation was aborted due to timeout" (12
+  // calls in five minutes on 2026-11-05). The one answer every Skatteverket
+  // door gives (skvUnavailableAnswer in the skatteverket extension's
+  // lib/api-client.ts).
   SKATTEVERKET_UNAVAILABLE: {
     httpStatus: 503,
-    message_sv: 'Skatteverket svarar inte just nu. Försök igen om en stund.',
+    message_sv: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
     message_en:
       'Skatteverket did not answer: no reply within the time limit, or no connection. Try the same call again in a few minutes.',
     retryable: true,

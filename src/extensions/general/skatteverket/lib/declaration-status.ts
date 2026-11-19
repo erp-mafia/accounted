@@ -5,12 +5,11 @@ import type {
   SkvVatDeclarationStatusInput,
   SkvVatDeclarationStatusResult,
 } from '@/lib/skatteverket/declaration-status'
-import { skvRequestWithAuth, SkatteverketAuthError, skvUnreachable } from './api-client'
+import { skvRequestWithAuth, SkatteverketAuthError, skvUnreachable, skvUnavailableAnswer } from './api-client'
 import { resolveReadAuth } from './resolve-auth'
 import { resolveRedovisare, resolveRedovisningsperiod } from './declaration-prep'
 import { skvAuthCodeToStructured } from './error-map'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
-import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { recordVatFilingConfirmed } from '@/lib/vat/filing-record-store'
 
 /**
@@ -132,10 +131,10 @@ export async function fetchVatDeclarationStatus(
     // agent as UNKNOWN_ERROR and the v1 route as a 500.
     if (skvUnreachable(err)) {
       ctx.log.warn('skv declaration-status: no answer from Skatteverket', {
-        message: err instanceof Error ? err.message : String(err),
+        cause: err.cause instanceof Error ? err.cause.message : String(err.cause),
       })
-      const code = 'SKATTEVERKET_UNAVAILABLE'
-      return { ok: false, code, http_status: 503, error: getErrorEntry(code)?.message_sv ?? code }
+      const answer = skvUnavailableAnswer()
+      return { ok: false, code: answer.code, http_status: answer.httpStatus, error: answer.messageSv }
     }
     throw err
   }

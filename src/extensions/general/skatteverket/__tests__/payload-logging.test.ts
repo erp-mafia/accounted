@@ -68,6 +68,9 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
+import { asSkvUnavailable } from '../lib/api-client'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { NO_ANSWER } from './skv-no-answer-fixture'
 
 /** The write-role gate reads company_members; this caller is a member. */
 function memberSupabase() {
@@ -214,16 +217,24 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
     },
   )
 
-  it.each(['/declaration/validate', '/declaration/draft'])(
-    '%s says Skatteverket did not answer in time, not the runtime\'s own words for it',
-    async (path) => {
-      mockSkvRequest.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+  // The dashboard door answers no answer from Skatteverket with the one
+  // answer (skvUnavailableAnswer): its code and status, never logged as our
+  // own error.
+  it.each(['/declaration/validate', '/declaration/draft'].flatMap((path) => NO_ANSWER.map(([label, platform]) => [path, label, platform] as const)))(
+    '%s, no answer (%s): SKATTEVERKET_UNAVAILABLE 503 in Swedish, not logged as our error',
+    async (path, _label, platform) => {
+      mockSkvRequest.mockRejectedValue(asSkvUnavailable(platform()))
       const ctx = makeContext()
 
       const response = await route('POST', path).handler(postJson(path, vatBody), ctx)
 
-      expect(response.status).toBe(500)
-      expect(await response.json()).toEqual({ error: 'Skatteverket svarade inte i tid. Försök igen om en stund.' })
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({
+        error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
+        code: 'SKATTEVERKET_UNAVAILABLE',
+      })
+      expect(getErrorEntry('SKATTEVERKET_UNAVAILABLE')?.retryable).toBe(true)
+      expect(everythingLogged(ctx)).not.toContain('ERROR API error')
     },
   )
 

@@ -66,7 +66,8 @@ vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () 
 import { tools } from '../server'
 import { getSkvConnectionHealth } from '../skv-connection-health'
 import { toToolError } from '../tool-result'
-import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
+import { SkatteverketAuthError, asSkvUnavailable } from '@/extensions/general/skatteverket/lib/api-client'
+import { NO_ANSWER } from '@/extensions/general/skatteverket/__tests__/skv-no-answer-fixture'
 import {
   COMPLETE_VAT_DECLARATION,
   INCOMPLETE_VAT_DECLARATION,
@@ -975,10 +976,11 @@ describe('Skatteverket tools: Skatteverket does not answer', () => {
   // aborted due to timeout": no word on what had timed out or what to do.
   const PERIOD = { period_type: 'quarterly', year: 2026, period: 3 }
 
-  /** What a fetch that outlives AbortSignal.timeout rejects with (pinned against the platform in lib/errors). */
-  const timeout = (): unknown => new DOMException('The operation was aborted due to timeout', 'TimeoutError')
-  /** undici's error for a call that reached nobody. */
-  const noConnection = (): unknown => new TypeError('fetch failed')
+  /**
+   * What the transport throws for each way of getting no answer: its time
+   * limit, and a refused connection (skv-no-answer-fixture).
+   */
+  const noAnswers = (): unknown[] => NO_ANSWER.map(([, platform]) => asSkvUnavailable(platform()))
 
   const refusalOf = async (call: Promise<unknown>, toolName: string) => {
     const thrown = await call.then(() => null, (err: unknown) => err)
@@ -994,7 +996,7 @@ describe('Skatteverket tools: Skatteverket does not answer', () => {
     // The connection is not the problem: the agent must not send the user to BankID.
     expect(error.remediation?.description).toContain('do not ask the user to reconnect')
     expect(error.remediation?.tool).toBeUndefined()
-    expect(error.message_sv).toBe('Skatteverket svarar inte just nu. Försök igen om en stund.')
+    expect(error.message_sv).toBe('Skatteverket svarade inte i tid. Försök igen om en stund.')
   }
 
   beforeEach(() => {
@@ -1002,7 +1004,7 @@ describe('Skatteverket tools: Skatteverket does not answer', () => {
   })
 
   it('gnubok_vat_declaration_validate names the check that needs no Skatteverket', async () => {
-    for (const failure of [timeout(), noConnection()]) {
+    for (const failure of noAnswers()) {
       mockSkvRequest.mockRejectedValue(failure)
       const { supabase } = createQueuedMockSupabase()
       const error = await refusalOf(
@@ -1016,21 +1018,23 @@ describe('Skatteverket tools: Skatteverket does not answer', () => {
   })
 
   it('gnubok_vat_declaration_submit says nothing was staged, and stages nothing', async () => {
-    mockSkvRequest.mockRejectedValue(timeout())
-    const { supabase, findCalls } = createTableMockSupabase({})
-    const error = await refusalOf(
-      vatSubmit.execute(PERIOD, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
-      'gnubok_vat_declaration_submit',
-    )
-    expectUnavailable(error)
-    expect(error.message_en).toContain('Nothing was staged')
-    expect(findCalls('pending_operations', 'insert')).toEqual([])
+    for (const failure of noAnswers()) {
+      mockSkvRequest.mockRejectedValue(failure)
+      const { supabase, findCalls } = createTableMockSupabase({})
+      const error = await refusalOf(
+        vatSubmit.execute(PERIOD, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+        'gnubok_vat_declaration_submit',
+      )
+      expectUnavailable(error)
+      expect(error.message_en).toContain('Nothing was staged')
+      expect(findCalls('pending_operations', 'insert')).toEqual([])
+    }
   })
 
   // The service answers the missing answer itself (declaration-status.test.ts).
   it('gnubok_vat_declaration_status names the local record of filed periods', async () => {
     mockFetchVatDeclarationStatus.mockResolvedValue({
-      ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, error: 'Skatteverket svarar inte just nu. Försök igen om en stund.',
+      ok: false, code: 'SKATTEVERKET_UNAVAILABLE', http_status: 503, error: 'Skatteverket svarade inte i tid. Försök igen om en stund.',
     })
     const { supabase } = createQueuedMockSupabase()
     const error = await refusalOf(
@@ -1049,16 +1053,18 @@ describe('Skatteverket tools: Skatteverket does not answer', () => {
       source: 'user',
       tokenUserId: 'user-1',
     })
-    mockKvittenser.mockRejectedValue(timeout())
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'sr-1', period_year: 2026, period_month: 9, agi_generated_at: null, agi_submitted_at: null } })
-    enqueue({ data: null })
-    const error = await refusalOf(
-      agiStatus.execute({ salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
-      'gnubok_agi_status',
-    )
-    expectUnavailable(error)
-    expect(error.message_en).toContain('gnubok_get_salary_run with salary_run_id sr-1')
+    for (const failure of noAnswers()) {
+      mockKvittenser.mockRejectedValue(failure)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'sr-1', period_year: 2026, period_month: 9, agi_generated_at: null, agi_submitted_at: null } })
+      enqueue({ data: null })
+      const error = await refusalOf(
+        agiStatus.execute({ salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+        'gnubok_agi_status',
+      )
+      expectUnavailable(error)
+      expect(error.message_en).toContain('gnubok_get_salary_run with salary_run_id sr-1')
+    }
   })
 
   it('a failure that is not a missing answer keeps its own words', async () => {
