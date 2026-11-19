@@ -3,7 +3,7 @@ import sv from '@/messages/sv.json'
 import { gateContext, SV_LABELS } from '@/lib/agent/ask/__tests__/ui-fixture'
 import type { UiMapInput } from '@/lib/agent/ask/ui-map'
 import type { MessageTree, PageTextIndex } from '../page-text-index'
-import { buildAppTools, handoffTool, isPageVisible, type HandoffOffer } from '../app-tools'
+import { buildAppTools, handoffTool, HANDOFF_TOOL_NAME, isPageVisible, type HandoffOffer } from '../app-tools'
 
 // The real menu (nav-v3.ts, labelled from sv.json) with every opt-in surface
 // on, and the same menu for a company that pays no salaries.
@@ -111,8 +111,17 @@ describe('offer_human_support', () => {
   it('hands the offer to the caller and answers that the button is shown', async () => {
     const onHandoff = vi.fn()
     const out = await handoffTool(onHandoff).execute({ reason: 'problem_report', summary: '  Knappen svarar inte.  ' })
-    expect(out).toEqual({ shown: true })
+    // The button is shown, and the assistant is told not to write its answer twice.
+    expect(out).toMatchObject({ shown: true })
+    expect((out as { note: string }).note).toContain('do not repeat it')
     expect(onHandoff).toHaveBeenCalledWith({ reason: 'problem_report', summary: 'Knappen svarar inte.' })
+  })
+
+  it('says in its schema when each reason applies', () => {
+    const tool = handoffTool(vi.fn())
+    expect(tool.name).toBe(HANDOFF_TOOL_NAME)
+    const reason = (tool.jsonSchema.properties as { reason: { enum: string[]; description: string } }).reason
+    for (const value of reason.enum) expect(reason.description).toContain(`${value}:`)
   })
 
   it('falls back to "cannot answer" for a reason outside the list and bounds the summary', async () => {

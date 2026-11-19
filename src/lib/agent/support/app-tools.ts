@@ -18,6 +18,8 @@ import { examplePath, matchRoute, pageParts, renderPageTexts, searchAppTexts, wi
  */
 
 export const HANDOFF_REASONS = ['cannot_answer', 'problem_report', 'account_or_billing', 'asked_for_human'] as const
+/** The tool that offers a person. A call to it does not end what the assistant was saying (service.ts). */
+export const HANDOFF_TOOL_NAME = 'offer_human_support'
 export type HandoffReason = (typeof HANDOFF_REASONS)[number]
 
 /** The assistant's own word that a person should take over, with its summary for the ticket. */
@@ -133,13 +135,18 @@ export function buildAppTools(input: AppToolsInput): AiToolDef[] {
 /** The one tool the assistant has even without page texts: saying that a person should take over. */
 export function handoffTool(onHandoff: (offer: HandoffOffer) => void): AiToolDef {
   return {
-    name: 'offer_human_support',
+    name: HANDOFF_TOOL_NAME,
     description:
-      'Show the user a button that sends this conversation to Accounted\'s support staff. Call it when you cannot answer from the menu, the page texts or the ledger tools; when something looks like a fault in the app; when the matter is one only Accounted can handle (the account, the subscription, payments to Accounted, a data correction); or when the user asks for a person. Then write your answer as usual and say that the question can be sent on with the button below the answer.',
+      'Show the user a button that sends this conversation to Accounted\'s support staff. Call it when you cannot answer from the menu, the page texts or the ledger tools; when something looks like a fault in the app; when the matter is one only Accounted can handle (the account, the subscription, payments to Accounted, a data correction); or when the user asks for a person. Write your answer as usual and say that the question can be sent on with the button below the answer. An answer you wrote before the call stays on screen: never write it a second time.',
     jsonSchema: {
       type: 'object',
       properties: {
-        reason: { type: 'string', enum: [...HANDOFF_REASONS] },
+        reason: {
+          type: 'string',
+          enum: [...HANDOFF_REASONS],
+          description:
+            'asked_for_human: only when the user asks for a person. account_or_billing: the account, the subscription or a payment to Accounted. problem_report: something in the app looks broken or wrong. cannot_answer: everything else, a wish for something the app does not do included.',
+        },
         summary: {
           type: 'string',
           description: 'One or two sentences for the support staff: what the user wants and what you could not answer or do.',
@@ -151,7 +158,10 @@ export function handoffTool(onHandoff: (offer: HandoffOffer) => void): AiToolDef
     execute: async (args) => {
       const reason = HANDOFF_REASONS.find((r) => r === args.reason) ?? 'cannot_answer'
       onHandoff({ reason, summary: text(args.summary, 600) })
-      return { shown: true }
+      return {
+        shown: true,
+        note: 'The button is under the answer now. What you have already written stays on screen: do not repeat it. Close with one short sentence that points to the button, in other words than you have used.',
+      }
     },
   }
 }

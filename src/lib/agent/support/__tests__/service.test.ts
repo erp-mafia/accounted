@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import sv from '@/messages/sv.json'
 import { gateContext, SV_LABELS } from '@/lib/agent/ask/__tests__/ui-fixture'
-import type { AiToolDef } from '@/lib/ai'
+import type { AiProgressEvent, AiToolDef } from '@/lib/ai'
 import type { PageTextIndex } from '../page-text-index'
 
 const generateText = vi.fn()
@@ -52,6 +52,7 @@ import { answerSupportQuestion } from '../service'
 import { supportSystemPrompt } from '../prompt'
 import { EmptyModelAnswerError } from '@/lib/agent/ask/errors'
 import { LEDGER_READ_TOOLS } from '@/lib/agent/ask/ledger-tools'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const supabase = {} as SupabaseClient
 const COMPANY = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -106,13 +107,13 @@ describe('answerSupportQuestion', () => {
     expect(req.maxSteps).toBe(6)
     expect(req.maxTokens).toBe(16_000)
     expect(req.history).toBeUndefined()
-    expect(req.onProgress).toBeUndefined()
   })
 
   it('puts what differs per company and question in the user turn: the company, its standing, its menu, the question', async () => {
     await ask()
     const prompt: string = generateText.mock.calls[0][0].prompt
     expect(prompt.startsWith('Företag: Exempelbolaget AB (aktiebolag).')).toBe(true)
+    expect(prompt).toContain(`Dagens datum: ${todayIsoStockholm()}.`)
     expect(prompt).toContain('Moms: kvartal.')
     expect(prompt).toContain('Appens meny för det här bolaget')
     expect(prompt).toContain('(/invoices)')
@@ -140,10 +141,118 @@ describe('answerSupportQuestion', () => {
       { role: 'user' as const, text: 'Hej' },
       { role: 'assistant' as const, text: 'Hej!' },
     ]
-    await ask({ history, onProgress })
-    const req = generateText.mock.calls[0][0]
-    expect(req.history).toEqual(history)
-    expect(req.onProgress).toBe(onProgress)
+    generateText.mockImplementation(async (req: { onProgress: (event: AiProgressEvent) => void }) => {
+      req.onProgress({ type: 'text', delta: 'Jag kollar.' })
+      req.onProgress({ type: 'tools', names: ['read_page'] })
+      req.onProgress({ type: 'text', delta: 'Under Fakturor.' })
+      return { text: 'Under Fakturor.', model: 'm', usage: {} }
+    })
+    const result = await ask({ history, onProgress })
+    expect(generateText.mock.calls[0][0].history).toEqual(history)
+    // A remark before a lookup is announced as before: the panel clears it, the answer is the last turn.
+    expect(onProgress.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'text', delta: 'Jag kollar.' },
+      { type: 'tools', names: ['read_page'] },
+      { type: 'text', delta: 'Under Fakturor.' },
+    ])
+    expect(result.answer).toBe('Under Fakturor.')
+  })
+
+  describe('an answer written before the assistant offers a person', () => {
+    const offerAfter = (before: string, after: string) =>
+      generateText.mockImplementation(
+        async (req: { tools: AiToolDef[]; onProgress: (event: AiProgressEvent) => void }) => {
+          req.onProgress({ type: 'text', delta: before })
+          req.onProgress({ type: 'tools', names: ['offer_human_support'] })
+          await req.tools.find((t) => t.name === 'offer_human_support')?.execute({ reason: 'cannot_answer', summary: 'Färger.' })
+          req.onProgress({ type: 'text', delta: after })
+          return { text: after, model: 'm', usage: {} }
+        },
+      )
+
+    it('is kept, in the answer and on screen: the offer is not announced as a lookup', async () => {
+      offerAfter('Loggan byter du under Varumärke.', 'Färgerna kan supporten svara på, med knappen nedan.')
+      const onProgress = vi.fn()
+      const result = await ask({ onProgress })
+      expect(result.answer).toBe('Loggan byter du under Varumärke.\n\nFärgerna kan supporten svara på, med knappen nedan.')
+      expect(result.handoff).toEqual({ reason: 'cannot_answer', summary: 'Färger.' })
+      expect(onProgress.mock.calls.map(([event]) => event)).toEqual([
+        { type: 'text', delta: 'Loggan byter du under Varumärke.' },
+        { type: 'text', delta: '\n\n' },
+        { type: 'text', delta: 'Färgerna kan supporten svara på, med knappen nedan.' },
+      ])
+    })
+
+    it('stands alone when it had already pointed to the button: the closing sentence would say it twice', async () => {
+      offerAfter(
+        'Abonnemanget säger du upp under Abonnemang. Vill du ha hjälp kan du använda knappen "Skicka till supporten" nedan.',
+        'Du kan skicka frågan med knappen nedan.',
+      )
+      const onProgress = vi.fn()
+      const result = await ask({ onProgress })
+      expect(result.answer).toBe(
+        'Abonnemanget säger du upp under Abonnemang. Vill du ha hjälp kan du använda knappen "Skicka till supporten" nedan.',
+      )
+      // Nothing more reaches the screen after the kept answer.
+      expect(onProgress).toHaveBeenCalledTimes(1)
+    })
+
+    it('is kept without anyone listening to the stream', async () => {
+      offerAfter('Loggan byter du under Varumärke.', 'Skicka resten med knappen nedan.')
+      const result = await ask()
+      expect(result.answer).toBe('Loggan byter du under Varumärke.\n\nSkicka resten med knappen nedan.')
+    })
+
+    it('is not doubled when the turn after the offer writes it again', async () => {
+      const body = 'Loggan byter du under Varumärke, i avsnittet Logotyp, och den visas sedan på alla fakturor du skickar.'
+      offerAfter(body, `${body} Färgerna kan supporten svara på.`)
+      const result = await ask()
+      expect(result.answer).toBe(`${body} Färgerna kan supporten svara på.`)
+    })
+
+    it('is dropped when a lookup follows the offer: what comes after is written anew', async () => {
+      generateText.mockImplementation(async (req: { onProgress: (event: AiProgressEvent) => void }) => {
+        req.onProgress({ type: 'text', delta: 'Ett första försök.' })
+        req.onProgress({ type: 'tools', names: ['offer_human_support'] })
+        req.onProgress({ type: 'tools', names: ['read_page'] })
+        req.onProgress({ type: 'text', delta: 'Det riktiga svaret.' })
+        return { text: 'Det riktiga svaret.', model: 'm', usage: {} }
+      })
+      expect((await ask()).answer).toBe('Det riktiga svaret.')
+    })
+
+    it('is not kept when the same turn also looks something up: that text was a remark', async () => {
+      generateText.mockImplementation(async (req: { onProgress: (event: AiProgressEvent) => void }) => {
+        req.onProgress({ type: 'text', delta: 'Jag kollar och kopplar in supporten.' })
+        req.onProgress({ type: 'tools', names: ['read_page', 'offer_human_support'] })
+        return { text: 'Svaret.', model: 'm', usage: {} }
+      })
+      const onProgress = vi.fn()
+      expect((await ask({ onProgress })).answer).toBe('Svaret.')
+      expect(onProgress).toHaveBeenCalledWith({ type: 'tools', names: ['read_page', 'offer_human_support'] })
+    })
+  })
+
+  it('shows the button when the answer points to it without the offer behind it, by its label or in other words', async () => {
+    for (const text of [
+      'Skicka frågan med knappen "Skicka till supporten" nedan.',
+      'Den frågan kan skickas vidare till supporten via knappen nedan.',
+    ]) {
+      generateText.mockResolvedValue({ text, model: 'm', usage: {} })
+      expect((await ask()).handoff).toEqual({ reason: 'cannot_answer', summary: 'Var skapar jag en faktura?' })
+    }
+  })
+
+  it('shows no button for an answer that names another button, or support without a button', async () => {
+    for (const text of ['Klicka på knappen Ny faktura.', 'Supporten kan inte ändra det. Fakturan krediterar du själv.']) {
+      generateText.mockResolvedValue({ text, model: 'm', usage: {} })
+      expect((await ask()).handoff).toBeNull()
+    }
+  })
+
+  it('takes the role marks of the page tools out of the answer', async () => {
+    generateText.mockResolvedValue({ text: 'Flikarna är:\n- Alla (flik)\n- Betalda (flik)\nKnappen Ny faktura (knapp) finns också.', model: 'm', usage: {} })
+    expect((await ask()).answer).toBe('Flikarna är:\n- Alla\n- Betalda\nKnappen Ny faktura finns också.')
   })
 
   it('reports that the assistant itself offered a person', async () => {

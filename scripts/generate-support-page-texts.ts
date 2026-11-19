@@ -56,9 +56,20 @@ export interface KeyRef {
   role?: PageTextRole
 }
 
+/** A read through a key property the file writes no value for: `t(item.labelKey)` with the items imported. */
+export interface PropertyRead {
+  /** The property the key is read from, e.g. `labelKey`. */
+  property: string
+  /** The namespace of the translator that reads it ('' for none). */
+  namespace: string
+  role?: PageTextRole
+}
+
 export interface FileAnalysis {
   imports: string[]
   refs: KeyRef[]
+  /** Key properties to look for in the modules the file imports (buildPageTextIndex). */
+  propertyReads: PropertyRead[]
 }
 
 // ── Reading one file ─────────────────────────────────────────
@@ -256,23 +267,24 @@ function isFunctionScope(node: ts.Node): boolean {
  * TAB_LABEL_KEYS, and `t(column.labelKey)` every `labelKey: '...'` the file
  * writes. Tabs, columns and statuses are commonly labelled this way, and
  * without the step the index held a page's group headings and not its tabs.
- * A table imported from another file is not followed.
+ * A key property the file writes no value for (`t(item.labelKey)` with the
+ * items built in a module it imports, as the report list is) is reported in
+ * `propertyReads`: buildPageTextIndex looks for it one step further, in the
+ * modules the file imports. A table variable imported from another file is
+ * not followed.
  */
-export function analyseSource(fileName: string, text: string): FileAnalysis {
-  const source = ts.createSourceFile(
+function parse(fileName: string, text: string): ts.SourceFile {
+  return ts.createSourceFile(
     fileName,
     text,
     ts.ScriptTarget.Latest,
     true,
     fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   )
-  const imports: string[] = []
-  const refs: KeyRef[] = []
-  const scopes: Array<Map<string, string>> = [new Map()]
+}
 
-  // The file's lookup tables and key properties, read before the calls are:
-  // a table is usually declared above the component that reads it, but need
-  // not be.
+/** A file's lookup tables (variable -> the texts of its literal) and key properties (property -> the keys written for it). */
+function tablesAndKeyProperties(source: ts.SourceFile): { tables: Map<string, string[]>; keyProperties: Map<string, string[]> } {
   const tables = new Map<string, string[]>()
   const keyProperties = new Map<string, string[]>()
   const collect = (node: ts.Node) => {
@@ -293,9 +305,30 @@ export function analyseSource(fileName: string, text: string): FileAnalysis {
     ts.forEachChild(node, collect)
   }
   collect(source)
+  return { tables, keyProperties }
+}
+
+/** The key properties one module writes: what a file that imports it may read through `t(item.labelKey)`. */
+export function keyPropertiesOfSource(fileName: string, text: string): Map<string, string[]> {
+  return tablesAndKeyProperties(parse(fileName, text)).keyProperties
+}
+
+export function analyseSource(fileName: string, text: string): FileAnalysis {
+  const source = parse(fileName, text)
+  const imports: string[] = []
+  const refs: KeyRef[] = []
+  const propertyReads: PropertyRead[] = []
+  const scopes: Array<Map<string, string>> = [new Map()]
+
+  // The file's lookup tables and key properties, read before the calls are:
+  // a table is usually declared above the component that reads it, but need
+  // not be.
+  const { tables, keyProperties } = tablesAndKeyProperties(source)
 
   /** The keys a call reads through a table or a key property of this file. */
-  const lookedUpKeys = (arg: ts.Expression | undefined): { keys: string[]; role?: PageTextRole } => {
+  const lookedUpKeys = (
+    arg: ts.Expression | undefined,
+  ): { keys: string[]; role?: PageTextRole; property?: string } => {
     if (!arg) return { keys: [] }
     const expression = unwrap(arg)
     if (ts.isStringLiteralLike(expression) || ts.isTemplateExpression(expression)) return { keys: [] }
@@ -304,7 +337,7 @@ export function analyseSource(fileName: string, text: string): FileAnalysis {
     if (root && table && !ts.isIdentifier(expression)) return { keys: table, role: roleOfName(root) }
     if (ts.isPropertyAccessExpression(expression)) {
       const property = expression.name.text
-      return { keys: keyProperties.get(property) ?? [], role: roleOfName(property) }
+      return { keys: keyProperties.get(property) ?? [], role: roleOfName(property), property }
     }
     return { keys: [] }
   }
@@ -378,6 +411,10 @@ export function analyseSource(fileName: string, text: string): FileAnalysis {
             for (const key of looked.keys) {
               refs.push({ path: ns ? `${ns}.${key}` : key, prefix: false, ...(tableRole ? { role: tableRole } : {}) })
             }
+            // Nothing written for the property here: the items come from a module this file imports.
+            if (looked.property && looked.keys.length === 0) {
+              propertyReads.push({ property: looked.property, namespace: ns, ...(tableRole ? { role: tableRole } : {}) })
+            }
           }
         }
       }
@@ -391,7 +428,7 @@ export function analyseSource(fileName: string, text: string): FileAnalysis {
     ts.forEachChild(node, visit)
   }
   visit(source)
-  return { imports, refs }
+  return { imports, refs, propertyReads }
 }
 
 // ── Messages ─────────────────────────────────────────────────
@@ -490,6 +527,41 @@ export function buildPageTextIndex(pages: string[], reader: SourceReader, messag
   const keysOfFile = new Map<string, string[]>()
   const rolesOfFile = new Map<string, string>()
 
+  // `t(item.labelKey)` with the items built elsewhere: the keys are the ones
+  // the modules this file imports write for that property. One step, and only
+  // keys that exist under the translator's namespace survive (expandKeyRef),
+  // so another table's `labelKey` in the same module adds nothing.
+  const keyPropertiesByFile = new Map<string, Map<string, string[]>>()
+  const keyPropertiesOf = (relative: string): Map<string, string[]> => {
+    const cached = keyPropertiesByFile.get(relative)
+    if (cached) return cached
+    const text = reader.read(relative)
+    const found = text === null ? new Map<string, string[]>() : keyPropertiesOfSource(relative, text)
+    keyPropertiesByFile.set(relative, found)
+    return found
+  }
+  const importedPropertyRefs = (relative: string, analysis: FileAnalysis): KeyRef[] => {
+    if (analysis.propertyReads.length === 0) return []
+    const targets = new Set<string>()
+    for (const specifier of analysis.imports) {
+      const target = resolveImport(relative, specifier, reader)
+      if (target && target !== relative && isFollowed(target)) targets.add(target)
+    }
+    const found: KeyRef[] = []
+    for (const read of analysis.propertyReads) {
+      for (const target of targets) {
+        for (const key of keyPropertiesOf(target).get(read.property) ?? []) {
+          found.push({
+            path: read.namespace ? `${read.namespace}.${key}` : key,
+            prefix: false,
+            ...(read.role ? { role: read.role } : {}),
+          })
+        }
+      }
+    }
+    return found
+  }
+
   const analyse = (relative: string): FileAnalysis | null => {
     const cached = analyses.get(relative)
     if (cached !== undefined) return cached
@@ -503,7 +575,7 @@ export function buildPageTextIndex(pages: string[], reader: SourceReader, messag
       // A key the file reads twice is listed once, with the first role the
       // source shows for it.
       const roleOfKey = new Map<string, PageTextRole | undefined>()
-      for (const ref of result.refs) {
+      for (const ref of [...result.refs, ...importedPropertyRefs(relative, result)]) {
         for (const key of expandKeyRef(ref, messages)) {
           if (!roleOfKey.has(key) || (roleOfKey.get(key) === undefined && ref.role)) roleOfKey.set(key, ref.role)
         }

@@ -154,6 +154,18 @@ export function withRole(item: PageText): string {
   return item.role ? `${item.text} (${PAGE_TEXT_ROLES[item.role]})` : item.text
 }
 
+const ROLE_MARK = new RegExp(`(?<=\\S) \\((?:${Object.values(PAGE_TEXT_ROLES).join('|')})\\)`, 'g')
+
+/**
+ * An answer without the role marks of withRole. "Alla (flik)" is how the
+ * tools write a text and its role to the assistant, not a text of the app:
+ * the prompt asks for "fliken Alla", and a list of a page's tabs still comes
+ * back with the mark on every row now and then.
+ */
+export function stripRoleMarks(answer: string): string {
+  return answer.replace(ROLE_MARK, '')
+}
+
 // Texts per file position, resolved once per locale and index.
 const resolvedByLocale = new Map<string, { index: PageTextIndex; texts: PageText[][] }>()
 

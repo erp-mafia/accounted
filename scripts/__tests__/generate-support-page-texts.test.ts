@@ -174,7 +174,7 @@ describe('analyseSource: keys read through a table of the file', () => {
   })
 
   it('does not follow a bare variable or a table of another file', () => {
-    const { refs } = analyseSource(
+    const { refs, propertyReads } = analyseSource(
       'components/Bare.tsx',
       `import { useTranslations } from 'next-intl'
        import { REMOTE_KEYS } from './keys'
@@ -182,6 +182,34 @@ describe('analyseSource: keys read through a table of the file', () => {
        export function Bare({ key }) { const t = useTranslations('invoices'); return <i>{t(key)}{t(REMOTE_KEYS[key])}{t(LOCAL)}</i> }`,
     )
     expect(refs).toEqual([])
+    expect(propertyReads).toEqual([])
+  })
+
+  it('reports a key property the file writes no value for, with the translator that reads it', () => {
+    const { refs, propertyReads } = analyseSource(
+      'components/Library.tsx',
+      `import { useTranslations } from 'next-intl'
+       import { getSections } from '@/lib/reports/catalog'
+       export function Library() {
+         const t = useTranslations('reports')
+         return <ul>{getSections().map((item) => <li key={item.id}>{t(item.labelKey)}<h3>{t(item.titleKey)}</h3></li>)}</ul>
+       }`,
+    )
+    expect(refs).toEqual([])
+    expect(propertyReads).toEqual([
+      { property: 'labelKey', namespace: 'reports' },
+      { property: 'titleKey', namespace: 'reports', role: 'h' },
+    ])
+  })
+
+  it('reports nothing for a key property the file writes itself', () => {
+    const { propertyReads } = analyseSource(
+      'components/Columns.tsx',
+      `import { useTranslations } from 'next-intl'
+       const COLUMNS = [{ headerKey: 'col_date' }]
+       export function Columns() { const t = useTranslations('invoices'); return <b>{COLUMNS.map((c) => t(c.headerKey))}</b> }`,
+    )
+    expect(propertyReads).toEqual([])
   })
 })
 
@@ -269,6 +297,60 @@ describe('resolveImport, routeOfPage, isFollowed', () => {
     expect(isFollowed('components/agent/AgentChat.tsx')).toBe(false)
     expect(isFollowed('components/support/SupportAsk.tsx')).toBe(false)
     expect(isFollowed('components/invoices/__tests__/x.test.tsx')).toBe(false)
+  })
+})
+
+describe('buildPageTextIndex: a key property written in an imported module', () => {
+  const messages = {
+    reports: { title: 'Rapporter', name_result: 'Resultat', desc_result: 'Intäkter och kostnader', name_balance: 'Balans' },
+    other: { name_result: 'Fel namnrymd' },
+  }
+  const index = buildPageTextIndex(
+    ['app/(dashboard)/reports/page.tsx'],
+    reader({
+      'app/(dashboard)/reports/page.tsx': `
+        import { Library } from '@/components/reports/Library'
+        export default function Page() { return <Library /> }`,
+      'components/reports/Library.tsx': `
+        'use client'
+        import { useTranslations } from 'next-intl'
+        import { getSections } from '@/lib/reports/catalog'
+        export function Library() {
+          const t = useTranslations('reports')
+          return <ul title={t('title')}>{getSections().map((item) => <li key={item.id}>{t(item.labelKey)}: {t(item.descKey)}</li>)}</ul>
+        }`,
+      // A plain module: it creates no translator, so it is no part of the
+      // page, but the component that imports it reads its keys.
+      'lib/reports/catalog.ts': `
+        import { MORE } from '@/lib/reports/more'
+        const ITEMS = [
+          { id: 'result', labelKey: 'name_result', descKey: 'desc_result' },
+          { id: 'balance', labelKey: 'name_balance', descKey: 'desc_missing' },
+          { id: 'elsewhere', labelKey: 'name_unknown' },
+        ]
+        export function getSections() { return [...ITEMS, ...MORE] }`,
+      'lib/reports/more.ts': `export const MORE = [{ id: 'far', labelKey: 'title' }]`,
+    }),
+    messages,
+  )
+
+  it('gives the reading component the keys that module writes for the property, in its own namespace', () => {
+    const library = index.files.indexOf('components/reports/Library.tsx')
+    expect(index.keys[library]).toEqual([
+      'reports.title',
+      'reports.name_result',
+      'reports.name_balance',
+      'reports.desc_result',
+    ])
+    // The module itself is no part of the page.
+    expect(index.files).not.toContain('lib/reports/catalog.ts')
+  })
+
+  it('goes one step only: a module the imported module imports is not read', () => {
+    const library = index.files.indexOf('components/reports/Library.tsx')
+    // 'title' is written as a labelKey two steps away; the component has it only from its own t('title').
+    expect(index.keys[library].filter((key) => key === 'reports.title')).toHaveLength(1)
+    expect(index.roles?.[library]).toHaveLength(index.keys[library].length)
   })
 })
 

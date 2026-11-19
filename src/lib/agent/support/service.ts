@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiService, type AiChatTurn, type AiProgressEvent, type AiToolDef } from '@/lib/ai'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
 import { companyProfileLine } from '@/lib/agent/ask/ask-service'
 import { EmptyModelAnswerError, truncatedAnswerNote } from '@/lib/agent/ask/errors'
@@ -8,9 +9,9 @@ import { buildAssistantSnapshot } from '@/lib/agent/ask/snapshot'
 import { loadNavGateContext, loadUiLabels, renderUiGrounding, type UiMapInput } from '@/lib/agent/ask/ui-map'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import type { Locale } from '@/i18n/config'
-import { buildAppTools, handoffTool, type HandoffOffer } from './app-tools'
-import { loadMessageTree, loadPageTextIndex } from './page-texts'
-import { supportSystemPrompt } from './prompt'
+import { buildAppTools, handoffTool, HANDOFF_TOOL_NAME, type HandoffOffer } from './app-tools'
+import { loadMessageTree, loadPageTextIndex, stripRoleMarks } from './page-texts'
+import { SEND_TO_SUPPORT_LABEL, supportSystemPrompt } from './prompt'
 import { supportAssistantEffort } from './rollout'
 
 const log = createLogger('agent.support')
@@ -58,6 +59,17 @@ export interface SupportAskResult {
 const MAX_TOKENS = 16_000
 const MAX_STEPS = 6
 const MAX_QUESTION_CHARS = 4000
+// How much of an answer written before an offer is looked for in the turn
+// after it, to tell a closing sentence from the same answer written twice.
+const KEPT_TEXT_PROBE = 80
+
+const BUTTON_SENTENCE = /[^.!?\n]*\b(?:knappen|button)\b[^.!?\n]*/gi
+
+/** Whether a text points the user to the button that sends the conversation to a person, by its label or in other words. */
+export function pointsToSupportButton(text: string, locale: Locale): boolean {
+  if (text.includes(SEND_TO_SUPPORT_LABEL[locale])) return true
+  return (text.match(BUTTON_SENTENCE) ?? []).some((sentence) => /support/i.test(sentence))
+}
 
 /**
  * The readers of the skill library (the same Swedish accounting texts a
@@ -115,6 +127,9 @@ export async function answerSupportQuestion(req: SupportAskRequest): Promise<Sup
 
   const promptParts: string[] = []
   if (profile) promptParts.push(profile)
+  // "I år", "senaste perioden" and every date a tool answers with are read
+  // against this; without it the model reasons from a date of its own.
+  promptParts.push(`Dagens datum: ${todayIsoStockholm()}.`)
   if (snapshot) {
     promptParts.push('Företagets nuläge (grunddata, inte hela bokföringen):')
     promptParts.push(snapshot)
@@ -125,6 +140,41 @@ export async function answerSupportQuestion(req: SupportAskRequest): Promise<Sup
     promptParts.push('')
   }
   promptParts.push(`Fråga: ${question}`)
+
+  // The AI layer takes what a turn wrote before a tool call for a remark
+  // ("Jag hämtar..."): it is not part of the result, and the panel clears it
+  // when the call is announced. That is wrong for one call. The assistant
+  // often writes its whole answer and offers a person last, and the turn
+  // after the offer holds only a closing sentence. What was written before
+  // an offer is therefore kept, in the answer and on screen (the call is not
+  // announced, the stream goes on in a new paragraph).
+  let turnText = ''
+  let keptText = ''
+  // The kept answer already pointed to the button: the sentence the turn
+  // after the offer adds would say it a second time, and is left out.
+  let closed = false
+  const onProgress = (event: AiProgressEvent) => {
+    if (event.type === 'text') {
+      turnText += event.delta
+      if (!closed) req.onProgress?.(event)
+      return
+    }
+    const written = turnText.trim()
+    turnText = ''
+    const onlyOffer = event.names.every((name) => name === HANDOFF_TOOL_NAME)
+    if (onlyOffer && written) {
+      keptText = keptText ? `${keptText}\n\n${written}` : written
+      closed = pointsToSupportButton(keptText, locale)
+      if (!closed) req.onProgress?.({ type: 'text', delta: '\n\n' })
+      return
+    }
+    // A lookup after the offer: whatever follows is written anew.
+    if (!onlyOffer) {
+      keptText = ''
+      closed = false
+    }
+    req.onProgress?.(event)
+  }
 
   const effort = supportAssistantEffort()
   const result = await getAiService().generateText({
@@ -138,7 +188,7 @@ export async function answerSupportQuestion(req: SupportAskRequest): Promise<Sup
     maxSteps: MAX_STEPS,
     cachePrompt: true,
     ...(effort ? { effort } : {}),
-    ...(req.onProgress ? { onProgress: req.onProgress } : {}),
+    onProgress,
   })
 
   const diagnostics = {
@@ -159,6 +209,15 @@ export async function answerSupportQuestion(req: SupportAskRequest): Promise<Sup
   }
   if (result.forcedFinal) log.warn('answer needed the final answer turn', diagnostics)
 
-  const answer = result.truncated ? `${result.text}\n\n${truncatedAnswerNote(locale)}` : result.text
-  return { answer, model: result.model, handoff }
+  // The kept part first, unless the last turn wrote the answer again after
+  // all; the kept part alone when it had already pointed to the button.
+  const repeated = keptText.length > 0 && result.text.includes(keptText.slice(0, KEPT_TEXT_PROBE))
+  const written = !keptText || repeated ? result.text : closed ? keptText : `${keptText}\n\n${result.text}`
+  const answer = stripRoleMarks(result.truncated ? `${written}\n\n${truncatedAnswerNote(locale)}` : written)
+  // An answer that points to the button without the offer behind it (a turn
+  // that ran out of steps cannot call the tool any more) would point at
+  // nothing: the button is shown then, with the question as its summary.
+  const offered: HandoffOffer | null =
+    handoff ?? (pointsToSupportButton(answer, locale) ? { reason: 'cannot_answer', summary: question.slice(0, 600) } : null)
+  return { answer, model: result.model, handoff: offered }
 }

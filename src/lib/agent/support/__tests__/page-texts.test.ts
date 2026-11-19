@@ -9,6 +9,8 @@ import {
   renderPageTexts,
   resetPageTextIndexCache,
   searchAppTexts,
+  stripRoleMarks,
+  withRole,
 } from '../page-texts'
 
 const MESSAGES: MessageTree = {
@@ -162,6 +164,19 @@ const parts = [{ name: 'page', texts: [{ text: 'x'.repeat(40) }, { text: 'y'.rep
     expect(text).toContain('x'.repeat(40))
     expect(text).not.toContain('z'.repeat(40))
     expect(text).toContain('texter till i den här delen')
+  })
+})
+
+describe('stripRoleMarks', () => {
+  it('takes out every mark withRole writes, and leaves the text', () => {
+    for (const role of ['b', 't', 'h', 'f', 'p', 'c', 'm', 'o', 'l', 'd', 's'] as const) {
+      expect(stripRoleMarks(`Öppna ${withRole({ text: 'Alla', role })}.`)).toBe('Öppna Alla.')
+    }
+  })
+
+  it('leaves every other parenthesis as it is written', () => {
+    const answer = 'Betalningsvillkor (dagar), Notering (valfritt), Återför (storno) och knappen (se nedan).'
+    expect(stripRoleMarks(answer)).toBe(answer)
   })
 })
 

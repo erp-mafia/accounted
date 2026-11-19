@@ -17,7 +17,26 @@ describe('supportSystemPrompt', () => {
     expect(full).toContain('Agenter → Koppla en agent (/settings/api)')
     // Only when the page is in the company menu, and only when that is what the user asks for.
     expect(full).toContain('om den sidan står i menyn nedan')
-    expect(full).toContain('Nämn det bara när frågan handlar om att få bokföringen gjord')
+    // Always when the user asks to have something done, never when they ask how or where.
+    expect(full).toContain('Bara när användaren uttryckligen ber dig utföra något')
+    expect(full).toContain('avsluta då alltid med en mening om att de kan låta en egen AI-assistent som Claude göra det')
+    expect(full).toContain('varken att du inte gör saken åt användaren eller något om en egen AI-assistent')
+  })
+
+  it('gives the figures the tools give, and does no arithmetic of its own', () => {
+    expect(full).toContain('Räkna inte själv: lägg inte ihop, dra inte ifrån och uppskatta inte')
+    expect(supportSystemPrompt({ locale: 'sv', hasLedgerTools: false, hasPageTexts: true, hasSkillTools: true })).not.toContain('Räkna inte själv')
+  })
+
+  it('answers a rule from the skill library and keeps the word skill to itself', () => {
+    expect(full).toContain('gnubok_load_skill')
+    expect(full).toContain('Ordet skill är ditt eget: användaren får aldrig läsa det')
+  })
+
+  it('keeps the answer short, in plain words and on the subject', () => {
+    expect(full).toContain('högst sex numrerade steg')
+    expect(full).toContain('inga namn på verktyg, inga fältnamn eller koder ur verktygssvaren')
+    expect(full).toContain('Skriv inte det som efterfrågades, inte heller en kort variant')
   })
 
   it('ties what it says about a page to read_page, and a missing page to find_in_app', () => {
@@ -29,13 +48,22 @@ describe('supportSystemPrompt', () => {
   it('tells it when to offer a person, and that it sends nothing itself', () => {
     expect(full).toContain('offer_human_support')
     expect(full).toContain('Du skickar ingenting själv')
-    expect(full).toContain('Lova inte när eller vad supporten svarar')
+    expect(full).toContain('Fråga aldrig om du ska skicka något vidare')
+    expect(full).toContain('skriv aldrig att du gör det ("jag skickar frågan vidare", "jag ber supporten")')
+    expect(full).toContain('Meningen om knappen skriver du en gång, efter anropet')
+    expect(full).toContain('varken supporten eller en redovisningskonsult')
+    expect(full).toContain('Det du skrev före anropet står kvar: upprepa det inte')
+    expect(full).toContain('Lova inte när supporten svarar eller vad den gör')
   })
 
   it('names the hand-off button by the label the dialog gives it, in both languages', () => {
     expect(SEND_TO_SUPPORT_LABEL.sv).toBe(sv.support_link.ask_send_to_support)
     expect(SEND_TO_SUPPORT_LABEL.en).toBe(en.support_link.ask_send_to_support)
     expect(full).toContain(`knappen "${sv.support_link.ask_send_to_support}"`)
+  })
+
+  it('requires a page read before it says more about a page than where it is', () => {
+    expect(full).toContain('Säger du mer om en sida än att den finns och var den ligger')
   })
 
   it('requires a page read behind every step it describes, also after it has declined to do the thing', () => {
