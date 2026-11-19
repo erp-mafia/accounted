@@ -121,6 +121,60 @@ describe('buildBatchAllocationPreview', () => {
     expect(over.balanced).toBe(true)
   })
 
+  // #119 (migration 20261119090000): the issue verifikat put 1510 at the
+  // rounded "Att betala" and the öre on 3740; carried_sek is what 1510 carries.
+  describe('a customer invoice whose issue verifikat booked the öresavrundning (#119)', () => {
+    const customer = (amount: number, invoice: { remaining_amount: number; carried_sek: number | null }) =>
+      buildBatchAllocationPreview({
+        transaction: { amount, date: '2026-08-05' },
+        bankAccount: '1930',
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount }],
+        invoices: { [INV_A]: { currency: 'SEK', total: invoice.remaining_amount, ...invoice } },
+      })
+
+    it('rounded down, paid the rounded amount: Cr 1510 what it carries and no 3740', () => {
+      const preview = customer(12500, { remaining_amount: 12500.25, carried_sek: 12500 })
+      expect(preview.lines).toEqual([
+        { account_number: '1510', description: 'Kundfaktura 1 av 1', debit: 0, credit: 12500 },
+        { account_number: '1930', description: 'Inbetalning 2026-08-05', debit: 12500, credit: 0 },
+      ])
+      expect(preview.balanced).toBe(true)
+    })
+
+    it('rounded up, paid the rounded amount: Cr 1510 what it carries and no 3740', () => {
+      const preview = customer(5000, { remaining_amount: 4999.75, carried_sek: 5000 })
+      expect(preview.lines).toEqual([
+        { account_number: '1510', description: 'Kundfaktura 1 av 1', debit: 0, credit: 5000 },
+        { account_number: '1930', description: 'Inbetalning 2026-08-05', debit: 5000, credit: 0 },
+      ])
+    })
+
+    it('paid the exact total: Cr 1510 what it carries and Cr 3740 the öre back', () => {
+      const preview = customer(12500.25, { remaining_amount: 12500.25, carried_sek: 12500 })
+      expect(preview.lines).toEqual([
+        { account_number: '1510', description: 'Kundfaktura 1 av 1', debit: 0, credit: 12500 },
+        { account_number: '3740', description: 'Öresavrundning', debit: 0, credit: 0.25 },
+        { account_number: '1930', description: 'Inbetalning 2026-08-05', debit: 12500.25, credit: 0 },
+      ])
+      expect(preview.balanced).toBe(true)
+    })
+
+    it('a part payment clears its own kronor', () => {
+      const preview = customer(5000, { remaining_amount: 12500.25, carried_sek: 12500 })
+      expect(preview.lines[0]).toEqual({ account_number: '1510', description: 'Kundfaktura 1 av 1', debit: 0, credit: 5000 })
+      expect(preview.lines).toHaveLength(2)
+    })
+
+    it('without a ledger figure: the whole remainder, as before', () => {
+      const preview = customer(12500, { remaining_amount: 12500.25, carried_sek: null })
+      expect(preview.lines).toEqual([
+        { account_number: '1510', description: 'Kundfaktura 1 av 1', debit: 0, credit: 12500.25 },
+        { account_number: '3740', description: 'Öresavrundning', debit: 0.25, credit: 0 },
+        { account_number: '1930', description: 'Inbetalning 2026-08-05', debit: 12500, credit: 0 },
+      ])
+    })
+  })
+
   it('cross-currency customer batch with a booked rate: Cr 1510 at booked SEK, the difference on 7960 or 3960', () => {
     // Booked 1 000 EUR at 11,20 = 11 200 kr; bank credited 11 000 kr: loss 200 kr.
     const loss = buildBatchAllocationPreview({

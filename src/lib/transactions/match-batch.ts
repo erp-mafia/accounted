@@ -639,15 +639,22 @@ async function previewMatchBatch(
   const ids = Array.from(
     new Set(allocations.map((a) => (a.kind === 'customer_invoice' ? a.invoice_id : a.supplier_invoice_id))),
   )
-  const invoices = new Map<string, BatchAllocationPreviewInvoice>()
+  // A customer invoice's issue verifikat and paid figure: what carriedSekOf
+  // needs to read the öre that verifikat booked.
+  type InvoiceRow = { id: string; journal_entry_id?: string | null; paid_amount?: number | null } & BatchAllocationPreviewInvoice
+  const invoices = new Map<string, InvoiceRow>()
   for (const part of chunk(ids, ID_READ_CHUNK)) {
     const { data, error } = await supabase
       .from(isCustomer ? 'invoices' : 'supplier_invoices')
-      .select('id, currency, exchange_rate, remaining_amount, total')
+      .select(
+        isCustomer
+          ? 'id, currency, exchange_rate, remaining_amount, total, journal_entry_id, paid_amount'
+          : 'id, currency, exchange_rate, remaining_amount, total',
+      )
       .in('id', part)
       .eq('company_id', companyId)
     if (error) return failed(error)
-    for (const row of (data ?? []) as ({ id: string } & BatchAllocationPreviewInvoice)[]) invoices.set(row.id, row)
+    for (const row of (data ?? []) as unknown as InvoiceRow[]) invoices.set(row.id, row)
   }
   const missing = ids.filter((id) => !invoices.has(id))
   if (missing.length > 0) {
@@ -659,10 +666,12 @@ async function previewMatchBatch(
   }
 
   // What a foreign invoice clears: what the ledger carries, read here as the
-  // RPC reads it under its locks. A sale or registration booked first has no
-  // voucher yet, so its dry run says. An amount past the limit is the RPC's
-  // refusal, answered on the dry run so a staged booking never waits for an
-  // approval that cannot post.
+  // RPC reads it under its locks. A kronor customer invoice carries a figure
+  // only when its issue verifikat booked the öresavrundning (carriedSekOf),
+  // and the RPC then clears that figure on a settlement in full. A sale or
+  // registration booked first has no voucher yet, so its dry run says. An
+  // amount past the limit is the RPC's refusal, answered on the dry run so a
+  // staged booking never waits for an approval that cannot post.
   const bookedFirst = new Map<string, number>([
     ...guard.registrations.map((plan): [string, number] => [plan.supplierInvoiceId, plan.payableSek]),
     ...guard.sales.map((plan): [string, number] => [plan.invoiceId, plan.receivableSek]),
@@ -670,13 +679,22 @@ async function previewMatchBatch(
   for (const allocation of allocations) {
     const id = allocation.kind === 'customer_invoice' ? allocation.invoice_id : allocation.supplier_invoice_id
     const invoice = invoices.get(id)
-    if (!invoice || isKronorCurrency(invoice.currency)) continue
+    if (!invoice) continue
+    const kronor = isKronorCurrency(invoice.currency)
+    if (kronor && !isCustomer) continue
     try {
       invoice.carried_sek =
-        bookedFirst.get(id) ?? (await carriedSekOf(supabase, companyId, isCustomer ? 'customer' : 'supplier', { id, currency: invoice.currency }))
+        bookedFirst.get(id) ??
+        (await carriedSekOf(
+          supabase,
+          companyId,
+          isCustomer ? 'customer' : 'supplier',
+          kronor ? invoice : { id, currency: invoice.currency },
+        ))
     } catch (err) {
       return failed(err)
     }
+    if (kronor) continue
     const remaining = invoice.remaining_amount ?? invoice.total
     if (remaining == null || !(Number(invoice.exchange_rate) > 0)) continue
     const bookedSek = clearedSek({ amount: remaining, remaining, carried: invoice.carried_sek, rate: Number(invoice.exchange_rate) })

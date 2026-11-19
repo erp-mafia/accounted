@@ -35,12 +35,12 @@ const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), chil
 
 const INVOICE = { id: INV_ID, document_type: 'invoice', credited_invoice_id: null, credit_notes: [], currency: 'EUR', exchange_rate: 11.123, remaining_amount: 176.7, total: 176.7 }
 
-function dryRun(kind: 'customer_invoice' | 'supplier_invoice', amount: number, carried: unknown) {
+function dryRun(kind: 'customer_invoice' | 'supplier_invoice', amount: number, carried: unknown, invoice: Record<string, unknown> = INVOICE) {
   const allocation =
     kind === 'customer_invoice' ? { kind, invoice_id: INV_ID, amount } : { kind, supplier_invoice_id: INV_ID, amount }
   const { supabase, findCall } = createTableMockSupabase({
-    invoices: { data: [INVOICE], error: null },
-    supplier_invoices: { data: [INVOICE], error: null },
+    invoices: { data: [invoice], error: null },
+    supplier_invoices: { data: [invoice], error: null },
     transactions: {
       data: {
         id: TX_ID,
@@ -134,5 +134,39 @@ describe('the dry run of a batch with a foreign invoice', () => {
       code: 'BATCH_FX_DEVIATION_TOO_LARGE',
       details: { invoice_id: INV_ID, allocation_amount: 2200, expected_sek: 1965.44 },
     })
+  })
+})
+
+// #119 (migration 20261119090000): a kronor customer invoice whose issue
+// verifikat put 1510 at the rounded "Att betala" and the öre on 3740. The dry
+// run reads what 1510 carries as the RPC does, and shows what it posts.
+describe('the dry run of a batch with a kronor invoice whose issue verifikat booked the öre', () => {
+  const KRONOR = { ...INVOICE, currency: 'SEK', exchange_rate: null, remaining_amount: 12500.25, total: 12500.25, paid_amount: 0, journal_entry_id: 'je-issue' }
+
+  it('shows 1510 cleared at what it carries and no second öresavrundning', async () => {
+    const { outcome, findCall } = dryRun('customer_invoice', 12500, { ok: true, sek: 12500 }, KRONOR)
+    expect(rows(await outcome)).toEqual([
+      ['1510', 0, 12500],
+      ['1930', 12500, 0],
+    ])
+    expect(findCall('rpc:document_carried_sek', 'rpc')).toEqual([
+      { p_company_id: 'company-1', p_side: 'customer', p_document_id: INV_ID },
+    ])
+  })
+
+  it('an invoice without a verifikat costs no read and keeps the whole remainder on 1510', async () => {
+    const { outcome, findCall } = dryRun('customer_invoice', 12500, { ok: true, sek: 12500 }, { ...KRONOR, journal_entry_id: null })
+    expect(rows(await outcome)).toEqual([
+      ['1510', 0, 12500.25],
+      ['3740', 0.25, 0],
+      ['1930', 12500, 0],
+    ])
+    expect(findCall('rpc:document_carried_sek', 'rpc')).toBeUndefined()
+  })
+
+  it('a supplier invoice in kronor costs no read', async () => {
+    const { outcome, findCall } = dryRun('supplier_invoice', 12500, { ok: true, sek: 12500 }, KRONOR)
+    expect(rows(await outcome)[0]).toEqual(['2440', 12500.25, 0])
+    expect(findCall('rpc:document_carried_sek', 'rpc')).toBeUndefined()
   })
 })

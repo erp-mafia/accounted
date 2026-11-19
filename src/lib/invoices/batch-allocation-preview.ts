@@ -1,8 +1,8 @@
-import { roundOre } from '@/lib/money'
+import { equalOre, roundOre } from '@/lib/money'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { clearedSek } from '@/lib/bookkeeping/ledger-carried-sek'
 import { lineBalance } from '@/lib/bookkeeping/line-balance'
-import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
+import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT, bookedOreRounding, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from '@/lib/bookkeeping/payout-fee-lines'
 
@@ -33,6 +33,9 @@ import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from
  * and so does matchTransactionBatch before it gets here), so every row here is
  * kronor, and a foreign invoice clears what the ledger carries (carried_sek,
  * read from the RPC's own document_carried_sek) or its remainder at the rate.
+ * Since 20261119090000 a kronor customer invoice whose issue verifikat booked
+ * the öresavrundning clears what 1510 carries on a settlement in full, and
+ * 3740 takes only the rest of the öre (carried_sek, bookedOreRounding).
  * When the RPC changes, this file changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
  * tests/pg/match-batch-preview-parity.pg.test.ts,
  * tests/pg/match-batch-allocate-series-description.pg.test.ts) are the
@@ -68,7 +71,11 @@ export interface BatchAllocationPreviewInvoice {
   exchange_rate?: number | null
   remaining_amount?: number | null
   total?: number | null
-  /** What the ledger carries for a foreign invoice (carriedSekOf); null when it cannot say. */
+  /**
+   * What the ledger carries (carriedSekOf): for a foreign invoice, and for a
+   * kronor customer invoice only when its issue verifikat booked the
+   * öresavrundning. Null when it cannot say or there is nothing to read.
+   */
   carried_sek?: number | null
 }
 
@@ -187,18 +194,27 @@ export function buildBatchAllocationPreview(input: {
         return
       }
       const oreDiff = oreSettlementResidual(remaining, alloc.amount)
-      if (oreDiff !== 0) {
+      // The öre a customer invoice's issue verifikat already booked: a
+      // settlement in full clears what 1510 carries and 3740 takes only the
+      // rest, so the rounding is not booked twice. A part payment clears its
+      // own kronor.
+      const settlesInFull = oreDiff !== 0 || equalOre(alloc.amount, remaining)
+      const issueOre = isCustomer && settlesInFull ? bookedOreRounding(remaining, invoice?.carried_sek) : 0
+      if (oreDiff !== 0 || issueOre !== 0) {
         // Whole-krona settlement of an öre total: clear the full remaining and
         // let 3740 carry the residual. Customer short-paid = Dr 3740, over-paid
         // = Cr 3740; supplier is the mirror.
-        settle(roundOre(remaining), label)
-        const debitSide = isCustomer ? oreDiff > 0 : oreDiff < 0
-        lines.push({
-          account_number: ORE_ROUNDING_ACCOUNT,
-          description: 'Öresavrundning',
-          debit: debitSide ? Math.abs(oreDiff) : 0,
-          credit: debitSide ? 0 : Math.abs(oreDiff),
-        })
+        settle(roundOre(remaining - issueOre), label)
+        const residual = roundOre(oreDiff - issueOre)
+        const debitSide = isCustomer ? residual > 0 : residual < 0
+        if (residual !== 0) {
+          lines.push({
+            account_number: ORE_ROUNDING_ACCOUNT,
+            description: 'Öresavrundning',
+            debit: debitSide ? Math.abs(residual) : 0,
+            credit: debitSide ? 0 : Math.abs(residual),
+          })
+        }
       } else {
         settle(alloc.amount, label)
       }
