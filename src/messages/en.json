@@ -7292,7 +7292,6 @@
     "delivery_cc_label": "Cc",
     "delivery_pdf_label": "Attached PDF",
     "delivery_pdf_fallback": "invoice.pdf",
-    "delivery_provider_label": "Email provider",
     "delivery_error_label": "Error",
     "convert_to_invoice": "Convert to invoice",
     "quote_accept": "Accept",
@@ -7588,7 +7587,7 @@
     "delivery_provider_status_label": "Delivery status",
     "delivery_provider_reason_label": "Reason from the recipient",
     "delivery_recipient_statuses_label": "Status per recipient",
-    "delivery_recipient_statuses_summary": "The overall status shows the most serious reported outcome. Each recipient's result is shown below.",
+    "delivery_recipient_statuses_summary": "This shows the worst outcome for the send. How it went for each recipient is listed below.",
     "delivery_recipient_status_unknown": "No delivery report yet",
     "delivery_status_unmatched_recipient_note": "This report does not point at any recipient above. For a bounce, the usual cause is forwarding or a filter on the recipient's side that rejected the message after the server had accepted it.",
     "not_found": "Invoice not found"
