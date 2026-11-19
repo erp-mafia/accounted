@@ -28,6 +28,8 @@ export const CustomerRecordSchema = z.object({
   address_line2: z.string().nullable(),
   postal_code: z.string().nullable(),
   city: z.string().nullable(),
+  /** State or province of a US or Canadian address ('WA'). */
+  address_state: z.string().nullable(),
   country: z.string(),
   org_number: z.string().nullable(),
   vat_number: z.string().nullable(),
@@ -58,7 +60,7 @@ export type CustomerRecord = z.infer<typeof CustomerRecordSchema>
  * rows; the test pins it to exactly the schema's fields, in order.
  */
 export const CUSTOMER_RECORD_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, language, default_payment_terms, invoice_reference, invoice_marking, notes, party_id, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, address_state, country, org_number, vat_number, vat_number_validated, personal_number, language, default_payment_terms, invoice_reference, invoice_marking, notes, party_id, archived_at, created_at, updated_at'
 
 /**
  * One customer of the company, personnummer masked, or null when no customer

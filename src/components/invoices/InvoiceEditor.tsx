@@ -140,6 +140,7 @@ import {
   deliveryAddressFormValues,
   normalizeDeliveryAddress,
 } from '@/lib/invoices/delivery-address'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
 import { getCountryOptions } from '@/lib/vat/country-codes'
 import { isInvoiceLinePostingAccount } from '@/lib/invoices/posting-account'
 import UnitPicker from '@/components/invoices/UnitPicker'
@@ -3231,9 +3232,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const customerLine = selectedCustomer
     ? [
         selectedCustomer.customer_type === 'individual' ? '' : selectedCustomer.org_number ?? '',
-        [selectedCustomer.address_line1, [selectedCustomer.postal_code, selectedCustomer.city].filter(Boolean).join(' ')]
-          .filter(Boolean)
-          .join(', '),
+        [selectedCustomer.address_line1, postalPlaceLine(selectedCustomer)].filter(Boolean).join(', '),
         selectedCustomer.email ?? '',
       ]
         .filter(Boolean)

@@ -135,7 +135,7 @@ const ALLOWED_EXPAND = ['items', 'payments'] as const
 const INVOICE_DETAIL_COLUMNS = INVOICE_FULL_COLUMNS
 
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, address_state, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const INVOICE_ITEM_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 

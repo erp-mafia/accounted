@@ -44,6 +44,7 @@ import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -369,9 +370,7 @@ export default function CustomerDetailPage({
             <div>
               {customer.address_line1 && <p>{customer.address_line1}</p>}
               {customer.address_line2 && <p>{customer.address_line2}</p>}
-              {(customer.postal_code || customer.city) && (
-                <p>{[customer.postal_code, customer.city].filter(Boolean).join(' ')}</p>
-              )}
+              {postalPlaceLine(customer) && <p>{postalPlaceLine(customer)}</p>}
               {customer.country && <p>{getCountryName(customer.country, errorLocale)}</p>}
             </div>
           </DefRow>
@@ -589,6 +588,7 @@ export default function CustomerDetailPage({
               address_line2: customer.address_line2 || undefined,
               postal_code: customer.postal_code || undefined,
               city: customer.city || undefined,
+              address_state: customer.address_state || undefined,
               country: customer.country || undefined,
               org_number: customer.org_number || undefined,
               vat_number: customer.vat_number || undefined,

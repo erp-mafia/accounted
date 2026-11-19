@@ -39,6 +39,7 @@ import {
   getCountryOptions,
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
+import { addressHasState } from '@/lib/invoices/postal-address'
 import type { CreateCustomerInput } from '@/types'
 import { CONSUMER_INVOICE_MAX_DAYS } from '@/lib/invoices/consumer-credit'
 
@@ -88,6 +89,7 @@ export default function CustomerForm({
     address_line2: z.string().optional(),
     postal_code: z.string().optional(),
     city: z.string().optional(),
+    address_state: z.string().optional(),
     // ISO 3166-1 alpha-2. A row from before 2026-09 can still carry a name
     // the backfill could not map; it is shown as-is in the picker and has to
     // be replaced before the form saves.
@@ -202,6 +204,7 @@ export default function CustomerForm({
       address_line2: initialData?.address_line2 || '',
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
+      address_state: initialData?.address_state || '',
       country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
       org_number: initialData?.org_number || '',
       vat_number: initialData?.vat_number || '',
@@ -255,6 +258,8 @@ export default function CustomerForm({
   // would look empty while holding something.
   const countryValueUnlisted =
     countryValue && !countryOptions.some((option) => option.code === countryValue)
+  // A US or Canadian address names its state or province (lib/invoices/postal-address.ts).
+  const showAddressState = addressHasState(countryValue)
   // The stored value could not be decrypted. The field is editable (typing a
   // fresh personnummer replaces it); say so, because the placeholder on its own
   // reads like a rendering fault.
@@ -341,6 +346,9 @@ export default function CustomerForm({
       // Blank is none; on an edit, null clears a stored value.
       invoice_reference: data.invoice_reference?.trim() || null,
       invoice_marking: data.invoice_marking?.trim() || null,
+      // Asked for only in a country that has states; a value left over from
+      // one is cleared, like the org number below. Blank is none.
+      address_state: addressHasState(data.country) ? data.address_state?.trim() ?? '' : '',
       personal_number: data.personal_number || null,
       invoice_email_cc_addresses: ccText
         ? parseInvoiceRecipientText(ccText)
@@ -626,6 +634,21 @@ export default function CustomerForm({
             )}
           </div>
         </div>
+        {showAddressState && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="address_state" optional>
+                {normalizeCountryCode(countryValue) === 'CA' ? t('address_province_label') : t('address_state_label')}
+              </Label>
+              <Input
+                id="address_state"
+                maxLength={100}
+                placeholder={normalizeCountryCode(countryValue) === 'CA' ? 'ON' : 'WA'}
+                {...register('address_state')}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Payment terms */}

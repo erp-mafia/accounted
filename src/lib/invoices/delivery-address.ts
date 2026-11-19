@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { isAssignedCountryCode, normalizeCountryCode } from '@/lib/vat/country-codes'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
 
 export interface InvoiceDeliveryAddress {
   name: string | null
@@ -117,20 +118,22 @@ export function deliveryAddressFormValues(raw: unknown): InvoiceDeliveryAddressF
 }
 
 /**
- * The lines the PDF prints under "Leveransadress": name, street lines,
- * "postnummer ort", and the country (by `countryName`) only when it differs
- * from the seller's.
+ * The lines the PDF prints under "Leveransadress": name, street lines, the
+ * postal code and town in the order of the address's country (its own, else
+ * `buyerCountry`: lib/invoices/postal-address.ts), and the country (by
+ * `countryName`) only when it differs from the seller's.
  */
 export function deliveryAddressLines(
   raw: unknown,
   homeCountry = 'SE',
   countryName: (code: string) => string = (code) => code,
+  buyerCountry: string | null = null,
 ): string[] {
   const address = normalizeDeliveryAddress(raw)
   if (!address) return []
-  const place = [address.postal_code, address.city].filter(Boolean).join(' ')
+  const place = postalPlaceLine({ postal_code: address.postal_code, city: address.city, country: address.country ?? buyerCountry })
   const country = address.country && address.country !== homeCountry.toUpperCase() ? countryName(address.country) : null
-  return [address.name, address.address_line1, address.address_line2, place || null, country].filter(
+  return [address.name, address.address_line1, address.address_line2, place, country].filter(
     (line): line is string => !!line,
   )
 }

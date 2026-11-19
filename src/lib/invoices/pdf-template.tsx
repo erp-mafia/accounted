@@ -21,6 +21,7 @@ import { GRON_TEKNIK_WORK_TYPES, workTypeLabel } from '@/lib/bookkeeping/rot-rut
 import { getCountryName } from '@/lib/vat/country-codes'
 import { unitLabel } from '@/lib/invoices/unit-labels'
 import { deliveryAddressLines } from '@/lib/invoices/delivery-address'
+import { formatPostalAddress, postalPlaceLine } from '@/lib/invoices/postal-address'
 import { sellerRegisteredOffice } from '@/lib/invoices/seller-registered-office'
 import {
   PAYMENT_AREA_GAP_PT,
@@ -401,10 +402,20 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   const sellerCountry = customer.country && customer.country !== (company.country || 'SE')
     ? getCountryName(company.country || 'SE', lang)
     : null
-  const postalLine = (postal: string | null | undefined, city: string | null | undefined) =>
-    postal || city ? `${postal ?? ''} ${city ?? ''}`.trim() : null
+  // Each address in its country's order (lib/invoices/postal-address.ts):
+  // "111 22 Stockholm", "Bellevue, WA 98006".
+  const sellerAddressLines = formatPostalAddress(company, sellerCountry)
+  const buyerAddressLines = formatPostalAddress(
+    customer,
+    customer.country && customer.country !== 'SE' ? getCountryName(customer.country, lang) : null,
+  )
   // Leveransadress (crm#1547): where the goods go, when not to the invoice address.
-  const deliveryLines = deliveryAddressLines(invoice.delivery_address, company.country || 'SE', (code) => getCountryName(code, lang))
+  const deliveryLines = deliveryAddressLines(
+    invoice.delivery_address,
+    company.country || 'SE',
+    (code) => getCountryName(code, lang),
+    customer.country,
+  )
 
   // The one notice slot: the statutory VAT notice, then the proforma or quote
   // notice. "Not VAT-registered" trumps the others ONLY when the invoice
@@ -473,7 +484,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
     company.company_name,
     company.address_line1,
     company.address_line2,
-    postalLine(company.postal_code, company.city),
+    postalPlaceLine(company),
     company.org_number ? `${bareLabel(L.orgNoLong)} ${formatOrgNumberDisplay(company.org_number)}` : null,
     // Säte when the company has set it (crm#1604); never the postal town.
     registeredOffice ? `${bareLabel(L.registeredOffice)} ${registeredOffice}` : null,
@@ -666,12 +677,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             <View style={styles.metaColumn}>
               <Text style={styles.metaLabel}>{L.fromHeading}</Text>
               <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{company.company_name}</Text>
-              {company.address_line1 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{company.address_line1}</Text>}
-              {company.address_line2 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{company.address_line2}</Text>}
-              {postalLine(company.postal_code, company.city) && (
-                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{postalLine(company.postal_code, company.city)}</Text>
-              )}
-              {sellerCountry && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{sellerCountry}</Text>}
+              {sellerAddressLines.map((line, index) => (
+                <Text key={`seller-address-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
               {company.email && <Text style={styles.metaLine} hyphenationCallback={wrapDescriptionWords}>{company.email}</Text>}
               {invoice.our_reference && (
                 <Text style={styles.metaReference} hyphenationCallback={wrapDescriptionWords}>
@@ -684,14 +692,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             <View style={styles.metaColumnLast}>
               <Text style={styles.metaLabel}>{L.toHeading}</Text>
               <Text style={styles.metaNameFull} hyphenationCallback={wrapDescriptionWords}>{customer.name}</Text>
-              {customer.address_line1 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{customer.address_line1}</Text>}
-              {customer.address_line2 && <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{customer.address_line2}</Text>}
-              {postalLine(customer.postal_code, customer.city) && (
-                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{postalLine(customer.postal_code, customer.city)}</Text>
-              )}
-              {customer.country && customer.country !== 'SE' && (
-                <Text style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{getCountryName(customer.country, lang)}</Text>
-              )}
+              {buyerAddressLines.map((line, index) => (
+                <Text key={`buyer-address-${index}`} style={styles.metaLineFull} hyphenationCallback={wrapDescriptionWords}>{line}</Text>
+              ))}
               {/* No identifier rows for a private customer: their personnummer
                   is not required on a B2C invoice (ML 17 kap 24§ asks for name
                   + address only) and printing it is a GDPR data-minimisation

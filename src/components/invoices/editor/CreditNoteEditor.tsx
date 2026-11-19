@@ -53,6 +53,7 @@ import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { invoiceRowStatus } from '@/lib/invoices/status-display'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
 
 type CreditIntent = { kind: 'send'; channel: EditorChannel } | { kind: 'create' }
 
@@ -385,9 +386,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const customerLine = customer
     ? [
         customer.customer_type === 'individual' ? '' : customer.org_number ?? '',
-        [customer.address_line1, [customer.postal_code, customer.city].filter(Boolean).join(' ')]
-          .filter(Boolean)
-          .join(', '),
+        [customer.address_line1, postalPlaceLine(customer)].filter(Boolean).join(', '),
         customer.email ?? '',
       ]
         .filter(Boolean)

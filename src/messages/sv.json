@@ -2802,6 +2802,8 @@
     "postal_placeholder": "123 45",
     "city_label": "Ort",
     "city_placeholder": "Stockholm",
+    "address_state_label": "Delstat",
+    "address_province_label": "Provins",
     "country_label": "Land",
     "country_placeholder": "Välj land",
     "country_invalid": "Välj ett land i listan",

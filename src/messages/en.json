@@ -2802,6 +2802,8 @@
     "postal_placeholder": "123 45",
     "city_label": "City",
     "city_placeholder": "Stockholm",
+    "address_state_label": "State",
+    "address_province_label": "Province",
     "country_label": "Country",
     "country_placeholder": "Select country",
     "country_invalid": "Pick a country from the list",

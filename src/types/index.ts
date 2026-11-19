@@ -1171,6 +1171,8 @@ export interface Customer {
   address_line2: string | null
   postal_code: string | null
   city: string | null
+  /** State or province of a US or Canadian address ('WA'); printed "City, ST ZIP" (lib/invoices/postal-address.ts). */
+  address_state?: string | null
   /** ISO 3166-1 alpha-2 ('SE', 'DE'). Rows from before 2026-09 that the backfill could not map may still hold a name. */
   country: string
 
@@ -2172,6 +2174,7 @@ export interface CreateCustomerInput {
   address_line2?: string
   postal_code?: string
   city?: string
+  address_state?: string
   country?: string
   org_number?: string
   vat_number?: string

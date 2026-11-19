@@ -142,6 +142,8 @@ export async function createCustomer(
     address_line2: input.address_line2 ?? null,
     postal_code: input.postal_code ?? null,
     city: input.city ?? null,
+    // Blank is none, as on the update below.
+    address_state: input.address_state || null,
     // Always a code here: the schema resolves an omitted country.
     country: input.country,
     org_number: input.org_number || null,
@@ -314,6 +316,7 @@ export async function updateCustomer(
   if (input.customer_number !== undefined) updateData.customer_number = input.customer_number || null
   if (input.invoice_reference !== undefined) updateData.invoice_reference = input.invoice_reference || null
   if (input.invoice_marking !== undefined) updateData.invoice_marking = input.invoice_marking || null
+  if (input.address_state !== undefined) updateData.address_state = input.address_state || null
   if (rerouted) updateData.org_number = null
   if (rerouted && !personalNumberValue) {
     updateData.personal_number = encryptCustomerPersonalNumber(rerouted)

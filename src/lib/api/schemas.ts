@@ -1595,6 +1595,12 @@ const CustomerInvoiceMarkingSchema = z
   .optional()
   .describe('Märkning: the invoice_marking (Peppol BT-13 OrderReference) a new invoice to this customer gets when the request states none.')
 
+/**
+ * State or province of a US or Canadian customer ('WA'), printed "City, ST
+ * ZIP" (lib/invoices/postal-address.ts). Blank is none: the write stores null.
+ */
+const CustomerAddressStateSchema = z.string().trim().max(100).optional()
+
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
@@ -1617,6 +1623,7 @@ export const CreateCustomerSchema = z.object({
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
   city: z.string().optional(),
+  address_state: CustomerAddressStateSchema,
   country: CountryCodeSchema,
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
@@ -1759,6 +1766,7 @@ export const UpdateCustomerSchema = z.object({
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
   city: z.string().optional(),
+  address_state: CustomerAddressStateSchema,
   country: CountryCodeSchema,
   org_number: z.string().optional(),
   vat_number: z.string().optional(),

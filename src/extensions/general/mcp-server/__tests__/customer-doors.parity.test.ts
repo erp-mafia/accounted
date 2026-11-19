@@ -349,6 +349,7 @@ describe('customer update: every door writes the same change', () => {
  */
 const NOT_ON_THE_AGENT_TOOLS: Record<string, string> = {
   invoice_email_bcc_addresses: 'a hidden copy of every invoice email; set in the web app (tools/list budget)',
+  address_state: 'the state or province of a US or Canadian address; set in the web app or v1 (tools/list budget)',
 }
 
 /** gnubok_create_customer names two fields its own way. */

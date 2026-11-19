@@ -159,6 +159,7 @@ import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-
 import { UsageLimitDialog } from '@/components/settings/UsageLimitDialog'
 import type { UsageKind } from '@/lib/usage/kinds'
 import type { DigitalMailboxProviderId } from '@/lib/digital-mailboxes/types'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
 import {
   EMPTY_INVOICE_MAILBOX_VIEW,
   mailboxSendActions,
@@ -3086,7 +3087,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         {customer.address_line1 && <p>{customer.address_line1}</p>}
                         {customer.address_line2 && <p>{customer.address_line2}</p>}
                         <p>
-                          {[customer.postal_code, customer.city].filter(Boolean).join(' ')}
+                          {postalPlaceLine(customer)}
                           {customer.country && customer.country !== 'SE' && `, ${getCountryName(customer.country, locale === 'en' ? 'en' : 'sv')}`}
                         </p>
                       </div>
