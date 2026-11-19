@@ -251,8 +251,8 @@ export function documentOAuthProblemFromReason(
  * login, a state the callback rejected). The panel replayed that problem
  * with its own prompt and dropped the reason, so a customer whose Fortnox
  * lacks the licence for the files read "godkänn åtkomsten till Arkiv och
- * Koppla fil" after every attempt (Fortnox answered error_missing_license
- * twice in prod, 2026-11-16 and 11-17). The problem stays the prior one: the
+ * Koppla fil" after every attempt (Fortnox answers error_missing_license
+ * in that case). The problem stays the prior one: the
  * connection is as it was, so its heading, its reference and the way forward
  * (log in again) still hold. A full-page return has no prior problem and
  * reads the reason alone (documentOAuthProblemFromReason).

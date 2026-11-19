@@ -21,10 +21,8 @@
  *   - two bank rows whose sets share an invoice cancel each other out
  *     (matchRowsToInvoiceCombinations): the amount cannot say which row paid.
  *
- * Measured in production before shipping (2026-10-21, bank rows of the last
- * 90 days that have been booked): 11 had such a unique set when they were
- * booked; 9 were booked as exactly that set through the batch match, and the
- * other 2 settled the same amount by hand. None went to other invoices. The
+ * Checked against booked bank rows before shipping: a row that had such a
+ * unique set was settled against that set, never against other invoices. The
  * refusals above are what keeps it there; widening them is a precision
  * decision, not a tuning knob.
  *
@@ -40,7 +38,7 @@
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { addDaysIso } from '@/lib/dates/iso'
 
-/** Largest set proposed. Every one-counterparty multi-invoice booking in production had 2 or 3. */
+/** Largest set proposed. A payment for several invoices of one counterparty usually covers 2 or 3. */
 export const COMBINATION_MAX_SIZE = 4
 
 /**

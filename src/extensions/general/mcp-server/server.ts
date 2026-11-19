@@ -4304,9 +4304,9 @@ async function readSieTargetCompany(supabase: SupabaseClient, companyId: string)
 /**
  * Other companies this connection reaches whose org number is the SIE file's
  * #ORGNR: where a file that does not belong to the current company most
- * likely belongs. In prod, 10 of the 15 imports in 90 days whose #ORGNR
- * differed from the company's (all before the confirm gate) carried the
- * number of another company the same user is a member of. Same reach as a
+ * likely belongs. A file whose #ORGNR differs from the company's most often
+ * carries the number of another company the same user is a member of. Same
+ * reach as a
  * wrong company_id's candidates (listAccessibleCompanies: key allowlist or
  * pin, no archived or seat-paused company) and the same number key as the
  * check itself (orgNumberKey). Best effort: a failed lookup names nothing.
@@ -20079,9 +20079,9 @@ export const tools: McpTool[] = [
         dateForPeriodCheck: je.entry_date,
         ...(note ? { complianceNote: note } : {}),
         // Two waiting already, this is the third: an agent working down a
-        // list, each link its own approval (crm#1207: 131 of them). Said at
-        // the third and then every tenth, not on every call: in production 65 % of
-        // single links were staged with two or more already waiting.
+        // list, each link its own approval (crm#1207). Said at the third and
+        // then every tenth, not on every call: most single links are staged
+        // with two or more already waiting.
         ...(waitingVoucherLinks % 10 === 2
           ? {
               next: {

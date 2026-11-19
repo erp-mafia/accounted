@@ -104,11 +104,10 @@ export async function shouldShowOtherAccountHint(
     // it. Leaving company_id out and letting RLS do the scoping reads as the
     // cheaper form and is the opposite: under the `authenticated` role the RLS
     // qual becomes a filter on the scan, so Postgres reads all of
-    // journal_entries (~900 ms measured in production, 4.2 s worst observed) on the
-    // blocking Hem render instead of using idx_journal_entries_company_id
-    // (~2 ms). Naming the ids cannot change the answer: user_company_ids(),
-    // which journal_entries RLS uses, excludes archived companies, and so does
-    // the list above.
+    // journal_entries on the blocking Hem render, hundreds of times slower
+    // than using idx_journal_entries_company_id. Naming the ids cannot change
+    // the answer: user_company_ids(), which journal_entries RLS uses,
+    // excludes archived companies, and so does the list above.
     const ownIds = ownCompanies.map((c) => c.id)
     if (await hasAnyJournalEntry(supabase, ownIds)) return false
 

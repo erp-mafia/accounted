@@ -7,8 +7,8 @@
  *
  * An anchor at a reversed verifikat books nothing, with one exception this file
  * pins: when a posted correction of that verifikat books on a bank account, the
- * row's money is on the ledger through the correction (prod holds 35 such rows,
- * from before a correction was refused from moving a bank leg; correctEntry also
+ * row's money is on the ledger through the correction (such rows exist from
+ * before a correction was refused from moving a bank leg; correctEntry also
  * logs a failed relink and carries on), and offering the row for booking would
  * book the same money twice.
  */

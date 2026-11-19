@@ -18,9 +18,9 @@ const WINDOW_MONTHS = 12
 /**
  * An imported counterparty needs this many verifikat before it is a pattern.
  * A bank-row pattern carries a person's or agent's categorization; an
- * imported one is only the old system's text and lines, and measured on
- * production a single imported verifikat predicted the next one's account
- * 80-87 % of the time against 94-97 % from two or more.
+ * imported one is only the old system's text and lines, and a single
+ * imported verifikat predicts the next one's account clearly worse than two
+ * or more do.
  */
 const MIN_IMPORTED_VOUCHERS = 2
 

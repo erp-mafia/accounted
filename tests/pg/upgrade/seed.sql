@@ -167,7 +167,7 @@ VALUES
 -- Agent proposals (pending_operations) as they stood before a later column or
 -- rule: two that are decided, which pending_operations_immutability refuses
 -- to change, and three that still wait, two of them created in the same
--- instant. On production 98 % of the rows are decided (2026-11-17), so a
+-- instant. A real database holds mostly decided rows, so a
 -- migration that touches every proposal fails there and passes on an empty
 -- table. Listed in creation order, ties by id: a merge-base that already
 -- numbers proposals at insert (20261117192101) gives them the numbers the

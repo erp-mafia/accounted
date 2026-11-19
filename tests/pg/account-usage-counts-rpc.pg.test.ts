@@ -175,8 +175,8 @@ describe('get_account_usage_counts RPC', () => {
 
   it('adds the posted lines (from the ledger summaries) and the draft lines on one account, and answers the same from the lines alone', async () => {
     // Posted and reversed verifikat are counted from ledger_account_days, the
-    // rest from their lines (seen 2026-11-12: every line of the largest
-    // company took 5 s and timed out cold). A company whose summaries are not
+    // rest from their lines (reading every line of a large company is too
+    // slow for this call). A company whose summaries are not
     // built keeps the line path; both must give the same counts.
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await insertJournalEntry({

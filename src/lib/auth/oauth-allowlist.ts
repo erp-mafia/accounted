@@ -79,18 +79,17 @@ export type BuiltInProvider =
  *
  * Squidler (squidler.io, AI colleagues for small companies) is a partner
  * that connects its customers' agents over MCP and uses one fixed callback
- * for all of them, one for production and one for its dev environment. Its
- * customers are not technical, and registering the callback once per
- * customer under Agenter stopped them, so both are built in (founder
- * decision 2026-11-17, replacing the per-user registration chosen for it on
- * 2026-11-04). Each is an exact path on Squidler's own https host, never a
- * prefix, so no other squidler.io path and no other subdomain rides on it.
+ * for all of them, one for production and one for its dev environment. Both
+ * are built in, so its customers connect without registering the callback
+ * under Agenter first. Each is an exact path on Squidler's own https host,
+ * never a prefix, so no other squidler.io path and no other subdomain rides
+ * on it.
  *
  * Celemine (celemine.com, a policy and security gateway between a company's
  * AI agents and the systems they work in) connects to Accounted as one of its
  * upstream MCP servers. It registers itself through /register with callbacks
- * under https://celemine.com/upstream/ on its own host (founder decision
- * 2026-11-19), so the entry is a prefix, like Claude's /api/. Each path
+ * under https://celemine.com/upstream/ on its own host, so the entry is a
+ * prefix, like Claude's /api/. Each path
  * segment must start with a letter, digit, `_` or `-` and hold only those and
  * `.`: no dot segment (`..`), percent-encoding, query or fragment can take the
  * browser off /upstream/ once the check has passed. Only the bare

@@ -1763,8 +1763,8 @@ describe('ingestTransactions', () => {
 
   // -----------------------------------------------------------------------
   // 2h. No date-drift dedup. Every dedup layer buckets on EXACT (date, öre),
-  //     so a twin one day away always imports. Measured in production (2026-10-12):
-  //     a ±1-day rule matched recurring same-text charges far more often than
+  //     so a twin one day away always imports:
+  //     a ±1-day rule matches recurring same-text charges far more often than
   //     re-imports, and dropping a real charge loses bookkeeping while a
   //     visible duplicate can be ignored. These pin that decision.
   // -----------------------------------------------------------------------

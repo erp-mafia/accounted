@@ -282,9 +282,8 @@ export type BankLegVerdict =
  *
  * Fits: a zero row; the first row in the row's direction, whatever its size
  * (as before: a lone row that differs from the verifikat, often by an
- * öresavrundning, links and the difference shows on the status card; prod
- * had five such links in the 30 days before this check, against eighteen
- * second rows on an already-held leg); a verifikat that books nothing in the
+ * öresavrundning, links and the difference shows on the status card); a
+ * verifikat that books nothing in the
  * row's direction (booksDirection refuses that row first, by its own code);
  * a row no larger than what other rows leave, within
  * BANK_LEG_ROOM_TOLERANCE. A verifikat whose amounts cannot be expressed in

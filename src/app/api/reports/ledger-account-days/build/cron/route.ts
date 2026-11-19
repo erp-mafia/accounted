@@ -10,8 +10,7 @@ export const maxDuration = 60
  * Stop starting new work after this long. One call started at the last moment
  * may run until the 30 s statement timeout PostgREST sets for the service
  * role (pre_request_statement_timeout), so budget plus one call must fit
- * maxDuration: 25 + 30 = 55 s. At 40 s it did not (40 + 30 = 70 s; a run of
- * 48.7 s was seen in production).
+ * maxDuration: 25 + 30 = 55 s. At 40 s it did not (40 + 30 = 70 s).
  */
 const TIME_BUDGET_MS = 25_000
 /** Companies read per pass; the loop asks again until the budget is spent. */
