@@ -15,6 +15,7 @@ import type { SenderRegistration } from '../types'
 const getConnection = vi.hoisted(() => vi.fn())
 const upsertConnection = vi.hoisted(() => vi.fn())
 const listPendingSenderConnections = vi.hoisted(() => vi.fn())
+const updateConnectionIfUnchanged = vi.hoisted(() => vi.fn())
 const getDigitalMailboxProviders = vi.hoisted(() => vi.fn())
 
 vi.mock('../connections', async (importOriginal) => ({
@@ -22,6 +23,7 @@ vi.mock('../connections', async (importOriginal) => ({
   getConnection,
   upsertConnection,
   listPendingSenderConnections,
+  updateConnectionIfUnchanged,
 }))
 vi.mock('../providers', () => ({ getDigitalMailboxProviders, isDigitalMailboxEnabled: () => true }))
 
@@ -91,6 +93,7 @@ function writesOnto(existing: DigitalMailboxConnection | null) {
     provider,
     ...patch,
   }))
+  updateConnectionIfUnchanged.mockImplementation(async (_s, connection, patch) => ({ ...connection, ...patch }))
 }
 
 beforeEach(() => {
@@ -180,6 +183,16 @@ describe('activateSending for a company that is a Kivra sender through another s
     expect(upsertConnection).not.toHaveBeenCalled()
   })
 
+  it('keeps a conflict that is not Kivra refusing the access request a failure to retry', async () => {
+    getDigitalMailboxProviders.mockReturnValue({ kivra: null, billo: { sender: { registerSender } } })
+    getConnection.mockResolvedValue(row({ provider: 'billo' }))
+    registerSender.mockRejectedValue(new DigitalMailboxApiError('billo', 'conflict', 'tenant registration answered 409', 409))
+
+    const outcome = await activateSending(service, { companyId: COMPANY, userId: 'admin-1', provider: 'billo', log })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'DIGITAL_MAILBOX_PROVIDER_FAILED' })
+  })
+
   it('still answers Kivra being down as a failure to retry', async () => {
     getConnection.mockResolvedValue(row())
     registerSender.mockRejectedValue(new DigitalMailboxApiError('kivra', 'unavailable', 'tenant registration answered 503', 503))
@@ -211,7 +224,22 @@ describe('checkPendingSenderRequests (cron)', () => {
     const summary = await checkPendingSenderRequests(service, { log })
 
     expect(summary).toEqual({ checked: 1, activated: 1, rejected: 0, errors: [] })
-    expect(upsertConnection.mock.calls[0]![3]).toMatchObject({ send_state: 'active', tenant_ref: 'tk-other', send_activated_by: 'admin-1' })
+    expect(upsertConnection).not.toHaveBeenCalled()
+    const [, guardedRow, patch] = updateConnectionIfUnchanged.mock.calls[0]!
+    expect(guardedRow).toMatchObject({ id: 'conn-kivra', updated_at: '2026-11-01T00:00:00Z' })
+    expect(patch).toMatchObject({ send_state: 'active', tenant_ref: 'tk-other', send_activated_by: 'admin-1' })
+  })
+
+  it('does not switch sending on when the admin switched it off while Kivra answered', async () => {
+    listPendingSenderConnections.mockResolvedValue([pendingRow()])
+    // The row moved on (the request was dropped): the guarded write matches nothing.
+    updateConnectionIfUnchanged.mockResolvedValue(null)
+    checkSenderRequest.mockResolvedValue({ status: 'active', tenantRef: 'tk-other' })
+
+    const summary = await checkPendingSenderRequests(service, { log })
+
+    expect(summary).toEqual({ checked: 1, activated: 0, rejected: 0, errors: [] })
+    expect(upsertConnection).not.toHaveBeenCalled()
   })
 
   it('leaves a request Kivra has not decided untouched, and keeps going past one that fails', async () => {
@@ -227,6 +255,7 @@ describe('checkPendingSenderRequests (cron)', () => {
     expect(summary.activated).toBe(0)
     expect(summary.errors).toHaveLength(1)
     expect(upsertConnection).not.toHaveBeenCalled()
+    expect(updateConnectionIfUnchanged).not.toHaveBeenCalled()
   })
 
   it('does not read the database when no provider can follow a request up', async () => {

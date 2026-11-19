@@ -35,11 +35,13 @@ import {
   updateConnection,
   upsertConnection,
   withoutSenderRequest,
+  updateConnectionIfUnchanged,
+  type ConnectionPatch,
   type DigitalMailboxConnection,
   type SenderRequest,
 } from './connections'
 import { orgNumberFromVatNumber } from './identifiers'
-import type { KivraProvider } from './kivra'
+import { KIVRA_SENDER_ELSEWHERE, type KivraProvider } from './kivra'
 import { getDigitalMailboxProviders, isDigitalMailboxEnabled } from './providers'
 import { DIGITAL_MAILBOX_PROVIDERS, type DigitalMailboxProviderId, type MailboxSender, type SenderRegistration } from './types'
 
@@ -453,7 +455,7 @@ export async function activateSending(
     const reason = errorReason(err)
     args.log.warn('digital mailbox sender registration failed', { companyId: args.companyId, provider: args.provider, reason })
     // The company sends through another service and the provider would not take the access request: retrying will not help.
-    const elsewhere = isDigitalMailboxApiError(err) && err.kind === 'conflict'
+    const elsewhere = isDigitalMailboxApiError(err) && err.kind === 'conflict' && err.providerCode === KIVRA_SENDER_ELSEWHERE
     return { ok: false, code: elsewhere ? 'DIGITAL_MAILBOX_SENDER_ELSEWHERE' : 'DIGITAL_MAILBOX_PROVIDER_FAILED', reason }
   }
   const connection = await recordSenderRegistration(service, {
@@ -464,7 +466,7 @@ export async function activateSending(
     requestedBy: args.userId,
   })
   if (registration.status === 'rejected') return { ok: false, code: 'DIGITAL_MAILBOX_SENDER_REQUEST_REJECTED' }
-  return { ok: true, data: connection }
+  return { ok: true, data: connection! }
 }
 
 /**
@@ -481,12 +483,22 @@ async function recordSenderRegistration(
     registration: SenderRegistration
     /** Who asked for sending: the admin, or for the cron the admin who made the request. */
     requestedBy: string | null
+    /**
+     * Write only onto the row as `existing` was read (the cron): an admin who
+     * switched sending off while Kivra answered has dropped the request, and
+     * an acceptance must not switch it back on. Null when the row moved on.
+     */
+    onlyIfUnchanged?: boolean
   },
-): Promise<DigitalMailboxConnection> {
+): Promise<DigitalMailboxConnection | null> {
   const { registration, existing } = args
   const meta = existing?.provider_meta ?? {}
+  const write = (patch: ConnectionPatch) =>
+    args.onlyIfUnchanged && existing
+      ? updateConnectionIfUnchanged(service, existing, patch)
+      : upsertConnection(service, args.companyId, args.provider, patch)
   if (registration.status === 'active') {
-    return upsertConnection(service, args.companyId, args.provider, {
+    return write({
       send_state: 'active',
       tenant_ref: registration.tenantRef,
       send_activated_by: args.requestedBy,
@@ -503,9 +515,7 @@ async function recordSenderRegistration(
     requested_at: earlier?.ref === ref && earlier.requested_at ? earlier.requested_at : new Date().toISOString(),
     requested_by: args.requestedBy,
   }
-  return upsertConnection(service, args.companyId, args.provider, {
-    provider_meta: { ...meta, [SENDER_REQUEST_KEY]: request },
-  })
+  return write({ provider_meta: { ...meta, [SENDER_REQUEST_KEY]: request } })
 }
 
 export interface SenderRequestSweep {
@@ -534,13 +544,16 @@ export async function checkPendingSenderRequests(service: SupabaseClient, args: 
     try {
       const registration = await sender.checkSenderRequest(request.ref)
       if (registration.status === 'pending') continue
-      await recordSenderRegistration(service, {
+      const written = await recordSenderRegistration(service, {
         companyId: row.company_id,
         provider: row.provider,
         existing: row,
         registration,
         requestedBy: request.requested_by,
+        onlyIfUnchanged: true,
       })
+      // The row changed while Kivra answered (switched off, or written by another run): the next run asks again.
+      if (!written) continue
       if (registration.status === 'active') summary.activated++
       else summary.rejected++
       args.log.info('digital mailbox sender access request decided', {

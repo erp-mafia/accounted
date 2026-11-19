@@ -173,6 +173,26 @@ export function withoutSenderRequest(meta: Record<string, unknown> | null | unde
   return rest
 }
 
+/**
+ * Patch the row only if it is still as it was read (updated_at moves on
+ * every write): the changed row, or null when something wrote it meanwhile.
+ */
+export async function updateConnectionIfUnchanged(
+  service: SupabaseClient,
+  connection: Pick<DigitalMailboxConnection, 'id' | 'company_id' | 'updated_at'>,
+  patch: ConnectionPatch,
+): Promise<DigitalMailboxConnection | null> {
+  const { data, error } = await service
+    .from('digital_mailbox_connections')
+    .update(patch)
+    .eq('id', connection.id)
+    .eq('company_id', connection.company_id)
+    .eq('updated_at', connection.updated_at)
+    .select('*')
+  if (error) throw new Error(`digital mailbox connection update failed: ${error.message}`)
+  return ((data as DigitalMailboxConnection[] | null) ?? [])[0] ?? null
+}
+
 /** The rows whose sender access request waits for the provider: the cron follows them up. */
 export async function listPendingSenderConnections(service: SupabaseClient): Promise<DigitalMailboxConnection[]> {
   const { data, error } = await service
