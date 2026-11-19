@@ -579,7 +579,12 @@ export async function deactivateSending(
 ): Promise<DigitalMailboxConnection | null> {
   const connection = await getConnection(service, args.companyId, args.provider)
   if (connection && senderRequestOf(connection)) {
-    return upsertConnection(service, args.companyId, args.provider, { provider_meta: withoutSenderRequest(connection.provider_meta) })
+    // send_state as read (never active here): should the cron have accepted
+    // the request since the read, this write still leaves sending off.
+    return upsertConnection(service, args.companyId, args.provider, {
+      send_state: connection.send_state,
+      provider_meta: withoutSenderRequest(connection.provider_meta),
+    })
   }
   if (!connection || connection.send_state !== 'active') return connection
   return upsertConnection(service, args.companyId, args.provider, { send_state: 'ended' })

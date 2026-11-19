@@ -210,7 +210,8 @@ describe('deactivateSending', () => {
 
     const connection = await deactivateSending(service, { companyId: COMPANY, provider: 'kivra' })
 
-    expect(upsertConnection.mock.calls[0]![3]).toEqual({ provider_meta: { failing_since: null } })
+    // send_state is written too: an acceptance the cron recorded after the read is switched off again.
+    expect(upsertConnection.mock.calls[0]![3]).toEqual({ send_state: 'off', provider_meta: { failing_since: null } })
     expect(summariseConnection(connection!).send_request).toBeNull()
   })
 })
