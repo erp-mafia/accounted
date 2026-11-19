@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest'
+import { deflateRawSync } from 'node:zlib'
 import * as XLSX from 'xlsx'
+import { crc32 } from '@/lib/reports/zip-writer'
+import { damagedXlsx } from '@/tests/fixtures/damaged-xlsx'
 import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
 import { classifyError } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
+  assertZipEntriesInflate,
   readBestSheet,
   readBestSheetValues,
   readWorkbookFromBuffer,
@@ -149,5 +153,134 @@ describe('a workbook from a streaming zip writer', () => {
       'Filen kunde inte läsas. Den kan vara skadad eller lösenordsskyddad. Öppna den i Excel, spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV och ladda upp den igen.',
     )
     expect(getErrorMessage(err, { locale: 'en' })).toContain('save it without a password as an Excel workbook (.xlsx) or as CSV')
+  })
+})
+
+// The xlsx reader's own inflate runs on past a damaged entry's data and the
+// file's end: a sheet with its first deflate bytes overwritten kept it busy for
+// minutes (#246). Every deflated entry is inflated first, bounded by its
+// declared size, and the workbook is refused unless each one inflates to its
+// declared size and CRC-32.
+describe('a workbook with damaged compressed data', () => {
+  const rows = [['Kundnummer', 'Namn', 'Ort']]
+  for (let i = 0; i < 400; i++) rows.push([String(1000 + i), `Kund ${i} AB`, i % 2 ? 'Göteborg' : 'Stockholm'])
+
+  /** The workbook's parts by path inside the zip, as the xlsx package writes them. */
+  function workbookParts(): Record<string, Uint8Array> {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Kunder')
+    const zip = XLSX.CFB.read(new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' })), { type: 'array' })
+    const parts: Record<string, Uint8Array> = {}
+    ;(zip.FullPaths as string[]).forEach((path, i) => {
+      const entry = zip.FileIndex[i] as { type: number; content: ArrayLike<number> }
+      if (entry.type === 2 && !path.endsWith('Sh33tJ5')) parts[path.replace(/^Root Entry\//, '')] = Uint8Array.from(entry.content)
+    })
+    return parts
+  }
+
+  /**
+   * A zip of `parts`, each deflated by node:zlib (a writer other than the
+   * reader's), declaring the uncompressed size `declared` gives for a part.
+   */
+  function zipOf(parts: Record<string, Uint8Array>, declared: Record<string, number> = {}): ArrayBuffer {
+    const encoder = new TextEncoder()
+    const local: Uint8Array[] = []
+    const central: Uint8Array[] = []
+    let offset = 0
+    for (const [name, content] of Object.entries(parts)) {
+      const path = encoder.encode(name)
+      const data = new Uint8Array(deflateRawSync(content))
+      const crc = crc32(content)
+      const size = declared[name] ?? content.length
+
+      const header = new DataView(new ArrayBuffer(30))
+      header.setUint32(0, 0x04034b50, true)
+      header.setUint16(4, 20, true)
+      header.setUint16(8, 8, true)
+      header.setUint32(14, crc, true)
+      header.setUint32(18, data.length, true)
+      header.setUint32(22, size, true)
+      header.setUint16(26, path.length, true)
+      local.push(new Uint8Array(header.buffer), path, data)
+
+      const entry = new DataView(new ArrayBuffer(46))
+      entry.setUint32(0, 0x02014b50, true)
+      entry.setUint16(4, 20, true)
+      entry.setUint16(6, 20, true)
+      entry.setUint16(10, 8, true)
+      entry.setUint32(16, crc, true)
+      entry.setUint32(20, data.length, true)
+      entry.setUint32(24, size, true)
+      entry.setUint16(28, path.length, true)
+      entry.setUint32(42, offset, true)
+      central.push(new Uint8Array(entry.buffer), path)
+      offset += 30 + path.length + data.length
+    }
+    const directorySize = central.reduce((sum, chunk) => sum + chunk.length, 0)
+    const end = new DataView(new ArrayBuffer(22))
+    end.setUint32(0, 0x06054b50, true)
+    end.setUint16(8, Object.keys(parts).length, true)
+    end.setUint16(10, Object.keys(parts).length, true)
+    end.setUint32(12, directorySize, true)
+    end.setUint32(16, offset, true)
+    const chunks = [...local, ...central, new Uint8Array(end.buffer)]
+    const out = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
+    let at = 0
+    for (const chunk of chunks) {
+      out.set(chunk, at)
+      at += chunk.length
+    }
+    return out.buffer
+  }
+
+  it.each([0x00, 0xff])('refuses a sheet whose first 16 deflate bytes are overwritten with %i, well inside 2 seconds', async (fill) => {
+    const buffer = damagedXlsx(rows, fill)
+    const started = performance.now()
+    const thrown = await readBestSheet(buffer, 'kunder.xlsx').catch((err: unknown) => err)
+    expect(performance.now() - started).toBeLessThan(2000)
+    expect(thrown).toBeInstanceOf(UnreadableWorkbookError)
+    expect(classifyError(thrown)).toMatchObject({ code: 'IMPORT_WORKBOOK_UNREADABLE', transient: false })
+    expect(getErrorMessage(thrown)).toContain('Filen kunde inte läsas.')
+    await expect(readBestSheetValues(buffer, 'budget.xlsx')).rejects.toBeInstanceOf(UnreadableWorkbookError)
+  }, 5000)
+
+  it('reads a workbook the xlsx package deflated', async () => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Kunder')
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer
+    const { rawData } = await readBestSheet(buffer, 'kunder.xlsx')
+    expect(rawData).toEqual(rows)
+  })
+
+  it('reads a workbook another writer deflated', async () => {
+    const { rawData } = await readBestSheet(zipOf(workbookParts()), 'kunder.xlsx')
+    expect(rawData).toEqual(rows)
+  })
+
+  it('refuses an entry that declares a small size and inflates large', async () => {
+    const parts = workbookParts()
+    const sheet = new TextDecoder().decode(parts['xl/worksheets/sheet1.xml'])
+    expect(sheet).toContain('<sheetData>')
+    // 16 MiB of whitespace inside the sheet, declared as the sheet's own size.
+    parts['xl/worksheets/sheet1.xml'] = new TextEncoder().encode(sheet.replace('<sheetData>', `<sheetData>${' '.repeat(16 * 1024 * 1024)}`))
+    const buffer = zipOf(parts, { 'xl/worksheets/sheet1.xml': sheet.length })
+    expect(buffer.byteLength).toBeLessThan(256 * 1024)
+
+    await expect(assertZipEntriesInflate(buffer)).rejects.toBeInstanceOf(UnreadableWorkbookError)
+    await expect(readBestSheet(buffer, 'kunder.xlsx')).rejects.toBeInstanceOf(UnreadableWorkbookError)
+  }, 10000)
+
+  it('refuses an entry whose content does not match its declared checksum', async () => {
+    const buffer = zipOf(workbookParts())
+    const view = new DataView(buffer)
+    view.setUint32(14, view.getUint32(14, true) ^ 1, true) // the first local header's CRC-32
+    const end = buffer.byteLength - 22
+    const directory = view.getUint32(end + 16, true)
+    view.setUint32(directory + 16, view.getUint32(directory + 16, true) ^ 1, true)
+    await expect(readBestSheet(buffer, 'kunder.xlsx')).rejects.toBeInstanceOf(UnreadableWorkbookError)
+  })
+
+  it('leaves bytes that are not a zip to the reader', async () => {
+    await expect(assertZipEntriesInflate(new TextEncoder().encode('Namn;Ort\n').buffer)).resolves.toBeUndefined()
   })
 })

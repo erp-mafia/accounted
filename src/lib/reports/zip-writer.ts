@@ -51,9 +51,12 @@ const CRC_TABLE = (() => {
   return table
 })()
 
-/** CRC-32 (ISO-HDLC), the checksum every ZIP entry carries. */
-export function crc32(data: Uint8Array): number {
-  let crc = -1
+/**
+ * CRC-32 (ISO-HDLC), the checksum every ZIP entry carries. `previous` is the
+ * checksum of the data before `data`, for data that arrives in parts.
+ */
+export function crc32(data: Uint8Array, previous = 0): number {
+  let crc = ~previous
   for (let i = 0; i < data.length; i++) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ data[i]) & 0xff]
   return (crc ^ -1) >>> 0
 }

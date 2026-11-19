@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as XLSX from 'xlsx'
 import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
+import { damagedXlsx } from '@/tests/fixtures/damaged-xlsx'
 import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
 
 const { supabase: mockSupabase, reset } = createQueuedMockSupabase()
@@ -73,6 +74,17 @@ describe('POST /api/import/customers/parse', () => {
     expect(body.error.message).toContain('spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV')
     expect(body.error.message_en).toContain('save it without a password as an Excel workbook (.xlsx) or as CSV')
   })
+
+  it('refuses a workbook whose compressed data is damaged with the same 400, at once (#246)', async () => {
+    const started = performance.now()
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await post(new File([damagedXlsx([['Namn'], ['Acme AB'], ['Beta AB']], 0xff)], 'kunder.xlsx')),
+    )
+    expect(performance.now() - started).toBeLessThan(2000)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_WORKBOOK_UNREADABLE')
+    expect(body.error.message).toContain('Filen kunde inte läsas.')
+  }, 5000)
 
   it('annotates customer number matches, and same-name rows only as possible duplicates', async () => {
     mockFetchAllRows.mockResolvedValue([

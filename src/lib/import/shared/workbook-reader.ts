@@ -1,4 +1,5 @@
 import type { ParsingOptions, WorkBook } from 'xlsx'
+import { crc32 } from '@/lib/reports/zip-writer'
 import { decodeFileContent } from './encoding'
 
 /** What a caller may tune on the read; the input type stays the reader's. */
@@ -105,6 +106,131 @@ export function withCentralDirectorySizes(buffer: ArrayBuffer): ArrayBuffer {
   return aligned ? aligned.buffer : buffer
 }
 
+/** Compression method 8: the entry's data is a raw deflate stream. */
+const ZIP_DEFLATE = 8
+/** Extra field 0x0001 (APPNOTE.TXT 4.5.3): the 64-bit sizes behind ZIP64_SIZE. */
+const ZIP64_EXTRA_FIELD = 0x0001
+
+/** True when the xlsx reader takes the bytes for a zip: "PK" and two bytes below 9, as SheetJS 0.20.3 tests them. */
+function readAsZip(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] < 0x09 && bytes[3] < 0x09
+}
+
+/**
+ * The sizes of a central directory entry whose 32-bit size fields hold
+ * ZIP64_SIZE, from its ZIP64 extra field in [from, to): an 8-byte value for
+ * each such field, the uncompressed size first. Null when the field is
+ * missing or too short.
+ */
+function zip64Sizes(
+  view: DataView,
+  from: number,
+  to: number,
+  sizes: { size: number; compressedSize: number },
+): { size: number; compressedSize: number } | null {
+  for (let at = from; at + 4 <= to; at += 4 + view.getUint16(at + 2, true)) {
+    if (view.getUint16(at, true) !== ZIP64_EXTRA_FIELD) continue
+    const end = Math.min(to, at + 4 + view.getUint16(at + 2, true))
+    let field = at + 4
+    const wide = (value: number): number => {
+      if (value !== ZIP64_SIZE) return value
+      if (field + 8 > end) return -1
+      const read = view.getUint32(field, true) + view.getUint32(field + 4, true) * 2 ** 32
+      field += 8
+      return read
+    }
+    const size = wide(sizes.size)
+    const compressedSize = wide(sizes.compressedSize)
+    return size < 0 || compressedSize < 0 ? null : { size, compressedSize }
+  }
+  return null
+}
+
+/**
+ * True when the raw deflate `data` inflates to exactly `size` bytes with
+ * CRC-32 `crc`. The read stops as soon as the output passes `size`.
+ */
+async function inflatesTo(data: Uint8Array<ArrayBuffer>, size: number, crc: number): Promise<boolean> {
+  const reader = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader()
+  let total = 0
+  let checksum = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.length
+      if (total > size) {
+        await reader.cancel()
+        return false
+      }
+      checksum = crc32(value, checksum)
+    }
+  } catch {
+    // An invalid block, or data that ends before the stream does: the entry
+    // is damaged, which the caller refuses.
+    return false
+  }
+  return total === size && checksum === crc
+}
+
+/**
+ * Throws UnreadableWorkbookError for a zip whose deflated entries do not
+ * inflate to the size and CRC-32 its central directory declares.
+ *
+ * The xlsx reader's own inflate (SheetJS 0.20.3) is bounded by neither the
+ * entry's data nor its declared size: it decodes from the entry's first byte
+ * on, past the entry's end and the file's, where every read gives zero bits,
+ * and zero bits decode as one empty stored block after another. A sheet whose
+ * first deflate bytes were overwritten so kept the reader busy for minutes,
+ * on the server until the function's time limit and in the browser (the
+ * article import) with the tab frozen. Each deflated entry is inflated here
+ * first with DecompressionStream, which Node and the browser both have and
+ * which stops at the first invalid block or at data that ends mid-stream.
+ * Output past the declared size stops the read, so an entry that declares a
+ * small size and inflates large is refused without being inflated whole.
+ *
+ * Bytes the reader does not take for a zip pass unread, and so do stored
+ * entries (the reader skips their declared size). A zip whose central
+ * directory or local headers cannot be followed (every read is
+ * bounds-checked) is refused: the reader would walk the same bytes.
+ */
+export async function assertZipEntriesInflate(buffer: ArrayBuffer): Promise<void> {
+  if (!readAsZip(new Uint8Array(buffer))) return
+  const view = new DataView(buffer)
+  const refuse = (reason: string) => new UnreadableWorkbookError(new Error(reason))
+  const end = endOfCentralDirectory(view)
+  if (end < 0) throw refuse('the zip has no central directory')
+
+  const entries = view.getUint16(end + 10, true)
+  let at = view.getUint32(end + 16, true)
+  for (let i = 0; i < entries; i++) {
+    if (at + 46 > view.byteLength || view.getUint32(at, true) !== ZIP_CENTRAL_HEADER) {
+      throw refuse('the zip central directory is damaged')
+    }
+    const crc = view.getUint32(at + 16, true)
+    let sizes: { size: number; compressedSize: number } | null = {
+      compressedSize: view.getUint32(at + 20, true),
+      size: view.getUint32(at + 24, true),
+    }
+    const extra = at + 46 + view.getUint16(at + 28, true)
+    const extraEnd = Math.min(view.byteLength, extra + view.getUint16(at + 30, true))
+    const local = view.getUint32(at + 42, true)
+    at = extra + view.getUint16(at + 30, true) + view.getUint16(at + 32, true)
+
+    if (local + 30 > view.byteLength || view.getUint32(local, true) !== ZIP_LOCAL_HEADER) {
+      throw refuse('a zip entry has no local header')
+    }
+    // The reader takes the method from the local header.
+    if (view.getUint16(local + 8, true) !== ZIP_DEFLATE) continue
+    if (sizes.size === ZIP64_SIZE || sizes.compressedSize === ZIP64_SIZE) sizes = zip64Sizes(view, extra, extraEnd, sizes)
+    const data = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true)
+    if (!sizes || data + sizes.compressedSize > view.byteLength) throw refuse('a zip entry runs past the end of the file')
+    if (!(await inflatesTo(new Uint8Array(buffer, data, sizes.compressedSize), sizes.size, crc))) {
+      throw refuse('a compressed part does not inflate to its declared size and checksum')
+    }
+  }
+}
+
 /**
  * Read a workbook from a raw file buffer, with correct encoding handling
  * for CSV files.
@@ -112,7 +238,8 @@ export function withCentralDirectorySizes(buffer: ArrayBuffer): ArrayBuffer {
  * For binary spreadsheet formats (.xlsx, .xls, .ods), xlsx handles encoding
  * via the embedded codepage and we pass the buffer through as `type: 'array'`,
  * a zipped workbook with its local headers aligned first
- * (withCentralDirectorySizes).
+ * (withCentralDirectorySizes) and its deflated entries checked
+ * (assertZipEntriesInflate).
  *
  * For CSV files, xlsx with `type: 'array'` decodes bytes as Latin-1, which
  * mangles UTF-8 multi-byte sequences (e.g. Ö → Ã–). We instead detect the
@@ -135,7 +262,13 @@ export async function readWorkbookFromBuffer(
   const XLSX = await import('xlsx')
   const ext = filename.toLowerCase().split('.').pop() ?? ''
   const text = ext === 'csv' || looksLikeMarkup(new Uint8Array(buffer))
-  const input = text ? decodeFileContent(buffer) : withCentralDirectorySizes(buffer)
+  let input: string | ArrayBuffer
+  if (text) {
+    input = decodeFileContent(buffer)
+  } else {
+    input = withCentralDirectorySizes(buffer)
+    await assertZipEntriesInflate(input)
+  }
   let workbook: WorkBook
   try {
     workbook = XLSX.read(input, { ...options, type: text ? 'string' : 'array' })

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import * as XLSX from 'xlsx'
 import { parseArticleFileInBrowser, ARTICLE_BROWSER_MAX_FILE_BYTES } from '../browser-parse'
 import { ARTICLE_MATCH_MAX_BYTES, ARTICLE_MATCH_MAX_ROWS } from '../types'
+import { damagedXlsx } from '@/tests/fixtures/damaged-xlsx'
 import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -128,6 +129,20 @@ describe('parseArticleFileInBrowser (crm#1383)', () => {
     expect(getErrorMessage(thrown)).toContain('spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV')
     expect(fetchImpl).not.toHaveBeenCalled()
   })
+
+  it('fails at once on a workbook whose compressed data is damaged, instead of freezing the tab (#246)', async () => {
+    const fetchImpl = vi.fn()
+    const started = performance.now()
+    const thrown = await parseArticleFileInBrowser(
+      new File([damagedXlsx([['Benämning'], ['Skruv'], ['Mutter']])], 'prislista.xlsx'),
+      undefined,
+      fetchImpl as unknown as typeof fetch,
+    ).catch((err: unknown) => err)
+
+    expect(performance.now() - started).toBeLessThan(2000)
+    expect(getErrorMessage(thrown)).toContain('Filen kunde inte läsas.')
+    expect(fetchImpl).not.toHaveBeenCalled()
+  }, 5000)
 
   it('reports a failed match with the route message, or none for a platform error', async () => {
     const file = xlsxFile([['Benämning'], ['Skruv']])

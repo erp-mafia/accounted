@@ -27,6 +27,11 @@ describe('crc32', () => {
     expect(crc32(text('123456789'))).toBe(0xcbf43926)
     expect(crc32(new Uint8Array(0))).toBe(0)
   })
+
+  it('continues over data that arrives in parts', () => {
+    expect(crc32(text('6789'), crc32(text('12345')))).toBe(0xcbf43926)
+    expect(crc32(new Uint8Array(0), 0xcbf43926)).toBe(0xcbf43926)
+  })
 })
 
 describe('writeZip', () => {
