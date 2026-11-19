@@ -3984,6 +3984,8 @@
   "settings_assistant": {
     "fab_title": "Floating assistant button",
     "fab_description": "Show the assistant button in the bottom-right corner on every page. The assistant is always available under Agents in the menu.",
+    "fab_support_title": "Floating support button",
+    "fab_support_description": "Show the support button in the bottom-right corner on every page. Support is always available in the menu under your name.",
     "fab_save_failed": "Could not save the setting",
     "fab_load_failed": "The setting could not be loaded, so your choice cannot be shown or changed right now.",
     "fab_load_retry": "Try again",
@@ -8639,7 +8641,7 @@
     "ask_fab": "Ask support",
     "ask_fab_hide": "Hide the button",
     "ask_fab_hidden_title": "The button is hidden",
-    "ask_fab_hidden_description": "You find support in the menu under your name.",
+    "ask_fab_hidden_description": "You find support in the menu under your name. Turn the button back on under Settings, Your account.",
     "ask_good_answer": "Good answer",
     "ask_bad_answer": "Bad answer",
     "ask_failed": "Could not reach the AI assistant. Try again, or write to support.",

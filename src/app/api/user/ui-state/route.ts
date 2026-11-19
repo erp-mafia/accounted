@@ -57,6 +57,9 @@ const BodySchema = z
     // One-time Discord invite card: when it was closed or used. Plain
     // top-level value, so the default spread below replaces it.
     discord_invite_dismissed_at: z.string().datetime().optional(),
+    // The floating support button hidden or shown again (lib/ui-state/
+    // fab-preference.ts). Plain top-level value, replaced by the spread.
+    support_fab_hidden: z.boolean().optional(),
     // Transaktioner column visibility. Replaced whole, never merged:
     // the list IS the preference.
     tx_columns: z

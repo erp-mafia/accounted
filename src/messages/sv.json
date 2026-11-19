@@ -3984,6 +3984,8 @@
   "settings_assistant": {
     "fab_title": "Flytande assistentknapp",
     "fab_description": "Visa assistentknappen nere till höger på alla sidor. Assistenten finns alltid kvar under Agenter i menyn.",
+    "fab_support_title": "Flytande supportknapp",
+    "fab_support_description": "Visa supportknappen nere till höger på alla sidor. Supporten finns alltid kvar i menyn under ditt namn.",
     "fab_save_failed": "Kunde inte spara inställningen",
     "fab_load_failed": "Inställningen kunde inte läsas in, så det går inte att se eller ändra ditt val just nu.",
     "fab_load_retry": "Försök igen",
@@ -8639,7 +8641,7 @@
     "ask_fab": "Fråga supporten",
     "ask_fab_hide": "Dölj knappen",
     "ask_fab_hidden_title": "Knappen är dold",
-    "ask_fab_hidden_description": "Supporten hittar du i menyn under ditt namn.",
+    "ask_fab_hidden_description": "Supporten hittar du i menyn under ditt namn. Knappen slår du på igen under Inställningar, Ditt konto.",
     "ask_good_answer": "Bra svar",
     "ask_bad_answer": "Dåligt svar",
     "ask_failed": "Kunde inte nå AI-assistenten. Försök igen, eller skriv till supporten.",

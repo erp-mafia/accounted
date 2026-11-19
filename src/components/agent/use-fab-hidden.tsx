@@ -6,18 +6,19 @@ import { useLocale, useTranslations } from 'next-intl'
 import { ToastAction } from '@/components/ui/toast'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { saveFabHidden as storeFabHidden, type FabKind } from '@/lib/ui-state/fab-preference'
 
 /**
- * A floating button's own X: it writes the user_preferences opt-out
- * (hide_assistant_fab) the settings switch writes (crm#245: that switch sits
- * on a page the settings rail no longer lists, so "turn it off in settings"
- * was not a way a user could find), and says so in a toast with an undo.
- * `hiddenToast` is what the toast says: where the thing the button led to
- * is still found.
+ * A floating button's own X: it writes the opt-out the settings switch
+ * writes (crm#245: that switch sits on a page the settings rail no longer
+ * lists, so "turn it off in settings" was not a way a user could find), and
+ * says so in a toast with an undo. `hiddenToast` is what the toast says:
+ * where the thing the button led to is still found.
  *
- * Shared by the built-in assistant's button (AgentTrigger) and the support
- * assistant's (components/support/SupportAskTrigger.tsx): one preference, so
- * a person who hid one does not get the other.
+ * Shared by the built-in assistant's button (AgentTrigger) and the support's
+ * (components/support/SupportAskTrigger.tsx). `kind` says which: each has
+ * its own stored choice (lib/ui-state/fab-preference.ts), so hiding the
+ * assistant's button never hid the support's.
  *
  * The override hides or restores the button at once instead of waiting for
  * router.refresh() to re-render the layout. It is keyed to the prop value it
@@ -27,6 +28,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 export function useFabHidden(
   hidden: boolean,
   hiddenToast: { title: string; description: string },
+  kind: FabKind = 'assistant',
 ): { effectiveHidden: boolean; hideFab: () => Promise<void> } {
   const t = useTranslations('settings_assistant')
   const errorLocale = useLocale() as ErrorLocale
@@ -37,11 +39,7 @@ export function useFabHidden(
 
   async function saveFabHidden(nextHide: boolean): Promise<boolean> {
     try {
-      const res = await fetch('/api/user/preferences', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hide_assistant_fab: nextHide }),
-      })
+      const res = await storeFabHidden(kind, nextHide)
       if (!res.ok) {
         const body = await res.json().catch(() => null)
         toast({
