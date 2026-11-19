@@ -1,17 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { formatRedovisare } from '@/lib/skatteverket/format'
-import { generateKU10Xml } from '@/lib/salary/ku/ku10-generator'
 import { generateAGIXml } from '@/lib/salary/agi/xml-generator'
 import { runPreflightChecks } from '@/lib/bokslut/ixbrl/validate/rules'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 
 /**
- * The four Skatteverket- and Bolagsverket-bound export paths must agree about
+ * The three Skatteverket- and Bolagsverket-bound export paths must agree about
  * what a valid org number is.
  *
  * Before `lib/invariants/org-number.ts` they did not: the SRU converter stripped
- * hyphens only and threw on a space, KU10 stripped the first hyphen only, AGI
- * stripped every non-digit (so stray letters passed), and the årsredovisning
+ * hyphens only and threw on a space, AGI stripped every non-digit (so stray
+ * letters passed), and the årsredovisning
  * validator rejected the 12-digit form and skipped the check digit. A company
  * stored in one of the awkward forms could file AGI for a year and then fail at
  * the årsredovisning deadline with a message that did not say why.
@@ -22,28 +21,14 @@ import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
  */
 
 const AB_10 = '5560125790'
-const AB_KU_12 = '165560125790'
 
 /** The input forms a Swedish user or a provider API actually produces. */
 const EQUIVALENT_FORMS = ['5560125790', '556012-5790', '556012 5790', '165560125790']
 
-/** The subset that is already 10 digits, ignoring separators. */
-const TEN_DIGIT_FORMS = ['5560125790', '556012-5790', '556012 5790']
-
-function ku10CompanyFixture(orgNumber: string) {
-  return {
-    orgNumber,
-    companyName: 'Testbolaget AB',
-    year: 2025,
-    contactName: 'Test Testsson',
-    contactPhone: '0700000000',
-    contactEmail: 'test@example.com',
-  }
-}
-
 function agiCompanyFixture(orgNumber: string) {
   return {
     orgNumber,
+    entityType: 'aktiebolag' as const,
     companyName: 'Testbolaget AB',
     periodYear: 2025,
     periodMonth: 3,
@@ -118,39 +103,17 @@ function agiRejects(orgNumber: string): boolean {
   }
 }
 
-describe('org number: the four export paths agree', () => {
+describe('org number: the three export paths agree', () => {
   it.each(EQUIVALENT_FORMS)('accepts %s everywhere', (form) => {
     expect(redovisareRejects(form), 'SRU redovisare conversion').toBe(false)
     expect(ixbrlRejects(form), 'årsredovisning preflight').toBe(false)
     expect(agiRejects(form), 'AGI generator').toBe(false)
-    expect(() => generateKU10Xml(ku10CompanyFixture(form), []), 'KU10 generator').not.toThrow()
   })
 
   it('produces the same redovisare identity from every equivalent form', () => {
     const identities = EQUIVALENT_FORMS.map((f) => formatRedovisare(f, 'aktiebolag'))
     expect(new Set(identities).size, `got ${JSON.stringify(identities)}`).toBe(1)
     expect(identities[0]).toBe('165560125790')
-  })
-
-  it('emits the schema-required 12-digit identity into the KU10 file', () => {
-    for (const form of TEN_DIGIT_FORMS) {
-      const xml = generateKU10Xml(ku10CompanyFixture(form), [])
-      const match = xml.match(/<Organisationsnummer>([^<]*)<\/Organisationsnummer>/)
-      // Guard against a vacuous assertion: the element must actually be there.
-      expect(match, `input form ${form}: no <Organisationsnummer> in output`).not.toBeNull()
-      expect(match?.[1], `input form ${form}`).toBe(AB_KU_12)
-    }
-  })
-
-  /**
-   * Skatteverket's KU 12.0 XSD defines OrganisationsnummerTYPE as a 12-digit
-   * value with the `16` prefix. The official 2026 KU10 examples use that form.
-   * Source: https://www.skatteverket.se/foretag/skatterochavdrag/kontrolluppgifter/testtjanstochtekniskbeskrivning.4.233f91f71260075abe8800073614.html
-   */
-  it('keeps a stored 12-digit KU organisation identity unchanged', () => {
-    const xml = generateKU10Xml(ku10CompanyFixture('165560125790'), [])
-    const match = xml.match(/<Organisationsnummer>([^<]*)<\/Organisationsnummer>/)
-    expect(match?.[1]).toBe(AB_KU_12)
   })
 
   it.each([
@@ -160,7 +123,6 @@ describe('org number: the four export paths agree', () => {
     expect(redovisareRejects(bad), 'SRU redovisare conversion').toBe(true)
     expect(ixbrlRejects(bad), 'årsredovisning preflight').toBe(true)
     expect(agiRejects(bad), 'AGI generator').toBe(true)
-    expect(() => generateKU10Xml(ku10CompanyFixture(bad), []), 'KU10 generator').toThrow()
   })
 
   it('surfaces a bad check digit without blocking the filing', () => {

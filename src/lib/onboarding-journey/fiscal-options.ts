@@ -1,16 +1,18 @@
+import { checkPeriodDuration, monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+
 /**
- * First-fiscal-year end-date options, ported from the wizard's
- * Step3TaxRegistration rules (BFL 3 kap.):
- * - EF always ends 31 December; the first year may run up to 18 months
- *   (a start after 30 June may roll into next year's December).
- * - AB may end any month, up to 18 months from the start date.
+ * First-fiscal-year end-date options: the month-ends in the chosen end month
+ * that the one räkenskapsår rule accepts (checkPeriodDuration, BFL 3 kap.).
+ * - A form bound to the calendar year (enskild firma) always ends 31
+ *   December; the first year may run up to 18 months (a start after 30 June
+ *   may roll into next year's December).
+ * - Other forms may end any month, up to 18 months from the start.
  *
- * BFL 3 kap sets NO minimum length for a first räkenskapsår: it may be
- * shorter than 12 months when bokföringsskyldigheten begins, with no floor
- * (Bolagsverket: "hur kort som helst"). See DECISIONS.md archive 2026-07-25 / PR
- * #1165, which removed the same invented 6-month floor from the validator.
- * The `months >= 1` guard below is structural, not legal: it drops end
- * months that fall before the start month.
+ * The rule itself lives in validate-period-duration, which every other door
+ * reads: the 18 months and "the end lies after the start" are asked there,
+ * not counted again here. It sets NO minimum length for a first
+ * räkenskapsår (Bolagsverket: "hur kort som helst"); see DECISIONS.md
+ * archive 2026-07-25 / PR #1165, which removed an invented 6-month floor.
  */
 
 export interface FirstYearEndOption {
@@ -26,25 +28,13 @@ function lastDayOf(year: number, month: number): number {
   return new Date(year, month, 0).getDate()
 }
 
-function monthsSpan(startYear: number, startMonth: number, endYear: number, endMonth: number): number {
-  return (endYear - startYear) * 12 + (endMonth - startMonth) + 1
-}
-
 function iso(year: number, month: number, day: number): string {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
+/** The December options: the only end month a calendar-year form has. */
 export function efFirstYearEndOptions(startYear: number, startMonth: number): FirstYearEndOption[] {
-  const out: FirstYearEndOption[] = []
-  const m1 = 12 - startMonth + 1
-  if (m1 >= 1 && m1 <= 18) {
-    out.push({ date: iso(startYear, 12, 31), months: m1, year: startYear, month: 12, day: 31 })
-  }
-  const m2 = m1 + 12
-  if (m2 >= 1 && m2 <= 18 && startMonth > 6) {
-    out.push({ date: iso(startYear + 1, 12, 31), months: m2, year: startYear + 1, month: 12, day: 31 })
-  }
-  return out
+  return abFirstYearEndOptions(startYear, startMonth, 12)
 }
 
 export function abFirstYearEndOptions(
@@ -52,12 +42,15 @@ export function abFirstYearEndOptions(
   startMonth: number,
   endMonth: number,
 ): FirstYearEndOption[] {
+  // The start counts from its month: the rule takes a mid-month start's
+  // month in full, so the day does not change which ends are allowed.
+  const start = iso(startYear, startMonth, 1)
   const out: FirstYearEndOption[] = []
   for (const endYear of [startYear, startYear + 1, startYear + 2]) {
-    const months = monthsSpan(startYear, startMonth, endYear, endMonth)
-    if (months >= 1 && months <= 18) {
-      const day = lastDayOf(endYear, endMonth)
-      out.push({ date: iso(endYear, endMonth, day), months, year: endYear, month: endMonth, day })
+    const day = lastDayOf(endYear, endMonth)
+    const date = iso(endYear, endMonth, day)
+    if (checkPeriodDuration(start, date, { isFirstPeriod: true }) === null) {
+      out.push({ date, months: monthsBetween(start, date), year: endYear, month: endMonth, day })
     }
   }
   return out

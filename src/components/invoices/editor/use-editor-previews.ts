@@ -18,6 +18,12 @@ const DEBOUNCE_MS = 500
 export interface PdfPreviewState extends PdfPreviewMeta {
   /** Blob URL of the latest good render; null before the first one. */
   url: string | null
+  /**
+   * The same render's bytes, for the pane that draws the PDF itself
+   * (PdfCanvasPreview): the page cannot fetch its own blob: URL back under
+   * the app's connect-src (accounted#178).
+   */
+  blob: Blob | null
   loading: boolean
   /** Why the latest request failed; the previous render stays. */
   error: string | null
@@ -32,7 +38,11 @@ const EMPTY_META: PdfPreviewMeta = { pageCount: null, qr: null, missing: [], exc
  */
 export function useInvoicePdfPreview(body: string | null, refreshKey = 0): PdfPreviewState {
   const locale = useLocale() as ErrorLocale
-  const [result, setResult] = useState<{ url: string | null } & PdfPreviewMeta>({ url: null, ...EMPTY_META })
+  const [result, setResult] = useState<{ url: string | null; blob: Blob | null } & PdfPreviewMeta>({
+    url: null,
+    blob: null,
+    ...EMPTY_META,
+  })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const currentUrlRef = useRef<string | null>(null)
@@ -69,7 +79,7 @@ export function useInvoicePdfPreview(body: string | null, refreshKey = 0): PdfPr
         const url = URL.createObjectURL(blob)
         const previous = currentUrlRef.current
         currentUrlRef.current = url
-        setResult({ url, ...meta })
+        setResult({ url, blob, ...meta })
         setError(null)
         setLoading(false)
         // The <object> swaps to the new URL on this render; the old one may

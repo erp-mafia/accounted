@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateExpenseClaimSchema } from '@/lib/api/schemas'
 import { listExpenseClaims } from '@/lib/expenses/expense-claims-service'
 import { createExpenseClaim } from '@/lib/expenses/expense-claim-actions'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const GET = withRouteContext('expense_claims.list', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)

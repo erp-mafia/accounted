@@ -12,7 +12,9 @@ import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
  * Övriga rörelseintäkter. Membership fees are tax-exempt for the association
  * (Skatteverket, "Deklarera för en ekonomisk förening") and must be isolated
  * from other operating income so the INK2S 4.5c adjustment can be detected
- * from the ledger (lib/bokslut/tax-provision/tax-adjustment-service.ts).
+ * from the ledger (lib/bokslut/tax-provision/tax-adjustment-service.ts). An
+ * ideell förening's chart seeds the same account, without the INK2R SRU code,
+ * for the Medlemsavgifter post of its förenklat årsbokslut (BFNAR 2010:1).
  */
 export const FORM_SEEDED_ACCOUNTS: Readonly<Record<string, BASReferenceAccount>> = {
   '3901': {

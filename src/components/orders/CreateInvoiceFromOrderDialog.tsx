@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -13,9 +13,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
-import { cn, formatCurrency } from '@/lib/utils'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
+import { useCustomers } from '@/lib/reference-data/hooks'
+import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
 import type { WebshopOrder } from '@/types'
 
 interface CreateInvoiceFromOrderDialogProps {
@@ -25,12 +30,57 @@ interface CreateInvoiceFromOrderDialogProps {
   onCreated: () => void
 }
 
+/** The new customer as typed or prefilled in the dialog. */
+interface CustomerDraft {
+  name: string
+  company: string
+  email: string
+}
+
+/**
+ * The Shopify contact lookup: idle until it runs, `withheld` when the store
+ * did not share the customer's name, `unavailable` when it could not answer
+ * (extension off, store disconnected, Shopify down).
+ */
+type ContactLookup = 'idle' | 'loading' | 'ready' | 'withheld' | 'unavailable'
+
+/** The Shopify extension's on-demand answer (GET .../orders/:id/customer). */
+interface ShopifyContactAnswer {
+  name: string | null
+  company: string | null
+  email: string | null
+  withheld: string[]
+}
+
+const EMPTY_DRAFT: CustomerDraft = { name: '', company: '', email: '' }
+// Light client check; the route validates the address properly.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/**
+ * A Shopify order row carries no names by design (crm#1032), so the
+ * customer is confirmed here instead of taken from the row.
+ */
+function needsCustomerInput(order: WebshopOrder): boolean {
+  return (
+    order.platform === 'shopify' &&
+    !order.customer_company &&
+    !order.customer_name &&
+    !order.customer_email
+  )
+}
+
 /**
  * Order -> DRAFT kundfaktura (confirm up front, convention 10): the dialog
  * states exactly what will happen, the user confirms, and lands in the draft
  * to review before sending. The customer is matched by e-mail or created from
  * the order's billing snapshot server-side; the scraped orgnr is shown here
  * for the user to eyeball since it never auto-lands on legal invoice fields.
+ *
+ * For a Shopify order the billing contact is fetched from the store when the
+ * dialog opens (core calls the extension route by URL, never by import; with
+ * the extension off the fetch simply fails and the fields start empty). The
+ * user confirms or edits it, or picks an existing customer; the contact is
+ * only ever stored on the customer the invoice is created for.
  */
 export default function CreateInvoiceFromOrderDialog({
   open,
@@ -44,8 +94,68 @@ export default function CreateInvoiceFromOrderDialog({
   const { toast } = useToast()
   const [submitting, setSubmitting] = useState(false)
 
+  const confirmCustomer = needsCustomerInput(order)
+  // '' = a new customer from the fields below.
+  const [customerId, setCustomerId] = useState('')
+  const [draft, setDraft] = useState<CustomerDraft>(EMPTY_DRAFT)
+  const [lookup, setLookup] = useState<ContactLookup>('idle')
+  // Bumped by the retry action after a failed lookup: fetches again without
+  // clearing what the user typed meanwhile.
+  const [lookupAttempt, setLookupAttempt] = useState(0)
+
+  useEffect(() => {
+    if (!open || !confirmCustomer) return
+    setCustomerId('')
+    setDraft(EMPTY_DRAFT)
+  }, [open, confirmCustomer, order.id])
+
+  useEffect(() => {
+    if (!open || !confirmCustomer) return
+    let cancelled = false
+    setLookup('loading')
+    fetch(`/api/extensions/ext/shopify/orders/${order.id}/customer`)
+      .then(async (res) => (res.ok ? ((await res.json()) as ShopifyContactAnswer) : null))
+      .then((answer) => {
+        if (cancelled) return
+        if (!answer) {
+          setLookup('unavailable')
+          return
+        }
+        // On a retry, a field the store leaves empty keeps what the user typed.
+        setDraft((typed) => ({
+          name: answer.name ?? typed.name,
+          company: answer.company ?? typed.company,
+          email: answer.email ?? typed.email,
+        }))
+        setLookup(answer.withheld.includes('name') && !answer.name && !answer.company ? 'withheld' : 'ready')
+      })
+      .catch(() => {
+        if (!cancelled) setLookup('unavailable')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, confirmCustomer, order.id, lookupAttempt])
+
   const customerLabel =
     order.customer_company || order.customer_name || t('invoice_no_customer')
+
+  const newCustomer = confirmCustomer && customerId === ''
+  const draftMissingName = newCustomer && !draft.name.trim() && !draft.company.trim()
+  const draftEmailInvalid = newCustomer && draft.email.trim() !== '' && !EMAIL_RE.test(draft.email.trim())
+  const blocked = (newCustomer && lookup === 'loading') || draftMissingName || draftEmailInvalid
+
+  function requestBody(): Record<string, unknown> {
+    if (!confirmCustomer) return {}
+    if (customerId) return { customer_id: customerId }
+    return {
+      customer: {
+        name: draft.name.trim() || null,
+        company: draft.company.trim() || null,
+        email: draft.email.trim() || null,
+      },
+    }
+  }
 
   async function handleCreate() {
     setSubmitting(true)
@@ -53,7 +163,7 @@ export default function CreateInvoiceFromOrderDialog({
       const res = await fetch(`/api/webshop-orders/${order.id}/create-invoice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify(requestBody()),
       })
       const json = (await res.json()) as { invoice_id?: string }
       if (!res.ok || !json.invoice_id) {
@@ -76,27 +186,42 @@ export default function CreateInvoiceFromOrderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           {/* data-ph-mask: order number and customer name are user data */}
           <DialogTitle data-ph-mask="">{t('invoice_title', { number: order.order_number })}</DialogTitle>
           <DialogDescription data-ph-mask="">
-            {t('invoice_description', { customer: customerLabel })}
+            {confirmCustomer
+              ? t('invoice_description_confirm')
+              : t('invoice_description', { customer: customerLabel })}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 text-sm">
-          <div className="space-y-1">
-            <div>{customerLabel}</div>
-            {order.customer_email && (
-              <div className="text-muted-foreground">{order.customer_email}</div>
-            )}
-            {order.customer_orgnr && (
-              <div className="text-muted-foreground">
-                {t('invoice_orgnr_hint', { orgnr: order.customer_orgnr })}
-              </div>
-            )}
-          </div>
+          {confirmCustomer ? (
+            <OrderInvoiceCustomerFields
+              customerId={customerId}
+              onCustomerIdChange={setCustomerId}
+              draft={draft}
+              onDraftChange={setDraft}
+              lookup={lookup}
+              onRetryLookup={() => setLookupAttempt((n) => n + 1)}
+              missingName={draftMissingName}
+              invalidEmail={draftEmailInvalid}
+            />
+          ) : (
+            <div className="space-y-1">
+              <div>{customerLabel}</div>
+              {order.customer_email && (
+                <div className="text-muted-foreground">{order.customer_email}</div>
+              )}
+              {order.customer_orgnr && (
+                <div className="text-muted-foreground">
+                  {t('invoice_orgnr_hint', { orgnr: order.customer_orgnr })}
+                </div>
+              )}
+            </div>
+          )}
 
           {order.line_items.length > 0 && (
             <table className="w-full border-collapse text-[13px]">
@@ -113,7 +238,7 @@ export default function CreateInvoiceFromOrderDialog({
                       {item.quantity} × {item.name}
                     </td>
                     <td className={cn(VTD_CLASS, 'text-right tabular-nums')}>
-                      {formatCurrency(item.total + item.total_tax, order.currency)}
+                      {formatRowAmount(item.total + item.total_tax, order.currency)}
                     </td>
                   </tr>
                 ))}
@@ -131,11 +256,135 @@ export default function CreateInvoiceFromOrderDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('cancel')}
           </Button>
-          <Button onClick={handleCreate} disabled={submitting}>
+          <Button onClick={handleCreate} disabled={submitting || blocked}>
             {submitting ? t('invoice_creating') : t('invoice_confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+interface OrderInvoiceCustomerFieldsProps {
+  customerId: string
+  onCustomerIdChange: (id: string) => void
+  draft: CustomerDraft
+  onDraftChange: (draft: CustomerDraft) => void
+  lookup: ContactLookup
+  onRetryLookup: () => void
+  missingName: boolean
+  invalidEmail: boolean
+}
+
+/**
+ * Pick an existing customer, or confirm the new one prefilled from the
+ * store. Its own component so only these orders load the customer register.
+ */
+function OrderInvoiceCustomerFields({
+  customerId,
+  onCustomerIdChange,
+  draft,
+  onDraftChange,
+  lookup,
+  onRetryLookup,
+  missingName,
+  invalidEmail,
+}: OrderInvoiceCustomerFieldsProps) {
+  const t = useTranslations('webshop_orders')
+  const tc = useTranslations('common')
+  const { customers, isLoading } = useCustomers()
+  const fetching = lookup === 'loading'
+  // The withheld and unavailable lines already ask for the customer; no
+  // second hint then.
+  const showRequired = missingName && !fetching && lookup !== 'withheld' && lookup !== 'unavailable'
+  const set = (field: keyof CustomerDraft) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    onDraftChange({ ...draft, [field]: e.target.value })
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <Label htmlFor="order-invoice-customer" className="text-xs">
+          {t('invoice_customer_label')}
+        </Label>
+        <CustomerCombobox
+          id="order-invoice-customer"
+          value={customerId}
+          customers={customers}
+          onChange={onCustomerIdChange}
+          loading={isLoading}
+          placeholder={t('invoice_customer_search')}
+          noneLabel={t('invoice_customer_new')}
+        />
+      </div>
+
+      {customerId === '' && (
+        <div className="space-y-3">
+          {fetching && (
+            <p className="text-xs text-muted-foreground">{t('invoice_customer_fetching')}</p>
+          )}
+          {lookup === 'withheld' && <AttnLine>{t('invoice_customer_withheld')}</AttnLine>}
+          {lookup === 'unavailable' && (
+            <AttnLine action={{ label: tc('retry'), onClick: onRetryLookup }}>
+              {t('invoice_customer_unavailable')}
+            </AttnLine>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="order-invoice-customer-name" className="text-xs">
+                {t('invoice_customer_name')}
+              </Label>
+              <Input
+                id="order-invoice-customer-name"
+                data-ph-mask=""
+                autoComplete="off"
+                value={draft.name}
+                onChange={set('name')}
+                disabled={fetching}
+                aria-describedby={showRequired ? 'order-invoice-customer-name-hint' : undefined}
+              />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="order-invoice-customer-company" className="text-xs">
+                {t('invoice_customer_company')}
+              </Label>
+              <Input
+                id="order-invoice-customer-company"
+                data-ph-mask=""
+                autoComplete="off"
+                value={draft.company}
+                onChange={set('company')}
+                disabled={fetching}
+              />
+            </div>
+          </div>
+          {showRequired && (
+            <p id="order-invoice-customer-name-hint" className="text-xs text-muted-foreground">
+              {t('invoice_customer_required')}
+            </p>
+          )}
+          <div className="space-y-1">
+            <Label htmlFor="order-invoice-customer-email" className="text-xs">
+              {t('invoice_customer_email')}
+            </Label>
+            <Input
+              id="order-invoice-customer-email"
+              type="email"
+              data-ph-mask=""
+              autoComplete="off"
+              value={draft.email}
+              onChange={set('email')}
+              disabled={fetching}
+              aria-invalid={invalidEmail}
+              aria-describedby={invalidEmail ? 'order-invoice-customer-email-error' : undefined}
+            />
+            {invalidEmail && (
+              <p id="order-invoice-customer-email-error" className="text-xs text-destructive" role="alert">
+                {t('invoice_customer_email_invalid')}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

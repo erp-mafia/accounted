@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
+  liveEntryOf,
   MAX_CHAIN_WALK,
 } from '../correction-chain'
 
@@ -141,5 +143,47 @@ describe('correctionChainDepth', () => {
     // Locked by the plan: depth 2 targets (fixing the fix) pass the guard,
     // depth 3+ requires the explicit override.
     expect(CORRECTION_CHAIN_GUARD_DEPTH).toBe(3)
+  })
+})
+
+describe('liveEntryOf', () => {
+  it('answers a posted verifikat with itself, in one read', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: { id: 'e1', status: 'posted' } }])
+
+    expect(await liveEntryOf(supabase as never, 'company-1', 'e1')).toEqual({ id: 'e1' })
+  })
+
+  it('follows a rättelse of a rättelse to the posted correction', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'e1', status: 'reversed' } },
+      { data: [{ id: 'c1' }] },
+      { data: { id: 'c1', status: 'reversed' } },
+      { data: [{ id: 'c2' }] },
+      { data: { id: 'c2', status: 'posted' } },
+    ])
+
+    expect(await liveEntryOf(supabase as never, 'company-1', 'e1')).toEqual({ id: 'c2' })
+  })
+
+  it('answers none for a storno without a correction: nothing stands for the verifikat', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'e1', status: 'reversed' } },
+      { data: [] },
+    ])
+
+    expect(await liveEntryOf(supabase as never, 'company-1', 'e1')).toEqual({ none: true })
+  })
+
+  it('answers exhausted when the shared hop budget runs out', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'e1', status: 'reversed' } },
+      { data: [{ id: 'c1' }] },
+    ])
+
+    expect(await liveEntryOf(supabase as never, 'company-1', 'e1', { hops: 1 })).toEqual({ exhausted: true })
   })
 })

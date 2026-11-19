@@ -85,6 +85,15 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   // The IB split per project (#3313) is the same inline rättelse as
   // correct_entry_lines_inline, priced on the same basis (both sides counted).
   split_opening_balances_per_project: ['changed_amount_sek'],
+  book_pos_sales_day: ['journal_entry.total_debit'],
+  book_webshop_order: ['journal_entry.total_debit'],
+  // Attest posts nothing, but it releases the invoice for payment, which is
+  // what create_supplier_payment_batch is priced for. The staging tool
+  // (gnubok_approve_supplier_invoice) writes total_sek, the invoice's total
+  // in SEK; ops staged before it carried only total (the invoice currency,
+  // SEK for most), read so they are not left unpriced.
+  approve_supplier_invoice: ['total_sek', 'total'],
+  book_webshop_day: ['journal_entry.total_debit'],
 }
 
 /**
@@ -118,12 +127,30 @@ export function priceOperation(
 }
 
 /**
+ * The ceiling that binds this actor: its positive limit when it is a key
+ * credential (api_key; mcp_oauth: an OAuth access token is itself a minted
+ * key; service_account: a service account's key), else null.
+ *
+ * Null means "do not enforce", so the control can only ever narrow what an
+ * API key does unattended and can never touch a human, a cron or an in-app
+ * approval. Every check of the ceiling starts here: the operation price below
+ * and the engine's check of each verifikat (lib/bookkeeping/unattended-ceiling.ts).
+ */
+export function unattendedCeiling(
+  actorType: string | undefined,
+  limit: number | null | undefined,
+): number | null {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) return null
+  const isKeyCredential = actorType === 'api_key' || actorType === 'mcp_oauth' || actorType === 'service_account'
+  return isKeyCredential ? limit : null
+}
+
+/**
  * True when this commit needs a human first.
  *
  * Written NULL-first in every clause. Absence of a limit, absence of a price,
- * and any non-api_key actor all return false, so the control can only ever
- * narrow what an API key does unattended and can never touch a human, a cron
- * or an in-app approval.
+ * and any actor that is not a key credential (unattendedCeiling) all return
+ * false.
  */
 export function exceedsUnattendedLimit(params: {
   actorType: string | undefined
@@ -136,12 +163,13 @@ export function exceedsUnattendedLimit(params: {
       ? params.limit
       : null
 
-  if (params.actorType !== 'api_key' || limit === null) {
+  const ceiling = unattendedCeiling(params.actorType, limit)
+  if (ceiling === null) {
     return { exceeded: false, attempted: null, limit }
   }
 
   const attempted = priceOperation(params.operationType, params.previewData)
-  if (attempted === null) return { exceeded: false, attempted: null, limit }
+  if (attempted === null) return { exceeded: false, attempted: null, limit: ceiling }
 
-  return { exceeded: attempted > limit, attempted, limit }
+  return { exceeded: attempted > ceiling, attempted, limit: ceiling }
 }

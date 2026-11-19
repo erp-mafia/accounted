@@ -140,14 +140,22 @@ describe('report tools carry data_status', () => {
   })
 
   it('gnubok_get_general_ledger: status over the whole period', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    const result = (await tool('gnubok_get_general_ledger').execute(
-      { period_id: 'fp-1' },
-      'company-1',
-      'user-1',
-      supabase as never,
-    )) as { data_status?: unknown }
+    const { result, supabase } = await run('gnubok_get_general_ledger', { period_id: 'fp-1' })
     expect(buildReportDataStatus).toHaveBeenCalledWith(supabase, 'company-1', { periodId: 'fp-1' })
+    expect(result.data_status).toEqual(STATUS)
+  })
+
+  it('gnubok_get_general_ledger: status over the from/to range the ledger covers', async () => {
+    const { result, supabase } = await run('gnubok_get_general_ledger', {
+      period_id: 'fp-1',
+      from_date: '2026-03-01',
+      to_date: '2026-03-31',
+    })
+    expect(buildReportDataStatus).toHaveBeenCalledWith(supabase, 'company-1', {
+      periodId: 'fp-1',
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    })
     expect(result.data_status).toEqual(STATUS)
   })
 

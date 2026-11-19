@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import { Hedvig_Letters_Serif } from "next/font/google";
 import {
   Fraunces,
@@ -23,7 +23,6 @@ import { PaletteProvider } from "@/components/providers/PaletteProvider";
 import { NonceProvider } from "@/components/providers/NonceProvider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
-import { ensureInitialized } from "@/lib/init";
 import { isSelfHosted } from "@/lib/env/public-flags";
 import { getBranding } from "@/lib/branding/service";
 import { resolveRequestBrand } from "@/lib/branding/request-brand";
@@ -31,8 +30,26 @@ import { getBrandFontPair } from "@/lib/branding/fonts";
 import { BrandProvider } from "@/lib/branding/brand-context";
 import { toPublicBrand } from "@/lib/branding/public-brand";
 import { APP_TIME_ZONE } from "@/i18n/config";
+import { ROOT_CLIENT_NAMESPACES, pickNamespaces } from "@/i18n/root-client-namespaces";
 import { CSP_NONCE_HEADER } from "@/lib/security/csp";
+// A fork's branding extension calls registerBrandingService() at module load,
+// so it must run before metadata, viewport or the layout read getBranding();
+// server-render errors logged through createLogger() reach PostHog Error
+// Tracking (gated on the token). lib/server-baseline does both without
+// loading an extension; extensions load from instrumentation.ts at boot
+// (lib/initialized.ts), never in a page's own graph.
+import "@/lib/server-baseline";
 import "./globals.css";
+import RootErrorBoundary from "./error";
+
+// The root error boundary (./error.tsx) is loaded with every page, but as a
+// sibling of the pages rather than their parent: what it imports (the
+// standalone page frame, the brand mark and its next/image, the support
+// dialog) was bundled once for the boundary and again for the dashboard
+// shell, the sign-in pages and the not-found page. Naming it here puts those
+// modules in this layout's chunk group, which every segment below reuses, so
+// each ships once (scripts/perf/README.md, "Page budgets").
+void RootErrorBoundary;
 
 // Brand resolution (WL-12: the lookup runs in the root layout, not
 // middleware) lives in lib/branding/request-brand.ts, shared with every
@@ -40,13 +57,10 @@ import "./globals.css";
 // uniformly. The layout used to carry a private copy of the function, which
 // silently skipped that override.
 
-// Load extensions before metadata/viewport functions read the branding service.
-// Without this, an extension that calls registerBrandingService() at its module
-// load time would not have run yet when the first request hits this layout.
-ensureInitialized();
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Stil v3 (product decision 2026-10-29): Inter is the one face for text,
+// Geist Mono stays for account numbers and code, Hedvig for headline numbers.
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -156,7 +170,11 @@ export default async function RootLayout({
   const branding = getBranding();
   const brand = await resolveRequestBrand();
   const locale = await getLocale();
-  const messages = await getMessages();
+  // Client components under this provider get only the public and auth
+  // namespaces: every page inlines them into its HTML, and the full catalog
+  // is about 0.8 MB per locale. The dashboard, onboarding and other app
+  // layouts restore the full set with AllMessagesProvider.
+  const messages = pickNamespaces(await getMessages(), ROOT_CLIENT_NAMESPACES);
   // Per-request CSP nonce from the proxy (src/proxy.ts, lib/security/csp.ts).
   // Next.js stamps it on its own scripts; the scripts this layout renders
   // (next-themes' and the palette's no-flash scripts, the service-worker
@@ -166,7 +184,7 @@ export default async function RootLayout({
   // already reads headers() above.
   const nonce = (await headers()).get(CSP_NONCE_HEADER) ?? undefined;
 
-  // Brand COLOR theming deliberately removed (founder call 2026-08-04):
+  // Brand COLOR theming deliberately removed (product call 2026-08-04):
   // white-label is logo + app name + domain only; every host renders the
   // standard editorial-monochrome theme. buildBrandVarsCss and the
   // brands.brand_color/chrome_color columns stay dormant for a future
@@ -181,7 +199,7 @@ export default async function RootLayout({
     <html
       lang={locale}
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable} ${brandFontVariables}`}
+      className={`${inter.variable} ${geistMono.variable} ${hedvigSerif.variable} ${brandFontVariables}`}
       style={
         fontPair
           ? ({

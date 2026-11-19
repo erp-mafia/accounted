@@ -1,19 +1,25 @@
 import { loadExtensions } from '@/lib/extensions/loader'
 import { setContextFactory } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
-import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
-import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler'
-import { registerDocumentReadHandler } from '@/lib/events/handlers/document-read-handler'
-import { registerWebhookHandler } from '@/lib/webhooks/handler'
+import { subscribeEventConsumers } from '@/lib/events/consumers'
+import { EVENT_CONSUMERS } from '@/lib/composition/event-consumers'
+import { installEventOutbox } from '@/lib/events/outbox'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
-import { registerObservabilitySink } from '@/lib/observability'
-import { postHogSink } from '@/lib/analytics/posthog-observability'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { registerConnectPaymentsProvider } from '@/lib/payments/initiation/connect'
+import { ensureObservability } from '@/lib/analytics/ensure-observability'
 import { createLogger } from '@/lib/logger'
+import { globalSingleton } from '@/lib/global-singleton'
+// What every server entry gets before its first line (a fork's branding
+// override, the PostHog sink): extension code runs in this module's graph,
+// which instrumentation.ts loads, not in the graph of the route it serves.
+import '@/lib/server-baseline'
 
 const log = createLogger('init')
 
-let initialized = false
+// Per process, not per module copy: the bus and the registries this fills are
+// process-wide (lib/global-singleton.ts), so a second copy of this module that
+// initialised again would subscribe every handler twice.
+const initState = globalSingleton('initDone', () => ({ initialized: false, consumersSubscribed: false }))
 
 const REQUIRED_CORE_VARS = [
   'NEXT_PUBLIC_SUPABASE_URL',
@@ -29,7 +35,7 @@ const REQUIRED_CORE_VARS = [
 // base) so Vercel prod (which only sets the _PRODUCTION variants) doesn't
 // warn on every cold start.
 // AI features run Claude via AWS Bedrock (see lib/agent/composer/client.ts and
-// extensions/general/invoice-inbox/lib/extract-invoice-fields.ts), so the
+// lib/documents/inbox-extraction/extract-invoice-fields.ts), so the
 // static AWS keys are what actually gates them. The assistant's client can
 // fall back to the AWS credential provider chain (instance profile, IRSA),
 // but document extraction requires both static keys, so this log-only warning
@@ -80,29 +86,45 @@ function validateEnvironment(): void {
 /**
  * Ensure the system is initialized (extensions loaded, context factory wired,
  * core event handlers registered).
- * Called from API routes that emit events.
+ * Imported by one module in the app: instrumentation.ts registers the loader
+ * that runs this (lib/initialized.ts) and starts it when the server boots.
+ * eventBus.emit() and every getter of a registry filled here wait for that
+ * load. Outside Next.js the process registers the loader itself. `npm run
+ * check:guards` (static-init-import) keeps every other import of this module,
+ * static or dynamic, out of the app. validateEnvironment() runs first, before
+ * anything subscribes to the bus, so a failed first init leaves nothing behind
+ * and the next caller retries cleanly.
  * Idempotent: safe to call multiple times.
  */
 export function ensureInitialized(): void {
-  if (initialized) return
+  if (initState.initialized) return
 
   validateEnvironment()
   setContextFactory(createExtensionContext)
-  // Turns lib/observability from a no-op into PostHog Error Tracking. Gated,
-  // so with no token (core, CI, self-hosted) the sink stays the no-op and
-  // PostHog is never constructed and never contacted. Note the SDK is still
-  // BUNDLED in those builds: the imports are static, so the bytes ship even
-  // though nothing initialises. Making that a true zero would mean dynamic
-  // imports at every posthog call site, which is a deliberate non-goal here.
-  if (isAnalyticsEnabled()) registerObservabilitySink(postHogSink)
-  registerSupplierInvoiceHandler()
-  registerEventLogHandler()
-  registerDocumentReadHandler()
-  registerWebhookHandler()
-  // Peppol Access Point adapters are registered from the environment here so
-  // every route that reports transport availability sees the same answer.
+  // PostHog Error Tracking, gated on the token; lib/server-baseline.ts calls
+  // the same function for the route wrappers and the root layout, so entries
+  // get it without this init.
+  ensureObservability()
+  // The core event consumers (lib/composition/event-consumers.ts), in their
+  // dispatch order. Once per process: a retry after a later step failed must
+  // not subscribe them twice. Each extension with event handlers joins as one
+  // more consumer when loadExtensions() registers it, below.
+  if (!initState.consumersSubscribed) {
+    subscribeEventConsumers(EVENT_CONSUMERS)
+    initState.consumersSubscribed = true
+  }
+  // The event outbox writer (lib/events/outbox.ts). The bus calls it only
+  // with EVENT_OUTBOX_MODE=shadow; with the mode off it is never called.
+  installEventOutbox()
+  // Peppol Access Point adapters are registered from the environment here;
+  // every reader goes through the async getters, which load this init first.
   registerConfiguredPeppolTransports()
+  // Bank payments reach the payment initiation provider only through Accounted
+  // Connect, hosted and self-hosted alike: the adapter registers when this
+  // installation has a connector key, and with none every payments door
+  // answers unavailable.
+  registerConnectPaymentsProvider()
   loadExtensions()
 
-  initialized = true
+  initState.initialized = true
 }

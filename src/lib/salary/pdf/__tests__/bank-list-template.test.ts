@@ -15,12 +15,13 @@ const list: SalaryBankList = {
   periodLabel: '2026-04',
   employeeCount: 2,
   totalAmount: 38750.75,
-  payer: { name: 'Testbolaget AB', orgNumber: '556000-0000', account: '5050-1055' },
+  payer: { name: 'Testbolaget AB', orgNumber: '556000-0000', account: '5050-1055', cashAccount: null },
   payees: [
     { employeeId: 'emp-1', name: 'Anna Test', maskedAccount: '6000-****6789', amount: 20000.5, reference: '000018' },
     { employeeId: 'emp-2', name: 'Bo Test', maskedAccount: '83279-****7890', amount: 18750.25, reference: '000026' },
   ],
-  warnings: ['BIC härleddes. Spara BIC under Inställningar → Fakturering.'],
+  warnings: ['BIC härleddes. Spara BIC under Inställningar → Fakturor.'],
+  correction: null,
 }
 
 describe('SalaryBankListPDF', () => {
@@ -41,7 +42,7 @@ describe('SalaryBankListPDF', () => {
       expect(text).toContain('18 750,25')
       expect(text).toContain('38 750,75')
       // The settings arrow has no Helvetica glyph; it prints as ">".
-      expect(text).toContain('Inställningar > Fakturering')
+      expect(text).toContain('Inställningar > Fakturor')
     },
     RENDER_TIMEOUT,
   )

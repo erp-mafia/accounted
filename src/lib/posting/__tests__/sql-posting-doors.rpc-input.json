@@ -1,0 +1,2543 @@
+{
+  "off": [
+    {
+      "name": "bulk_book_transactions: a new samlingsverifikat of two bank lines, manual lines",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": null,
+            "p_new_entry": {
+              "description": "Bankavgifter mars",
+              "lines": [
+                {
+                  "account_number": "6570",
+                  "debit_amount": 500,
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "line_description": "Bankavgifter",
+                  "sort_order": 0
+                },
+                {
+                  "account_number": "1930",
+                  "debit_amount": 0,
+                  "credit_amount": 500,
+                  "currency": "SEK",
+                  "sort_order": 1
+                }
+              ]
+            },
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "create_new",
+          "journal_entry_id": "je-bulk",
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "bulk_book_transactions: two bank lines linked to a posted verifikat (no event)",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_new_entry": null,
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "link_existing",
+          "journal_entry_id": "00000000-0000-4000-8000-000000009001",
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "match_batch_allocate: one bank line against two customer invoices",
+      "requests": [
+        [
+          "match_batch_allocate",
+          {
+            "p_tx_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_allocations": [
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0001",
+                "amount": 1250
+              },
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0002",
+                "amount": 500
+              }
+            ],
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "journal_entry_id": "je-batch",
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "allocations": [],
+          "total_allocated": 1750,
+          "leftover": 0
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Länkad",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 100,
+          "remainingAmount": 0,
+          "paymentAmount": 100,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a kronor invoice (no event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 1000,
+          "remainingAmount": 250,
+          "paymentAmount": 1000,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Auto-länkad",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 80,
+          "remainingAmount": 0,
+          "paymentAmount": 80,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 0,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a stated share of a verifikat that pays several (no event, p_amount)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_amount": 40,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 40,
+          "remainingAmount": 40,
+          "paymentAmount": 40,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 60,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "create_expense_payout_batch: two utlägg repaid in one transfer",
+      "requests": [
+        [
+          "create_expense_payout_batch",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_claim_ids": [
+              "00000000-0000-4000-8000-0000000c1001",
+              "00000000-0000-4000-8000-0000000c1002"
+            ],
+            "p_payout_date": "2026-06-10",
+            "p_cash_account": "1930",
+            "p_notes": "Utlägg maj",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_transaction_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "batch_id": "batch-1",
+        "journal_entry_id": "je-payout",
+        "voucher_number": 19,
+        "total_sek": 570.5,
+        "claim_count": 2
+      }
+    },
+    {
+      "name": "commit_opening_balance_replacement: the IB cascade replaces a later year's IB",
+      "requests": [
+        [
+          "commit_opening_balance_replacement",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_period_id": "00000000-0000-4000-8000-00000000f002",
+            "p_expected_old_entry_id": "00000000-0000-4000-8000-000000009101",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_entry_date": "2027-01-01",
+            "p_description": "Ingående balanser (korrigerade, rättelse av IB1)",
+            "p_voucher_series": "A",
+            "p_lines": [
+              {
+                "account_number": "1930",
+                "account_id": "acc-1930",
+                "debit_amount": 10000,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "Bank",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 0
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 10000,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": null,
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 1
+              },
+              {
+                "account_number": "1510",
+                "account_id": "acc-1510",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 1510",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 2
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 400,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 2091",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 3
+              }
+            ],
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "corrected": [
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+            "period_name": "2027",
+            "journal_entry_id": "je-ib-new",
+            "reversed_entry_id": "00000000-0000-4000-8000-000000009101"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_depreciation: the planenlig avskrivning of two assets",
+      "requests": [
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000001",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 12000,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ],
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000002",
+            "p_entry_id": "je-draft-2",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 9041,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "posted": [
+          {
+            "assetId": "00000000-0000-4000-8000-000000000001",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          },
+          {
+            "assetId": "00000000-0000-4000-8000-000000000002",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a sale with 25 % moms",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000003",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "sale",
+            "p_disposed_at": "2026-06-30",
+            "p_disposed_proceeds": 50000,
+            "p_proceeds_vat": 10000,
+            "p_vat_treatment": "standard_25",
+            "p_current_depreciation": 5951,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Lastbil",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 60000,
+          "salvage_value": 0,
+          "useful_life_months": 60,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": {
+          "id": "je-posted",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "status": "posted",
+          "voucher_series": "A",
+          "voucher_number": 41,
+          "lines": []
+        },
+        "gain_or_loss": -14049
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a fully written-off asset scrapped for nothing (no verifikat)",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000004",
+            "p_entry_id": null,
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "scrap",
+            "p_disposed_at": "2026-04-30",
+            "p_disposed_proceeds": 0,
+            "p_proceeds_vat": 0,
+            "p_vat_treatment": null,
+            "p_current_depreciation": 0,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Gammal skärm",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 0,
+          "salvage_value": 0,
+          "useful_life_months": 36,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": null,
+        "gain_or_loss": 0
+      }
+    }
+  ],
+  "shadow": [
+    {
+      "name": "bulk_book_transactions: a new samlingsverifikat of two bank lines, manual lines",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": null,
+            "p_new_entry": {
+              "description": "Bankavgifter mars",
+              "lines": [
+                {
+                  "account_number": "6570",
+                  "debit_amount": 500,
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "line_description": "Bankavgifter",
+                  "sort_order": 0
+                },
+                {
+                  "account_number": "1930",
+                  "debit_amount": 0,
+                  "credit_amount": 500,
+                  "currency": "SEK",
+                  "sort_order": 1
+                }
+              ]
+            },
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null,
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "shadow"
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "create_new",
+          "journal_entry_id": "je-bulk",
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "bulk_book_transactions: two bank lines linked to a posted verifikat (no event)",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_new_entry": null,
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "link_existing",
+          "journal_entry_id": "00000000-0000-4000-8000-000000009001",
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "match_batch_allocate: one bank line against two customer invoices",
+      "requests": [
+        [
+          "match_batch_allocate",
+          {
+            "p_tx_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_allocations": [
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0001",
+                "amount": 1250
+              },
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0002",
+                "amount": 500
+              }
+            ],
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "shadow",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "journal_entry_id": "je-batch",
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "allocations": [],
+          "total_allocated": 1750,
+          "leftover": 0
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Länkad",
+            "p_event_ids": [
+              "<event 0>"
+            ],
+            "p_event_mode": "shadow",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 100,
+          "remainingAmount": 0,
+          "paymentAmount": 100,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a kronor invoice (no event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 1000,
+          "remainingAmount": 250,
+          "paymentAmount": 1000,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Auto-länkad",
+            "p_event_ids": [
+              "<event 0>"
+            ],
+            "p_event_mode": "shadow",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 80,
+          "remainingAmount": 0,
+          "paymentAmount": 80,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 0,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a stated share of a verifikat that pays several (no event, p_amount)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_amount": 40,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 40,
+          "remainingAmount": 40,
+          "paymentAmount": 40,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 60,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "create_expense_payout_batch: two utlägg repaid in one transfer",
+      "requests": [
+        [
+          "create_expense_payout_batch",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_claim_ids": [
+              "00000000-0000-4000-8000-0000000c1001",
+              "00000000-0000-4000-8000-0000000c1002"
+            ],
+            "p_payout_date": "2026-06-10",
+            "p_cash_account": "1930",
+            "p_notes": "Utlägg maj",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_transaction_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "shadow",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "batch_id": "batch-1",
+        "journal_entry_id": "je-payout",
+        "voucher_number": 19,
+        "total_sek": 570.5,
+        "claim_count": 2
+      }
+    },
+    {
+      "name": "commit_opening_balance_replacement: the IB cascade replaces a later year's IB",
+      "requests": [
+        [
+          "commit_opening_balance_replacement",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_period_id": "00000000-0000-4000-8000-00000000f002",
+            "p_expected_old_entry_id": "00000000-0000-4000-8000-000000009101",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_entry_date": "2027-01-01",
+            "p_description": "Ingående balanser (korrigerade, rättelse av IB1)",
+            "p_voucher_series": "A",
+            "p_lines": [
+              {
+                "account_number": "1930",
+                "account_id": "acc-1930",
+                "debit_amount": 10000,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "Bank",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 0
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 10000,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": null,
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 1
+              },
+              {
+                "account_number": "1510",
+                "account_id": "acc-1510",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 1510",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 2
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 400,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 2091",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 3
+              }
+            ],
+            "p_actor_type": "user",
+            "p_actor_label": null,
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "shadow"
+          }
+        ]
+      ],
+      "answer": {
+        "corrected": [
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+            "period_name": "2027",
+            "journal_entry_id": "je-ib-new",
+            "reversed_entry_id": "00000000-0000-4000-8000-000000009101"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_depreciation: the planenlig avskrivning of two assets",
+      "requests": [
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000001",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 12000,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ],
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000002",
+            "p_entry_id": "je-draft-2",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 9041,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "posted": [
+          {
+            "assetId": "00000000-0000-4000-8000-000000000001",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          },
+          {
+            "assetId": "00000000-0000-4000-8000-000000000002",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a sale with 25 % moms",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000003",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "sale",
+            "p_disposed_at": "2026-06-30",
+            "p_disposed_proceeds": 50000,
+            "p_proceeds_vat": 10000,
+            "p_vat_treatment": "standard_25",
+            "p_current_depreciation": 5951,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Lastbil",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 60000,
+          "salvage_value": 0,
+          "useful_life_months": 60,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": {
+          "id": "je-posted",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "status": "posted",
+          "voucher_series": "A",
+          "voucher_number": 41,
+          "lines": []
+        },
+        "gain_or_loss": -14049
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a fully written-off asset scrapped for nothing (no verifikat)",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000004",
+            "p_entry_id": null,
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "scrap",
+            "p_disposed_at": "2026-04-30",
+            "p_disposed_proceeds": 0,
+            "p_proceeds_vat": 0,
+            "p_vat_treatment": null,
+            "p_current_depreciation": 0,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Gammal skärm",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 0,
+          "salvage_value": 0,
+          "useful_life_months": 36,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": null,
+        "gain_or_loss": 0
+      }
+    }
+  ],
+  "strict": [
+    {
+      "name": "bulk_book_transactions: a new samlingsverifikat of two bank lines, manual lines",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": null,
+            "p_new_entry": {
+              "description": "Bankavgifter mars",
+              "lines": [
+                {
+                  "account_number": "6570",
+                  "debit_amount": 500,
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "line_description": "Bankavgifter",
+                  "sort_order": 0
+                },
+                {
+                  "account_number": "1930",
+                  "debit_amount": 0,
+                  "credit_amount": 500,
+                  "currency": "SEK",
+                  "sort_order": 1
+                }
+              ]
+            },
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null,
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "strict"
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "create_new",
+          "journal_entry_id": "je-bulk",
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "bulk_book_transactions: two bank lines linked to a posted verifikat (no event)",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_new_entry": null,
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "link_existing",
+          "journal_entry_id": "00000000-0000-4000-8000-000000009001",
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "match_batch_allocate: one bank line against two customer invoices",
+      "requests": [
+        [
+          "match_batch_allocate",
+          {
+            "p_tx_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_allocations": [
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0001",
+                "amount": 1250
+              },
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0002",
+                "amount": 500
+              }
+            ],
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "strict",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "journal_entry_id": "je-batch",
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "allocations": [],
+          "total_allocated": 1750,
+          "leftover": 0
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Länkad",
+            "p_event_ids": [
+              "<event 0>"
+            ],
+            "p_event_mode": "strict",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 100,
+          "remainingAmount": 0,
+          "paymentAmount": 100,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a kronor invoice (no event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 1000,
+          "remainingAmount": 250,
+          "paymentAmount": 1000,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Auto-länkad",
+            "p_event_ids": [
+              "<event 0>"
+            ],
+            "p_event_mode": "strict",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 80,
+          "remainingAmount": 0,
+          "paymentAmount": 80,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 0,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a stated share of a verifikat that pays several (no event, p_amount)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_amount": 40,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 40,
+          "remainingAmount": 40,
+          "paymentAmount": 40,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 60,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "create_expense_payout_batch: two utlägg repaid in one transfer",
+      "requests": [
+        [
+          "create_expense_payout_batch",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_claim_ids": [
+              "00000000-0000-4000-8000-0000000c1001",
+              "00000000-0000-4000-8000-0000000c1002"
+            ],
+            "p_payout_date": "2026-06-10",
+            "p_cash_account": "1930",
+            "p_notes": "Utlägg maj",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_transaction_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "strict",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "batch_id": "batch-1",
+        "journal_entry_id": "je-payout",
+        "voucher_number": 19,
+        "total_sek": 570.5,
+        "claim_count": 2
+      }
+    },
+    {
+      "name": "commit_opening_balance_replacement: the IB cascade replaces a later year's IB",
+      "requests": [
+        [
+          "commit_opening_balance_replacement",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_period_id": "00000000-0000-4000-8000-00000000f002",
+            "p_expected_old_entry_id": "00000000-0000-4000-8000-000000009101",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_entry_date": "2027-01-01",
+            "p_description": "Ingående balanser (korrigerade, rättelse av IB1)",
+            "p_voucher_series": "A",
+            "p_lines": [
+              {
+                "account_number": "1930",
+                "account_id": "acc-1930",
+                "debit_amount": 10000,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "Bank",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 0
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 10000,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": null,
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 1
+              },
+              {
+                "account_number": "1510",
+                "account_id": "acc-1510",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 1510",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 2
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 400,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 2091",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 3
+              }
+            ],
+            "p_actor_type": "user",
+            "p_actor_label": null,
+            "p_event_ids": [
+              "<event 0>",
+              "<event 1>"
+            ],
+            "p_event_mode": "strict"
+          }
+        ]
+      ],
+      "answer": {
+        "corrected": [
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+            "period_name": "2027",
+            "journal_entry_id": "je-ib-new",
+            "reversed_entry_id": "00000000-0000-4000-8000-000000009101"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_depreciation: the planenlig avskrivning of two assets",
+      "requests": [
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000001",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 12000,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ],
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000002",
+            "p_entry_id": "je-draft-2",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 9041,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "posted": [
+          {
+            "assetId": "00000000-0000-4000-8000-000000000001",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          },
+          {
+            "assetId": "00000000-0000-4000-8000-000000000002",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a sale with 25 % moms",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000003",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "sale",
+            "p_disposed_at": "2026-06-30",
+            "p_disposed_proceeds": 50000,
+            "p_proceeds_vat": 10000,
+            "p_vat_treatment": "standard_25",
+            "p_current_depreciation": 5951,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Lastbil",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 60000,
+          "salvage_value": 0,
+          "useful_life_months": 60,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": {
+          "id": "je-posted",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "status": "posted",
+          "voucher_series": "A",
+          "voucher_number": 41,
+          "lines": []
+        },
+        "gain_or_loss": -14049
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a fully written-off asset scrapped for nothing (no verifikat)",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000004",
+            "p_entry_id": null,
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "scrap",
+            "p_disposed_at": "2026-04-30",
+            "p_disposed_proceeds": 0,
+            "p_proceeds_vat": 0,
+            "p_vat_treatment": null,
+            "p_current_depreciation": 0,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Gammal skärm",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 0,
+          "salvage_value": 0,
+          "useful_life_months": 36,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": null,
+        "gain_or_loss": 0
+      }
+    }
+  ],
+  "shadow, every event write refused": [
+    {
+      "name": "bulk_book_transactions: a new samlingsverifikat of two bank lines, manual lines",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": null,
+            "p_new_entry": {
+              "description": "Bankavgifter mars",
+              "lines": [
+                {
+                  "account_number": "6570",
+                  "debit_amount": 500,
+                  "credit_amount": 0,
+                  "currency": "SEK",
+                  "line_description": "Bankavgifter",
+                  "sort_order": 0
+                },
+                {
+                  "account_number": "1930",
+                  "debit_amount": 0,
+                  "credit_amount": 500,
+                  "currency": "SEK",
+                  "sort_order": 1
+                }
+              ]
+            },
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "create_new",
+          "journal_entry_id": "je-bulk",
+          "voucher_series": "A",
+          "voucher_number": 7,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "bulk_book_transactions: two bank lines linked to a posted verifikat (no event)",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_new_entry": null,
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "link_existing",
+          "journal_entry_id": "00000000-0000-4000-8000-000000009001",
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "match_batch_allocate: one bank line against two customer invoices",
+      "requests": [
+        [
+          "match_batch_allocate",
+          {
+            "p_tx_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_allocations": [
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0001",
+                "amount": 1250
+              },
+              {
+                "kind": "customer_invoice",
+                "invoice_id": "00000000-0000-4000-8000-0000000d0002",
+                "amount": 500
+              }
+            ],
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "journal_entry_id": "je-batch",
+          "voucher_series": "A",
+          "voucher_number": 12,
+          "allocations": [],
+          "total_allocated": 1750,
+          "leftover": 0
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Länkad",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 100,
+          "remainingAmount": 0,
+          "paymentAmount": 100,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a kronor invoice (no event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 1000,
+          "remainingAmount": 250,
+          "paymentAmount": 1000,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": "Auto-länkad",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "paid",
+          "paidAmount": 80,
+          "remainingAmount": 0,
+          "paymentAmount": 80,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 0,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a stated share of a verifikat that pays several (no event, p_amount)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_amount": 40,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 40,
+          "remainingAmount": 40,
+          "paymentAmount": 40,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 60,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "create_expense_payout_batch: two utlägg repaid in one transfer",
+      "requests": [
+        [
+          "create_expense_payout_batch",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_claim_ids": [
+              "00000000-0000-4000-8000-0000000c1001",
+              "00000000-0000-4000-8000-0000000c1002"
+            ],
+            "p_payout_date": "2026-06-10",
+            "p_cash_account": "1930",
+            "p_notes": "Utlägg maj",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_transaction_id": "00000000-0000-4000-8000-0000000b0001",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "batch_id": "batch-1",
+        "journal_entry_id": "je-payout",
+        "voucher_number": 19,
+        "total_sek": 570.5,
+        "claim_count": 2
+      }
+    },
+    {
+      "name": "commit_opening_balance_replacement: the IB cascade replaces a later year's IB",
+      "requests": [
+        [
+          "commit_opening_balance_replacement",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_period_id": "00000000-0000-4000-8000-00000000f002",
+            "p_expected_old_entry_id": "00000000-0000-4000-8000-000000009101",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_entry_date": "2027-01-01",
+            "p_description": "Ingående balanser (korrigerade, rättelse av IB1)",
+            "p_voucher_series": "A",
+            "p_lines": [
+              {
+                "account_number": "1930",
+                "account_id": "acc-1930",
+                "debit_amount": 10000,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "Bank",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 0
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 10000,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": null,
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 1
+              },
+              {
+                "account_number": "1510",
+                "account_id": "acc-1510",
+                "debit_amount": 400,
+                "credit_amount": 0,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 1510",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 2
+              },
+              {
+                "account_number": "2091",
+                "account_id": "acc-2091",
+                "debit_amount": 0,
+                "credit_amount": 400,
+                "currency": "SEK",
+                "amount_in_currency": null,
+                "exchange_rate": null,
+                "line_description": "IB-rättelse 2091",
+                "tax_code": null,
+                "dimensions": {},
+                "sort_order": 3
+              }
+            ],
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "corrected": [
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+            "period_name": "2027",
+            "journal_entry_id": "je-ib-new",
+            "reversed_entry_id": "00000000-0000-4000-8000-000000009101"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_depreciation: the planenlig avskrivning of two assets",
+      "requests": [
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000001",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 12000,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ],
+        [
+          "commit_asset_depreciation",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000002",
+            "p_entry_id": "je-draft-2",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_planned_depreciation": 9041,
+            "p_expected_opening_amount": 0,
+            "p_expected_opening_date": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "posted": [
+          {
+            "assetId": "00000000-0000-4000-8000-000000000001",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          },
+          {
+            "assetId": "00000000-0000-4000-8000-000000000002",
+            "entry": {
+              "id": "je-posted",
+              "company_id": "00000000-0000-4000-8000-00000000c001",
+              "status": "posted",
+              "voucher_series": "A",
+              "voucher_number": 41,
+              "lines": []
+            },
+            "scheduleId": "sched-1"
+          }
+        ],
+        "skipped": []
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a sale with 25 % moms",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000003",
+            "p_entry_id": "je-draft-1",
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "sale",
+            "p_disposed_at": "2026-06-30",
+            "p_disposed_proceeds": 50000,
+            "p_proceeds_vat": 10000,
+            "p_vat_treatment": "standard_25",
+            "p_current_depreciation": 5951,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Lastbil",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 60000,
+          "salvage_value": 0,
+          "useful_life_months": 60,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": {
+          "id": "je-posted",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "status": "posted",
+          "voucher_series": "A",
+          "voucher_number": 41,
+          "lines": []
+        },
+        "gain_or_loss": -14049
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a fully written-off asset scrapped for nothing (no verifikat)",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000004",
+            "p_entry_id": null,
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "scrap",
+            "p_disposed_at": "2026-04-30",
+            "p_disposed_proceeds": 0,
+            "p_proceeds_vat": 0,
+            "p_vat_treatment": null,
+            "p_current_depreciation": 0,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Gammal skärm",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 0,
+          "salvage_value": 0,
+          "useful_life_months": 36,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": null,
+        "gain_or_loss": 0
+      }
+    }
+  ],
+  "strict, every event write refused": [
+    {
+      "name": "bulk_book_transactions: a new samlingsverifikat of two bank lines, manual lines",
+      "requests": [],
+      "answer": {
+        "ok": false,
+        "code": "BULK_BOOK_RPC_FAILED",
+        "details": {
+          "message": "Verifikationen kunde inte sparas. Försök igen."
+        }
+      }
+    },
+    {
+      "name": "bulk_book_transactions: two bank lines linked to a posted verifikat (no event)",
+      "requests": [
+        [
+          "bulk_book_transactions",
+          {
+            "p_tx_ids": [
+              "00000000-0000-4000-8000-0000000b0001",
+              "00000000-0000-4000-8000-0000000b0002"
+            ],
+            "p_existing_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_new_entry": null,
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_commit_method": "bulk_accept",
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "data": {
+          "mode": "link_existing",
+          "journal_entry_id": "00000000-0000-4000-8000-000000009001",
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "linked_tx_count": 2,
+          "tx_sum": -500,
+          "docs_linked": 0
+        }
+      }
+    },
+    {
+      "name": "match_batch_allocate: one bank line against two customer invoices",
+      "requests": [],
+      "answer": {
+        "ok": false,
+        "code": "BATCH_RPC_FAILED",
+        "details": {
+          "message": "Verifikationen kunde inte sparas. Försök igen."
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [],
+      "answer": {
+        "ok": false,
+        "code": "LINK_VOUCHER_DB_ERROR",
+        "details": {
+          "reason": "Database operation \"record_business_event\" failed: business event record failed: business_events refused"
+        }
+      }
+    },
+    {
+      "name": "link_invoice_to_voucher: a kronor invoice (no event)",
+      "requests": [
+        [
+          "link_invoice_to_voucher",
+          {
+            "p_invoice_id": "00000000-0000-4000-8000-0000000d0001",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "pay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 1000,
+          "remainingAmount": 250,
+          "paymentAmount": 1000,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "reconciledTransactionId": null,
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a EUR invoice settled by a kronor verifikat (kursdifferens event)",
+      "requests": [],
+      "answer": {
+        "ok": false,
+        "code": "LINK_SI_VOUCHER_DB_ERROR",
+        "details": {
+          "reason": "Database operation \"record_business_event\" failed: business event record failed: business_events refused"
+        }
+      }
+    },
+    {
+      "name": "link_supplier_invoice_to_voucher: a stated share of a verifikat that pays several (no event, p_amount)",
+      "requests": [
+        [
+          "link_supplier_invoice_to_voucher",
+          {
+            "p_supplier_invoice_id": "00000000-0000-4000-8000-0000000d0101",
+            "p_journal_entry_id": "00000000-0000-4000-8000-000000009001",
+            "p_user_id": "00000000-0000-4000-8000-00000000a001",
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_notes": null,
+            "p_amount": 40,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "ok": true,
+        "result": {
+          "paymentId": "spay-1",
+          "invoiceStatus": "partially_paid",
+          "paidAmount": 40,
+          "remainingAmount": 40,
+          "paymentAmount": 40,
+          "journalEntryId": "00000000-0000-4000-8000-000000009001",
+          "voucherRemaining": 60,
+          "reconciledTransactionId": null,
+          "registrationJournalEntryId": null
+        }
+      }
+    },
+    {
+      "name": "create_expense_payout_batch: two utlägg repaid in one transfer",
+      "requests": [],
+      "answer": {
+        "ok": false,
+        "code": "BATCH_INSERT_FAILED",
+        "detail": "Database operation \"record_business_event\" failed: business event record failed: business_events refused",
+        "error": {
+          "operation": "record_business_event",
+          "cause": "business event record failed: business_events refused",
+          "pgCode": "42501",
+          "name": "BookkeepingDatabaseError",
+          "code": "BOOKKEEPING_DATABASE_ERROR"
+        }
+      }
+    },
+    {
+      "name": "commit_opening_balance_replacement: the IB cascade replaces a later year's IB",
+      "requests": [],
+      "answer": {
+        "corrected": [],
+        "skipped": [
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f002",
+            "period_name": "2027",
+            "reason": "correction_failed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "commit_asset_depreciation: the planenlig avskrivning of two assets",
+      "requests": [],
+      "answer": {
+        "threw": "BookkeepingDatabaseError: Database operation \"record_business_event\" failed: business event record failed: business_events refused"
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a sale with 25 % moms",
+      "requests": [],
+      "answer": {
+        "threw": "BookkeepingDatabaseError: Database operation \"record_business_event\" failed: business event record failed: business_events refused"
+      }
+    },
+    {
+      "name": "commit_asset_disposal: a fully written-off asset scrapped for nothing (no verifikat)",
+      "requests": [
+        [
+          "commit_asset_disposal",
+          {
+            "p_company_id": "00000000-0000-4000-8000-00000000c001",
+            "p_asset_id": "00000000-0000-4000-8000-000000000004",
+            "p_entry_id": null,
+            "p_fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "p_disposal_type": "scrap",
+            "p_disposed_at": "2026-04-30",
+            "p_disposed_proceeds": 0,
+            "p_proceeds_vat": 0,
+            "p_vat_treatment": null,
+            "p_current_depreciation": 0,
+            "p_jamkning_amount": 0,
+            "p_jamkning_direction": "none",
+            "p_jamkning_remaining_years": 5,
+            "p_jamkning_total_years": 5,
+            "p_jamkning_original_input_vat": null,
+            "p_jamkning_original_deduction_percent": null,
+            "p_jamkning_new_deduction_percent": 0,
+            "p_actor_type": "user",
+            "p_actor_label": null
+          }
+        ]
+      ],
+      "answer": {
+        "asset": {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "user_id": "00000000-0000-4000-8000-00000000a001",
+          "company_id": "00000000-0000-4000-8000-00000000c001",
+          "name": "Gammal skärm",
+          "category": "equipment",
+          "acquisition_date": "2026-01-01",
+          "acquisition_cost": 0,
+          "salvage_value": 0,
+          "useful_life_months": 36,
+          "depreciation_method": "linear",
+          "bas_asset_account": "1220",
+          "bas_accumulated_account": "1229",
+          "bas_expense_account": "7832",
+          "restvarde_target": null,
+          "disposed_at": null,
+          "disposed_proceeds": null,
+          "disposal_type": null,
+          "disposal_journal_entry_id": null,
+          "disposed_proceeds_vat": 0,
+          "disposed_vat_treatment": null,
+          "jamkning_amount": 0,
+          "jamkning_remaining_months": null,
+          "jamkning_total_months": null,
+          "jamkning_original_input_vat": null,
+          "k3_components": null,
+          "notes": null,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z"
+        },
+        "disposal_entry": null,
+        "gain_or_loss": 0
+      }
+    }
+  ]
+}

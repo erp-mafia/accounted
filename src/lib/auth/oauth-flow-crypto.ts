@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { openAesGcm, sealAesGcm, sha256Key } from '@/lib/crypto/aes-gcm'
 
 /**
  * At-rest encryption for the secrets an oauth_flows row holds between
@@ -14,22 +14,14 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 function getKey(): Buffer {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!secret) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required')
-  return createHash('sha256').update('oauth-flows:v1:' + secret).digest()
+  return sha256Key('oauth-flows:v1:' + secret)
 }
 
 export function encryptOAuthFlowValue(plaintext: string, context: string): string {
-  const iv = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', getKey(), iv)
-  cipher.setAAD(Buffer.from(context))
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-  return 'v1:' + Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url')
+  return 'v1:' + sealAesGcm(getKey(), plaintext, context).toString('base64url')
 }
 
 export function decryptOAuthFlowValue(ciphertext: string, context: string): string {
   if (!ciphertext.startsWith('v1:')) throw new Error('Invalid OAuth flow ciphertext')
-  const combined = Buffer.from(ciphertext.slice(3), 'base64url')
-  const decipher = createDecipheriv('aes-256-gcm', getKey(), combined.subarray(0, 12))
-  decipher.setAAD(Buffer.from(context))
-  decipher.setAuthTag(combined.subarray(12, 28))
-  return Buffer.concat([decipher.update(combined.subarray(28)), decipher.final()]).toString('utf8')
+  return openAesGcm(getKey(), Buffer.from(ciphertext.slice(3), 'base64url'), context)
 }

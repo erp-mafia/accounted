@@ -1,0 +1,36 @@
+import { Suspense } from 'react'
+import { getTranslations } from 'next-intl/server'
+import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { WikiViews } from '@/components/wiki/WikiViews'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
+import { parseWikiView } from '@/lib/agent-context/wiki-views'
+import { getDashboardCompanyId } from '../request-context'
+
+/**
+ * Wiki: everything an agent receives about the company, landing on the
+ * context view (what the briefing holds, part by part), with the map,
+ * facts, memory and skills one segment away. Replaces "Vad din agent vet".
+ *
+ * Fakta (what Arkiv has read out of the company's documents) exists only
+ * inside the Arkiv rollout. Outside it nothing reads the documents, so the
+ * view is not offered.
+ */
+export default async function WikiPage({ searchParams }: { searchParams: Promise<{ view?: string | string[] }> }) {
+  const t = await getTranslations('wiki')
+  const companyId = await getDashboardCompanyId()
+  const facts = !!companyId && isArkivBrainEnabled(companyId)
+  // The top bar names the view, as the menu does: Kontext and Minne are rows
+  // of Agenter, Karta a row of Företaget (nav-v3.ts), all views of this page.
+  const raw = (await searchParams).view
+  const parsed = parseWikiView(Array.isArray(raw) ? raw[0] : raw)
+  const view = parsed === 'facts' && !facts ? 'context' : parsed
+  return (
+    <>
+      <PageHeader title={t(`view_${view}`)} help={<HelpPopover>{t('help')}</HelpPopover>} />
+      <Suspense>
+        <WikiViews facts={facts} />
+      </Suspense>
+    </>
+  )
+}

@@ -1,0 +1,20 @@
+{
+  "name": "accounted",
+  "interface": {
+    "displayName": "Accounted"
+  },
+  "plugins": [
+    {
+      "name": "accounted",
+      "source": {
+        "source": "local",
+        "path": "./packages/claude-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

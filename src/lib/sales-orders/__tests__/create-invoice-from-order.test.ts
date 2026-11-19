@@ -324,6 +324,40 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(findCall('invoices', 'insert')).toBeUndefined()
   })
 
+  // crm#1200: the order's Er referens, else the customer card's Fakturareferens.
+  async function builtYourReference(orderReference: string | null) {
+    enqueue({ data: orderWith([makeSalesOrderItem()], { your_reference: orderReference }) })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer({ invoice_reference: 'KST 4410', contact_person: 'Karin Ek' }) })
+    enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [invoicedRow(IDS.item1, 10)] })
+    await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+    return (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input.your_reference
+  }
+
+  it("builds the invoice with the customer card's Fakturareferens when the order has no Er referens", async () => {
+    expect(await builtYourReference(null)).toBe('KST 4410')
+  })
+
+  it("keeps the order's own Er referens over the customer card", async () => {
+    expect(await builtYourReference('Anna Andersson')).toBe('Anna Andersson')
+  })
+
+  it("builds the invoice with the customer card's Märkning (crm#1477)", async () => {
+    enqueue({ data: orderWith([makeSalesOrderItem()]) })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer({ invoice_marking: '4500012345' }) })
+    enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [invoicedRow(IDS.item1, 10)] })
+    await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+    const built = mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { invoice_marking?: string } }
+    expect(built.input.invoice_marking).toBe('4500012345')
+  })
+
   it('still creates the invoice for a foreign-currency order when the rate is present', async () => {
     enqueue({ data: orderWith([makeSalesOrderItem()], { currency: 'EUR' }) })
     enqueue({ data: [] })
@@ -349,6 +383,45 @@ describe('createInvoiceFromSalesOrder', () => {
     enqueue({ data: null })
     const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
     expect(result).toMatchObject({ ok: false, code: 'CUSTOMER_NOT_FOUND', details: { customerId: IDS.customer } })
+  })
+
+  // The due date of a draft the caller leaves it off: calendar days from the
+  // invoice date, whatever the process zone, on the customer's terms.
+  describe('due date from the terms', () => {
+    const buildInputDue = () =>
+      (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { due_date: string } }).input.due_date
+
+    function queueDraft(customer: Record<string, unknown>) {
+      enqueue({ data: orderWith([makeSalesOrderItem({ id: IDS.item1, quantity: 1 })]) })
+      enqueue({ data: [] })
+      enqueue({ data: makeOrderCustomer(customer) })
+    }
+    function queueCommit() {
+      enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+      enqueue({ data: null })
+      enqueue({ data: orderWith() })
+      enqueue({ data: [] })
+    }
+
+    it('counts calendar days across the spring clock change in a Swedish process', async () => {
+      vi.stubEnv('TZ', 'Europe/Stockholm')
+      try {
+        queueDraft({ default_payment_terms: 30 })
+        queueCommit()
+        await createInvoiceFromSalesOrder(sb, { ...params, input: { invoice_date: '2026-02-28' } })
+        expect(buildInputDue()).toBe('2026-03-30')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('a customer without terms takes the company default', async () => {
+      queueDraft({ default_payment_terms: null })
+      enqueue({ data: { invoice_default_days: 10 } })
+      queueCommit()
+      await createInvoiceFromSalesOrder(sb, { ...params, input: { invoice_date: '2026-09-02' } })
+      expect(buildInputDue()).toBe('2026-09-12')
+    })
   })
 
   it('creates an unnumbered draft linked to the order, each line carrying its sales_order_item_id', async () => {

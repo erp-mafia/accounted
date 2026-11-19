@@ -4,9 +4,12 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { parseBudgetParam, ReportBudgetError } from '@/lib/budgets/report-budget'
 
 // Resultat per projekt/kostnadsställe: value-as-column P&L matrix over one
-// SIE dimension. ?dim_no picks the dimension (default 6, projekt).
+// SIE dimension. ?dim_no picks the dimension (default 6, projekt);
+// ?budget_id adds each column's budget (the page's Utfall/Budget/Avvikelse).
+// The budget id is not a filter: every amount stays company-wide per value.
 export const GET = withRouteContext(
   'report.dimension_pnl',
   async (request, ctx) => {
@@ -38,15 +41,21 @@ export const GET = withRouteContext(
     if (!parsed.ok) {
       return NextResponse.json({ error: parsed.error }, { status: 400 })
     }
+    const budgetParam = parseBudgetParam(searchParams)
+    if (!budgetParam.ok) {
+      return NextResponse.json({ error: budgetParam.error }, { status: 400 })
+    }
 
     try {
       // The resultatrapport's window: activity inside from_date..to_date.
       const data = await generateDimensionPnl(supabase, companyId!, periodId, dimNo, {
         fromDate: parsed.range.fromDate,
         toDate: parsed.range.toDate,
+        budgetId: budgetParam.budgetId,
       })
       return NextResponse.json({ data })
     } catch (err) {
+      if (err instanceof ReportBudgetError) return errorResponseFromCode(err.code, log, { requestId })
       log.error('dimension pnl generation failed', err as Error, { periodId, dimNo })
       return errorResponseFromCode('REPORT_GENERATION_FAILED', log, {
         requestId,

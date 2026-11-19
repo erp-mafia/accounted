@@ -38,6 +38,17 @@ vi.mock('@/lib/api/v1/check-period-lock', () => ({
   checkPeriodLock: (...args: unknown[]) => mockCheckPeriodLock(...args),
 }))
 
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { categorizeMatchedTransaction } from '../categorize-core'
 
 const TX_ID = '00000000-0000-4000-8000-0000000000aa'
@@ -85,7 +96,8 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
     })
 
     expect(result.status).toBe(409)
-    expect(result.error).toMatch(/already has a journal entry/)
+    expect(result.errorCode).toBe('TRANSACTION_ALREADY_CATEGORIZED')
+    expect(result.error).toMatch(/redan bokförd/)
     expect(findCalls('transactions', 'update')).toEqual([])
     expect(mockCreateJE).not.toHaveBeenCalled()
     // The read carried the junction rows along: the links were not re-read,
@@ -97,12 +109,15 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow([{ journal_entry_id: 'je-reversed', role: 'bank_line' }]) })
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] }) // journal_entries status
+    enqueue({ data: null }) // standing_correction: no correction books the money
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: [] }) // ensureFiscalPeriod: no open period
-    enqueue({ data: [{ period_start: '2026-01-01' }] })
-    enqueue({ data: null })
-    mockCheckPeriodLock.mockResolvedValue({ locked: true, reason: 'period_is_closed', fiscal_period_id: 'fp-2026' })
+    enqueue({ data: [{ id: 'fy', period_start: '2026-01-01', period_end: '2026-12-31' }] })
+    // Open period: the engine runs (and returns null here, so the booking
+    // refuses with NO_OPEN_PERIOD_FOR_DATE after it).
+    mockCheckPeriodLock.mockResolvedValue({ locked: false })
 
     const result = await categorizeMatchedTransaction(supabase as never, 'user-1', 'company-1', TX_ID, {
       category: 'expense_other',
@@ -115,19 +130,20 @@ describe('categorizeMatchedTransaction: transaction_voucher_links guard (#1553)'
   it('lets a row carrying only a residual "other" row past the guard', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow([{ journal_entry_id: 'je-residual', role: 'other' }]) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // company_settings
     enqueue({ data: [] }) // resolveSettlementAccount
     enqueue({ data: [] }) // ensureFiscalPeriod: no open period
-    enqueue({ data: [{ period_start: '2026-01-01' }] })
-    enqueue({ data: null })
-    mockCheckPeriodLock.mockResolvedValue({ locked: true, reason: 'period_is_closed', fiscal_period_id: 'fp-2026' })
+    enqueue({ data: [{ id: 'fy', period_start: '2026-01-01', period_end: '2026-12-31' }] })
+    // Open period: the engine runs (and returns null here, so the booking
+    // refuses with NO_OPEN_PERIOD_FOR_DATE after it).
+    mockCheckPeriodLock.mockResolvedValue({ locked: false })
 
     const result = await categorizeMatchedTransaction(supabase as never, 'user-1', 'company-1', TX_ID, {
       category: 'expense_other',
     })
 
-    // Reached the engine (which fails closed on the locked period here):
-    // the junction guard did not fire.
+    // Reached the engine: the junction guard did not fire.
     expect(result.status).not.toBe(409)
     expect(mockCreateJE).toHaveBeenCalled()
   })

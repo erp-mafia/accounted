@@ -4,6 +4,15 @@ import { eventBus } from '@/lib/events/bus'
 import { hashRequest } from '@/lib/api/idempotency'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { tools } from '../server'
+import { findUnknownArgKeys } from '../arg-guard'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts). A new
+// customer is never judged by it, so the stub answers what the real one
+// does (none) until a test gives it a note.
+const filedVat = vi.hoisted(() => ({ note: null as string | null }))
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async () => filedVat.note,
+}))
 
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_create_customer')!
 
@@ -47,6 +56,74 @@ describe('gnubok_create_customer: customer_number input', () => {
       params: Record<string, unknown>
     }
     expect(inserted.params).toMatchObject({ customer_number: 'K-1001' })
+  })
+
+  // Every staging tool answers through the one staging helper, so this is
+  // the staged answer of all of them (lib/pending-operations/operation-number.ts).
+  it('answers the number the database gave the proposal, in the envelope and in the message', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // company_settings read (payment-terms default)
+    enqueue({ data: { id: 'op-create-customer-3', operation_number: 128 } })
+
+    const result = (await tool().execute(
+      { name: 'Kund AB', customer_type: 'swedish_business' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; operation_id?: string; operation_number?: number; message: string }
+
+    expect(result.staged).toBe(true)
+    expect(result.operation_id).toBe('op-create-customer-3')
+    expect(result.operation_number).toBe(128)
+    expect(result.message).toMatch(/^Staged as proposal 128, pending_operation op-create-customer-3 \(risk: /)
+  })
+
+  // The staged message is one line that two changes meet in: it opens with
+  // the proposal's number and closes with the advisory note (the tool's own
+  // and the filed-momsperiod one). Neither may push the other out.
+  it('names the proposal first and still closes with the advisory note', async () => {
+    const note = 'Momsdeklarationen för 2026-Q3 är redan inlämnad (2026-11-11). Godkänns förslaget kan deklarationen behöva rättas.'
+    filedVat.note = note
+    try {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ data: null }) // company_settings read (payment-terms default)
+      enqueue({ data: { id: 'op-create-customer-5', operation_number: 129 } })
+
+      const result = (await tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )) as { staged: boolean; operation_number?: number; message: string; preview: Record<string, unknown> }
+
+      expect(result.staged).toBe(true)
+      expect(result.operation_number).toBe(129)
+      expect(result.message).toMatch(/^Staged as proposal 129, pending_operation op-create-customer-5 \(risk: /)
+      expect(result.message.endsWith(` WARNING: ${note}`)).toBe(true)
+      // The approver reads the same note on the stored proposal.
+      expect(result.preview.compliance_warning).toBe(note)
+      const [inserted] = findCall('pending_operations', 'insert') as [{ preview_data: Record<string, unknown> }]
+      expect(inserted.preview_data.compliance_warning).toBe(note)
+    } finally {
+      filedVat.note = null
+    }
+  })
+
+  it('answers without a number while the column is not there yet', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // company_settings read (payment-terms default)
+    enqueue({ data: { id: 'op-create-customer-4' } })
+
+    const result = (await tool().execute(
+      { name: 'Kund AB', customer_type: 'swedish_business' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; message: string }
+
+    expect(result.staged).toBe(true)
+    expect(result).not.toHaveProperty('operation_number')
+    expect(result.message).toMatch(/^Staged as pending_operation op-create-customer-4 \(risk: /)
   })
 
   it('rejects a customer_number longer than 32 characters before staging', async () => {
@@ -95,7 +172,7 @@ describe('gnubok_create_customer: customer_number input', () => {
     const inserted = findCall('pending_operations', 'insert')?.[0] as {
       params: Record<string, unknown>
     }
-    expect(inserted.params).toMatchObject({ customer_number: null })
+    expect(inserted.params.customer_number ?? null).toBeNull()
   })
 })
 
@@ -168,7 +245,7 @@ describe('gnubok_create_customer: personal_number', () => {
     expect(result.preview.personal_number_masked).toBe(MASKED)
 
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.org_number).toBeNull()
+    expect(inserted.params.org_number ?? null).toBeNull()
     expect(decryptPersonnummer(inserted.params.personal_number_encrypted as string)).toBe(PERSONAL_NUMBER)
     expect(JSON.stringify(inserted)).not.toContain(PERSONAL_NUMBER)
   })
@@ -189,6 +266,20 @@ describe('gnubok_create_customer: personal_number', () => {
         supabase as never,
       ),
     ).rejects.toThrow(/personnummer/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses an org number that is not a personnummer on an individual before staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Bertil Bengtsson', customer_type: 'individual', org_number: '556677-8899' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/no org number/)
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
@@ -239,7 +330,7 @@ describe('gnubok_create_customer: personal_number', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/personnummer/)
+    ).rejects.toThrow(/personal_number/)
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
@@ -354,9 +445,9 @@ describe('gnubok_create_customer: payment terms', () => {
       supabase as never,
     )) as { preview: Record<string, unknown> }
 
-    expect(result.preview.payment_terms).toBe(10)
+    expect(result.preview.default_payment_terms).toBe(10)
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.payment_terms).toBe(10)
+    expect(inserted.params.default_payment_terms).toBe(10)
   })
 
   it('falls back to 30 when the company has no default', async () => {
@@ -371,9 +462,9 @@ describe('gnubok_create_customer: payment terms', () => {
       supabase as never,
     )) as { preview: Record<string, unknown> }
 
-    expect(result.preview.payment_terms).toBe(30)
+    expect(result.preview.default_payment_terms).toBe(30)
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.payment_terms).toBe(30)
+    expect(inserted.params.default_payment_terms).toBe(30)
   })
 
   it('keeps an explicit payment_terms without reading the company setting', async () => {
@@ -388,8 +479,115 @@ describe('gnubok_create_customer: payment terms', () => {
     )) as { staged: boolean; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
-    expect(result.preview.payment_terms).toBe(14)
+    expect(result.preview.default_payment_terms).toBe(14)
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.payment_terms).toBe(14)
+    expect(inserted.params.default_payment_terms).toBe(14)
+  })
+
+  // #2070: 0 days (betalning direkt) is a valid choice, not "unset".
+  it('keeps an explicit payment_terms of 0 without reading the company setting', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-pt-4' } }) // only the insert: no settings read
+
+    const result = (await tool().execute(
+      { name: 'Kund AB', customer_type: 'swedish_business', payment_terms: 0 },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.default_payment_terms).toBe(0)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
+    expect(inserted.params.default_payment_terms).toBe(0)
+  })
+
+  it('gnubok_update_customer accepts 0 to 365 days', () => {
+    const update = tools.find((t) => t.name === 'gnubok_update_customer')!
+    const property = (update.inputSchema.properties as Record<string, { minimum?: number; maximum?: number }>)
+      .default_payment_terms
+    expect(property.minimum).toBe(0)
+    expect(property.maximum).toBe(365)
+  })
+})
+
+// crm#1198: the tool listed its arguments by hand and the dispatcher refuses
+// any key a tool does not list, so contact_person never reached the schema.
+describe('gnubok_create_customer: contact person, invoice copies and the rest of the card', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  const card = {
+    name: 'Kund AB',
+    customer_type: 'swedish_business',
+    contact_person: ' Anna Andersson ',
+    invoice_email_cc_addresses: ['ekonomi@kund.example'],
+    phone: '08-123 45',
+    address: 'Gatan 1',
+    address_line2: 'c/o Kontoret',
+    language: 'en',
+    notes: 'Märk fakturan med projektnummer.',
+  }
+
+  it('lets every field of the card past the dispatcher\'s argument guard', () => {
+    expect(findUnknownArgKeys(tool().inputSchema as Record<string, unknown>, card)).toEqual([])
+  })
+
+  it('stages the contact person, the cc list and the rest of the card in params and preview', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: null }) // company_settings read (payment-terms default)
+    enqueue({ data: { id: 'op-create-customer-card' } })
+
+    const result = (await tool().execute(card, 'company-1', 'user-1', supabase as never)) as {
+      staged: boolean
+      preview: Record<string, unknown>
+    }
+
+    const expected = {
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['ekonomi@kund.example'],
+      phone: '08-123 45',
+      address_line1: 'Gatan 1',
+      address_line2: 'c/o Kontoret',
+      language: 'en',
+      notes: 'Märk fakturan med projektnummer.',
+    }
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject(expected)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toMatchObject(expected)
+  })
+
+  it('refuses a cc address that is not an email before staging, naming the field', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business', invoice_email_cc_addresses: ['ekonomi'] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      issues: [expect.objectContaining({ field: 'invoice_email_cc_addresses.0' })],
+    })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses a contact person over 200 characters before staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business', contact_person: 'A'.repeat(201) },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [expect.objectContaining({ field: 'contact_person' })] })
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 })

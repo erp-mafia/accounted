@@ -29,10 +29,13 @@ import {
   fetchArticles,
   fetchBookingTemplates,
   fetchCashAccounts,
+  fetchCustomer,
   fetchCustomers,
+  fetchEmployees,
   fetchDimensions,
   fetchFiscalPeriods,
   fetchSuppliers,
+  selectAccounts,
 } from '../fetchers'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -112,6 +115,25 @@ describe('API fetchers', () => {
     ])
   })
 
+  it('fetchCustomer reads one customer, archived ones included, and null when the body has none', async () => {
+    fetchMock.mockImplementationOnce(async () => jsonResponse({ data: { id: 'c 1', name: 'Arkiv AB' } }))
+    expect(await fetchCustomer('c 1')).toEqual({ id: 'c 1', name: 'Arkiv AB' })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/customers/c%201')
+
+    fetchMock.mockImplementationOnce(async () => jsonResponse({}))
+    expect(await fetchCustomer('c2')).toBeNull()
+  })
+
+  it('fetchEmployees reads the masked roster route, former employees on request', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ data: [{ id: 'e1' }] }))
+    expect(await fetchEmployees()).toEqual([{ id: 'e1' }])
+    expect(await fetchEmployees(true)).toEqual([{ id: 'e1' }])
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      '/api/salary/employees',
+      '/api/salary/employees?active=false',
+    ])
+  })
+
   it('reads the dimensions route from its `dimensions` field', async () => {
     fetchMock.mockImplementation(async () => jsonResponse({ dimensions: [{ id: 'd' }] }))
     expect(await fetchDimensions()).toEqual([{ id: 'd' }])
@@ -137,5 +159,21 @@ describe('API fetchers', () => {
     expect(err).toBeInstanceOf(ReferenceFetchError)
     expect(err.status).toBe(502)
     expect(err.body).toBeNull()
+  })
+})
+
+describe('selectAccounts', () => {
+  const chart = [
+    { account_number: '1930', is_active: true },
+    { account_number: '1940', is_active: false },
+    { account_number: '3001', is_active: true },
+  ] as unknown as Parameters<typeof selectAccounts>[0]
+
+  it('keeps only active accounts, in route order, for the active variant', () => {
+    expect(selectAccounts(chart, true).map((a) => a.account_number)).toEqual(['1930', '3001'])
+  })
+
+  it('returns the full chart unchanged for the all-accounts variant', () => {
+    expect(selectAccounts(chart, false)).toBe(chart)
   })
 })

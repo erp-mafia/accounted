@@ -31,7 +31,7 @@ export const GET = withRouteContext('bookkeeping.accounts.list', async (request,
   try {
     // Single-round-trip path: the RPC aggregates the whole list into one json
     // scalar server-side, bypassing PostgREST's 1000-row page cap. Large
-    // charts (95/1250 prod companies exceed 1000 active accounts) previously
+    // charts (some companies exceed 1000 active accounts) previously
     // paid 2-5 sequential cross-region round trips through fetchAllRows.
     const rpc = await supabase.rpc('list_company_accounts', {
       p_company_id: companyId,

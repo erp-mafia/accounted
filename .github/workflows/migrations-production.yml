@@ -1,0 +1,103 @@
+name: Production migrations
+
+# Applies supabase/migrations to the production database on every push to
+# main. --include-all applies
+# out-of-order versions too. The applied versions are listed before and after,
+# so the log shows exactly what changed.
+#
+# No `supabase link`: that reads the project's API keys, which this job has no
+# use for. The access token only looks up the session pooler's address; the
+# CLI then connects with the database password. The URL holds the password; it
+# is masked and never printed.
+#
+# Secrets: SUPABASE_ACCESS_TOKEN and SUPABASE_DB_PASSWORD, on the `production`
+# environment, never on the repository. With the environment's deployment
+# branches restricted to main, no job on another ref can read them. This
+# workflow has no pull_request trigger.
+#
+# It runs on its own: it does not wait for CI or for the Vercel
+# deployment of the same commit.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One run at a time, never cancelled mid-run. GitHub keeps one pending run per
+# group and cancels an older pending run when a newer push queues; the newer
+# run's checkout holds every migration the cancelled one had, and db push
+# applies all of them.
+concurrency:
+  group: production-database
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Apply migrations to production
+    # Runs where the production environment's secrets are held: in a private
+    # repository, or in one that sets the repository variable
+    # APPLY_PRODUCTION_MIGRATIONS to true. Anywhere else (a public repository,
+    # a public fork) the job is skipped, so a push to main there applies
+    # nothing and does not fail for want of secrets.
+    if: github.event.repository.private || vars.APPLY_PRODUCTION_MIGRATIONS == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      SUPABASE_PROJECT_REF: pwxtzglxptnnvjrpixpg
+      SUPABASE_CLI: supabase@2.119.0
+    steps:
+      - name: Require the environment secrets
+        # Only whether each secret is set reaches this step.
+        env:
+          HAS_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN != '' }}
+          HAS_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD != '' }}
+        run: |
+          set -euo pipefail
+          test "$HAS_ACCESS_TOKEN" = "true" || { echo "::error::SUPABASE_ACCESS_TOKEN is not set on the production environment"; exit 1; }
+          test "$HAS_DB_PASSWORD" = "true" || { echo "::error::SUPABASE_DB_PASSWORD is not set on the production environment"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Apply migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/database/pooler" > "$RUNNER_TEMP/pooler.json"
+          # The CLI connects with the URL alone and never sees the token.
+          unset SUPABASE_ACCESS_TOKEN
+          # The script is JavaScript in single quotes; its ${} is a template literal.
+          # shellcheck disable=SC2016
+          node -e '
+            const fs = require("fs");
+            const [poolerPath, urlPath] = process.argv.slice(1);
+            const list = [].concat(JSON.parse(fs.readFileSync(poolerPath, "utf8")));
+            const p = list.find((x) => x.database_type === "PRIMARY") || list[0];
+            if (!p || !p.db_host || !p.db_user) { console.error("No pooler config for the primary database"); process.exit(1) }
+            const pw = encodeURIComponent(process.env.SUPABASE_DB_PASSWORD);
+            const url = `postgresql://${p.db_user}:${pw}@${p.db_host}:5432/${p.db_name || "postgres"}?sslmode=require`;
+            // The raw password is masked as a secret; its URL-encoded form and
+            // the URL are not, until masked here.
+            console.log("::add-mask::" + pw);
+            console.log("::add-mask::" + url);
+            console.log("Session pooler: " + p.db_host + ":5432 as " + p.db_user);
+            fs.writeFileSync(urlPath, url, { mode: 0o600 });
+          ' "$RUNNER_TEMP/pooler.json" "$RUNNER_TEMP/db-url"
+          SUPABASE_DB_URL="$(cat "$RUNNER_TEMP/db-url")"
+          export SUPABASE_DB_URL
+          rm -f "$RUNNER_TEMP/db-url" "$RUNNER_TEMP/pooler.json"
+          npx -y "$SUPABASE_CLI" migration list --db-url "$SUPABASE_DB_URL" | tail -15
+          npx -y "$SUPABASE_CLI" db push --include-all --db-url "$SUPABASE_DB_URL"
+          npx -y "$SUPABASE_CLI" migration list --db-url "$SUPABASE_DB_URL" | tail -8

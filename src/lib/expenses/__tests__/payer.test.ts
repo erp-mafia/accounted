@@ -3,6 +3,7 @@ import {
   OWNER_FALLBACK_NAME,
   PAYER_ORDER,
   isPersonPayer,
+  lastOwnerClaimantName,
   ownerFallbackName,
   resolveExpenseLiabilityAccount,
 } from '../payer'
@@ -59,5 +60,49 @@ describe('isPersonPayer', () => {
 
   it('the owner fallback label is the one Hem groups on', () => {
     expect(OWNER_FALLBACK_NAME).toBe('Ägare')
+  })
+})
+
+describe('lastOwnerClaimantName (PH 101: "Jag, privat" remembers the name)', () => {
+  const owner = (claimant_name: string | null, created_at: string | null) => ({ employee_id: null, claimant_name, created_at })
+
+  it('is the name the most recently registered owner claim was typed under, trimmed', () => {
+    expect(
+      lastOwnerClaimantName([
+        owner('Anna', '2026-10-01T10:00:00+00:00'),
+        owner('  Kim  ', '2026-10-21T21:56:14.096565+00:00'),
+        owner('Anna', '2026-10-20T08:00:00+00:00'),
+      ]),
+    ).toBe('Kim')
+  })
+
+  it("skips an employee's claim: the name belongs to the employee row", () => {
+    expect(
+      lastOwnerClaimantName([
+        owner('Kim', '2026-10-01T10:00:00+00:00'),
+        { employee_id: 'emp-1', claimant_name: 'Sam Anställd', created_at: '2026-10-22T10:00:00+00:00' },
+      ]),
+    ).toBe('Kim')
+  })
+
+  it('skips a claim left on the fallback label, so the typed name wins over "Ägare"', () => {
+    expect(
+      lastOwnerClaimantName([
+        owner('Kim', '2026-10-21T21:47:06+00:00'),
+        owner('Ägare', '2026-10-21T21:53:53+00:00'),
+        owner('medlem', '2026-10-21T21:54:00+00:00'),
+        owner('Owner', '2026-10-21T21:55:00+00:00'),
+      ]),
+    ).toBe('Kim')
+  })
+
+  it('is null without a typed owner name, so the field stays empty with the fallback as placeholder', () => {
+    expect(lastOwnerClaimantName([])).toBeNull()
+    expect(lastOwnerClaimantName([owner('Ägare', '2026-10-21T21:53:53+00:00'), owner('   ', null), owner(null, null)])).toBeNull()
+  })
+
+  it('still answers when a row has no readable date', () => {
+    expect(lastOwnerClaimantName([owner('Kim', null)])).toBe('Kim')
+    expect(lastOwnerClaimantName([owner('Kim', 'not a date'), owner('Anna', '2026-10-01T10:00:00+00:00')])).toBe('Anna')
   })
 })

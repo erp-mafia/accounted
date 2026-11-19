@@ -11,7 +11,7 @@
  * detector's answer into a decision, so every door that books a bank row (the
  * dashboard routes, MCP staging, the pending-operation commit) refuses,
  * overrides and records in exactly the same way. A guard that lived in one
- * door only is how the MCP path booked gecko's Bankgirot aggregate a second
+ * door only is how the MCP path booked a company's Bankgirot aggregate a second
  * time (issue #2294, dashboard fix in PR #2300).
  *
  * Override binding: force=true is honoured only when the caller echoes the
@@ -23,6 +23,7 @@
  * Detection failures fail OPEN (the booking RPCs remain the atomicity
  * boundary); callers log the miss through `onDetectError`.
  */
+import { formatAmount } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   detectDuplicatePaymentVoucher,
@@ -97,8 +98,7 @@ export function alreadyExplainedDetails(
   }
 }
 
-const sek = (amount: number): string =>
-  `${amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`
+const sek = (amount: number): string => `${formatAmount(amount)} kr`
 
 /** "A57 + A58 (1930, 2026-07-31, 88 250,00 kr)": the set as a human reads it. */
 export function describeExplainingSet(set: ExplainingVoucherSet): string {
@@ -107,6 +107,16 @@ export function describeExplainingSet(set: ExplainingVoucherSet): string {
   const when = dates.length === 1 ? dates[0] : `${dates[0]} till ${dates[dates.length - 1]}`
   return `${labels} (${set.bank_account_number}, ${when}, ${sek(set.total)})`
 }
+
+/**
+ * Staged into preview.compliance_warning when a duplicate / already-explained
+ * check threw at stage time without force. The stage fails open (the commit
+ * re-runs the check as the hard gate), but the approver must see that the
+ * check did not run rather than approve as if it had.
+ */
+export const DUPLICATE_CHECK_FAILED_NOTE =
+  'Dubblettkontrollen kunde inte köras vid stagingen: kontrollera manuellt att raden inte redan är bokförd ' +
+  '(verifikat utan bankkoppling på kontot) innan du godkänner. Kontrollen körs igen vid godkännandet.'
 
 export interface GuardOptions {
   /** Called when the detector throws; the guard then fails open. */
@@ -229,6 +239,12 @@ export interface TransactionForDuplicate {
   currency: string | null
   amount_sek?: number | null
   exchange_rate?: number | null
+  /**
+   * Scopes the scan to the account the money landed on (its ledger_account);
+   * absent or null scans the whole 19xx range. A door that selects a narrow
+   * column list must include it, or a 1686 row is compared with 1930 vouchers.
+   */
+  cash_account_id?: string | null
 }
 
 /**
@@ -254,6 +270,7 @@ export async function guardDuplicatePaymentVoucher(
       transactionCurrency: transaction.currency ?? null,
       transactionAmountSek: transaction.amount_sek ?? null,
       transactionExchangeRate: transaction.exchange_rate ?? null,
+      cashAccountId: transaction.cash_account_id ?? null,
     })
   } catch (err) {
     options.onDetectError?.(err)

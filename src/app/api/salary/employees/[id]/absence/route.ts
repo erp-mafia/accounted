@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import {
@@ -16,8 +15,6 @@ import {
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
-
-ensureInitialized()
 
 function errorResponse(code: string, details?: Record<string, unknown>): NextResponse {
   const entry = getErrorEntry(code)

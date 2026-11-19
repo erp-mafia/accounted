@@ -7,6 +7,7 @@
  * semicolon separator (comma is the decimal sign in sv-SE), decimal comma,
  * CRLF line endings and a UTF-8 BOM so å/ä/ö render correctly.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type {
   TrialBalanceRow,
   IncomeStatementReport,
@@ -136,7 +137,7 @@ export function generalLedgerToCsv(report: GeneralLedgerReport): string {
         account.account_number,
         account.account_name,
         line.date,
-        `${line.voucher_series}${line.voucher_number}`,
+        formatVoucher(line),
         line.description,
         line.debit,
         line.credit,

@@ -43,7 +43,7 @@ export default function ExpensePayoutMatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{t('description')}</DialogDescription>
@@ -51,7 +51,7 @@ export default function ExpensePayoutMatchDialog({
 
         {transaction && match && (
           <div className="space-y-4">
-            <div className="rounded-lg border border-border p-4 space-y-1">
+            <div className="rounded-lg p-4 space-y-1 bg-control shadow-raised">
               <p className="font-medium">{transaction.description}</p>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground tabular-nums">{formatDate(transaction.date)}</span>
@@ -59,14 +59,14 @@ export default function ExpensePayoutMatchDialog({
               </div>
             </div>
 
-            <div className="rounded-lg border border-border p-4 space-y-1 text-sm">
+            <div className="rounded-lg p-4 space-y-1 text-sm bg-control shadow-raised">
               <p className="font-medium">{match.claimant_name}</p>
               <p className="text-muted-foreground">
                 {match.claim_count === 1
                   ? t('claims_one', { date: formatDate(match.oldest_expense_date) })
                   : t('claims_other', { count: match.claim_count, date: formatDate(match.oldest_expense_date) })}
               </p>
-              <p className="text-xs text-muted-foreground tabular-nums pt-2 border-t border-border">
+              <p className="text-xs text-muted-foreground tabular-nums pt-2 border-t-hairline">
                 {match.liability_account} D {formatCurrency(amount, 'SEK')} · 19xx K {formatCurrency(amount, 'SEK')}
               </p>
               <p className="text-xs text-muted-foreground">{t('outcome')}</p>

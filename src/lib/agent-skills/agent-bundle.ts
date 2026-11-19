@@ -9,6 +9,11 @@ import { kvittojaktenSkills } from './workflows/kvittojakten'
 import { loadCompanySkillRows, ownSkill } from './company-skills'
 import type { Skill } from './types'
 import { buildArkivMap, type ArkivMap } from '@/lib/arkiv/map'
+import { loadRememberedFacts, type RememberedFact } from '@/lib/agent-context/remembered-facts'
+import { creatorFields } from '@/lib/attribution/person-names'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('agent-skills.bundle')
 
 export type ConnectionStatus = 'connected' | 'missing' | 'in_ai' | 'unknown'
 
@@ -278,8 +283,8 @@ export interface CompanyKnowledge {
   onboarding_summary: string | null
   facts: Array<{ label: string; value: string; valid_from: string | null }>
   agreements?: ArkivMap['agreements']
-  /** What agents were told (remember_fact), newest first, so a later fact can settle an earlier one. */
-  remembered: Array<{ text: string; saved_at: string | null }>
+  /** What agents were told (remember_fact), all of it, newest first, so a later fact can settle an earlier one. fact_id goes into remember_fact's replaces. created_by names who saved it (never an e-mail); created_by_deleted says that person's account is gone. */
+  remembered: Array<{ fact_id: string; text: string; saved_at: string | null; created_by?: string; created_by_deleted?: true }>
   documents: { total: number; look_up: string[] }
 }
 
@@ -299,17 +304,19 @@ export interface AgentBundle {
   connections: AgentConnectionState[]
 }
 
-const REMEMBERED = 10
-
 /** Own agents declare no facts: they get every company fact the map holds. */
 async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string, def: { facts: readonly string[] | null; agreements: boolean }): Promise<CompanyKnowledge> {
   const [map, profile, memory] = await Promise.all([
     // The map is best-effort: an archive that cannot be read never blocks the agent.
     buildArkivMap(supabase, companyId).catch(() => null),
     supabase.from('agent_profiles').select('profile_summary').eq('company_id', companyId).maybeSingle(),
-    // A memory that a newer one replaced (superseded_by) never reaches the agent.
-    supabase.from('agent_memory').select('content, created_at').eq('company_id', companyId).eq('is_active', true).is('superseded_by', null)
-      .order('relevance_score', { ascending: false, nullsFirst: false }).limit(REMEMBERED),
+    // Every remembered fact, not a ranked few (lib/agent-context/remembered-facts);
+    // a memory that a newer one replaced never reaches the agent. Best-effort:
+    // the workflow starts without them, and the log says why.
+    loadRememberedFacts(supabase, companyId).catch((error: unknown) => {
+      log.warn('Remembered facts unavailable; the workflow starts without them', { companyId, error: error instanceof Error ? error.message : String(error) })
+      return null
+    }),
   ])
   const order = def.facts ? new Map(def.facts.map((f, i) => [f, i])) : null
   const facts = (map?.company_facts ?? [])
@@ -322,15 +329,15 @@ async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string,
     onboarding_summary: profile.error ? null : profile.data?.profile_summary ?? null,
     facts,
     ...(def.agreements ? { agreements: map?.agreements ?? [] } : {}),
-    remembered: memory.error ? [] : newestFirst((memory.data ?? []) as Array<{ content: string; created_at: string | null }>),
+    remembered: newestFirst(memory?.facts ?? []),
     documents: { total: map?.documents.total ?? 0, look_up: map?.how_to ?? [] },
   }
 }
 
-/** The most relevant memories, dated and newest first: without dates two that disagree could not be told apart. */
-function newestFirst(rows: Array<{ content: string; created_at: string | null }>): CompanyKnowledge['remembered'] {
-  return rows
-    .map((m) => ({ text: m.content, saved_at: m.created_at ?? null }))
+/** The memories, dated and newest first: without dates two that disagree could not be told apart. */
+function newestFirst(facts: readonly RememberedFact[]): CompanyKnowledge['remembered'] {
+  return facts
+    .map((m) => ({ fact_id: m.fact_id, text: m.content, saved_at: m.saved_at, ...creatorFields(m.created_by) }))
     .sort((a, b) => (b.saved_at ?? '').localeCompare(a.saved_at ?? ''))
 }
 

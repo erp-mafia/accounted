@@ -83,3 +83,26 @@ describe('resolveAccount', () => {
     expect(result).toEqual({ account: '1930', fallback: false })
   })
 })
+
+describe('resolveAccount with a company card', () => {
+  it('never counts a card, so the only bank account still claims an unbound row', () => {
+    const accounts = [
+      makeCashAccount({ id: 'bank', ledger_account: '1940', is_primary: true }),
+      makeCashAccount({ id: 'card', ledger_account: '2890', is_primary: false, kind: 'card' }),
+    ]
+    expect(resolveAccount(accounts, null, 'SEK')).toEqual({ account: '1940', fallback: false })
+  })
+
+  it('never answers the card for an unbound row, even as the only account', () => {
+    const accounts = [makeCashAccount({ id: 'card', ledger_account: '2890', is_primary: false, kind: 'card' })]
+    expect(resolveAccount(accounts, null, 'SEK')).toEqual({ account: '1930', fallback: true })
+  })
+
+  it('answers the card ledger for a row bound to the card', () => {
+    const accounts = [
+      makeCashAccount({ id: 'bank', ledger_account: '1930' }),
+      makeCashAccount({ id: 'card', ledger_account: '2899', is_primary: false, kind: 'card' }),
+    ]
+    expect(resolveAccount(accounts, 'card', 'SEK')).toEqual({ account: '2899', fallback: false })
+  })
+})

@@ -23,11 +23,23 @@ import { getBranding } from '@/lib/branding/service'
 import { flagEnabled, isSelfHosted } from '@/lib/env/public-flags'
 import { STANDARD_VOUCHER_SERIES_MAP, resolveDefaultSeriesForSource, voucherSeriesLabel, type VoucherSeriesMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { cashAccountSeriesOverride } from '@/lib/bookkeeping/cash-account-voucher-series'
+import { CASH_PARTIAL_FIRST_DESCRIPTION } from '@/lib/bookkeeping/invoice-lines'
+import { readCollectionsEnv } from '@/lib/collections/flags'
+import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
+import { counterpartySetoffEnabled } from '@/lib/env/counterparty-setoff-switch'
+import { cashPartialPaymentsEnabled } from '@/lib/env/cash-partial-payments-switch'
 import { API_KEY_SCOPES } from '@/lib/auth/scope-catalog'
 import {
   ARCHIVE_RULES,
   BEHANDLINGSHISTORIK_RULES,
+  CASH_PARTIAL_PAYMENT_RULE,
   CORRECTION_AND_LOCK_RULES,
+  COUNTERPARTY_SETOFF_RULE,
+  EU_GOODS_REGISTRATION_DATE_RULE,
+  INVOICE_NUMBER_RULES,
+  KONTANTMETOD_CUTOFF_RULES,
+  KONTANTMETOD_EU_GOODS_RULE,
+  vacationLiabilityRuleText,
   SIE_IMPORT_RULES,
   SUPPLIER_INVOICE_ROUNDING_RULES,
   SUPPLIER_PAYMENT_RULES,
@@ -60,6 +72,8 @@ export interface SystemdokumentationSettingsRow {
   dimensions_enabled: boolean | null
   recurring_invoices_enabled: boolean | null
   invoice_payment_links_enabled: boolean | null
+  salary_vacation_liability_method?: string | null
+  salary_calculation_policy?: unknown
 }
 
 export interface SystemdokumentationPeriodRow {
@@ -95,6 +109,44 @@ export interface SystemdokumentationConnections {
   cloud_backup: boolean
 }
 
+/**
+ * The company's live collections connection (collection_connections), when it
+ * has one: the provider's name as stored at activation and the rules the
+ * system applies through it.
+ */
+export interface SystemdokumentationCollections {
+  display_name: string
+  state: 'connecting' | 'needs_setup' | 'active' | 'disconnected'
+  minimum_amount: number | string
+  default_start_step: 'reminder' | 'collection'
+  reminder_fee_terms_since: string | null
+  late_interest_percent: number | string | null
+  late_interest_agreed_since: string | null
+  clearing_account: string
+  payout_account: string
+  auto_book_collected_payments: boolean
+  auto_book_settlements: boolean
+}
+
+/**
+ * Booking rules that wait behind an installation switch, and whether the
+ * company's books hold vouchers only those rules write. The document
+ * describes such a rule, and lists the series of its source type, while its
+ * switch is on or once its vouchers exist: a series that was used stays
+ * described after the switch is turned off.
+ */
+export interface SystemdokumentationSwitchedRules {
+  /** CASH_PARTIAL_PAYMENTS_ENABLED, COLLECTIONS_ENABLED, CUSTOMER_LOSS_ENABLED, COUNTERPARTY_SETOFF_ENABLED. */
+  switches: { cashPartialPayments: boolean; collections: boolean; customerLoss: boolean; counterpartySetoff?: boolean }
+  /** Pro-rata part payment vouchers, collections payout vouchers, kundförlust vouchers, kvittning vouchers. */
+  vouchers: { cashPartialPayments: boolean; collectionSettlement: boolean; customerLoss: boolean; counterpartySetoff?: boolean }
+}
+
+const NO_SWITCHED_RULES: SystemdokumentationSwitchedRules = {
+  switches: { cashPartialPayments: false, collections: false, customerLoss: false, counterpartySetoff: false },
+  vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false, counterpartySetoff: false },
+}
+
 /** Everything the pure builder needs; the loader fills it from the database. */
 export interface SystemdokumentationFacts {
   company: { name: string | null; org_number: string | null; accounting_framework: AccountingFramework | null }
@@ -107,6 +159,10 @@ export interface SystemdokumentationFacts {
   apiKeys: SystemdokumentationApiKeyRow[]
   dimensions: { name: string }[]
   connections: SystemdokumentationConnections
+  /** Reminders and debt collection through a provider; absent or null when the company has no live connection. */
+  collections?: SystemdokumentationCollections | null
+  /** Rules behind an installation switch; absent: every switch off and none of their vouchers. */
+  switchedRules?: SystemdokumentationSwitchedRules
   /** user id -> display label (e-mail or name). */
   labels: Map<string, string>
   env: {
@@ -144,6 +200,9 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   invoice_cash_payment: 'Kundbetalning (kontantmetoden)',
   rot_rut_payout: 'ROT/RUT-utbetalning från Skatteverket',
   rot_rut_reclaim: 'ROT/RUT-återkrav',
+  customer_loss: 'Kundförlust (befarad, konstaterad, återvunnen)',
+  counterparty_setoff: 'Kvittning kund-/leverantörsfaktura',
+  rot_rut_reclassification: 'Omföring av ROT/RUT-avdrag på migrerad faktura',
   supplier_invoice_registered: 'Leverantörsfaktura',
   supplier_credit_note: 'Kreditfaktura från leverantör',
   supplier_invoice_paid: 'Leverantörsbetalning',
@@ -152,7 +211,9 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   salary_payment: 'Lön',
   accrual: 'Periodisering',
   webshop_order: 'Webbutiksorder',
+  pos_daily_sales: 'Dagskassa från kassasystem',
   stripe_payout: 'Stripe-utbetalning',
+  collection_settlement: 'Utbetalning från inkassobolaget',
   expense_claim: 'Utlägg',
   expense_payout: 'Utbetalning av utlägg',
   vat_settlement: 'Momsredovisning',
@@ -162,6 +223,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   result_appropriation: 'Resultatdisposition',
   import: 'Import',
   system: 'System',
+  tax_account: 'Skattekonto',
   storno: 'Storno',
   correction: 'Rättelse',
 }
@@ -213,7 +275,17 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { key: 'dimensioner', label: 'Dimensioner', description: facts.dimensions.length ? `Konteringsrader märks med ${facts.dimensions.map((d) => d.name).join(', ')}; påverkar inte huvudbokföringens saldon` : 'Kostnadsställen och projekt på konteringsrader; påverkar inte huvudbokföringens saldon', kontering: 'Ingen egen kontering', active: s?.dimensions_enabled === true },
   ]
 
-  const sourceTypes = Object.keys(STANDARD_VOUCHER_SERIES_MAP) as JournalEntrySourceType[]
+  const switched = facts.switchedRules ?? NO_SWITCHED_RULES
+  // The source types only a switched rule writes: listed while it can write
+  // them or once it has.
+  const switchedSourceTypes: Partial<Record<JournalEntrySourceType, boolean>> = {
+    collection_settlement: switched.switches.collections || switched.vouchers.collectionSettlement,
+    customer_loss: switched.switches.customerLoss || switched.vouchers.customerLoss,
+    counterparty_setoff: Boolean(switched.switches.counterpartySetoff || switched.vouchers.counterpartySetoff),
+  }
+  const sourceTypes = (Object.keys(STANDARD_VOUCHER_SERIES_MAP) as JournalEntrySourceType[]).filter(
+    (sourceType) => switchedSourceTypes[sourceType] !== false,
+  )
   const perSourceType = sourceTypes.map((source_type) => {
     const series = resolveDefaultSeriesForSource((s?.default_voucher_series_per_source_type ?? null) as VoucherSeriesMap | null, source_type)
     return { source_type, label: SOURCE_TYPE_LABELS_SV[source_type], series, series_label: seriesLabel(series, labels) }
@@ -234,21 +306,50 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   const behandlingsregler: SystemdokumentationRule[] = [
     { rubrik: 'Verifikationsnummer', text: 'Tilldelas i löpande följd av databasfunktionen commit_journal_entry vid bokföring, unikt per företag, räkenskapsår och serie, säkert vid samtidiga anrop. Kan inte sättas manuellt. Luckor förklaras i systemets funktion för nummerluckor och förklaringarna bevaras.' },
     { rubrik: 'Balanskontroll', text: 'Varje verifikation måste balansera (debet lika med kredit, båda större än noll); databasen avvisar allt annat.' },
+    { rubrik: 'Fakturanummer, serie', text: `${INVOICE_NUMBER_RULES.serie} ${INVOICE_NUMBER_RULES.nasta_nummer}` },
+    { rubrik: 'Fakturanummer, unika och i ordning', text: `${INVOICE_NUMBER_RULES.unikt} ${INVOICE_NUMBER_RULES.ordning}` },
+    { rubrik: 'Fakturanummer, införande', text: INVOICE_NUMBER_RULES.andring },
     { rubrik: 'Öresavrundning på kundfakturor', text: oreDefault ? 'Företagsinställningen avrundar fakturabeloppet till hel krona; skillnaden bokförs på 3740 utan moms.' : 'Företagsinställningen är avstängd: kundfakturor avrundas inte till hel krona.' },
     { rubrik: 'Öresavrundning på leverantörsfakturor', text: SUPPLIER_INVOICE_ROUNDING_RULES.val },
     { rubrik: 'Öresavrundning, registrering', text: SUPPLIER_INVOICE_ROUNDING_RULES.registrering },
     { rubrik: 'Öresavrundning och moms', text: `${SUPPLIER_INVOICE_ROUNDING_RULES.moms} ${SUPPLIER_INVOICE_ROUNDING_RULES.omfattning}` },
     { rubrik: 'Öresavrundning, kontantmetoden', text: SUPPLIER_INVOICE_ROUNDING_RULES.betalning_kontantmetoden },
     { rubrik: 'Öresavrundning, införande', text: SUPPLIER_INVOICE_ROUNDING_RULES.historik },
+    { rubrik: 'Bokslut enligt kontantmetoden', text: KONTANTMETOD_CUTOFF_RULES },
     { rubrik: 'Leverantörsbetalningens belopp', text: `${SUPPLIER_PAYMENT_RULES.bankmatchning} ${SUPPLIER_PAYMENT_RULES.andring} ${SUPPLIER_PAYMENT_RULES.historik}` },
-    { rubrik: 'Moms', text: 'Momssats väljs per rad och byts inte automatiskt efter datum. Utgående moms bokförs på 2611, 2621 och 2631 efter sats, ingående på 2641. Omvänd skattskyldighet vid inköp bokför beräknad utgående moms på 2614, 2624 eller 2634 och ingående på 2645 (utland) eller 2647 (inrikes). Förvärv av varor från EU och importmoms skapas inte automatiskt från leverantörsfakturor utan bokförs manuellt.' },
+    { rubrik: 'Moms', text: 'Momssats väljs per rad och byts inte automatiskt efter datum. Utgående moms bokförs på 2611, 2621 och 2631 efter sats, ingående på 2641. Omvänd skattskyldighet vid inköp bokför beräknad utgående moms på 2614, 2624 eller 2634 och ingående på 2645 (utland) eller 2647 (inrikes). Förvärv av varor från ett annat EU-land bokförs från leverantörsfakturan med omvänd skattskyldighet och beskattningsunderlaget i ruta 20. Importmoms skapas inte automatiskt från leverantörsfakturor utan bokförs manuellt.' },
     { rubrik: 'Bankavstämning', text: 'Banktransaktioner matchas mot bokförda verifikationer på belopp och datum, referens, datumintervall och sannolikhet. Förslag med mycket hög säkerhet kopplas automatiskt mot redan bokförda verifikationer; inga nya verifikationer skapas då.' },
     { rubrik: 'Maskinell och automatisk bokföring', text: 'Förslag från maskinella hjälpmedel (kategorisering av banktransaktioner, avläsning av underlag) bokförs först när en användare har godkänt dem. Utan godkännande per verifikation bokför: schemalagda periodiseringsposter, återkommande fakturor med automatiskt utskick och API-nycklar med skrivbehörighet. Varje verifikation registreras i behandlingshistoriken med tidpunkt, sätt och utförare.' },
     { rubrik: 'Valutor', text: 'Belopp i utländsk valuta räknas om med Riksbankens kurs; valutaomvärdering bokförs som egen verifikation.' },
     { rubrik: 'SIE-import', text: SIE_IMPORT_RULES },
+    { rubrik: 'Varor från annat EU-land, registreringsdatum', text: EU_GOODS_REGISTRATION_DATE_RULE },
   ]
+  const collections = facts.collections ?? null
+  if (collections) behandlingsregler.push({ rubrik: 'Påminnelser och inkasso', text: collectionsRuleText(collections) })
+  if (s?.accounting_method === 'cash') {
+    behandlingsregler.push({ rubrik: 'Varor från annat EU-land, kontantmetoden', text: KONTANTMETOD_EU_GOODS_RULE })
+  }
+  if ((switched.switches.cashPartialPayments && s?.accounting_method === 'cash') || switched.vouchers.cashPartialPayments) {
+    behandlingsregler.push({ rubrik: 'Delbetalningar, kontantmetoden', text: CASH_PARTIAL_PAYMENT_RULE })
+  }
+  if (switched.switches.counterpartySetoff || switched.vouchers.counterpartySetoff) {
+    behandlingsregler.push({ rubrik: 'Kvittning', text: COUNTERPARTY_SETOFF_RULE })
+  }
+  if (paysSalaries) {
+    behandlingsregler.push({
+      rubrik: 'Semesterlöneskuld',
+      // Read in place: the ledger kernel does not import payroll (lib/modules
+      // boundary); anything but the non-default value is the default.
+      text: vacationLiabilityRuleText(
+        s?.salary_vacation_liability_method === 'remeasure' ? 'remeasure' : 'accrual',
+        (s?.salary_calculation_policy as { vacation_day_value?: unknown } | null | undefined)?.vacation_day_value === 'percent_4_6'
+          ? 'percent_4_6'
+          : 'daily_divisor',
+      ),
+    })
+  }
   if (s?.auto_lock_period_days != null) {
-    behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje momsperiods slut.` })
+    behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje kalendermånads slut.` })
   }
 
   const integrationer: SystemdokumentationIntegration[] = [
@@ -266,6 +367,15 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { key: 'resend', label: 'Resend', description: 'E-post ut (fakturor, påminnelser) och in (dokumentinkorgens adress)', active: facts.env.hosted },
     { key: 'riksbanken', label: 'Riksbanken', description: 'Valutakurser', active: true },
   ]
+  if (collections) {
+    integrationer.push({
+      key: 'collections',
+      label: `Påminnelser och inkasso (${collections.display_name}, via Accounted Connect)`,
+      description:
+        'Fakturor som en användare väljer att lämna över skickas till inkassobolaget, som sköter påminnelser och inkassokrav; ärendenas status hämtas tillbaka. Inga uppgifter om företaget lämnade appen förrän en administratör hade godkänt inkassobolagets villkor.',
+      active: collections.state === 'active',
+    })
+  }
 
   const apiKeys: SystemdokumentationApiKey[] = facts.apiKeys
     .map((k) => ({
@@ -279,7 +389,7 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     }))
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
 
-  const roleOrder: Record<CompanyRole, number> = { owner: 0, admin: 1, member: 2, viewer: 3 }
+  const roleOrder: Record<CompanyRole, number> = { owner: 0, admin: 1, member: 2, viewer: 3, invoicer: 4 }
   const members = [...facts.members]
     .sort((a, b) => roleOrder[a.role] - roleOrder[b.role] || a.joined_at.localeCompare(b.joined_at))
     .map((m) => ({ role: m.role, label: label(m.user_id), joined_at: m.joined_at }))
@@ -339,6 +449,37 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   }
 }
 
+function kronor(value: number | string): string {
+  return `${Number(value).toLocaleString('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} kr`
+}
+
+/** The rules a live collections connection applies, as stored on it. */
+export function collectionsRuleText(c: SystemdokumentationCollections): string {
+  const parts = [
+    `Fakturor lämnas till inkassobolaget först när en användare väljer det för fakturan, från ${kronor(c.minimum_amount)}; första steget är ${c.default_start_step === 'collection' ? 'inkassokrav' : 'påminnelse'}.`,
+    'Inkassobolaget frågar alltid innan ett inkassokrav skickas och innan ett ärende går till Kronofogden.',
+    'Innan en faktura lämnas över, och innan inkassobolaget får gå vidare till nästa steg, kontrolleras att fakturan fortfarande är obetald enligt bokföringen och att banken inte visar en obokförd inbetalning som kan vara den.',
+    'Betalningar och kreditfakturor som bokförs på en faktura hos inkassobolaget rapporteras automatiskt till inkassobolaget, och en borttagen betalning återkallas där. Varje ny inbetalning i banken som kan vara betalning av en sådan faktura pausar ärendet hos inkassobolaget tills en användare har tagit ställning, och en gång per dygn jämförs det belopp inkassobolaget kräver med bokföringen.',
+    'Bara en person godkänner en överlämning eller nästa steg i Accounted; en AI-agent eller API-nyckel kan föreslå dem men inte godkänna dem.',
+    'Medan kopplingen är aktiv skickar Accounted inga egna påminnelser och bokför inga egna påminnelseavgifter; inkassobolaget sköter påminnelserna.',
+    'Fakturans status och bokföring ändras inte av överlämningen. Ärendets förlopp och varje beslut om det sparas i en logg som inte kan ändras.',
+    c.reminder_fee_terms_since
+      ? `Påminnelseavgift begärs bara för fakturor utfärdade från och med ${c.reminder_fee_terms_since}, då företagets villkor anger den.`
+      : 'Ingen påminnelseavgift begärs: företaget har inte angett att den är avtalad.',
+    c.late_interest_percent !== null && c.late_interest_agreed_since
+      ? `Avtalad dröjsmålsränta ${Number(c.late_interest_percent).toLocaleString('sv-SE')} procent för företagskunder på fakturor från och med ${c.late_interest_agreed_since}; annars räntelagens ränta.`
+      : 'Dröjsmålsränta enligt räntelagen.',
+    `Inbetalningar som inkassobolaget tar emot bokförs på konto ${c.clearing_account} och utbetalningar från inkassobolaget på konto ${c.payout_account}, ${c.auto_book_collected_payments || c.auto_book_settlements ? 'delvis automatiskt' : 'efter att en användare har godkänt varje bokföring'}.`,
+    'Varje inbetalning som inkassobolaget tagit emot får ett betalningsunderlag som Accounted upprättar ur inkassobolagets uppgifter (faktura, ärende, belopp, betalningsdag, inkassobolagets referens och när och av vem den bokfördes); underlaget arkiveras innan verifikationen bokförs, och avräkningen från inkassobolaget bifogas samma verifikation som kopia när utbetalningen bokförs.',
+    'En inbetalning som inkassobolaget tagit emot kan inte makuleras med en vanlig storno, eftersom fakturan då skulle stå som betald mot en öppen fordran. Den rättas genom att bokföras om under Avräkningar: verifikationen stornas, betalningen tas bort från fakturan och bokförs på nytt med ett nytt betalningsunderlag som anger vilken verifikation det ersätter, och den stornerade verifikationen sparas med sitt underlag. Makuleras en utbetalning från inkassobolaget går den tillbaka till en användare för att bokföras på nytt.',
+    `En inbetalning som inkassobolaget tagit emot på en faktura som är bokförd som konstaterad kundförlust bokförs i stället som återvunnen kundförlust (konto 3950 och den utgående momsen redovisas på nytt) mot konto ${c.clearing_account}, alltid efter att en användare har godkänt den, med betalningsunderlaget som underlag; fakturan förblir en kundförlust, och bokföringen rättas på samma sätt under Avräkningar.`,
+    'Bankraden för en bokförd utbetalning kopplas till utbetalningens verifikation när den hittas (samma belopp, inom tre dagar, på det bankkonto utbetalningen bokförs mot, inkassobolagets referens i texten), och radens förslag om betalning av en öppen faktura tas bort.',
+    'En utbetalning som verkar redan bokförd för hand bokförs inte förrän en användare har bekräftat att den inte är en dubblett, eller markerat den som hanterad på annat sätt med en motivering; båda besluten loggas med användaren.',
+    'Ändringar av reglerna registreras i behandlingshistoriken.',
+  ]
+  return parts.join(' ')
+}
+
 type Rows<T> = { data: T[] | null; error: { message: string } | null }
 
 /** A side table that fails is reported as empty, with a warning: never a reason to refuse the document. */
@@ -376,7 +517,7 @@ export async function loadSystemdokumentationFacts(
     supabase
       .from('company_settings')
       .select(
-        'entity_type, accounting_method, moms_period, vat_registered, pays_salaries, fiscal_year_start_month, bookkeeping_locked_through, auto_lock_period_days, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, ore_rounding, dimensions_enabled, recurring_invoices_enabled, invoice_payment_links_enabled',
+        'entity_type, accounting_method, moms_period, vat_registered, pays_salaries, fiscal_year_start_month, bookkeeping_locked_through, auto_lock_period_days, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, ore_rounding, dimensions_enabled, recurring_invoices_enabled, invoice_payment_links_enabled, salary_vacation_liability_method, salary_calculation_policy',
       )
       .eq('company_id', companyId)
       .maybeSingle(),
@@ -404,6 +545,52 @@ export async function loadSystemdokumentationFacts(
     optional<{ id: string }>(companyId, 'whatsapp_phone_links', supabase.from('whatsapp_phone_links').select('id').eq('default_company_id', companyId).is('revoked_at', null).limit(1)),
     optional<{ id: string }>(companyId, 'whatsapp_phone_links', supabase.from('whatsapp_phone_links').select('id').eq('last_company_id', companyId).is('revoked_at', null).limit(1)),
   ])
+
+  // The live collections connection, if any. A failed read is reported and
+  // left out, like the other side tables.
+  const collectionsRows = await optional<SystemdokumentationCollections>(
+    companyId,
+    'collection_connections',
+    supabase
+      .from('collection_connections')
+      .select('display_name, state, minimum_amount, default_start_step, reminder_fee_terms_since, late_interest_percent, late_interest_agreed_since, clearing_account, payout_account, auto_book_collected_payments, auto_book_settlements')
+      .eq('company_id', companyId)
+      .neq('state', 'disconnected')
+      .limit(1),
+  )
+
+  // Vouchers only a switched rule writes (drafts are no vouchers). Required:
+  // leaving a used series out would be a wrong document, not a degraded one.
+  const [settlementVouchers, customerLossVouchers, cashPartialVouchers, setoffVouchers] = await Promise.all([
+    required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'collection_settlement').neq('status', 'draft').limit(1)),
+    required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'customer_loss').neq('status', 'draft').limit(1)),
+    required<{ id: string }>(
+      'verifikationer',
+      supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('source_type', 'invoice_cash_payment')
+        .like('description', `${CASH_PARTIAL_FIRST_DESCRIPTION}%`)
+        .neq('status', 'draft')
+        .limit(1),
+    ),
+    required<{ id: string }>('verifikationer', supabase.from('journal_entries').select('id').eq('company_id', companyId).eq('source_type', 'counterparty_setoff').neq('status', 'draft').limit(1)),
+  ])
+  const switchedRules: SystemdokumentationSwitchedRules = {
+    switches: {
+      cashPartialPayments: cashPartialPaymentsEnabled(),
+      collections: readCollectionsEnv().enabled,
+      customerLoss: customerLossEnabled(),
+      counterpartySetoff: counterpartySetoffEnabled(),
+    },
+    vouchers: {
+      cashPartialPayments: cashPartialVouchers.length > 0,
+      collectionSettlement: settlementVouchers.length > 0,
+      customerLoss: customerLossVouchers.length > 0,
+      counterpartySetoff: setoffVouchers.length > 0,
+    },
+  }
 
   const memberIds = members.map((m) => m.user_id)
   let apiKeys: SystemdokumentationApiKeyRow[] = []
@@ -448,6 +635,8 @@ export async function loadSystemdokumentationFacts(
       email_inbox: mail.length > 0,
       cloud_backup: cloudBackup.length > 0,
     },
+    collections: collectionsRows[0] ?? null,
+    switchedRules,
     labels,
     env: {
       appName: branding.appName,

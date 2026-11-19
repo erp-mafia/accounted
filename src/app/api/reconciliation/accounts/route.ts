@@ -2,9 +2,6 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import { ISO_DATE_RE } from '@/lib/invariants'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 const DATE = ISO_DATE_RE
 

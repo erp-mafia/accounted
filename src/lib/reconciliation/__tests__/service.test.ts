@@ -16,6 +16,10 @@ vi.mock('../manual-reconciliation', () => ({
   listManualAccounts: (...args: unknown[]) => listManualMock(...args),
   getManualReconciliationStatus: (...args: unknown[]) => manualStatusMock(...args),
 }))
+const balanceCheckMock = vi.fn()
+vi.mock('../bank-balance-check', () => ({
+  checkBankBalance: (...args: unknown[]) => balanceCheckMock(...args),
+}))
 
 import { bankAccountKey, parseAccountKey } from '../schemas'
 import { getAccountStatus, listReconciliationAccounts } from '../service'
@@ -36,7 +40,7 @@ function cashAccount(id: string, overrides: Record<string, unknown> = {}) {
     is_primary: false,
     source: 'enable_banking',
     bank_connection_id: 'conn-1',
-    updated_at: '2026-08-01T00:00:00Z',
+    created_at: '2026-08-01T00:00:00Z',
     ...overrides,
   }
 }
@@ -106,6 +110,8 @@ describe('listReconciliationAccounts', () => {
     })
     listManualMock.mockResolvedValue([
       { account_key: 'manual:1510', kind: 'manual', account_number: '1510', name: 'Kundfordringar' },
+      // The skattekonto's own account: the skattekonto row owns it.
+      { account_key: 'manual:1630', kind: 'manual', account_number: '1630', name: 'Skattekonto' },
       { account_key: 'manual:2440', kind: 'manual', account_number: '2440', name: 'Leverantörsskulder' },
     ])
 
@@ -125,7 +131,9 @@ describe('listReconciliationAccounts', () => {
     ])
     const [, , opts] = listManualMock.mock.calls[0] as [unknown, unknown, { asOf: string; exclude: Set<string>; withStatus: boolean; signoffs: Map<string, unknown> }]
     expect(opts.asOf).toBe('2026-07-31')
-    expect([...opts.exclude].sort()).toEqual(['1630', '1930', '1931'])
+    // The cash accounts' ledgers up front; the skattekonto's account once its
+    // read answers (the groups read concurrently).
+    expect([...opts.exclude].sort()).toEqual(['1930', '1931'])
     expect(opts.withStatus).toBe(false)
     expect(opts.signoffs.has('manual:2440')).toBe(true)
   })
@@ -147,12 +155,13 @@ describe('listReconciliationAccounts', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        cashAccount(ID_A, { is_primary: true, iban: 'SE1', updated_at: '2026-08-10T00:00:00Z' }),
-        cashAccount(ID_B, { iban: 'SE1', updated_at: '2026-06-01T00:00:00Z' }),
+        cashAccount(ID_A, { is_primary: true, iban: 'SE1', created_at: '2026-06-01T00:00:00Z' }),
+        cashAccount(ID_B, { iban: 'SE1', created_at: '2026-08-10T00:00:00Z' }),
         cashAccount(ID_C, { ledger_account: '1931', iban: 'SE2' }),
       ],
     })
     enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [] }) // ledgersWithPostedLines: no ledger carries posted lines
     enqueue({ data: [{ id: 'conn-1', bank_name: 'Swedbank' }] }) // bank names for logos
     // latestBankSyncAt per account (withStatus=false skips bankStatus): three maybeSingle reads
     enqueue({ data: { created_at: '2026-08-19T06:00:00Z' } })
@@ -183,7 +192,7 @@ describe('listReconciliationAccounts', () => {
       'skattekonto',
     ])
     const byKey = Object.fromEntries(accounts.map((a) => [a.account_key, a]))
-    // The older duplicate is marked, never dropped.
+    // The duplicate the account does not stand on is marked, never dropped.
     expect(byKey[bankAccountKey(ID_B)].superseded_by).toBe(bankAccountKey(ID_A))
     expect(byKey[bankAccountKey(ID_A)].superseded_by).toBeNull()
     expect(byKey[bankAccountKey(ID_C)].superseded_by).toBeNull()
@@ -194,12 +203,91 @@ describe('listReconciliationAccounts', () => {
     expect(byKey[bankAccountKey(ID_B)].source.stale).toBe(true)
     expect(byKey[bankAccountKey(ID_C)].source).toMatchObject({ synced_at: null, stale: true })
     expect(byKey[bankAccountKey(ID_A)].status).toBeNull()
-    // Skattekonto row carries the logo and the open counts.
+    // Skattekonto row carries no logo (Skatteverket's API terms) and the open counts.
     expect(byKey.skattekonto).toMatchObject({
-      logo_url: '/logos/skatteverket_color.svg',
+      logo_url: null,
       source: { type: 'skatteverket_api', stale: false },
       status: { state: 'open', open_counts: { proposed: 2, unmatched_external: 3, unmatched_ledger: 1 } },
     })
+  })
+
+  describe('a reconnect duplicate (pickKeeper)', () => {
+    const twins = () => [
+      cashAccount(ID_A, { is_primary: true, iban: 'SE1' }),
+      cashAccount(ID_B, { ledger_account: '1931', iban: 'SE1' }),
+    ]
+    const ledgerLines = (...accounts: string[]) => [
+      { data: [{ id: 'entry-1' }] },
+      { data: accounts.map((account_number, i) => ({ id: `line-${i}`, journal_entry_id: 'entry-1', account_number })) },
+    ]
+
+    async function supersededBy(ledgerReads: Array<{ data?: unknown; error?: unknown }>) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: twins() })
+      enqueue({ data: [] }) // latest sign-offs (none)
+      for (const read of ledgerReads) enqueue(read)
+      enqueue({ data: [] }) // bank names for logos
+      enqueue({ data: null })
+      enqueue({ data: null })
+      skattekontoStatusMock.mockResolvedValue(null)
+      const accounts = await listReconciliationAccounts(supabase as never, COMPANY, { today: '2026-08-20', withStatus: false })
+      return accounts.map((a) => [a.account_key, a.superseded_by])
+    }
+
+    it('keeps the row whose ledger carries posted lines, over the primary', async () => {
+      expect(await supersededBy(ledgerLines('1931'))).toEqual([
+        [bankAccountKey(ID_A), bankAccountKey(ID_B)],
+        [bankAccountKey(ID_B), null],
+      ])
+    })
+
+    it('folds nothing for an account split over two ledgers', async () => {
+      expect(await supersededBy(ledgerLines('1930', '1931'))).toEqual([
+        [bankAccountKey(ID_A), null],
+        [bankAccountKey(ID_B), null],
+      ])
+    })
+
+    it('folds nothing when the ledger read fails', async () => {
+      expect(await supersededBy([{ error: { message: 'timeout' } }])).toEqual([
+        [bankAccountKey(ID_A), null],
+        [bankAccountKey(ID_B), null],
+      ])
+    })
+  })
+
+  it('carries each account outside balance: the bank-reported balance and the Skatteverket saldo', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        cashAccount(ID_A, { is_primary: true, balance: 36053.97, balance_updated_at: '2026-10-04T06:00:00Z' }),
+        cashAccount(ID_C, { ledger_account: '1931', balance: null, balance_updated_at: null }),
+      ],
+    })
+    enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [] }) // bank names for logos
+    enqueue({ data: null })
+    enqueue({ data: null })
+    skattekontoStatusMock.mockResolvedValue({
+      account_key: 'skattekonto',
+      kind: 'skattekonto',
+      account_number: '1630',
+      currency: 'SEK',
+      as_of: '2026-10-04T18:20:00.000Z',
+      stale: false,
+      external_balance: 265,
+      is_reconciled: true,
+      unexplained_difference: 0,
+      counts: { proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 1, ignored: 0 },
+      skattekonto: { saldo_skatteverket: 265, fetched_at: '2026-10-04T18:20:00.000Z' },
+    })
+
+    const accounts = await listReconciliationAccounts(supabase as never, COMPANY, { today: '2026-10-04', withStatus: false })
+    const byKey = Object.fromEntries(accounts.map((a) => [a.account_key, a]))
+    // The skattekonto has no cash account; its balance is Skatteverket's saldo.
+    expect(byKey.skattekonto).toMatchObject({ balance: 265, balance_at: '2026-10-04T18:20:00.000Z' })
+    expect(byKey[bankAccountKey(ID_A)]).toMatchObject({ balance: 36053.97, balance_at: '2026-10-04T06:00:00Z' })
+    expect(byKey[bankAccountKey(ID_C)]).toMatchObject({ balance: null, balance_at: null })
   })
 
   it('omits the skattekonto when the company has neither snapshot nor rows', async () => {
@@ -267,8 +355,8 @@ describe('listReconciliationAccounts', () => {
     enqueue({ data: [] }) // latest sign-offs (none)
     enqueue({ data: [] }) // bank names for logos
     bankStatusMock.mockResolvedValue(bankStatus({ unmatched_transaction_count: 2, unmatched_transaction_total: -1046, is_reconciled: false }))
-    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt inside bankStatus
-    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt for the account row
+    // latestBankSyncAt: one read serves the status and the account row.
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
     skattekontoStatusMock.mockResolvedValue(null)
 
     const accounts = await listReconciliationAccounts(supabase as never, COMPANY, {
@@ -301,6 +389,8 @@ describe('getAccountStatus', () => {
     skattekontoStatusMock.mockReset()
     bankStatusMock.mockReset()
     manualStatusMock.mockReset()
+    balanceCheckMock.mockReset()
+    balanceCheckMock.mockResolvedValue({ check: null, refusal: 'NO_BANK_BALANCE' })
   })
 
   function manualStatus(overrides: Record<string, unknown> = {}) {
@@ -445,6 +535,108 @@ describe('getAccountStatus', () => {
       bank_reported_available_balance: 123930.5,
       bank_balance_updated_at: '2026-08-20T05:12:00Z',
     })
+  })
+
+  it('adds the balance check for the account, beside the movement bridge', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const reference = { date: '2026-08-19', type: 'closingBooked', fetched_at: '2026-08-20T05:12:00+00:00' }
+    const row = cashAccount(ID_A, { is_primary: true, balance: 1000, balance_updated_at: '2026-08-20T05:12:00Z', balance_reference: reference })
+    enqueue({ data: row })
+    bankStatusMock.mockResolvedValue(bankStatus())
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+    const check = {
+      as_of: '2026-08-19',
+      fetched_at: '2026-08-20T05:12:00Z',
+      balance_type: 'closingBooked',
+      bank_balance: 1000,
+      booked_balance: 700,
+      difference: 300,
+      unbooked: { count: 2, total: 150 },
+      before_history: { history_start: '2026-06-01', bank_balance: 400, booked_balance: 300, difference: 100 },
+      ignored: { count: 0, total: 0 },
+      rest: 50,
+    }
+    balanceCheckMock.mockResolvedValue({ check, refusal: null })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    if (!s) throw new Error('expected status')
+    expect(balanceCheckMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      expect.objectContaining({ id: ID_A, ledger_account: '1930', balance_reference: reference }),
+    )
+    expect(s.bank).toMatchObject({ balance_check: check, balance_check_refusal: null })
+    // The movement verdict and everything sign-off reads stay as they were.
+    expect(s.is_reconciled).toBe(true)
+    expect(s.difference).toBe(0)
+    expect(s.external_balance).toBeNull()
+  })
+
+  it('says why there is no balance check', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { currency: 'EUR' }) })
+    bankStatusMock.mockResolvedValue(bankStatus({ currency: 'EUR' }))
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+    balanceCheckMock.mockResolvedValue({ check: null, refusal: 'FOREIGN_CURRENCY_ACCOUNT' })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    expect(s?.bank).toMatchObject({ balance_check: null, balance_check_refusal: 'FOREIGN_CURRENCY_ACCOUNT' })
+  })
+
+  it('a failed balance check costs only that block', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { balance: 1000, balance_updated_at: '2026-08-20T05:12:00Z' }) })
+    bankStatusMock.mockResolvedValue(bankStatus({ difference: -46 }))
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+    balanceCheckMock.mockRejectedValue(new Error('Kunde inte läsa räkenskapsår: timeout'))
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.difference).toBe(-46)
+    expect(s.bank).toMatchObject({ balance_check: null, balance_check_refusal: null, bank_reported_balance: 1000 })
+  })
+
+  // PH 195: a connected account the bank had delivered nothing for compared
+  // an empty bank side with an empty ledger and read "Banken och bokföringen
+  // stämmer". Two zeros are no agreement.
+  it('never calls a bank account without a single bank row avstämd', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { balance: 40.53, balance_updated_at: '2026-10-20T07:48:46Z' }) })
+    bankStatusMock.mockResolvedValue(bankStatus({
+      bank_transaction_total: 0,
+      bank_transaction_count: 0,
+      gl_1930_balance: 0,
+      gl_1930_period_movement: 0,
+      matched_count: 0,
+      history_start: null,
+      is_reconciled: true,
+    }))
+    enqueue({ data: null }) // no transaction on the account
+    enqueue({ data: { last_synced_at: '2026-10-20T08:28:05Z' } })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-10-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.difference).toBe(0)
+    expect(s.is_reconciled).toBe(false)
+    expect(s.bank).toMatchObject({ no_bank_rows: true })
+  })
+
+  it('keeps a quiet window on an account with bank history avstämd', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A) })
+    bankStatusMock.mockResolvedValue(bankStatus({
+      bank_transaction_total: 0,
+      bank_transaction_count: 0,
+      gl_1930_period_movement: 0,
+      history_start: '2025-01-20',
+      is_reconciled: true,
+    }))
+    enqueue({ data: { created_at: '2026-10-01T06:00:00Z' } })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-10-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.is_reconciled).toBe(true)
+    expect(s.bank).toMatchObject({ no_bank_rows: false })
   })
 
   it('leaves external_balance null on the bank kind when no balance was ever synced', async () => {

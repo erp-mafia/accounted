@@ -11,6 +11,7 @@ import {
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { BalansrapportSection } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 interface FlatRow {
   group: string
@@ -18,6 +19,7 @@ interface FlatRow {
   section: string
   account_number: string
   account_name: string
+  year_ib: number
   ib: number
   period_change: number
   ub: number
@@ -66,6 +68,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
           section: section.label,
           account_number: r.account_number,
           account_name: r.account_name,
+          year_ib: r.year_ib,
           ib: r.ib,
           period_change: r.period_change,
           ub: r.ub,
@@ -76,6 +79,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
         section: section.label,
         account_number: '',
         account_name: section.total_label,
+        year_ib: section.subtotal_year_ib,
         ib: section.subtotal_ib,
         period_change: section.subtotal_change,
         ub: section.subtotal_ub,
@@ -88,6 +92,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
         section: '',
         account_number: '',
         account_name: `Summa ${g.class_label}`,
+        year_ib: g.subtotal_year_ib,
         ib: g.subtotal_ib,
         period_change: g.subtotal_change,
         ub: g.subtotal_ub,
@@ -98,10 +103,25 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
       section: '',
       account_number: '',
       account_name: 'Beräknat resultat',
+      year_ib: 0,
       ib: 0,
       period_change: report.beraknat_resultat,
       ub: report.beraknat_resultat,
     })
+    // The rows add up only with it: assets + eq_liab = beräknat resultat +
+    // differens. Blank opening columns and change: the differens is no movement.
+    if (report.differens !== 0) {
+      rows.push({
+        group: 'Differens',
+        section: '',
+        account_number: '',
+        account_name: 'Differens (balanserar ej)',
+        year_ib: null as unknown as number,
+        ib: null as unknown as number,
+        period_change: null as unknown as number,
+        ub: report.differens,
+      })
+    }
 
     // Reconciliation aid (#1267). reportToWorkbook has no preamble concept, so
     // this rides as a first body row, the same way the dimension disclosure
@@ -113,13 +133,14 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
         section: '',
         account_number: '',
         account_name: '',
+        year_ib: null as unknown as number,
         ib: null as unknown as number,
         period_change: null as unknown as number,
         ub: null as unknown as number,
       })
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Balansrapport',
         columns: [
@@ -127,9 +148,10 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
           textColumn('Avsnitt'),
           textColumn('Konto'),
           textColumn('Kontonamn'),
-          currencyColumn('IB'),
-          currencyColumn('Periodförändring'),
-          currencyColumn('UB'),
+          currencyColumn('Ingående balans'),
+          currencyColumn('Ingående saldo'),
+          currencyColumn('Förändring'),
+          currencyColumn('Utgående balans'),
         ],
         rows,
         mapRow: (r) => [
@@ -137,6 +159,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
           r.section,
           r.account_number,
           r.account_name,
+          r.year_ib,
           r.ib,
           r.period_change,
           r.ub,
@@ -149,12 +172,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
       companyRow?.company_name ?? '',
       report.period.end,
     )
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera balansrapport' },

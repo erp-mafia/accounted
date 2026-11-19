@@ -36,7 +36,7 @@ describe('GET /api/import/sie/[id]/recovery', () => {
   it('preserves the hosted MFA refusal', async () => {
     requireAuthMock.mockResolvedValue({
       user: null, supabase: db.supabase,
-      error: NextResponse.json({ error: { code: 'MFA_REQUIRED' } }, { status: 403 }),
+      error: NextResponse.json({ error: 'MFA verification required' }, { status: 403 }),
     })
     expect((await request()).status).toBe(403)
     expect(db.supabase.from).not.toHaveBeenCalled()
@@ -76,10 +76,10 @@ describe('GET /api/import/sie/[id]/recovery', () => {
     expect((await response.json()).error.code).toBe('CONFLICT')
   })
 
-  it('returns 500 on a database failure, never an empty successful assessment', async () => {
+  it('returns 503 on a statement timeout, never an empty successful assessment', async () => {
     db.enqueue({ error: { code: '57014', message: 'statement timeout' } })
     const response = await request()
-    expect(response.status).toBe(500)
+    expect(response.status).toBe(503)
     expect((await response.json()).data).toBeUndefined()
   })
 })

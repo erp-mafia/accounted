@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import type { ImportNotice } from '@/lib/import/notices'
 
 /** A field that can be mapped to a column in the uploaded file. */
 export interface RegisterColumnSpec<K extends string> {
@@ -20,6 +22,8 @@ interface RegisterColumnMappingStepProps<K extends string> {
   initial: Record<K, number | null>
   onConfirm: (mapping: Record<K, number | null>) => void
   onBack: () => void
+  /** What the parser noticed, e.g. a column it unmapped because its data contradicted the header. */
+  notices?: readonly ImportNotice[]
 }
 
 export default function RegisterColumnMappingStep<K extends string>({
@@ -29,6 +33,7 @@ export default function RegisterColumnMappingStep<K extends string>({
   initial,
   onConfirm,
   onBack,
+  notices = [],
 }: RegisterColumnMappingStepProps<K>) {
   const [mapping, setMapping] = useState<Record<K, number | null>>(initial)
 
@@ -44,13 +49,13 @@ export default function RegisterColumnMappingStep<K extends string>({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Kolumnmappning</CardTitle>
         <CardDescription>
           Vi kunde inte automatiskt identifiera alla kolumner. Ange vilka kolumner i din fil
           som motsvarar respektive fält. Lämna tomt för fält som inte finns.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        <ImportNotices notices={notices} />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {specs.map((spec) => (
             <div key={spec.key} className="space-y-2">
@@ -86,9 +91,9 @@ export default function RegisterColumnMappingStep<K extends string>({
         {previewRows.length > 0 && (
           <div className="space-y-2">
             <Label className="text-muted-foreground">Förhandsgranskning (5 första raderna)</Label>
-            <div className="overflow-x-auto rounded-lg border">
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b">
                     {headers.map((h, i) => (
                       /* data-ph-mask: CSV headers are user data */

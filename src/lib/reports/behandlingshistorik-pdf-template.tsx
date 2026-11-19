@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import {
   BEHANDLINGSHISTORIK_CATEGORIES,
@@ -99,6 +99,7 @@ const styles = StyleSheet.create({
   colTime: { width: 100, fontFamily: 'Courier', fontSize: 7.5, color: MUTED, paddingRight: 6 },
   colEvent: { width: 190, paddingRight: 8 },
   colActor: { width: 140, paddingRight: 8, color: '#333' },
+  verifiedLabel: { fontSize: 7.5, color: MUTED, marginTop: 1 },
   colDetails: { flex: 1 },
   eventLabel: { fontSize: 8.5 },
   objectLabel: { fontFamily: 'Courier', fontSize: 7.5, color: MUTED, marginTop: 1 },
@@ -134,7 +135,15 @@ function EventRow({ event }: { event: BehandlingshistorikEvent }) {
         <Text style={styles.eventLabel}>{pdfText(event.event)}</Text>
         {event.object ? <Text style={styles.objectLabel}>{pdfText(event.object)}</Text> : null}
       </View>
-      <Text style={styles.colActor}>{pdfText(event.actor.label)}</Text>
+      {event.verified ? (
+        // The principal the database verified, under the asserted actor.
+        <View style={styles.colActor}>
+          <Text>{pdfText(event.actor.label)}</Text>
+          <Text style={styles.verifiedLabel}>{pdfText(`Verifierat av databasen: ${event.verified.label}`)}</Text>
+        </View>
+      ) : (
+        <Text style={styles.colActor}>{pdfText(event.actor.label)}</Text>
+      )}
       <View style={styles.colDetails}>
         {event.details.length > 0 ? (
           // One wrapped paragraph rather than one Text per line: half the
@@ -165,8 +174,9 @@ export interface BehandlingshistorikPDFProps {
 }
 
 export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) {
-  const systemEvents = report.events.filter((e) => e.category !== 'verifikation')
+  const systemEvents = report.events.filter((e) => e.category !== 'verifikation' && e.category !== 'beslut')
   const voucherEvents = report.events.filter((e) => e.category === 'verifikation')
+  const decisionEvents = report.events.filter((e) => e.category === 'beslut')
   const scope =
     report.mode === 'fiscal_year'
       ? 'Hela räkenskapsåret'
@@ -199,7 +209,7 @@ export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) 
           <View style={styles.companyInfo}>
             {report.company.name ? <Text style={styles.companyName}>{report.company.name}</Text> : null}
             {report.company.org_number ? (
-              <Text style={styles.companyMeta}>Org.nr: {formatOrgNumber(report.company.org_number)}</Text>
+              <Text style={styles.companyMeta}>Org.nr: {formatOrgNumberDisplay(report.company.org_number)}</Text>
             ) : null}
           </View>
         </View>
@@ -219,7 +229,7 @@ export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) 
           </View>
           <View style={styles.metaItem}>
             <Text style={styles.metaLabel}>Källor</Text>
-            <Text style={styles.metaValue}>Verifikationer, oföränderlig ändringslogg, rättelselogg, importer</Text>
+            <Text style={styles.metaValue}>Verifikationer, oföränderlig ändringslogg, rättelselogg, importer, beslutslogg</Text>
           </View>
         </View>
         {summary ? <Text style={styles.summary}>{summary}</Text> : null}
@@ -241,11 +251,16 @@ export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) 
           note="Varje bokförd verifikation med registreringstidpunkt och utförare, samt makuleringar, rättelser och raderingar (BFNAR 2013:2 punkt 9.16 första stycket)."
           events={voucherEvents}
         />
+        <Section
+          title="Beslut och förslag"
+          note="Beslut om banktransaktioner och underlag: vilka förslag som fanns (regler, mallar, tidigare bokningar, assistenten, dokumentläsning), vilket som valdes, vem som beslutade och om beslutet kom via API-nyckel eller agent."
+          events={decisionEvents}
+        />
 
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {report.company.name}
-            {report.company.org_number ? ` · ${formatOrgNumber(report.company.org_number)}` : ''}
+            {report.company.org_number ? ` · ${formatOrgNumberDisplay(report.company.org_number)}` : ''}
             {' · Behandlingshistorik'}
           </Text>
           <Text

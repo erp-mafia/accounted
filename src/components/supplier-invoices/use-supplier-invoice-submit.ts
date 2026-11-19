@@ -1,13 +1,20 @@
 'use client'
 
-import { useState, type RefObject } from 'react'
+import { useReducer, useState, type RefObject } from 'react'
 import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { findIllegalVatRateRow } from '@/lib/vat/supplier-invoice-line-checks'
-import { rateToPctString, supplierInvoiceCreateUrl, type SupplierInvoiceFormData } from '@/lib/supplier-invoices/form-payload'
+import {
+  rateToPctString,
+  reverseChargeKindMissing,
+  supplierInvoiceCreateUrl,
+  type SupplierInvoiceFormData,
+} from '@/lib/supplier-invoices/form-payload'
 import { isPersonPayer } from '@/lib/expenses/payer'
+import { registrationPassesReview } from '@/lib/supplier-invoices/duplicate-lookup'
+import { pendingRegistrationReducer } from '@/lib/supplier-invoices/pending-registration'
 import type { InvoiceExtractionResult } from '@/types'
 
 // The existing invoice surfaced on a duplicate-number conflict, used to drive
@@ -40,6 +47,16 @@ export interface CreateResult {
       }
 }
 
+/** What POST /api/inkorg/items/:id/register-and-settle answers. */
+interface RegisterAndSettleResult extends Omit<CreateResult, 'data'> {
+  data?: {
+    supplier_invoice_id: string
+    arrival_number: number
+    settled: boolean
+    settlement_error: { code: string; message: string; message_en?: string } | null
+  }
+}
+
 interface UseSupplierInvoiceSubmitParams {
   t: ReturnType<typeof useTranslations>
   ta: ReturnType<typeof useTranslations>
@@ -59,13 +76,28 @@ interface UseSupplierInvoiceSubmitParams {
   /** After an utlägg booked: the host refreshes server data (the Utlägg nav gate). */
   onExpenseRegistered?: () => void
   /**
+   * The bank row this inbox invoice was paid by, when the Inkorg already
+   * knows it (match on arrival). "Företaget" then needs no picker: the
+   * invoice is registered and settled against that row in one request.
+   */
+  settleTransactionId?: string | null
+  /** The supplier is in another EU country: its reverse charge must say goods or services. */
+  euSupplier: boolean
+  /**
+   * Whether this registration has something to acknowledge in the review
+   * dialog first: a payment reference another invoice of the supplier already
+   * carries (lib/supplier-invoices/duplicate-lookup.ts). Asked when the
+   * person submits, so a lookup still on its way is waited for.
+   */
+  acknowledgesInReview?: (data: SupplierInvoiceFormData) => Promise<boolean>
+  /**
    * Focus router for the always-enabled primary: called instead of a toast
-   * when a required field is missing (supplier, invoice number, row account),
-   * in the same priority order as the next-step line. Optional so the hook
-   * can ship before the shell rebuild wires it.
+   * when a required field is missing (supplier, invoice number, row account,
+   * goods or services), in the same priority order as the next-step line.
+   * Optional so the hook can ship before the shell rebuild wires it.
    */
   onMissingField?: (
-    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account',
+    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account' | 'reverse_charge_kind',
     rowIndex?: number,
   ) => void
 }
@@ -95,14 +127,21 @@ export function useSupplierInvoiceSubmit({
   invoiceNumberInputRef,
   onExpenseRegistered,
   onMissingField,
+  settleTransactionId = null,
+  euSupplier,
+  acknowledgesInReview,
 }: UseSupplierInvoiceSubmitParams) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showReview, setShowReview] = useState(false)
-  const [pendingData, setPendingData] = useState<SupplierInvoiceFormData | null>(null)
+  // The submitted form and the bank row it is matched to, as one value: a
+  // new submit starts a new one, so a row picked for an earlier submit never
+  // comes along (lib/supplier-invoices/pending-registration.ts).
+  const [pending, dispatchPending] = useReducer(pendingRegistrationReducer, null)
+  const pendingData = pending?.data ?? null
+  const pendingTransactionId = pending?.transactionId ?? null
 
   // Match-on-create state
   const [showBankPicker, setShowBankPicker] = useState(false)
-  const [pendingTransactionId, setPendingTransactionId] = useState<string | null>(null)
 
   // Conflict state for duplicate-supplier-invoice-number
   const [conflict, setConflict] = useState<{
@@ -179,10 +218,31 @@ export function useSupplierInvoiceSubmit({
         variant: 'destructive',
       })
     }
+    // The invoice states bank details the supplier card lacks: registered,
+    // but its payment waits for a person's approval (lib/payments/payee-alerts.ts).
+    if (
+      res.ok &&
+      (result as CreateResult).warnings?.some((warning) => warning.code === 'SUPPLIER_PAYEE_CHANGED' || warning.code === 'SUPPLIER_PAYEE_NEW')
+    ) {
+      toast({ title: t('payee_alert_toast_title'), description: t('payee_alert_toast_description') })
+    }
     return { ok: res.ok, status: res.status, result }
   }
 
-  function onSubmit(data: SupplierInvoiceFormData) {
+  // Whether the review dialog comes first (registrationPassesReview). Asked
+  // on every path, so the dialog opens with the answer already in.
+  async function reviewsBeforeRegistering(data: SupplierInvoiceFormData): Promise<boolean> {
+    // Busy while it is asked: a second click must not register twice.
+    setIsSubmitting(true)
+    try {
+      const acknowledges = (await acknowledgesInReview?.(data)) ?? false
+      return registrationPassesReview({ isEF, personPaid: isPersonPayer(data.payer), acknowledges })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  async function onSubmit(data: SupplierInvoiceFormData) {
     if (documentUploadInProgress) {
       toast({
         title: t('document_upload_in_progress_title'),
@@ -219,7 +279,8 @@ export function useSupplierInvoiceSubmit({
       else toast({ title: t('supplier_missing_title'), description: t('supplier_missing_description'), variant: 'destructive' })
       return
     }
-    if (!data.supplier_invoice_number) {
+    // A självfaktura takes its number from the company's series (crm#1367).
+    if (!data.supplier_invoice_number && !data.is_self_billed) {
       if (onMissingField) onMissingField('invoice_number')
       else toast({ title: t('invoice_number_missing_title'), description: t('invoice_number_missing_description'), variant: 'destructive' })
       return
@@ -250,6 +311,13 @@ export function useSupplierInvoiceSubmit({
       }
       return
     }
+    // Goods (ruta 20) or services (ruta 21) has no default: a silent
+    // "services" booked EU goods in the wrong box (crm#1323).
+    if (reverseChargeKindMissing(data, euSupplier)) {
+      if (onMissingField) onMissingField('reverse_charge_kind')
+      else toast({ title: t('warning_title'), description: t('reverse_charge_kind_missing'), variant: 'destructive' })
+      return
+    }
     // Only 25/12/6/0 % are legal Swedish VAT rates (ML 2023:200). The free-text
     // VatRateCell clamps to [0, 100] but accepts anything in between, so block
     // illegal rates here. Reverse-charge invoices skip this: their line vat_rate
@@ -268,15 +336,19 @@ export function useSupplierInvoiceSubmit({
         return
       }
     }
-    // A row with an open periodisering panel must carry a complete period of
-    // at least two calendar months before the invoice can be booked.
-    const invalidAccrual = canUseAccrual && data.items.some((item) => {
-      if (item.accrual_balance_account == null) return false
-      if (!item.accrual_period_start || !item.accrual_period_end) return true
-      if (item.accrual_period_end < item.accrual_period_start) return true
-      return countCalendarMonths(item.accrual_period_start, item.accrual_period_end) < 2
-    })
-    if (invalidAccrual) {
+    // A row with an open periodisering panel must carry a complete period
+    // before the invoice can be booked, and a period lying only in the
+    // invoice month moves nothing (the API refuses it).
+    const openAccrualItems = canUseAccrual
+      ? data.items.filter((item) => item.accrual_balance_account != null)
+      : []
+    const incompleteAccrual = openAccrualItems.some(
+      (item) =>
+        !item.accrual_period_start ||
+        !item.accrual_period_end ||
+        item.accrual_period_end < item.accrual_period_start,
+    )
+    if (incompleteAccrual) {
       toast({
         title: ta('incomplete_toast_title'),
         description: ta('incomplete_toast_description'),
@@ -284,12 +356,27 @@ export function useSupplierInvoiceSubmit({
       })
       return
     }
+    if (data.invoice_date && invoiceMonthOnlyAccrualRows(data.invoice_date, openAccrualItems).length > 0) {
+      toast({
+        title: ta('invoice_month_toast_title'),
+        description: ta('invoice_month_toast_description'),
+        variant: 'destructive',
+      })
+      return
+    }
 
+    dispatchPending({ type: 'submitted', data, knownTransactionId: inboxItemId ? settleTransactionId : null })
     if (data.payer === 'company') {
+      if (settleTransactionId && inboxItemId) {
+        // The bank row is already known: no picker. AB reviews first, as
+        // after a pick; EF goes straight through.
+        if (await reviewsBeforeRegistering(data)) setShowReview(true)
+        else void handleRegisterAndSettle(data, settleTransactionId)
+        return
+      }
       // "Företaget" is register-and-match: open the bank-transaction picker;
       // the actual create happens on pick. For AB the review dialog is shown
       // after a transaction is picked.
-      setPendingData(data)
       setShowBankPicker(true)
       return
     }
@@ -297,13 +384,8 @@ export function useSupplierInvoiceSubmit({
     // A person paying skips the AB review dialog: the answer itself is the
     // explicit user intent, and the resulting verifikat is just expense + VAT
     // against that person's liability account. Same path for EF.
-    if (isEF || isPersonPayer(data.payer)) {
-      setPendingData(data)
-      handleDirectSubmit(data)
-    } else {
-      setPendingData(data)
-      setShowReview(true)
-    }
+    if (await reviewsBeforeRegistering(data)) setShowReview(true)
+    else handleDirectSubmit(data)
   }
 
   // EF: create + auto-approve, no review dialog. Privately-paid invoices land
@@ -368,10 +450,67 @@ export function useSupplierInvoiceSubmit({
     setIsSubmitting(false)
   }
 
+  // Registered and settled against the known bank row in one request
+  // (POST /api/inkorg/items/:id/register-and-settle). When the settlement
+  // fails the invoice stays registered and unpaid, and the toast says why.
+  async function handleRegisterAndSettle(data: SupplierInvoiceFormData, transactionId: string) {
+    if (!inboxItemId) return
+    setIsSubmitting(true)
+    await patchInboxFieldsIfChanged(data)
+    const res = await fetch(`/api/inkorg/items/${inboxItemId}/register-and-settle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction_id: transactionId, invoice: buildPayload(data) }),
+    })
+    const result = (await res.json()) as RegisterAndSettleResult
+    if (!res.ok || !result.data) {
+      setShowReview(false)
+      const failure: CreateResult = { error: result.error }
+      if (!tryHandleDuplicateConflict(res.status, failure)) handleCreateError(res.status, failure)
+      setIsSubmitting(false)
+      return
+    }
+    const answer = result.data
+    setShowReview(false)
+    // Clear dirty state: see comment in handleDirectSubmit.
+    reset(data)
+    if (result.warnings?.some((warning) => warning.code === 'SUPPLIER_PAYEE_CHANGED' || warning.code === 'SUPPLIER_PAYEE_NEW')) {
+      toast({ title: t('payee_alert_toast_title'), description: t('payee_alert_toast_description') })
+    }
+    if (answer.settled) {
+      toast({
+        title: t('invoice_registered_and_matched_title'),
+        description: t('invoice_registered_and_matched_description', { number: answer.arrival_number }),
+      })
+    } else {
+      toast({
+        title: t('invoice_registered_match_failed_title'),
+        description: getErrorMessage({ error: answer.settlement_error }, { context: 'supplier_invoice' }),
+        variant: 'destructive',
+      })
+      // An EF registration is attested at once (handleDirectSubmit); a paid one has nothing left to attest.
+      if (isEF) await fetch(`/api/supplier-invoices/${answer.supplier_invoice_id}/approve`, { method: 'POST' }).catch(() => undefined)
+    }
+    finishCreate(answer.supplier_invoice_id)
+    setIsSubmitting(false)
+  }
+
   // AB: create after review dialog. If a bank transaction was picked first
   // (register-and-match flow), also match the new invoice to it.
   async function handleConfirm() {
     if (!pendingData) return
+    if (settleTransactionId && pendingTransactionId === settleTransactionId && pendingData.payer === 'company') {
+      await handleRegisterAndSettle(pendingData, settleTransactionId)
+      return
+    }
+    // EF and a person's utlägg passed the dialog only to acknowledge
+    // (reviewsBeforeRegistering): they register the way they do without it.
+    if (isEF || isPersonPayer(pendingData.payer)) {
+      setShowReview(false)
+      if (pendingTransactionId) await registerAndMatchUnreviewed(pendingData, pendingTransactionId)
+      else await handleDirectSubmit(pendingData)
+      return
+    }
     setIsSubmitting(true)
     await patchInboxFieldsIfChanged(pendingData)
     const { ok, status, result } = await postCreate(pendingData)
@@ -390,7 +529,6 @@ export function useSupplierInvoiceSubmit({
           body: JSON.stringify({ supplier_invoice_id: invoiceId }),
         })
         const matchResult = await matchRes.json()
-        setPendingTransactionId(null)
 
         if (matchRes.ok) {
           toast({
@@ -515,12 +653,16 @@ export function useSupplierInvoiceSubmit({
     if (!pendingData) return
     setShowBankPicker(false)
 
-    if (!isEF) {
-      setPendingTransactionId(transactionId)
+    if (await reviewsBeforeRegistering(pendingData)) {
+      dispatchPending({ type: 'row_picked', transactionId })
       setShowReview(true)
       return
     }
+    await registerAndMatchUnreviewed(pendingData, transactionId)
+  }
 
+  // EF's register-and-match: create, attest, then match the picked bank row.
+  async function registerAndMatchUnreviewed(pendingData: SupplierInvoiceFormData, transactionId: string) {
     setIsSubmitting(true)
     await patchInboxFieldsIfChanged(pendingData)
     const { ok, status, result } = await postCreate(pendingData)
@@ -572,7 +714,6 @@ export function useSupplierInvoiceSubmit({
     pendingData,
     showBankPicker,
     setShowBankPicker,
-    setPendingTransactionId,
     conflict,
     setConflict,
     isResolvingConflict,

@@ -6,8 +6,8 @@
  */
 
 import crypto from 'crypto'
+import { openAesGcm, sealAesGcm } from '@/lib/crypto/aes-gcm'
 
-const ALGORITHM = 'aes-256-gcm'
 
 // ---------------------------------------------------------------------------
 // Feature flag
@@ -38,31 +38,14 @@ function getEncryptionKey(): Buffer {
   return Buffer.from(key, 'hex')
 }
 
-/** AES-256-GCM encrypt a personnummer for storage. */
+/** AES-256-GCM encrypt a personnummer for storage: iv (12) + tag (16) + ciphertext. */
 export function encryptPersonalNumber(personalNumber: string): Buffer {
-  const key = getEncryptionKey()
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
-
-  const encrypted = Buffer.concat([cipher.update(personalNumber, 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
-
-  // Format: iv (12) + tag (16) + ciphertext
-  return Buffer.concat([iv, tag, encrypted])
+  return sealAesGcm(getEncryptionKey(), personalNumber)
 }
 
 /** AES-256-GCM decrypt a stored personnummer. */
 export function decryptPersonalNumber(data: Buffer): string {
-  const key = getEncryptionKey()
-
-  const iv = data.subarray(0, 12)
-  const tag = data.subarray(12, 28)
-  const encrypted = data.subarray(28)
-
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
-  decipher.setAuthTag(tag)
-
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+  return openAesGcm(getEncryptionKey(), data)
 }
 
 // ---------------------------------------------------------------------------

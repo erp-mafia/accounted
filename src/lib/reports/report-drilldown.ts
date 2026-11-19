@@ -27,14 +27,39 @@ export function huvudbokDrilldownHref(
   accountNumber: string,
   context: DrilldownWindow & { dimension?: DrilldownDimension | null },
 ): string {
-  const params = new URLSearchParams({ account: accountNumber })
-  if (context.fromDate) params.set('from_date', context.fromDate)
-  if (context.toDate) params.set('to_date', context.toDate)
-  if (context.dimension) {
-    params.set('dim_no', context.dimension.dimNo)
-    params.set('dim_code', context.dimension.code)
-  }
-  return `/reports/huvudbok?${params.toString()}`
+  return `/reports/huvudbok?${withReportState(new URLSearchParams({ account: accountNumber }), context).toString()}`
+}
+
+/**
+ * `params` with a report's window and dimension filter written in, and any
+ * part it lacks removed; other params (the huvudbok's account) are kept. A
+ * report writes its own state into its URL the same way (crm#1279), so the
+ * browser's back button, a reload or a second window opens on exactly what
+ * it showed, not on the last choice remembered for the company.
+ */
+export function withReportState(
+  params: URLSearchParams,
+  state: DrilldownWindow & { dimension?: DrilldownDimension | null },
+): URLSearchParams {
+  const next = new URLSearchParams(params)
+  const write = (key: string, value: string | undefined) =>
+    value ? next.set(key, value) : next.delete(key)
+  write('from_date', state.fromDate)
+  write('to_date', state.toDate)
+  write('dim_no', state.dimension?.dimNo)
+  write('dim_code', state.dimension?.code)
+  return next
+}
+
+/**
+ * The fiscal period a URL window lies in, so a report opens on the year its
+ * URL names rather than the year last picked for the company.
+ */
+export function periodForWindow<P extends { period_start: string; period_end: string }>(
+  periods: readonly P[],
+  range: DrilldownWindow,
+): P | null {
+  return periods.find((p) => windowFitsPeriod(range, p.period_start, p.period_end)) ?? null
 }
 
 /**

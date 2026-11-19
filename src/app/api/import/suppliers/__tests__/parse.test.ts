@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as XLSX from 'xlsx'
 import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
+import { streamedXlsx } from '@/tests/fixtures/streamed-xlsx'
 
 const { supabase: mockSupabase, reset } = createQueuedMockSupabase()
 
@@ -60,6 +61,17 @@ describe('POST /api/import/suppliers/parse', () => {
   it('returns 400 without a file', async () => {
     const { status } = await parseJsonResponse(await post())
     expect(status).toBe(400)
+  })
+
+  it('refuses a workbook the reader cannot open with what to do, not a 500', async () => {
+    const cut = new Uint8Array(streamedXlsx({ rows: [['Namn'], ['Acme AB']] })).slice(0, 600)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string } }>(
+      await post(new File([cut], 'leverantorer.xlsx')),
+    )
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_WORKBOOK_UNREADABLE')
+    expect(body.error.message).toContain('spara den utan lösenord som Excel-arbetsbok (.xlsx) eller som CSV')
+    expect(body.error.message_en).toContain('save it without a password as an Excel workbook (.xlsx) or as CSV')
   })
 
   it('annotates org number matches, and same-name rows only as possible duplicates', async () => {

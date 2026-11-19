@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useLocale } from 'next-intl'
-import { Brain, Pin, Plus } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
+import { BookmarkIcon, LightBulbIcon, PlusIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -14,6 +14,8 @@ import { SettingsSeg, SettingsSelect, SettingsTextarea } from '@/components/sett
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDateLong } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { attributionWordsFrom, formatActorAttribution, mcpClientDisplayName } from '@/lib/attribution/format-actor'
+import type { Creator } from '@/lib/attribution/person-names'
 
 import type { FactKind as Kind, FactSource as Source } from '@/lib/agent-context/agent-competence'
 
@@ -29,6 +31,10 @@ interface AgentMemoryRow {
   last_accessed_at: string | null
   created_at: string
   updated_at: string
+  /** Who saved it (GET and POST only): the name or that the account is deleted, never the e-mail. */
+  created_by?: Creator | null
+  /** The MCP client label that wrote it; null outside MCP. */
+  client: string | null
 }
 
 const KIND_LABEL: Record<Kind, string> = {
@@ -57,6 +63,26 @@ export function AgentMemoryPanel() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const errorLocale = useLocale() as ErrorLocale
+  const t = useTranslations('settings')
+  const tAttribution = useTranslations('attribution')
+  const attributionWords = useMemo(() => attributionWordsFrom((key, values) => tAttribution(key, values)), [tAttribution])
+
+  // "Sparad av ...": the person, or the agent and the person it acted for
+  // ("Claude åt Jonas Ek"), worded like Bokförd av. An MCP write carries the
+  // client label; agent_learned rows from before that column read as an AI
+  // connection. Nothing when the row records no one.
+  function savedBy(row: AgentMemoryRow): string | null {
+    if (!row.created_by) return null
+    const personName = row.created_by.name ?? (row.created_by.deleted ? t('memory_creator_deleted') : null)
+    const byAgent = Boolean(row.client) || row.source === 'agent_learned'
+    return formatActorAttribution(
+      byAgent
+        ? { actorType: 'mcp_oauth', actorLabel: mcpClientDisplayName(row.client), personName }
+        : { actorType: 'user', personName },
+      attributionWords,
+      { inline: true },
+    )
+  }
 
   // null = the memory list is not known: still loading, or the read failed
   // (loadError). A failed read must never render the "Inga minnen ännu"
@@ -157,7 +183,8 @@ export function AgentMemoryPanel() {
         return
       }
       const json = await res.json()
-      setRows((prev) => prev?.map((r) => (r.id === id ? (json.data as AgentMemoryRow) : r)) ?? null)
+      // The PATCH answer has no created_by: keep the one the list read.
+      setRows((prev) => prev?.map((r) => (r.id === id ? { ...r, ...(json.data as Partial<AgentMemoryRow>) } : r)) ?? null)
     } catch (err) {
       // A rejected fetch (offline, DNS failure) or a 200 whose body will not
       // parse never reaches the !res.ok arm above: without this toast the
@@ -236,12 +263,15 @@ export function AgentMemoryPanel() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+        {/* The segments scroll sideways on a phone instead of pushing the page wide. */}
+        <div className="max-w-full overflow-x-auto rounded-lg">
+          <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+        </div>
         <button
           type="button"
           onClick={() => setIncludeDismissed((v) => !v)}
           aria-pressed={includeDismissed}
-          className={cn(QUIET_LINK_CLASS, 'ml-1 text-[12.5px]')}
+          className={cn(QUIET_LINK_CLASS, 'ml-1 text-xs')}
         >
           {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
         </button>
@@ -251,15 +281,15 @@ export function AgentMemoryPanel() {
           samtal per tur.
         </HelpPopover>
         {canWrite && (
-          <Button size="sm" className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          <Button className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
+            <PlusIcon className="h-3.5 w-3.5" aria-hidden />
             Lägg till minne
           </Button>
         )}
       </div>
 
       {canWrite && showAdd && (
-        <div className="space-y-3 border-b border-border pb-4">
+        <div className="space-y-3 border-b-hairline pb-4">
           <SettingsTextarea
             value={newContent}
             onChange={(e) => setNewContent(e.target.value)}
@@ -280,10 +310,10 @@ export function AgentMemoryPanel() {
               </SettingsSelect>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => { setShowAdd(false); setNewContent('') }}>
+              <Button variant="outline" onClick={() => { setShowAdd(false); setNewContent('') }}>
                 Avbryt
               </Button>
-              <Button size="sm" onClick={addMemory} disabled={newContent.trim().length < 2} loading={adding}>
+              <Button onClick={addMemory} disabled={newContent.trim().length < 2} loading={adding}>
                 Spara
               </Button>
             </div>
@@ -292,7 +322,7 @@ export function AgentMemoryPanel() {
       )}
 
       {rows && rows.length > 0 && (
-        <p className="text-[12.5px] tabular-nums text-muted-foreground">
+        <p className="text-xs tabular-nums text-muted-foreground">
           {counts.active} aktiva · {counts.pinned} fästa
           {includeDismissed && counts.dismissed > 0 ? ` · ${counts.dismissed} dolda` : ''}
         </p>
@@ -313,7 +343,7 @@ export function AgentMemoryPanel() {
       {rows === null && !loadError && (
         <div aria-busy>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="space-y-2 border-b border-border py-3.5">
+            <div key={i} className="space-y-2 border-b-hairline py-3.5">
               <Skeleton className="h-3.5 w-3/4" />
               <Skeleton className="h-3 w-40" />
             </div>
@@ -323,7 +353,7 @@ export function AgentMemoryPanel() {
 
       {rows && rows.length === 0 && (
         <EmptyState
-          icon={Brain}
+          icon={LightBulbIcon}
           title="Inga minnen ännu"
           description="När du lär assistenten saker (eller när den noterar saker själv med ditt godkännande) dyker de upp här."
         />
@@ -335,8 +365,9 @@ export function AgentMemoryPanel() {
             const isEditing = editingId === row.id
             const isBusy = busyId === row.id
             const dimmed = !row.is_active
+            const who = savedBy(row)
             return (
-              <li key={row.id} className={cn('group flex items-start gap-3 border-b border-border py-3.5', dimmed && 'opacity-60')}>
+              <li key={row.id} className={cn('group flex items-start gap-3 border-b-hairline py-3.5', dimmed && 'opacity-60')}>
                 {canWrite && row.is_active ? (
                   <button
                     type="button"
@@ -344,16 +375,16 @@ export function AgentMemoryPanel() {
                     disabled={isBusy}
                     className={cn(
                       'mt-0.5 shrink-0 rounded-sm p-1 transition-colors duration-150',
-                      row.is_pinned ? 'text-foreground' : 'text-muted-foreground/50 hover:text-foreground',
+                      row.is_pinned ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
                     )}
                     aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
                     title={row.is_pinned ? 'Lossa' : 'Fäst: minnet skickas alltid med'}
                   >
-                    <Pin className={cn('h-3.5 w-3.5', row.is_pinned && 'fill-current')} />
+                    <BookmarkIcon className={cn('h-3.5 w-3.5', row.is_pinned && 'fill-current')} />
                   </button>
                 ) : (
                   <span className="mt-0.5 shrink-0 p-1">
-                    {row.is_pinned && <Pin className="h-3.5 w-3.5 fill-current text-foreground" />}
+                    {row.is_pinned && <BookmarkIcon className="h-3.5 w-3.5 fill-current text-foreground" />}
                   </span>
                 )}
                 <div className="min-w-0 flex-1">
@@ -369,10 +400,10 @@ export function AgentMemoryPanel() {
                         className="w-full border-border"
                       />
                       <div className="flex items-center gap-2">
-                        <Button size="sm" onClick={() => saveEdit(row)} disabled={editDraft.trim().length < 2} loading={isBusy}>
+                        <Button onClick={() => saveEdit(row)} disabled={editDraft.trim().length < 2} loading={isBusy}>
                           Spara
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => setEditingId(null)} disabled={isBusy}>
+                        <Button variant="outline" onClick={() => setEditingId(null)} disabled={isBusy}>
                           Avbryt
                         </Button>
                       </div>
@@ -380,8 +411,9 @@ export function AgentMemoryPanel() {
                   ) : (
                     <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{row.content}</p>
                   )}
-                  <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
+                  <p className="mt-1 text-xs tabular-nums text-muted-foreground">
                     {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]} · {formatDateLong(row.created_at)}
+                    {who && ` · ${t('memory_saved_by', { who })}`}
                     {row.updated_at !== row.created_at && ` · uppdaterad ${formatDateLong(row.updated_at)}`}
                     {dimmed && ' · dold'}
                   </p>
@@ -390,15 +422,15 @@ export function AgentMemoryPanel() {
                   <div className={cn('flex shrink-0 items-center gap-3 pt-0.5', HOVER_REVEAL_CLASS)}>
                     {row.is_active ? (
                       <>
-                        <button type="button" onClick={() => startEdit(row)} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+                        <button type="button" onClick={() => startEdit(row)} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
                           Redigera
                         </button>
-                        <button type="button" onClick={() => patch(row.id, { is_active: false })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+                        <button type="button" onClick={() => patch(row.id, { is_active: false })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
                           Dölj
                         </button>
                       </>
                     ) : (
-                      <button type="button" onClick={() => patch(row.id, { is_active: true })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
+                      <button type="button" onClick={() => patch(row.id, { is_active: true })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-xs')}>
                         Återställ
                       </button>
                     )}

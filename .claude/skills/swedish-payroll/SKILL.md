@@ -19,7 +19,7 @@ This skill has a router structure. The SKILL.md contains the most critical rules
 | `references/social-charges.md` | Questions about arbetsgivaravgifter component breakdown, age-based reductions, egenavgifter, växa-stöd, forskningsavdrag, youth discount, thresholds (PBB/IBB/SGI) |
 | `references/tax-tables.md` | Questions about skatteavdrag, skattetabeller, column system, jämkning, sidoinkomst, statlig inkomstskatt brytpunkt, Skatteverket tax table data format |
 | `references/benefits.md` | Questions about förmånsbeskattning: bilförmån (all 3 formula generations, miljöbil reductions), kostförmån, friskvård, KPO, telefon/internet, bostadsförmån |
-| `references/vacation-pay.md` | Questions about semesterlön, semesterlöneskuld, procentregeln, sammalöneregeln, semestertillägg, sparade dagar, intjänandeår, BAS 2920/7090 accounting |
+| `references/vacation-pay.md` | Questions about semesterlön, semesterlöneskuld, procentregeln, sammalöneregeln, semestertillägg, sparade dagar, intjänandeår, BAS 2920/7090 accounting, deltid and fewer than five workdays a week (nettometoden, Semesterlagen 12 a §) |
 | `references/ob-overtime.md` | Questions about OB-tillägg, övertid, Arbetstidslagen limits, CBA divisors, mertid, kompensationsledighet |
 | `references/travel-expenses.md` | Questions about traktamente (domestic/international), tremånadersregeln, meal reductions, utlägg vs kostnadsersättning, milersättning, körjournal |
 | `references/f-skatt.md` | Questions about F-skatt vs A-skatt vs FA-skatt, verification workflow, employer liability, Skatteverket Företagsuppgifter API |
@@ -113,4 +113,4 @@ A-skatt: withhold tax + pay avgifter. F-skatt: neither. FA-skatt: split. No F-sk
 
 ## Rate update schedule
 
-Rates shift annually with PBB, IBB, and SLR. Subscribe to Skatteverket's annual publications each December. Bilförmån formulas use SLR from November 30 of prior year (floor 0.50%). Kostförmån tied to PBB. Traktamente normalbelopp published annually. PBB 2027: SCB has calculated 59,600 SEK; not yet formally set by the government.
+Rates shift annually with PBB, IBB, and SLR. Subscribe to Skatteverket's annual publications each December. Bilförmån formulas use SLR from November 30 of prior year (floor 0.50%). Kostförmån tied to PBB. Traktamente normalbelopp published annually. PBB 2027: 59,600 SEK, set by the government in September 2026.

@@ -19,6 +19,7 @@ import {
 } from '../lib/skattekonto-booking'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { SkattekontoLedgerTwin } from '@/types/skatteverket'
+import { testRoutes } from '@/tests/helpers'
 
 const ROUTE_PATH = '/skattekonto/transaktioner/:id/bokfor'
 const ROW_ID = '11111111-1111-4111-8111-111111111111'
@@ -33,7 +34,7 @@ const TWIN: SkattekontoLedgerTwin = {
 }
 
 function findRoute() {
-  const route = skatteverketExtension.apiRoutes?.find(
+  const route = testRoutes(skatteverketExtension).find(
     (r) => r.method === 'POST' && r.path === ROUTE_PATH,
   )
   if (!route) throw new Error('bokfor route not registered')
@@ -122,7 +123,7 @@ describe('POST /skattekonto/transaktioner/:id/bokfor', () => {
       'user-1',
       ROW_ID,
       undefined,
-      { allowDuplicate: false },
+      {},
     )
   })
 
@@ -139,10 +140,62 @@ describe('POST /skattekonto/transaktioner/:id/bokfor', () => {
     })
   })
 
-  it('passes allow_duplicate: true through as the override', async () => {
+  it('passes allow_duplicate: true with its reason through as the override', async () => {
     vi.mocked(bokforSkattekontoTransaction).mockResolvedValue({ id: 'je-draft-2' } as never)
-    const res = await findRoute().handler(makeRequest({ allow_duplicate: true }), makeContext())
+    const res = await findRoute().handler(
+      makeRequest({ allow_duplicate: true, duplicate_reason: ' Räntan debiterades två gånger ' }),
+      makeContext(),
+    )
     expect(res.status).toBe(200)
-    expect(vi.mocked(bokforSkattekontoTransaction).mock.calls[0][5]).toEqual({ allowDuplicate: true })
+    expect(vi.mocked(bokforSkattekontoTransaction).mock.calls[0][5]).toEqual({
+      duplicateReason: 'Räntan debiterades två gånger',
+    })
+  })
+
+  it('refuses allow_duplicate without a reason with 400: the override needs one', async () => {
+    const res = await findRoute().handler(makeRequest({ allow_duplicate: true }), makeContext())
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('duplicate_reason')
+    expect(vi.mocked(bokforSkattekontoTransaction)).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-string or too long duplicate_reason with 400', async () => {
+    for (const duplicate_reason of [42, 'x'.repeat(501)]) {
+      const res = await findRoute().handler(makeRequest({ allow_duplicate: true, duplicate_reason }), makeContext())
+      expect(res.status).toBe(400)
+    }
+    expect(vi.mocked(bokforSkattekontoTransaction)).not.toHaveBeenCalled()
+  })
+
+  it('answers LEDGER_COVER_EXISTS for a planned row with 409 and its one verifikat', async () => {
+    const cover = {
+      account_number: '1630',
+      through_date: '2027-03-26',
+      kind: 'planned_link' as const,
+      event_count: 2,
+      event_total: -5100,
+      event_ids: [ROW_ID, 'other-row'],
+      entries: [{ ...TWIN, open_amount: -5100 }],
+      entry_count: 1,
+    }
+    vi.mocked(bokforSkattekontoTransaction).mockRejectedValue(
+      new SkattekontoBookingError('Händelsen finns redan i bokföringen.', 'LEDGER_COVER_EXISTS', undefined, cover),
+    )
+    const res = await findRoute().handler(makeRequest(), makeContext())
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'LEDGER_COVER_EXISTS', ledger_cover: cover })
+  })
+
+  it('answers LEDGER_DIRECT_EXISTS with 409 and the bank verifikat that already book the event (PH 171)', async () => {
+    const holder: SkattekontoLedgerTwin = { ...TWIN, journal_entry_id: 'je-14', voucher_number: 14, description: 'Avstämning skattekonto' }
+    vi.mocked(bokforSkattekontoTransaction).mockRejectedValue(
+      new SkattekontoBookingError('Händelsen finns redan i bokföringen utan skattekontot.', 'LEDGER_DIRECT_EXISTS', undefined, undefined, [holder]),
+    )
+    const res = await findRoute().handler(makeRequest(), makeContext())
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json).toMatchObject({ code: 'LEDGER_DIRECT_EXISTS', ledger_direct: [holder] })
+    expect(json).not.toHaveProperty('ledger_twins')
+    expect(json).not.toHaveProperty('ledger_cover')
   })
 })

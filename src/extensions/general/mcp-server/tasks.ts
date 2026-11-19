@@ -1,4 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('mcp-server/tasks')
 
 /**
  * MCP Tasks extension (io.modelcontextprotocol/tasks).
@@ -13,12 +16,33 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * what the synchronous call would have returned. The `failed` status (and the
  * `error` column) is reserved for infrastructure failures where no tool
  * result exists.
+ *
+ * The one such failure there is: the work runs after the response, inside
+ * the invocation that answered the call, and an invocation the platform
+ * kills (time limit, memory, deploy) writes nothing. Its row stayed
+ * `working` until it expired, so a client polled an export that no longer
+ * existed for up to an hour. tasks/get now answers `failed` for a row still
+ * working past MCP_TASK_ABANDONED_AFTER_MS (abandonMcpTaskIfStale).
  */
 
 export const TASKS_EXTENSION_ID = 'io.modelcontextprotocol/tasks'
 
 const DEFAULT_POLL_INTERVAL_MS = 2000
 const DEFAULT_TTL_MS = 3_600_000
+
+/**
+ * A task still working this long after it was created has no process behind
+ * it: the MCP route runs at most 800 s (maxDuration in
+ * app/api/extensions/ext/[...path]/route.ts). 900 s leaves room for clock
+ * skew and the last write.
+ */
+export const MCP_TASK_ABANDONED_AFTER_MS = 900_000
+
+/** The JSON-RPC error an abandoned task carries (mcp_tasks.error). */
+const ABANDONED_TASK_ERROR = {
+  code: -32603,
+  message: 'The task was interrupted before it finished and will not complete. Start it again.',
+}
 
 export interface McpTaskRow {
   id: string
@@ -35,15 +59,26 @@ export interface McpTaskRow {
 }
 
 /**
+ * The extensions a 2026-07-28 client declares in this request's capabilities
+ * (`_meta`): an empty object when it lists capabilities without any, null
+ * when it lists no capabilities at all (a handshake-era client declared them
+ * once, at initialize).
+ */
+export function declaredClientExtensions(requestMeta: unknown): Record<string, unknown> | null {
+  if (!requestMeta || typeof requestMeta !== 'object') return null
+  const caps = (requestMeta as Record<string, unknown>)['io.modelcontextprotocol/clientCapabilities']
+  if (!caps || typeof caps !== 'object') return null
+  const extensions = (caps as Record<string, unknown>).extensions
+  return extensions && typeof extensions === 'object' ? (extensions as Record<string, unknown>) : {}
+}
+
+/**
  * Per the extension spec, a server must never return a task to a client that
  * did not declare the extension in this request's capabilities.
  */
 export function isTaskCapableClient(requestMeta: Record<string, unknown>): boolean {
-  const caps = requestMeta['io.modelcontextprotocol/clientCapabilities']
-  if (!caps || typeof caps !== 'object') return false
-  const extensions = (caps as Record<string, unknown>).extensions
-  if (!extensions || typeof extensions !== 'object') return false
-  return TASKS_EXTENSION_ID in (extensions as Record<string, unknown>)
+  const extensions = declaredClientExtensions(requestMeta)
+  return !!extensions && TASKS_EXTENSION_ID in extensions
 }
 
 export async function createMcpTask(
@@ -82,6 +117,10 @@ export async function createMcpTask(
  * Move a still-working task to a terminal state. The status='working' guard
  * makes terminal states immutable (spec) and lets a tasks/cancel that raced
  * the execution win: the late completion becomes a no-op.
+ *
+ * Answers whether this call moved the row. A write the database refused is
+ * logged as an error here (the client never throws, so no caller's catch saw
+ * it): the row stays working and tasks/get fails it once it is stale.
  */
 export async function resolveMcpTask(
   supabase: SupabaseClient,
@@ -92,11 +131,11 @@ export async function resolveMcpTask(
     error?: Record<string, unknown>
     statusMessage?: string
   }
-): Promise<void> {
+): Promise<boolean> {
   // Literal payload (no conditional spreads) so the phantom-column guard can
   // resolve every column. Writing null for absent terminal fields is correct:
   // the transition sets the complete terminal state.
-  await supabase
+  const { data, error } = await supabase
     .from('mcp_tasks')
     .update({
       status: terminal.status,
@@ -106,6 +145,38 @@ export async function resolveMcpTask(
     })
     .eq('id', taskId)
     .eq('status', 'working')
+    .select('id')
+  if (error) {
+    log.error('MCP task terminal state not stored', { taskId, status: terminal.status, code: error.code, reason: error.message })
+    return false
+  }
+  return ((data ?? []) as unknown[]).length > 0
+}
+
+/**
+ * For tasks/get: a row still working past MCP_TASK_ABANDONED_AFTER_MS is
+ * failed, and the failed row is answered. The write is the same guarded
+ * transition as every other, so of all the polls of one task exactly one
+ * moves it and logs the error; a row something else resolved in the same
+ * moment is read again and answered as it is. A fresh or terminal row comes
+ * back untouched.
+ */
+export async function abandonMcpTaskIfStale(supabase: SupabaseClient, row: McpTaskRow, now: number = Date.now()): Promise<McpTaskRow> {
+  const ageMs = now - Date.parse(row.created_at)
+  if (row.status !== 'working' || !(ageMs > MCP_TASK_ABANDONED_AFTER_MS)) return row
+
+  const statusMessage = ABANDONED_TASK_ERROR.message
+  if (await resolveMcpTask(supabase, row.id, { status: 'failed', error: ABANDONED_TASK_ERROR, statusMessage })) {
+    log.error('MCP task abandoned: still working after the route time limit, answered as failed', {
+      taskId: row.id,
+      toolName: row.tool_name,
+      companyId: row.company_id,
+      ageMs,
+    })
+    return { ...row, status: 'failed', error: ABANDONED_TASK_ERROR, status_message: statusMessage }
+  }
+  const { data } = await supabase.from('mcp_tasks').select('*').eq('id', row.id).eq('user_id', row.user_id).single()
+  return (data as McpTaskRow | null) ?? row
 }
 
 /** Map a row to the wire Task object shared by CreateTaskResult and tasks/get. */

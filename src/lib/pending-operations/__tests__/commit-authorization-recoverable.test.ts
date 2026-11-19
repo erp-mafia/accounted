@@ -17,6 +17,40 @@ import type { PendingOperation } from '@/types'
 
 import { commitPendingOperation } from '../commit'
 
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+// The duplicate guard and the underlag propagation have their own tests.
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: vi.fn(async () => null),
+}))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: vi.fn(async () => undefined),
+}))
+
+const TXS = [
+  '11111111-1111-4111-8111-111111111111',
+  '22222222-2222-4222-8222-222222222222',
+  '33333333-3333-4333-8333-333333333333',
+]
+const TX_ROWS = TXS.map((id) => ({ id, amount: 100, currency: 'SEK', description: 'Swish', date: '2026-07-22', journal_entry_id: null }))
+const LINES = [
+  { account_number: '1930', debit_amount: 300, credit_amount: 0, currency: 'SEK' },
+  { account_number: '3001', debit_amount: 0, credit_amount: 300, currency: 'SEK' },
+]
+
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 function makeBulkBookOp(): PendingOperation {
   return {
     id: 'op-bulk-1',
@@ -26,9 +60,9 @@ function makeBulkBookOp(): PendingOperation {
     status: 'pending',
     title: 'Samlingsverifikation: 3 transaktioner 2026-07-22',
     params: {
-      tx_ids: ['tx-1', 'tx-2', 'tx-3'],
+      tx_ids: TXS,
       existing_journal_entry_id: null,
-      new_entry: { description: 'Dagskassa', lines: [] },
+      new_entry: { description: 'Dagskassa', lines: LINES },
     },
     preview_data: {},
     result_data: null,
@@ -52,6 +86,10 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null }, // atomic claim pending -> committing
+      { data: TX_ROWS, error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
+      { data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }, // chart allowlist
+      { data: [], error: null }, // account_dimension_rules
       { data: { ok: false, code: 'BULK_BOOK_UNAUTHORIZED' }, error: null }, // RPC refusal
       { data: null, error: null }, // release claim back to pending
     ])
@@ -78,7 +116,13 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null },
+      { data: TX_ROWS, error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
+      { data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }, // chart allowlist
+      { data: [], error: null }, // account_dimension_rules
       { data: { ok: true, journal_entry_id: 'je-1', mode: 'create_new', linked_tx_count: 3 }, error: null },
+      { data: { id: 'je-1', company_id: 'company-1', status: 'posted', lines: [] }, error: null }, // engine door reload
+      { data: [], error: null }, // transaction.reconciled: the booked rows re-read
       { data: null, error: null }, // finalize committed
     ])
 
@@ -102,6 +146,10 @@ describe('commitPendingOperation: authorization refusal is recoverable', () => {
     const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-1' }, error: null },
+      { data: TX_ROWS, error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
+      { data: [{ account_number: '1930' }, { account_number: '3001' }], error: null }, // chart allowlist
+      { data: [], error: null }, // account_dimension_rules
       { data: { ok: false, code: 'BULK_BOOK_INVALID_PAYLOAD' }, error: null },
       { data: null, error: null }, // rejected update
     ])

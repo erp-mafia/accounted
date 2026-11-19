@@ -1,5 +1,4 @@
-import posthog from 'posthog-js'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { captureAnalyticsEvent, isAnalyticsActive, loadedAnalytics } from '@/lib/analytics/client'
 
 export interface SubmitFeedbackInput {
   message: string
@@ -18,7 +17,7 @@ export interface SubmitFeedbackInput {
  * Delivery channels.
  *
  * 'ticket' - PostHog Support conversation, linked to the person and their
- *            session replay. Since 2026-09-14 this is the inbox the founders
+ *            session replay. Since 2026-09-14 this is the inbox the operators
  *            answer in, and the reply shows up in the same dialog
  *            (components/ui/support-link.tsx), so it is the delivery for a
  *            plain message.
@@ -36,6 +35,9 @@ export interface SubmitFeedbackResult {
   ok: boolean
   channels: SupportChannel[]
   error?: string
+  /** Mail delivery only: the address the answer goes to (the mail's Reply-To,
+   *  the signed-in user's own), when the server reported it. */
+  replyTo?: string
 }
 
 /**
@@ -61,16 +63,30 @@ function buildEmailRequest({ message, subject, files }: SubmitFeedbackInput): Re
   return { method: 'POST', body: form }
 }
 
+/** The Reply-To the server set on the mail. Delivery never depends on this:
+ *  an unreadable body still counts as sent, just without the address. */
+async function readReplyTo(res: Response): Promise<string | undefined> {
+  try {
+    const value = (await res.json())?.data?.reply_to
+    return typeof value === 'string' && value ? value : undefined
+  } catch {
+    // The mail already went out (res.ok); only the address is missing, and
+    // the dialog then names "your email address" instead.
+    return undefined
+  }
+}
+
 async function submitViaEmail(
   input: SubmitFeedbackInput
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; replyTo?: string } | { ok: false; error: string }> {
   try {
     const res = await fetch('/api/support/contact', buildEmailRequest(input))
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       return { ok: false, error: data.error || 'Kunde inte skicka meddelandet' }
     }
-    return { ok: true }
+    const replyTo = await readReplyTo(res)
+    return replyTo ? { ok: true, replyTo } : { ok: true }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Nätverksfel' }
   }
@@ -106,22 +122,18 @@ function noteInAnalytics(
   { subject }: SubmitFeedbackInput,
   outcomes: { email: 'ok' | 'failed' | 'skipped'; ticket: ChannelOutcome | 'skipped' }
 ): void {
-  if (!isAnalyticsEnabled()) return
-  try {
-    const delivered = outcomes.ticket === 'ok' || outcomes.email === 'ok'
-    posthog.capture('support_feedback_submitted', {
-      subject: subject ?? null,
-      // Kept for continuity: existing insights filter on `delivered`.
-      delivered,
-      email: outcomes.email,
-      ticket: outcomes.ticket,
-      // True only when the user's message reached neither channel. This is the
-      // one that deserves an alert.
-      lost: !delivered,
-    })
-  } catch {
-    // Telemetry must never affect whether the user's message went out.
-  }
+  const delivered = outcomes.ticket === 'ok' || outcomes.email === 'ok'
+  // Never throws: telemetry must never affect whether the user's message went out.
+  captureAnalyticsEvent('support_feedback_submitted', {
+    subject: subject ?? null,
+    // Kept for continuity: existing insights filter on `delivered`.
+    delivered,
+    email: outcomes.email,
+    ticket: outcomes.ticket,
+    // True only when the user's message reached neither channel. This is the
+    // one that deserves an alert.
+    lost: !delivered,
+  })
 }
 
 /**
@@ -130,15 +142,18 @@ function noteInAnalytics(
  * Unlike the analytics breadcrumb this DOES carry the message body: a support
  * ticket the user deliberately wrote is the one place their words are the
  * point. That makes tickets a distinct processing purpose from analytics, so
- * it is declared separately in .compliance/ropa.yaml and on the privacy page.
+ * it is declared separately in the record of processing activities and on the
+ * privacy page.
  *
  * Never throws and never blocks: if conversations are unavailable (support
  * disabled, no analytics, older SDK) the user still gets the email path.
  */
 async function submitViaTicket({ message, subject, newTicket }: SubmitFeedbackInput): Promise<ChannelOutcome> {
-  if (!isAnalyticsEnabled()) return 'unavailable'
+  if (!isAnalyticsActive()) return 'unavailable'
   try {
-    const conversations = posthog.conversations
+    // Not loaded yet reads as unavailable, as a Support still starting up
+    // always has: the mail goes out instead.
+    const conversations = loadedAnalytics()?.conversations
     if (!conversations?.isAvailable?.()) return 'unavailable'
     // The SDK resolves null (not a rejection) when the ticket could not be
     // created; that must count as failed so email takes over.
@@ -179,7 +194,7 @@ export async function submitFeedback(input: SubmitFeedbackInput): Promise<Submit
   if (input.files?.length) {
     const emailResult = await submitViaEmail(input)
     noteInAnalytics(input, { email: emailResult.ok ? 'ok' : 'failed', ticket: 'skipped' })
-    if (emailResult.ok) return { ok: true, channels: ['email'] }
+    if (emailResult.ok) return emailDelivered(emailResult.replyTo)
     return { ok: false, channels: [], error: emailResult.error }
   }
 
@@ -194,6 +209,10 @@ export async function submitFeedback(input: SubmitFeedbackInput): Promise<Submit
 
   const emailResult = await submitViaEmail(input)
   noteInAnalytics(input, { email: emailResult.ok ? 'ok' : 'failed', ticket })
-  if (emailResult.ok) return { ok: true, channels: ['email'] }
+  if (emailResult.ok) return emailDelivered(emailResult.replyTo)
   return { ok: false, channels: [], error: emailResult.error }
+}
+
+function emailDelivered(replyTo?: string): SubmitFeedbackResult {
+  return replyTo ? { ok: true, channels: ['email'], replyTo } : { ok: true, channels: ['email'] }
 }

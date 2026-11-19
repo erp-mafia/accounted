@@ -213,6 +213,7 @@ describe('POST /api/invoices/[id]/book', () => {
       expect.objectContaining({ id: 'inv-1' }),
       'aktiebolag',
       'Kunden AB',
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     expect(mockCreateSchedules).toHaveBeenCalled()
   })
@@ -236,6 +237,7 @@ describe('POST /api/invoices/[id]/book', () => {
       'company-1',
       'document-1',
       'je-1',
+      { link_basis: 'system_derived', link_evidence: null },
     )
     expect(mockSupabase.rpc).toHaveBeenCalledWith(
       'latest_sent_invoice_delivery_document',

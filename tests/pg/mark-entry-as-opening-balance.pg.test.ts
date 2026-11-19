@@ -31,9 +31,10 @@ async function insertPostedEntry(params: {
   fiscalPeriodId: string
   voucherNumber: number
   sourceType?: string
+  entryDate?: string
   lines?: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
-  const id = await insertDraftJournalEntry({...params,entryDate:'2026-01-01',description:'Ingående balanser 2026'})
+  const id = await insertDraftJournalEntry({...params,entryDate:params.entryDate ?? '2026-01-01',description:'Ingående balanser 2026'})
   const lines = params.lines ?? [
     { account: '1930', debit: 5000, credit: 0 },
     { account: '2099', debit: 0, credit: 5000 },
@@ -176,6 +177,70 @@ describe('mark_entry_as_opening_balance RPC', () => {
     await insertTransaction({
       companyId, userId, amount: -2500, cashAccountId, journalEntryId: entryId,
     })
+
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(`SELECT mark_entry_as_opening_balance($1, $2)`, [companyId, entryId]),
+      ).rejects.toThrow(/linked bank transactions/i)
+    })
+  })
+
+  it('refuses a mid-year entry: a dated rättelse is a movement, never an IB (20261006121003)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const entryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, entryDate: '2026-09-21',
+    })
+
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(`SELECT mark_entry_as_opening_balance($1, $2)`, [companyId, entryId]),
+      ).rejects.toThrow(/first day of its fiscal period/i)
+    })
+    // Read outside the user transaction: the refusal aborted it.
+    const after = await getPool().query<{ source_type: string }>(
+      `SELECT source_type FROM public.journal_entries WHERE id = $1`,
+      [entryId],
+    )
+    expect(after.rows[0]!.source_type).toBe('manual')
+  })
+
+  it('accepts the first day of a broken fiscal year, not only 1 January', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId, companyId, periodStart: '2025-07-01', periodEnd: '2026-06-30', name: '2025/2026',
+    })
+    const entryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, entryDate: '2025-07-01',
+    })
+
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ mark_entry_as_opening_balance: { retagged: boolean } }>(
+        `SELECT mark_entry_as_opening_balance($1, $2)`,
+        [companyId, entryId],
+      )
+      expect(r.rows[0]!.mark_entry_as_opening_balance.retagged).toBe(true)
+    })
+  })
+
+  it('refuses an entry linked only through transaction_voucher_links (a 1:N slice)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1930' })
+    const txId = await insertTransaction({ companyId, userId, amount: 1000, cashAccountId, date: '2026-01-01' })
+    await getPool().query(
+      `INSERT INTO public.transaction_voucher_links
+         (company_id, user_id, transaction_id, journal_entry_id, allocated_amount, role)
+       VALUES ($1, $2, $3, $4, 1000, 'bank_line')`,
+      [companyId, userId, txId, entryId],
+    )
 
     await withUserContext(userId, async (client) => {
       await expect(

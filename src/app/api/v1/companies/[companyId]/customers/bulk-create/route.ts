@@ -14,7 +14,6 @@
  */
 
 import { z } from 'zod'
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -22,12 +21,10 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
-import { validateVatNumber } from '@/lib/vat/vies-client'
-import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
-import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
-import { eventBus } from '@/lib/events'
-import type { Logger } from '@/lib/logger'
-import type { Customer } from '@/types'
+import { createCustomer } from '@/lib/customers/customer-commands'
+import { customerRecordOutcome } from '@/lib/customers/customer-record'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import type { OperationContext } from '@/lib/operations/types'
 
 const BulkCreateRequest = z.object({
   customers: z.array(CreateCustomerSchema).min(1).max(50),
@@ -55,11 +52,6 @@ const BulkCreateResponse = z.object({
     failed: z.number().int(),
   }),
 })
-
-// Same projection as the single-create endpoint: keeps response shapes
-// identical so callers can union the two surfaces transparently.
-const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.bulk-create',
@@ -112,149 +104,44 @@ interface ResultItem {
   error?: { code: string; message: string; details?: unknown }
 }
 
+/**
+ * One item through the single create (lib/customers/customer-commands.ts), the
+ * insert and rule set every customer door shares, answered as a result item.
+ */
 async function createOneCustomer(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+  ctx: OperationContext,
   index: number,
   input: z.infer<typeof CreateCustomerSchema>,
   dryRun: boolean,
-  log: Logger,
-  fallbackPaymentTerms: number,
 ): Promise<ResultItem> {
-  if (dryRun) {
-    return {
-      ok: true,
-      request_index: index,
-      data: {
-        preview: {
-          id: null,
-          name: input.name,
-          customer_type: input.customer_type,
-          contact_person: input.contact_person ?? null,
-          email: input.email ?? null,
-          phone: input.phone ?? null,
-          invoice_email_cc_addresses: input.invoice_email_cc_addresses ?? null,
-          invoice_email_bcc_addresses: input.invoice_email_bcc_addresses ?? null,
-          address_line1: input.address_line1 ?? null,
-          address_line2: input.address_line2 ?? null,
-          postal_code: input.postal_code ?? null,
-          city: input.city ?? null,
-          country: input.country ?? 'SE',
-          org_number: input.org_number ?? null,
-          vat_number: input.vat_number ?? null,
-          vat_number_validated: false,
-          default_payment_terms: input.default_payment_terms ?? fallbackPaymentTerms,
-          notes: input.notes ?? null,
-          archived_at: null,
-          created_at: null,
-          updated_at: null,
-        },
-      },
-    }
+  const outcome = customerRecordOutcome(await createCustomer(ctx, input, { dryRun }))
+  if (outcome.ok) {
+    return outcome.dryRun
+      ? { ok: true, request_index: index, data: { preview: outcome.preview } }
+      : { ok: true, request_index: index, data: outcome.data }
   }
-
-  // Best-effort VIES validation. Resolve BEFORE the insert so the row
-  // reflects validation state atomically.
-  let vatValidated = false
-  let vatValidatedAt: string | null = null
-  if (input.customer_type === 'eu_business' && input.vat_number) {
-    try {
-      const vatResult = await validateVatNumber(input.vat_number)
-      if (vatResult.valid) {
-        vatValidated = true
-        vatValidatedAt = new Date().toISOString()
-      }
-    } catch (err) {
-      log.warn('bulk-create: VIES validation failed for item', err as Error, {
-        request_index: index,
-      })
-    }
-  }
-
-  const { data, error } = await supabase
-    .from('customers')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      name: input.name,
-      customer_type: input.customer_type,
-      contact_person: input.contact_person ?? null,
-      email: input.email ?? null,
-      phone: input.phone ?? null,
-      invoice_email_cc_addresses: input.invoice_email_cc_addresses ?? null,
-      invoice_email_bcc_addresses: input.invoice_email_bcc_addresses ?? null,
-      address_line1: input.address_line1 ?? null,
-      address_line2: input.address_line2 ?? null,
-      postal_code: input.postal_code ?? null,
-      city: input.city ?? null,
-      country: input.country ?? 'SE',
-      org_number: input.org_number ?? null,
-      vat_number: input.vat_number ?? null,
-      vat_number_validated: vatValidated,
-      vat_number_validated_at: vatValidatedAt,
-      // Stored as ciphertext (customers_personal_number_check). The response
-      // projection deliberately excludes it; nothing here leaks it.
-      personal_number: encryptCustomerPersonalNumber(input.personal_number),
-      default_payment_terms: input.default_payment_terms ?? fallbackPaymentTerms,
-      notes: input.notes ?? null,
-    })
-    .select(CUSTOMER_RESPONSE_COLUMNS)
-    .single()
-
-  if (error) {
-    if (error.code === '23505') {
-      // GDPR Art.5(1)(c): do NOT echo input.org_number; for sole traders
-      // it IS the personnummer. The error code + field is enough: the
-      // caller knows the value they submitted.
-      return {
-        ok: false,
-        request_index: index,
-        error: {
-          code: 'CUSTOMER_DUPLICATE_ORG_NUMBER',
-          message: 'A customer with this org_number already exists in this company.',
-          details: { field: 'org_number' },
-        },
-      }
-    }
-    log.error('bulk-create: customer insert failed', error, {
-      request_index: index,
-      companyId,
-      pgCode: error.code,
-    })
+  if (outcome.code === 'CUSTOMER_CREATE_FAILED') {
     return {
       ok: false,
       request_index: index,
       error: {
-        code: 'CUSTOMER_CREATE_FAILED',
+        code: outcome.code,
         message: 'Customer insert failed.',
-        details: { pg_code: error.code },
+        details: { pg_code: (outcome.error as { code?: string } | undefined)?.code },
       },
     }
   }
-
-  // Emit customer.created per success. Same cast pattern as the single
-  // POST: projection omits internal scoping fields we re-inject here.
-  try {
-    await eventBus.emit({
-      type: 'customer.created',
-      payload: {
-        customer: {
-          ...(data as Record<string, unknown>),
-          user_id: userId,
-          company_id: companyId,
-        } as unknown as Customer,
-        companyId,
-        userId,
-      },
-    })
-  } catch (err) {
-    log.warn('bulk-create: customer.created emit failed', err as Error, {
-      request_index: index,
-    })
+  // Refusals carry the field, never the value: for a sole trader the org
+  // number is the personnummer (GDPR art. 5.1 c).
+  return {
+    ok: false,
+    request_index: index,
+    error: {
+      code: outcome.code,
+      message: getErrorEntry(outcome.code)?.message_en ?? outcome.code,
+      details: outcome.details,
+    },
   }
-
-  return { ok: true, request_index: index, data }
 }
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
@@ -287,30 +174,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Items without explicit payment terms follow the company's own default,
-    // not a hardcoded 30. Resolved once for the whole batch.
-    const fallbackPaymentTerms = await resolveDefaultPaymentTerms(
-      ctx.supabase,
-      ctx.companyId!,
-      undefined,
-    )
-
     // Sequential processing: matches /invoices/bulk-create. VIES has its own
     // upstream throughput limits; running a batch of 50 in parallel can trip
     // them. The 50-item cap keeps the worst-case latency bounded.
+    const commandCtx = { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log }
     const results: ResultItem[] = []
     for (let i = 0; i < body.customers.length; i++) {
-      const item = await createOneCustomer(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
-        i,
-        body.customers[i],
-        ctx.dryRun,
-        ctx.log,
-        fallbackPaymentTerms,
-      )
-      results.push(item)
+      results.push(await createOneCustomer(commandCtx, i, body.customers[i], ctx.dryRun))
     }
 
     const summary = {

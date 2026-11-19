@@ -1,9 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
 import {
   createMockRequest,
   parseJsonResponse,
   createMockRouteParams,
   createQueuedMockSupabase,
+  enqueueBankLinkLeg,
   makeTransaction,
   makeInvoice,
 } from '@/tests/helpers'
@@ -108,6 +119,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 7, entry_date: '2026-05-15' },
       error: null,
     }) // target JE fetch
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: null, error: null }) // logMatchEvent insert
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
@@ -179,6 +191,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     // Update transaction
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // logMatchEvent insert
@@ -222,6 +235,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -233,6 +247,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     // Update transaction
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // Update invoice (optimistic lock returns updated row)
@@ -333,6 +351,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -344,6 +363,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     enqueue({ data: [{ id: TX_UUID }], error: null }) // update transaction
     enqueue({ data: [{ id: INV_UUID }], error: null }) // update invoice
     enqueue({ data: { id: 'ip-1' }, error: null }) // insert invoice_payments
@@ -367,7 +390,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
 
   it('returns 404 when invoice_id supplied but invoice not found', async () => {
     enqueue({
-      data: makeTransaction({ id: TX_UUID, journal_entry_id: null }),
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000 }),
       error: null,
     })
     enqueue({
@@ -380,6 +403,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: null, error: { message: 'not found' } })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
@@ -394,7 +418,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
 
   it('returns 400 when supplied invoice is not in an open state', async () => {
     enqueue({
-      data: makeTransaction({ id: TX_UUID, journal_entry_id: null }),
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000 }),
       error: null,
     })
     enqueue({
@@ -407,6 +431,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({ id: INV_UUID, status: 'paid' }),
       error: null,
@@ -437,6 +462,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -474,10 +500,15 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({ id: INV_UUID, status: 'sent', total: 1000, remaining_amount: 1000 }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     // Update transaction succeeds
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // Optimistic invoice update returns 0 rows
@@ -510,6 +541,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -520,6 +552,10 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       }),
       error: null,
     })
+    // invoice_settlement_side: a booked invoice settles on the 151x credit
+    enqueue({ data: { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }, error: null })
+    // the voucher's lines on that side: the 1510 credit
+    enqueue({ data: [{ account_number: '1510', debit_amount: 0, credit_amount: 1000 }], error: null })
     // Update transaction succeeds
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // Optimistic invoice update succeeds

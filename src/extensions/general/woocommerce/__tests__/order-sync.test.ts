@@ -334,6 +334,39 @@ describe('mapOrderToWebshopRow', () => {
     expect(rows[0]).toMatchObject({ is_paid: false, paid_date: null, order_date: '2026-08-01' })
   })
 
+  it('dates an order on the Swedish day, not the GMT day (#58)', () => {
+    // _gmt timestamps carry no zone suffix; they are UTC whatever zone the
+    // server runs in. Winter time: 23:30 GMT on 31 October is 00:30 on 1
+    // November in Stockholm.
+    const [winter] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      date_created_gmt: '2026-10-31T23:30:00',
+      date_paid_gmt: '2026-10-31T23:31:00',
+    }))
+    expect(winter).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+    // Summer time: 22:30 GMT on 31 August is 00:30 on 1 September.
+    const [summer] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      date_created_gmt: '2026-08-31T22:30:00',
+      date_paid_gmt: '2026-08-31T22:31:00',
+    }))
+    expect(summer).toMatchObject({ order_date: '2026-09-01', paid_date: '2026-09-01' })
+    // 21:30 GMT is still 23:30 on 31 August there.
+    const [evening] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      date_created_gmt: '2026-08-31T21:30:00',
+      date_paid_gmt: null,
+    }))
+    expect(evening).toMatchObject({ order_date: '2026-08-31', paid_date: null })
+  })
+
+  it('dates a refund on the Swedish day too (#58)', () => {
+    const [row] = mapRefundToWebshopRow(connection, 's', makeOrder(), {
+      id: 78,
+      amount: '250.00',
+      reason: 'Retur',
+      date_created_gmt: '2026-10-31T23:30:00',
+    })
+    expect(row).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+  })
+
   it('skips trashed, unparseable-total and zero-total orders', () => {
     expect(mapOrderToWebshopRow(connection, 's', makeOrder({ status: 'trash' }))).toEqual([])
     expect(
@@ -679,11 +712,14 @@ describe('syncWooCommerceOrders', () => {
     ])
 
     // Cursor persisted from the page's max date_modified_gmt, branded UTC,
-    // and any stale error_message is cleared on progress.
+    // and any stale error_message is cleared on progress. The window listed
+    // to its empty page then advances the watermark to the run start.
     const cursors = cursorUpdates(updates)
-    expect(cursors).toHaveLength(1)
+    expect(cursors).toHaveLength(2)
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:05:00.000Z')
     expect(cursors[0].values.error_message).toBeNull()
+    const watermarkMs = Date.parse(cursors[1].values.last_order_synced_at as string)
+    expect(Math.abs(watermarkMs - Date.now())).toBeLessThan(60_000)
 
     // Second list call proves cursor pagination: modified_after advanced to
     // the last row's timestamp, page reset to 1, terminated by the empty page.
@@ -730,7 +766,7 @@ describe('syncWooCommerceOrders', () => {
     ])
     // The removal is complete work: the cursor advances normally.
     const cursors = cursorUpdates(updates)
-    expect(cursors).toHaveLength(1)
+    expect(cursors).toHaveLength(2)
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:05:00.000Z')
   })
 
@@ -789,6 +825,28 @@ describe('syncWooCommerceOrders', () => {
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:04:59.000Z')
   })
 
+  it('moves a quiet store\'s cursor to the run start (scanned-through watermark)', async () => {
+    // Without it the store keeps its old cursor and the front of the cron's
+    // oldest-cursor-first candidates, re-listing the same window every night.
+    const { client, updates } = makeSupabaseMock()
+
+    const summary = await syncWooCommerceOrders(client, makeConnection({ last_order_synced_at: '2026-07-01T00:00:00.000Z' }))
+
+    expect(summary.fetched).toBe(0)
+    const cursors = cursorUpdates(updates)
+    expect(cursors).toHaveLength(1)
+    expect(Math.abs(Date.parse(cursors[0].values.last_order_synced_at as string) - Date.now())).toBeLessThan(60_000)
+  })
+
+  it('leaves the watermark alone when the time budget stops the run', async () => {
+    const { client, updates } = makeSupabaseMock()
+
+    const summary = await syncWooCommerceOrders(client, makeConnection(), undefined, Date.now() - 1)
+
+    expect(summary.deadlineReached).toBe(true)
+    expect(cursorUpdates(updates)).toHaveLength(0)
+  })
+
   it('pages through a full same-timestamp tie by offset, then resumes cursor pagination', async () => {
     const { client } = makeSupabaseMock()
     const tie = Array.from({ length: 100 }, (_, i) =>
@@ -821,7 +879,7 @@ describe('syncWooCommerceOrders', () => {
     expect(summary.errors).toBe(1)
     expect(upsertWebshopOrders).not.toHaveBeenCalled()
     // Deliberate: a permanently corrupt total must not stall the feed.
-    expect(cursorUpdates(updates)).toHaveLength(1)
+    expect(cursorUpdates(updates)).toHaveLength(2)
   })
 
   it('stores the store currency for an order carrying the encoded symbol', async () => {
@@ -847,7 +905,7 @@ describe('syncWooCommerceOrders', () => {
     expect(upsertWebshopOrders).not.toHaveBeenCalled()
     expect(listOrderRefunds).not.toHaveBeenCalled()
     // Syncing again cannot fix the store's data; the feed moves on.
-    expect(cursorUpdates(updates)).toHaveLength(1)
+    expect(cursorUpdates(updates)).toHaveLength(2)
   })
 
   it('records a skipped order durably with what the panel needs', async () => {

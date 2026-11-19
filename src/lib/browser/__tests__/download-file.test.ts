@@ -56,6 +56,22 @@ describe('downloadFile', () => {
     await expect((blob as Blob).text()).resolves.toBe(EXPORT_BODY)
   })
 
+  it('GETs by default and POSTs JSON when postJson is given', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(EXPORT_BODY)))
+    globalThis.fetch = fetchMock
+    const saveBlob = vi.fn()
+
+    await downloadFile({ url: '/a', filename: 'a.xml', saveBlob })
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+
+    await downloadFile({ url: '/b', filename: 'b.xml', saveBlob, postJson: { confirm_previous_not_approved: true } })
+    const init = fetchMock.mock.calls[1][1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
+    expect(init.body).toBe('{"confirm_previous_not_approved":true}')
+    expect(saveBlob).toHaveBeenCalledTimes(2)
+  })
+
   it('writes NO file on a 500 and reports the envelope message', async () => {
     // The regression guard. The old handler called res.blob() with no res.ok
     // check, so this error envelope was saved to disk as bokforingsmallar.json
@@ -87,6 +103,13 @@ describe('downloadFile', () => {
       reason: 'server',
       status: 500,
       message: 'Kunde inte hämta mallarna. Försök igen.',
+      body: {
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Kunde inte hämta mallarna. Försök igen.',
+          message_en: 'Could not load the templates. Please try again.',
+        },
+      },
     })
   })
 
@@ -107,6 +130,7 @@ describe('downloadFile', () => {
       reason: 'server',
       status: 502,
       message: 'Servern är tillfälligt otillgänglig. Försök igen om en stund.',
+      body: null,
     })
   })
 
@@ -169,6 +193,56 @@ describe('downloadFile', () => {
     // The call site branches on this to say "took too long" instead of the
     // generic "something went wrong".
     expect(result).not.toMatchObject({ reason: 'network' })
+  })
+
+  it('saves under the server-given name when asked to, decoding the UTF-8 form', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('PK', {
+        status: 200,
+        headers: {
+          'Content-Disposition': `attachment; filename="L_nespec.zip"; filename*=UTF-8''L%C3%B6nespec.zip`,
+        },
+      }),
+    )
+    const saveBlob = vi.fn()
+
+    const result = await downloadFile({
+      url: '/x',
+      filename: 'fallback.zip',
+      preferServerFilename: true,
+      saveBlob,
+    })
+
+    expect(result).toEqual({ ok: true, filename: 'Lönespec.zip' })
+    expect(saveBlob.mock.calls[0][1]).toBe('Lönespec.zip')
+  })
+
+  it('keeps the given name when the response names none, or when not asked', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('PK', { status: 200 }))
+    const saveBlob = vi.fn()
+
+    const result = await downloadFile({ url: '/x', filename: 'fallback.zip', preferServerFilename: true, saveBlob })
+    expect(result).toEqual({ ok: true, filename: 'fallback.zip' })
+
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('PK', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="server.zip"' } }),
+    )
+    const fixed = await downloadFile({ url: '/x', filename: 'mine.zip', saveBlob })
+    expect(fixed).toEqual({ ok: true, filename: 'mine.zip' })
+  })
+
+  it('reads a refusal in the caller\'s context and hands back the envelope', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('', { status: 418 }))
+
+    const result = await downloadFile({ url: '/x', filename: 'f.pdf', errorContext: 'invoice', saveBlob: vi.fn() })
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'server',
+      status: 418,
+      message: 'Kunde inte hantera fakturan. Försök igen.',
+      body: null,
+    })
   })
 
   it('passes the deadline to fetch as an abort signal', async () => {

@@ -8,14 +8,21 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  holdEscapeWhileUnsaved,
+  useEditedSinceOpen,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { vacationPayRateFromPercentInput } from '@/lib/salary/vacation-pay-rate'
+import {
+  semestertillaggRateFromPercentInput,
+  semestertillaggRateToPercent,
+  STATUTORY_SEMESTERTILLAGG_RATE,
+  vacationDaysFromInput,
+  vacationPayRateFromPercentInput,
+} from '@/lib/salary/vacation-pay-rate'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -26,9 +33,11 @@ import {
   checkEmployeeAccountChecksum,
   BANK_ISSUE_MESSAGES_SV,
   BANK_CHECKSUM_WARNING_SV,
-} from '@/lib/salary/payment/bank-account'
+} from '@/lib/payments/bank-account'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
+import SemestertillaggRateInput from '@/components/salary/SemestertillaggRateInput'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5">*</span>
@@ -36,7 +45,7 @@ function RequiredMark() {
 
 // Small caps section label; sections are separated by a hairline divider
 // instead of being boxed in their own cards (compact, Linear-style layout).
-const SECTION_HEADER = 'text-xs font-semibold uppercase tracking-wider text-muted-foreground'
+const SECTION_HEADER = 'text-xs font-semibold text-muted-foreground'
 
 /** Compact label + control stack shared by every field in the dialog. */
 function Field({
@@ -77,25 +86,31 @@ interface Props {
  * (no per-section cards) with a sticky Spara bar, to keep scrolling short.
  */
 export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Props) {
+  const { edited, editProps } = useEditedSinceOpen()
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        // Override the primitive's own padding + whole-dialog scroll: this
-        // dialog is a fixed header + scrolling body + solid footer (flex
-        // column), so the footer never overlaps scrolling content.
-        className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden"
-        // A half-typed employee must survive an accidental backdrop click or
-        // a stray Escape (the municipality combobox and dimension pickers
-        // portal outside the dialog). Closing is explicit: the header X or
-        // Avbryt. Same convention as NewJournalEntryDialog.
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
-        <DialogHeader className="border-b border-border px-6 pb-4 pt-6">
+      <DialogContent size="wide"
+ // Override the primitive's own padding + whole-dialog scroll: this
+ // dialog is a fixed header + scrolling body + solid footer (flex
+ // column), so the footer never overlaps scrolling content.
+ className="flex flex-col p-0 gap-0 overflow-hidden"
+ // Escape closes an untouched dialog, like every other overlay, but a
+ // half-typed employee must survive a stray Escape: then closing is
+ // explicit, the header X or Avbryt. The fields are uncontrolled (read
+ // on submit), so "changed since open" decides (useEditedSinceOpen). A
+ // backdrop click never closes it. Same convention as
+ // NewJournalEntryDialog.
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
+        <DialogHeader className="border-b-hairline px-6 pb-4 pt-6">
           <DialogTitle>Ny anställd</DialogTitle>
         </DialogHeader>
-        <NewEmployeeForm onCreated={onCreated} onCancel={() => onOpenChange(false)} />
+        <div className="contents" {...editProps}>
+          <NewEmployeeForm onCreated={onCreated} onCancel={() => onOpenChange(false)} />
+        </div>
       </DialogContent>
     </Dialog>
   )
@@ -137,7 +152,11 @@ async function submitEmployee(body: unknown, locale: ErrorLocale): Promise<Submi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (res.ok) return null
+    if (res.ok) {
+      // The roster pickers (expense claimant, reports) read the cached list.
+      void invalidateReferenceData('ref:employees')
+      return null
+    }
 
     // A body that is not JSON leaves null: getErrorMessage then falls back to
     // the HTTP status map, still in the user's language.
@@ -163,14 +182,21 @@ async function submitEmployee(body: unknown, locale: ErrorLocale): Promise<Submi
 // unmounts DialogContent children on close).
 function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
   const t = useTranslations('employees')
+  const tEmployee = useTranslations('salary_employee')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
   const [submitError, setSubmitError] = useState<SubmitError | null>(null)
   const [employmentType, setEmploymentType] = useState('employee')
+  // Wage series (70xx arbetare, 72xx tjänsteman); only asked of employees.
+  const [personnelCategory, setPersonnelCategory] = useState('tjansteman')
   const [salaryType, setSalaryType] = useState('monthly')
   const [personnummer, setPersonnummer] = useState('')
   const [vacationRule, setVacationRule] = useState('procentregeln')
+  // Controlled so the below-0,43 % warning follows the typed value. crm#1529
+  const [semestertillaggInput, setSemestertillaggInput] = useState(
+    String(semestertillaggRateToPercent(STATUTORY_SEMESTERTILLAGG_RATE)),
+  )
   const [clearing, setClearing] = useState('')
   const [account, setAccount] = useState('')
   // Suppress the (soft) check-digit warning while the user is still typing in
@@ -192,6 +218,9 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     jamkning_valid_from: null,
     jamkning_valid_to: null,
     jamkning_touched: false,
+    extra_tax_amount: null,
+    extra_tax_percentage: null,
+    extra_tax_touched: false,
   })
 
   function setDimension(dimNo: string, code: string | null) {
@@ -227,6 +256,9 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       last_name: form.get('last_name') as string,
       personnummer: personnummer.replace(/\D/g, ''),
       employment_type: employmentType,
+      // Owners and board members book on their own accounts: the category is
+      // left at its default for them.
+      personnel_category: employmentType === 'employee' ? personnelCategory : undefined,
       employment_start: form.get('employment_start') as string,
       employment_end: form.get('employment_end') as string || undefined,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
@@ -243,6 +275,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       jamkning_percentage: tax.jamkning_percentage ?? undefined,
       jamkning_valid_from: tax.jamkning_valid_from ?? undefined,
       jamkning_valid_to: tax.jamkning_valid_to ?? undefined,
+      extra_tax_amount: tax.extra_tax_amount ?? undefined,
+      extra_tax_percentage: tax.extra_tax_percentage ?? undefined,
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
       address_line1: form.get('address_line1') as string || undefined,
@@ -251,9 +285,16 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       clearing_number: normalizeBankNumber(clearing) || undefined,
       bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
-      vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
+      // 0 is a real value (vacation_rule none, e.g. a company owner outside
+      // semesterlagen); only an empty field falls back to the default 25.
+      vacation_days_per_year: vacationDaysFromInput(form.get('vacation_days_per_year')) ?? 25,
       // Empty (or hidden under sammalöneregeln/none) = statutory rate.
       vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
+      // Sammalöneregeln only (the one rule that reads it); otherwise left out
+      // and the API default (0,43 %) applies. crm#1529
+      semestertillagg_rate: vacationRule === 'sammaloneregeln'
+        ? semestertillaggRateFromPercentInput(form.get('semestertillagg_rate'))
+        : undefined,
       // Always sent: {} means no default dimensions.
       default_dimensions: dimensions,
     }
@@ -363,6 +404,20 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
                 </SelectContent>
               </Select>
             </Field>
+            {employmentType === 'employee' && (
+              <Field label={tEmployee('form_personnel_category')} htmlFor="personnel_category">
+                <Select value={personnelCategory} onValueChange={setPersonnelCategory}>
+                  <SelectTrigger id="personnel_category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tjansteman">{tEmployee('form_personnel_category_tjansteman')}</SelectItem>
+                    <SelectItem value="arbetare">{tEmployee('form_personnel_category_arbetare')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{tEmployee('form_personnel_category_hint')}</p>
+              </Field>
+            )}
             <Field label="Anställningsdatum" htmlFor="employment_start" required>
               <Input id="employment_start" name="employment_start" type="date" required />
             </Field>
@@ -377,7 +432,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               <Input id="hours_per_week" name="hours_per_week" type="number" defaultValue="40" min="1" max="80" step="0.5" />
             </Field>
             <Field label="Arbetsdagar per vecka" htmlFor="workdays_per_week">
-              <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue="5" min="1" max="7" step="1" />
+              <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue="5" min="1" max="7" step="0.01" />
             </Field>
             <Field label="Löneform" htmlFor="salary_type" required>
               <Select value={salaryType} onValueChange={setSalaryType}>
@@ -431,13 +486,24 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               )}
               {vacationRule === 'semesterersattning' && (
                 <p className="text-xs text-muted-foreground">
-                  12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp. Vanligt för tim- och visstidsanställda.
+                  12 % läggs på varje lönekörning och bokas som semesterlön (7285, 7082 för arbetare, 7286 för företagsledare). Ingen semesterlöneskuld byggs upp. Vanligt för tim- och visstidsanställda.
                 </p>
               )}
             </Field>
             <Field label="Semesterdagar per år" htmlFor="vacation_days_per_year">
-              <Input id="vacation_days_per_year" name="vacation_days_per_year" type="number" min="25" max="40" defaultValue="25" />
-              <p className="text-xs text-muted-foreground">Lagstadgat minimum: 25 dagar</p>
+              <Input
+                id="vacation_days_per_year"
+                name="vacation_days_per_year"
+                type="number"
+                min={vacationRule === 'none' ? 0 : 25}
+                max="40"
+                defaultValue="25"
+              />
+              <p className="text-xs text-muted-foreground">
+                {vacationRule === 'none'
+                  ? tEmployee('form_vacation_days_hint_none')
+                  : tEmployee('form_vacation_days_hint')}
+              </p>
             </Field>
             {(vacationRule === 'procentregeln' || vacationRule === 'semesterersattning') && (
               <Field label="Semesterlön, procentsats" htmlFor="vacation_pay_rate">
@@ -445,6 +511,11 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
                 <p className="text-xs text-muted-foreground">
                   Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5. Lagens nivå gäller alltid som golv.
                 </p>
+              </Field>
+            )}
+            {vacationRule === 'sammaloneregeln' && (
+              <Field label={tEmployee('form_semestertillagg_rate')} htmlFor="semestertillagg_rate">
+                <SemestertillaggRateInput value={semestertillaggInput} onChange={setSemestertillaggInput} />
               </Field>
             )}
           </div>
@@ -509,7 +580,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
       {/* Solid footer outside the scroll area: always visible, never overlaps
           content (the body above scrolls independently). */}
-      <div className="flex items-center gap-3 border-t border-border bg-background px-6 py-4">
+      <div className="flex items-center gap-3 border-t-hairline bg-background px-6 py-4">
         {submitError && (
           <p role="alert" className="min-w-0 flex-1 text-sm text-destructive">
             {submitError.message}
@@ -523,12 +594,12 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
             )}
           </p>
         )}
-        <Button type="button" variant="outline" className="ml-auto" onClick={onCancel}>
+        <Button type="button" variant="ghost" className="ml-auto" onClick={onCancel}>
           Avbryt
         </Button>
-        <Button type="submit" disabled={saving}>
-          <Save className="mr-2 h-4 w-4" />
-          {saving ? 'Sparar...' : 'Spara'}
+        {/* The primary names the thing it creates (V7 creation forms). */}
+        <Button type="submit" loading={saving}>
+          Skapa anställd
         </Button>
       </div>
     </form>

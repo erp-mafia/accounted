@@ -34,3 +34,26 @@ export function summarizeByCurrency(
     }))
     .sort((a, b) => a.currency.localeCompare(b.currency))
 }
+
+/**
+ * The currency most rows of a file are denominated in ('SEK' when none say).
+ * One file is one physical account, so this is that account's currency: the
+ * import binds every row of the batch to one account, and Wise and camt.053
+ * files may still carry a few rows in another currency.
+ */
+export function dominantCurrency(transactions: Array<Pick<ParsedBankTransaction, 'currency'>>): string {
+  const counts = new Map<string, number>()
+  for (const tx of transactions) {
+    const currency = (tx.currency || 'SEK').toUpperCase()
+    counts.set(currency, (counts.get(currency) ?? 0) + 1)
+  }
+  let best = 'SEK'
+  let bestCount = 0
+  for (const [currency, count] of counts) {
+    if (count > bestCount) {
+      best = currency
+      bestCount = count
+    }
+  }
+  return best
+}

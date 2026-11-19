@@ -100,6 +100,12 @@ export async function markSignatureSigned(
     evidenceRecordedBy: string
     signedAt?: string
     bankidSignatureData?: Record<string, unknown>
+    /**
+     * The revisor's påteckning: the revisionsberättelse's opinion and the
+     * revisionsbolag, frozen on the slot as it is signed (workflow-service
+     * pateckningGate). Board slots carry none.
+     */
+    pateckning?: { opinion: string; firmName: string | null }
   },
 ): Promise<SignatureRequest> {
   const { data, error } = await supabase
@@ -113,6 +119,9 @@ export async function markSignatureSigned(
       evidence_recorded_by: options.evidenceRecordedBy,
       evidence_recorded_at: new Date().toISOString(),
       bankid_signature_data: options.bankidSignatureData ?? null,
+      ...(options.pateckning
+        ? { pateckning_opinion: options.pateckning.opinion, pateckning_firm_name: options.pateckning.firmName }
+        : {}),
     })
     .eq('id', requestId)
     .eq('company_id', companyId)

@@ -77,8 +77,51 @@ const EXTENSION_TYPES: Record<string, string> = {
  */
 const CSV_ALIASES = new Set(['application/vnd.ms-excel', 'text/plain', 'application/csv', 'text/x-csv', 'text/comma-separated-values'])
 
-/** The input `accept` attribute that matches ALLOWED_DOCUMENT_TYPES. */
-export const DOCUMENT_UPLOAD_ACCEPT = Object.keys(EXTENSION_TYPES).map((ext) => `.${ext}`).join(',')
+/**
+ * What the invoice inbox takes, and with it every flow that hands a receipt or
+ * an invoice to its extraction (Utlägg, a new supplier invoice's underlag):
+ * PDFs and photos, never office files. The inbox upload route checks this
+ * list (extensions/general/invoice-inbox/lib/upload-and-extract.ts).
+ */
+export const INBOX_UPLOAD_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/heif',
+  'image/webp',
+]
+
+/**
+ * Taken by every route, never offered in a file picker: when `accept` leaves
+ * HEIC out, iOS Safari transcodes a photo-library pick to JPEG, which every
+ * reader handles and which is smaller (DECISIONS.md 2026-08-13). A HEIC that
+ * is dropped, mailed or sent over WhatsApp is still taken and decoded.
+ */
+const PICKER_HIDDEN_TYPES = new Set(['image/heic', 'image/heif'])
+
+/** The `accept` attribute that offers exactly the extensions of `types`, minus the picker-hidden ones. */
+function pickerAccept(types: readonly string[]): string {
+  return Object.entries(EXTENSION_TYPES)
+    .filter(([, type]) => types.includes(type) && !PICKER_HIDDEN_TYPES.has(type))
+    .map(([ext]) => `.${ext}`)
+    .join(',')
+}
+
+/**
+ * The input `accept` attribute for every picker whose file is stored as a
+ * document (POST /api/documents, a new version, reconciliation and import
+ * underlag): it offers only what ALLOWED_DOCUMENT_TYPES takes.
+ */
+export const DOCUMENT_UPLOAD_ACCEPT = pickerAccept(ALLOWED_DOCUMENT_TYPES)
+
+/** The input `accept` attribute for every picker whose file goes to the inbox upload. */
+export const INBOX_UPLOAD_ACCEPT = pickerAccept(INBOX_UPLOAD_TYPES)
+
+/** True when the inbox upload route would take this file's declared type. */
+export function isAllowedInboxFile(file: { type?: string | null }): boolean {
+  return INBOX_UPLOAD_TYPES.includes(file.type ?? '')
+}
 
 function extensionOf(name: string | null | undefined): string {
   const lower = (name ?? '').toLowerCase()

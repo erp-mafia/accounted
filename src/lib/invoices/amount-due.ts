@@ -12,7 +12,8 @@
  * Pure and isomorphic (no fs, no crypto): the invoice editor can import it.
  */
 import { roundOre } from '@/lib/money'
-import { getAmountToPay } from '@/lib/invoices/rounding'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import type { CompanySettings, Invoice } from '@/types'
 
 /** The invoice header fields that decide whether it is a payment request. */
@@ -20,6 +21,7 @@ export interface PayableInvoiceShape {
   status?: string | null
   document_type?: string | null
   credited_invoice_id?: string | null
+  total?: number | string | null
 }
 
 /** Statuses whose document must never ask for a payment. */
@@ -33,7 +35,7 @@ const NON_PAYABLE_STATUSES: ReadonlySet<string> = new Set(['paid', 'cancelled', 
  */
 export function isInvoicePayableStatus(invoice: PayableInvoiceShape): boolean {
   if ((invoice.document_type || 'invoice') !== 'invoice') return false
-  if (invoice.credited_invoice_id) return false
+  if (isCreditNoteDocument(invoice)) return false
   return !(invoice.status && NON_PAYABLE_STATUSES.has(invoice.status))
 }
 

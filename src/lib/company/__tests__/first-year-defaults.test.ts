@@ -58,11 +58,11 @@ describe('deriveFirstYearDefaults', () => {
     ).toBe(false)
   })
 
-  it('seeds first_year_start as the 1st of the UTC registration month', () => {
+  it('seeds first_year_start as the UTC registration day, not the 1st of its month (crm#1140)', () => {
     const registered = new Date('2026-03-14T10:00:00Z').getTime()
     const result = deriveFirstYearDefaults(registered, NOW)
     expect(result.isFirstFiscalYear).toBe(true)
-    expect(result.firstYearStart).toBe('2026-03-01')
+    expect(result.firstYearStart).toBe('2026-03-14')
   })
 
   it('returns falsy defaults for missing or invalid registration dates', () => {

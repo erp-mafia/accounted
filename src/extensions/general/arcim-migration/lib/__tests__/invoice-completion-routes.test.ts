@@ -18,10 +18,6 @@ function context(role: string | null = 'owner') {
 }
 beforeEach(() => vi.resetAllMocks())
 describe('invoice completion recovery API', () => {
-  it.each(['GET', 'POST'])('requires an authenticated company for %s', async method => {
-    expect((await route(method)(request({ consentId, blockId }))).status).toBe(401)
-    expect(rpc).not.toHaveBeenCalled()
-  })
   it.each([{ consentId }, { consentId, blockId: 'invalid' }, { consentId, blockId, companyId: 'foreign' }])('rejects invalid or extended input', async body => {
     expect((await route('POST')(request(body), context().ctx)).status).toBe(400)
     expect(rpc).not.toHaveBeenCalled()

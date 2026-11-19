@@ -101,7 +101,7 @@ export function agentStatus({ id, aiKnown, overview, waiting, lastAt, t, formatD
   t: (key: string, values?: Record<string, string | number>) => string
   formatDate: (iso: string) => string
 }): { presence: Presence; text: string } | undefined {
-  // Only when the agent is stuck (founder: no "12 att göra", no "Redo"): no AI yet, or a connection it cannot work without.
+  // Only when the agent is stuck (no "12 att göra", no "Redo"): no AI yet, or a connection it cannot work without.
   void waiting; void lastAt; void formatDate
   if (aiKnown === false) return { presence: 'idle', text: t('status_ai_missing') }
   const missing = overview?.agents.find((a) => a.id === id)?.connections.find((c) => isCheckable(c.kind) && c.status === 'missing')

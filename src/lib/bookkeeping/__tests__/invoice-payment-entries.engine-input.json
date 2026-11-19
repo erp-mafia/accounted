@@ -1,0 +1,628 @@
+[
+  {
+    "name": "payment: an issued SEK invoice paid in full to 1930",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-15",
+          "description": "Inbetalning kundfaktura F-1000, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1000, Kund AB"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Inbetalning kundfaktura F-1000, Kund AB"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-0"
+    }
+  },
+  {
+    "name": "payment: a partial payment",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-16",
+          "description": "Delbetalning kundfaktura F-1001, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 600,
+              "credit_amount": 0,
+              "line_description": "Delbetalning kundfaktura F-1001, Kund AB"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 600,
+              "line_description": "Delbetalning kundfaktura F-1001, Kund AB"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-1"
+    }
+  },
+  {
+    "name": "payment: an EUR invoice paid with a kursvinst",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-17",
+          "description": "Inbetalning kundfaktura F-1002, Kunde GmbH",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 2340,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1002, Kunde GmbH"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Inbetalning kundfaktura F-1002, Kunde GmbH"
+            },
+            {
+              "account_number": "3960",
+              "debit_amount": 0,
+              "credit_amount": 40,
+              "line_description": "Valutakursvinst"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-2"
+    }
+  },
+  {
+    "name": "payment: an EUR invoice paid with a kursförlust",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-18",
+          "description": "Inbetalning kundfaktura F-1003, Kunde GmbH",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 2274.5,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1003, Kunde GmbH"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Inbetalning kundfaktura F-1003, Kunde GmbH"
+            },
+            {
+              "account_number": "7960",
+              "debit_amount": 25.5,
+              "credit_amount": 0,
+              "line_description": "Valutakursförlust"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-3"
+    }
+  },
+  {
+    "name": "payment: a card payment settled into the PSP balance on 1686",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-19",
+          "description": "Inbetalning kundfaktura F-1004, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1004, Kund AB"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Inbetalning kundfaktura F-1004, Kund AB"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-4"
+    }
+  },
+  {
+    "name": "payment: from a bank row, with the bank booking context",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-15",
+          "description": "Inbetalning kundfaktura F-1005",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-100000000006",
+              "cash_account_id": "00000000-0000-4000-8000-00000000d001",
+              "settlement_account": "1940",
+              "date": "2026-09-15",
+              "amount": 1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "1940",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1005"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Inbetalning kundfaktura F-1005"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-5"
+    }
+  },
+  {
+    "name": "payment: a RUT invoice settles the customer share only",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Inbetalning kundfaktura F-1006, Privatkund",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 3500,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1006, Privatkund"
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 3500,
+              "line_description": "Inbetalning kundfaktura F-1006, Privatkund"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-6"
+    }
+  },
+  {
+    "name": "payment: the invoice dimensions ride every leg",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-21",
+          "description": "Inbetalning kundfaktura F-1007, Kund AB",
+          "source_type": "invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000008",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Inbetalning kundfaktura F-1007, Kund AB",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Inbetalning kundfaktura F-1007, Kund AB",
+              "dimensions": {
+                "6": "P100"
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-7"
+    }
+  },
+  {
+    "name": "payment: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  },
+  {
+    "name": "cash: kontantmetoden books the sale and its moms at payment for an aktiebolag",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-15",
+          "description": "Kontantbetalning kundfaktura F-1009, Kund AB",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000010",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1009, Kund AB"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Försäljning faktura F-1009"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Utgående moms 25% faktura F-1009"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-9"
+    }
+  },
+  {
+    "name": "cash: mixed rates for an enskild firma",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-16",
+          "description": "Kontantbetalning kundfaktura F-1010, Kund AB",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000011",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1792,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1010, Kund AB"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 600,
+              "line_description": "Försäljning faktura F-1010"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 150,
+              "line_description": "Utgående moms 25% faktura F-1010"
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 200,
+              "line_description": "Försäljning faktura F-1010"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 24,
+              "line_description": "Utgående moms 12% faktura F-1010"
+            },
+            {
+              "account_number": "3003",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Försäljning faktura F-1010"
+            },
+            {
+              "account_number": "2631",
+              "debit_amount": 0,
+              "credit_amount": 18,
+              "line_description": "Utgående moms 6% faktura F-1010"
+            },
+            {
+              "account_number": "3004",
+              "debit_amount": 0,
+              "credit_amount": 500,
+              "line_description": "Försäljning faktura F-1010"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-10"
+    }
+  },
+  {
+    "name": "cash: a RUT invoice debits 1513 for the deduction",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-17",
+          "description": "Kontantbetalning kundfaktura F-1011, Privatkund",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000012",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 3500,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1011, Privatkund"
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 2500,
+              "credit_amount": 0,
+              "line_description": "RUT-avdrag faktura F-1011"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 4800,
+              "line_description": "Försäljning faktura F-1011"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Utgående moms 25% faktura F-1011"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-11"
+    }
+  },
+  {
+    "name": "cash: from a bank row 40 öre short of the total, the gap on 3740",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-18",
+          "description": "Kontantbetalning kundfaktura F-1012",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000013",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-100000000013",
+              "cash_account_id": "00000000-0000-4000-8000-00000000d001",
+              "settlement_account": "1940",
+              "date": "2026-09-18",
+              "amount": 1500,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "1940",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1012"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200.32,
+              "line_description": "Försäljning faktura F-1012"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300.08,
+              "line_description": "Utgående moms faktura F-1012"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0.4,
+              "credit_amount": 0,
+              "line_description": "Öresavrundning"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-12"
+    }
+  },
+  {
+    "name": "cash: from a bank row paying too much, the excess on 2420",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-19",
+          "description": "Kontantbetalning kundfaktura F-1013, Kund AB",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000014",
+          "bank_booking_context": [
+            {
+              "transaction_id": "00000000-0000-4000-8000-100000000014",
+              "cash_account_id": "00000000-0000-4000-8000-00000000d001",
+              "settlement_account": "1930",
+              "date": "2026-09-19",
+              "amount": 1700,
+              "currency": "SEK"
+            }
+          ],
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 1700,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1013, Kund AB"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 1200,
+              "line_description": "Försäljning faktura F-1013"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Utgående moms 25% faktura F-1013"
+            },
+            {
+              "account_number": "2420",
+              "debit_amount": 0,
+              "credit_amount": 200,
+              "line_description": "Överbetalning, förskott från kund"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-13"
+    }
+  },
+  {
+    "name": "cash: an EUR invoice under reverse charge",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kontantbetalning kundfaktura F-1014, Kunde GmbH",
+          "source_type": "invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000015",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 2300,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning kundfaktura F-1014, Kunde GmbH"
+            },
+            {
+              "account_number": "3308",
+              "debit_amount": 0,
+              "credit_amount": 2300,
+              "line_description": "Försäljning faktura F-1014"
+            }
+          ]
+        }
+      ]
+    ],
+    "outcome": {
+      "posted": "je-14"
+    }
+  },
+  {
+    "name": "cash: no open fiscal period, nothing posted",
+    "calls": [],
+    "outcome": null
+  }
+]

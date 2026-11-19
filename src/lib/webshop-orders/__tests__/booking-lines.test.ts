@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildOrderBooking,
   buildOrderBookingLines,
   fallbackVatBreakdown,
   orderBookingDescription,
@@ -33,6 +34,7 @@ const settings: WebshopStoreSettings = {
     klarna_payments: { mode: 'book', account: '1580' },
     bacs: { mode: 'invoice' },
   },
+  country_account_rules: [],
   created_at: '',
   updated_at: '',
 }
@@ -173,6 +175,99 @@ describe('buildOrderBookingLines', () => {
     expect(sumDebits(lines)).toBe(sumCredits(lines))
   })
 
+  describe('a gap between the gross total and the VAT buckets (crm#1993)', () => {
+    const accountLines = (lines: CreateJournalEntryLineInput[]) =>
+      lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+    it('keeps a gap within the residual limit on 3740', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({ total: 500.4, total_sek: 500.4 }),
+        settings,
+      })
+      expect(gap).toBeNull()
+      expect(lineFor(lines, '3740')).toMatchObject({ debit_amount: 0, credit_amount: 0.4 })
+      expect(sumDebits(lines)).toBe(sumCredits(lines))
+    })
+
+    it('books a refund\'s untaxed shipping part at the order\'s one rate, never on 3740', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({
+          row_type: 'refund',
+          total: -768,
+          total_tax: -146,
+          total_sek: -768,
+          vat_breakdown: [{ rate: 25, net: 583, tax: 146 }],
+        }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: 39, booked: 'shipping' })
+      expect(accountLines(lines)).toEqual([
+        ['1930', 0, 768],
+        ['3001', 583, 0],
+        ['2611', 146, 0],
+        ['3001', 31.2, 0],
+        ['2611', 7.8, 0],
+      ])
+      expect(lineFor(lines, '3740')).toBeUndefined()
+      expect(sumDebits(lines)).toBe(768)
+      expect(sumCredits(lines)).toBe(768)
+    })
+
+    it('splits the gap of a foreign-currency order in that currency', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({
+          currency: 'EUR',
+          total: 110,
+          total_tax: 20,
+          total_sek: 1100,
+          exchange_rate: 10,
+          vat_breakdown: [{ rate: 25, net: 80, tax: 20 }],
+        }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: 100, booked: 'shipping' })
+      expect(lines.slice(3)).toEqual([
+        expect.objectContaining({ account_number: '3001', credit_amount: 80, amount_in_currency: 8, currency: 'EUR' }),
+        expect.objectContaining({ account_number: '2611', credit_amount: 20, amount_in_currency: 2, currency: 'EUR' }),
+      ])
+      expect(sumDebits(lines)).toBe(sumCredits(lines))
+    })
+
+    it('leaves the gap of a two-rate order out, with nothing on 3740', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({
+          total: 700,
+          total_tax: 112,
+          total_sek: 700,
+          vat_breakdown: [
+            { rate: 25, net: 400, tax: 100 },
+            { rate: 12, net: 100, tax: 12 },
+          ],
+        }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: 88, booked: null })
+      expect(accountLines(lines)).toEqual([
+        ['1930', 700, 0],
+        ['3001', 0, 400],
+        ['2611', 0, 100],
+        ['3002', 0, 100],
+        ['2621', 0, 12],
+      ])
+      expect(round(sumDebits(lines) - sumCredits(lines))).toBe(88)
+    })
+
+    it('leaves out a gap where the buckets exceed the gross: no missing shipping makes the gross smaller', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({ total: 400, total_sek: 400 }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: -100, booked: null })
+      expect(lineFor(lines, '3740')).toBeUndefined()
+      expect(lines).toHaveLength(3)
+    })
+  })
+
   it('mirrors refund rows: credit the payment account, debit revenue and VAT', () => {
     const lines = buildOrderBookingLines({
       order: makeOrder({
@@ -294,9 +389,9 @@ describe('buildOrderBookingLines', () => {
   it('falls back to the default revenue account for rates not in the template', () => {
     const lines = buildOrderBookingLines({
       order: makeOrder({
-        total: 537,
+        total: 487,
         total_tax: 87,
-        total_sek: 537,
+        total_sek: 487,
         vat_breakdown: [
           { rate: 25, net: 300, tax: 75 },
           { rate: 12, net: 100, tax: 12 },
@@ -338,11 +433,309 @@ describe('buildOrderBookingLines', () => {
   })
 })
 
+describe('buildOrderBookingLines with country rules (crm#1032)', () => {
+  const shopifySettings: WebshopStoreSettings = {
+    ...settings,
+    platform: 'shopify',
+    store_scope: 'minbutik.myshopify.com',
+    payment_method_account_map: {},
+    country_account_rules: [
+      { country: 'EU', vat_rate: null, mode: 'accounts', revenue_account: '3106', vat_account: '2670' },
+      { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+    ],
+  }
+  const toCountry = (customer_country: string, overrides: Record<string, unknown> = {}) => ({
+    ...makeOrder({ payment_method: 'shopify_payments', ...overrides }),
+    platform: 'shopify',
+    customer_country,
+  })
+
+  it('books each bucket of an order shipped abroad on the rule\'s accounts', () => {
+    const lines = buildOrderBookingLines({
+      order: toCountry('DE', {
+        total: 160,
+        total_sek: 160,
+        total_tax: 21,
+        vat_breakdown: [
+          { rate: 19, net: 100, tax: 19 },
+          { rate: 7, net: 39, tax: 2 },
+        ],
+      }),
+      settings: shopifySettings,
+    })
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 160, 0],
+      ['3106', 0, 100],
+      ['2670', 0, 19],
+      ['3106', 0, 39],
+      ['2670', 0, 2],
+    ])
+    expect(sumDebits(lines)).toBe(sumCredits(lines))
+  })
+
+  it('never applies the revenue template to a bucket a rule books', () => {
+    const lines = buildOrderBookingLines({
+      order: toCountry('DK'),
+      settings: shopifySettings,
+      revenueAccounts: { 25: '3011' },
+    })
+    expect(lineFor(lines, '3011')).toBeUndefined()
+    expect(lineFor(lines, '3106')?.credit_amount).toBe(400)
+  })
+
+  it('keeps the Swedish prefill for a bucket no rule covers, for the user to change', () => {
+    // Norway at 25 %: only the 0 % export rule exists.
+    const lines = buildOrderBookingLines({ order: toCountry('NO'), settings: shopifySettings })
+    expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+    expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+  })
+
+  it('books a VAT-free order outside the EU as export without a VAT line', () => {
+    const lines = buildOrderBookingLines({
+      order: toCountry('US', { total_tax: 0, vat_breakdown: [{ rate: 0, net: 500, tax: 0 }] }),
+      settings: shopifySettings,
+    })
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 500, 0],
+      ['3105', 0, 500],
+    ])
+  })
+
+  it('books a VAT-free order outside the EU with nothing to ship as services on 3305 (#88)', () => {
+    const vatFree = { total_tax: 0, vat_breakdown: [{ rate: 0, net: 500, tax: 0 }] }
+    const lines = buildOrderBookingLines({
+      order: toCountry('US', { ...vatFree, ships_nothing: true }),
+      settings: shopifySettings,
+    })
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 500, 0],
+      ['3305', 0, 500],
+    ])
+    // Its refund reverses it on the same account.
+    const refund = buildOrderBookingLines({
+      order: toCountry('US', {
+        ...vatFree,
+        row_type: 'refund',
+        total: -500,
+        total_sek: -500,
+        ships_nothing: true,
+      }),
+      settings: shopifySettings,
+    })
+    expect(refund.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 0, 500],
+      ['3305', 500, 0],
+    ])
+  })
+
+  it('ignores the rules for a WooCommerce order (billing country)', () => {
+    const lines = buildOrderBookingLines({
+      order: makeOrder({ platform: 'woocommerce', customer_country: 'DK' }),
+      settings: { ...shopifySettings, platform: 'woocommerce' },
+    })
+    expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+  })
+
+  it('drops the advisories a rule answers', () => {
+    const zeroRateUs = toCountry('US', { total_tax: 0, vat_breakdown: [{ rate: 0, net: 500, tax: 0 }] })
+    expect(resolveBookingWarnings(zeroRateUs)).toEqual(['country_not_routed', 'zero_rate_foreign'])
+    expect(resolveBookingWarnings(zeroRateUs, shopifySettings)).toEqual([])
+    const eurDk = toCountry('DK', { currency: 'EUR' })
+    expect(resolveBookingWarnings(eurDk)).toEqual(['country_not_routed', 'foreign_vat'])
+    expect(resolveBookingWarnings(eurDk, shopifySettings)).toEqual([])
+  })
+
+  it('warns first when a bucket of an order shipped abroad has no rule', () => {
+    // Norway at 25 % in SEK: no currency or 0 % hint would fire, so without
+    // this the dialog would show Swedish accounts in silence.
+    expect(resolveBookingWarnings(toCountry('NO'), shopifySettings)).toEqual(['country_not_routed'])
+  })
+
+  it('warns about an order without a VAT breakdown the same as the prefill books it', () => {
+    // No breakdown from the store: the prefill books the ratio-inferred 25 %
+    // bucket on 3001/2611, so the warning must route that bucket too.
+    const noSplit = toCountry('NO', { vat_breakdown: [] })
+    const lines = buildOrderBookingLines({ order: noSplit, settings: shopifySettings })
+    expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+    expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+    expect(resolveBookingWarnings(noSplit, shopifySettings)).toEqual(['country_not_routed'])
+    expect(resolveBookingWarnings(noSplit)).toEqual(['country_not_routed'])
+
+    // The inferred bucket a rule covers books on the rule's accounts: no hint.
+    const dkNoSplit = toCountry('DK', { vat_breakdown: [] })
+    expect(lineFor(buildOrderBookingLines({ order: dkNoSplit, settings: shopifySettings }), '3106')?.credit_amount).toBe(400)
+    expect(resolveBookingWarnings(dkNoSplit, shopifySettings)).toEqual([])
+  })
+
+  it('flags a 0 % prefill on an order without a breakdown shipped abroad', () => {
+    const usNoSplit = toCountry('US', { total_tax: 0, vat_breakdown: [] })
+    // Prefilled on 3004 without rules: both hints apply.
+    expect(lineFor(buildOrderBookingLines({ order: usNoSplit }), '3004')?.credit_amount).toBe(500)
+    expect(resolveBookingWarnings(usNoSplit)).toEqual(['country_not_routed', 'zero_rate_foreign'])
+    // The export rule books it on 3105: neither applies.
+    expect(resolveBookingWarnings(usNoSplit, shopifySettings)).toEqual([])
+  })
+
+  it('keeps foreign_vat on a non-SEK order without a breakdown even when a rule routes it', () => {
+    // The rate is inferred, so the user must check it whatever account it lands on.
+    const eurDkNoSplit = toCountry('DK', { currency: 'EUR', vat_breakdown: [] })
+    expect(resolveBookingWarnings(eurDkNoSplit, shopifySettings)).toEqual(['foreign_vat'])
+  })
+
+  describe("Swedish VAT on EU sales, the store's own revenue account (crm#1449)", () => {
+    const swedishSettings = (revenue_account?: string): WebshopStoreSettings => ({
+      ...shopifySettings,
+      country_account_rules: [
+        { country: 'EU', vat_rate: null, mode: 'swedish', ...(revenue_account ? { revenue_account } : {}) },
+        { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+      ],
+    })
+
+    it('books the net on the rule\'s account and the VAT on the Swedish account for the rate', () => {
+      const lines = buildOrderBookingLines({ order: toCountry('DE'), settings: swedishSettings('3012') })
+      expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['1686', 500, 0],
+        ['3012', 0, 400],
+        ['2611', 0, 100],
+      ])
+    })
+
+    it('lets the rule\'s account outrank the bulk revenue template, which keeps Swedish orders', () => {
+      const settings = swedishSettings('3012')
+      const eu = buildOrderBookingLines({ order: toCountry('DE'), settings, revenueAccounts: { 25: '3011' } })
+      expect(lineFor(eu, '3012')?.credit_amount).toBe(400)
+      expect(lineFor(eu, '3011')).toBeUndefined()
+      const se = buildOrderBookingLines({ order: toCountry('SE'), settings, revenueAccounts: { 25: '3011' } })
+      expect(lineFor(se, '3011')?.credit_amount).toBe(400)
+    })
+
+    it('keeps the default Swedish accounts, or the template, for a rule without an account', () => {
+      const settings = swedishSettings()
+      expect(lineFor(buildOrderBookingLines({ order: toCountry('DE'), settings }), '3001')?.credit_amount).toBe(400)
+      const templated = buildOrderBookingLines({ order: toCountry('DE'), settings, revenueAccounts: { 25: '3011' } })
+      expect(lineFor(templated, '3011')?.credit_amount).toBe(400)
+    })
+
+    it('drops the OSS currency hint for an EU order the rule books with Swedish VAT', () => {
+      const eurDe = toCountry('DE', { currency: 'EUR', total_sek: 5600, exchange_rate: 11.2 })
+      expect(resolveBookingWarnings(eurDe, swedishSettings('3012'))).toEqual([])
+      expect(resolveBookingWarnings(eurDe, swedishSettings())).toEqual([])
+      // Without a rule the store has not answered the question: the hint stays.
+      expect(resolveBookingWarnings(eurDe)).toEqual(['country_not_routed', 'foreign_vat'])
+      // A Swedish order in euro is not covered by any rule either.
+      expect(resolveBookingWarnings(toCountry('SE', { currency: 'EUR' }), swedishSettings('3012'))).toEqual([
+        'foreign_vat',
+      ])
+    })
+  })
+
+  describe("a Sverige row, the store's own sales account for Sweden (crm#1449)", () => {
+    // The reporting store's saved rules (Swedish VAT on EU sales, export
+    // outside the EU) plus the Sverige row it asked for.
+    const storeSettings: WebshopStoreSettings = {
+      ...shopifySettings,
+      payment_method_account_map: { shopify_payments: { mode: 'book', account: '1686' } },
+      country_account_rules: [
+        { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+        { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+        { country: 'SE', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+      ],
+    }
+
+    it("books an order to Sweden on the row's account and the VAT on the account for the rate", () => {
+      // The store's order of 94.50 kr incl. 25 % to Sweden, which booked on 3001 by default.
+      const order = toCountry('SE', {
+        total: 94.5,
+        total_sek: 94.5,
+        total_tax: 18.9,
+        vat_breakdown: [{ rate: 25, net: 75.6, tax: 18.9 }],
+      })
+      const lines = buildOrderBookingLines({ order, settings: storeSettings })
+      expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['1686', 94.5, 0],
+        ['3011', 0, 75.6],
+        ['2611', 0, 18.9],
+      ])
+      expect(resolveBookingWarnings(order, storeSettings)).toEqual([])
+    })
+
+    it('outranks the bulk revenue template, which keeps a rate the row does not cover', () => {
+      const se25: WebshopStoreSettings = {
+        ...shopifySettings,
+        country_account_rules: [{ country: 'SE', vat_rate: 25, mode: 'swedish', revenue_account: '3011' }],
+      }
+      const order = toCountry('SE', {
+        total: 556,
+        total_sek: 556,
+        total_tax: 106,
+        vat_breakdown: [
+          { rate: 25, net: 400, tax: 100 },
+          { rate: 12, net: 50, tax: 6 },
+        ],
+      })
+      const lines = buildOrderBookingLines({ order, settings: se25, revenueAccounts: { 25: '3010', 12: '3022' } })
+      expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['1686', 556, 0],
+        ['3011', 0, 400],
+        ['2611', 0, 100],
+        ['3022', 0, 50],
+        ['2621', 0, 6],
+      ])
+    })
+
+    it('leaves an order to Sweden on the default accounts in a store without the row', () => {
+      // The OSS preset's EU catch-all is the other EU countries, never Sweden.
+      const lines = buildOrderBookingLines({ order: toCountry('SE'), settings: shopifySettings })
+      expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+      expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+      expect(lineFor(lines, '3106')).toBeUndefined()
+    })
+  })
+
+  describe('order without a destination country', () => {
+    const noCountry = (overrides: Record<string, unknown> = {}) => ({
+      ...makeOrder({ payment_method: 'shopify_payments', ...overrides }),
+      platform: 'shopify',
+      customer_country: null,
+    })
+
+    it('warns when the store has country rules, and still prefills the Swedish accounts', () => {
+      const order = noCountry()
+      expect(resolveBookingWarnings(order, shopifySettings)).toEqual(['country_unknown'])
+      const lines = buildOrderBookingLines({ order, settings: shopifySettings })
+      expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+      expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+    })
+
+    it('ranks the unknown country before the currency hint', () => {
+      expect(resolveBookingWarnings(noCountry({ currency: 'EUR' }), shopifySettings)).toEqual([
+        'country_unknown',
+        'foreign_vat',
+      ])
+    })
+
+    it('also warns for an order without a breakdown', () => {
+      expect(resolveBookingWarnings(noCountry({ vat_breakdown: [] }), shopifySettings)).toEqual([
+        'country_unknown',
+      ])
+    })
+
+    it('stays quiet for a store without rules or another platform', () => {
+      expect(resolveBookingWarnings(noCountry())).toEqual([])
+      expect(resolveBookingWarnings(noCountry(), { country_account_rules: [] })).toEqual([])
+      expect(
+        resolveBookingWarnings({ ...noCountry(), platform: 'woocommerce' }, shopifySettings),
+      ).toEqual([])
+    })
+  })
+})
+
 describe('resolveBookingWarnings', () => {
   it('flags a 0%-amount to a known non-SE country', () => {
     expect(
       resolveBookingWarnings({
         currency: 'SEK',
+        total: 2000,
         total_tax: 0,
         vat_breakdown: [{ rate: 0, net: 2000, tax: 0 }],
         customer_country: 'NO',
@@ -354,6 +747,7 @@ describe('resolveBookingWarnings', () => {
     expect(
       resolveBookingWarnings({
         currency: 'SEK',
+        total: 2000,
         total_tax: 0,
         vat_breakdown: [{ rate: 0, net: 2000, tax: 0 }],
         customer_country: 'SE',
@@ -362,6 +756,7 @@ describe('resolveBookingWarnings', () => {
     expect(
       resolveBookingWarnings({
         currency: 'SEK',
+        total: 2000,
         total_tax: 0,
         vat_breakdown: [{ rate: 0, net: 2000, tax: 0 }],
         customer_country: null,
@@ -373,6 +768,7 @@ describe('resolveBookingWarnings', () => {
     expect(
       resolveBookingWarnings({
         currency: 'EUR',
+        total: 100,
         total_tax: 20,
         vat_breakdown: [{ rate: 25, net: 80, tax: 20 }],
         customer_country: 'DK',

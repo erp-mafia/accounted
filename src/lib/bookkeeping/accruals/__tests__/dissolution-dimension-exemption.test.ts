@@ -87,7 +87,13 @@ function buildSupabase(tables: Record<string, TableMock>) {
 
   const supabase = {
     from,
-    rpc: vi.fn().mockResolvedValue({ data: null, error: null }),
+    // commit_accrual_installment posts the draft and marks the month posted
+    // in one transaction; every other function answers as before.
+    rpc: vi.fn().mockImplementation(async (fn: string) =>
+      fn === 'commit_accrual_installment'
+        ? { data: [{ outcome: 'posted', voucher_number: 1 }], error: null }
+        : { data: null, error: null },
+    ),
   }
 
   return { supabase, inserts, updates, queriedTables: () => from.mock.calls.map((c) => c[0] as string) }
@@ -147,7 +153,6 @@ function buildTables(valueRows: Array<Record<string, unknown>>): Record<string, 
     accrual_schedule_installments: {
       rows: [
         { data: [makeInstallment()] }, // due installments
-        { data: [{ id: 'inst-1' }] }, // CAS claim
         { count: 0 }, // remaining pending
       ],
     },
@@ -213,13 +218,15 @@ describe('postDueInstallments with an archived dimension value', () => {
       dimensions: { '6': 'P001' },
     })
 
-    // The installment was claimed, not parked with a last_error for the cron
-    // to retry forever.
+    // The month was posted together with its draft, not parked with a
+    // last_error for the cron to retry forever.
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'commit_accrual_installment',
+      expect.objectContaining({ p_company_id: COMPANY, p_installment_id: 'inst-1', p_entry_id: 'je-1' }),
+    )
     const installmentUpdates = (updates.accrual_schedule_installments ?? []) as Array<
       Record<string, unknown>
     >
-    expect(installmentUpdates).toHaveLength(1)
-    expect(installmentUpdates[0]).toMatchObject({ status: 'posted', journal_entry_id: 'je-1' })
     expect(installmentUpdates.some((u) => typeof u.last_error === 'string')).toBe(false)
   })
 

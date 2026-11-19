@@ -99,6 +99,9 @@ export const GET = withRouteContext('arkiv.agreement', async (_request, ctx, { p
     .select('id, kind, title, status, counterparty_party_id, counterparty_name, starts_on, ends_on, amount, currency, period, source_document_id, sources')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
+    // The archive's agreements are the ones read from its documents; a manual
+    // one lives in Avtal och åtaganden (lib/commitments).
+    .not('source_document_id', 'is', null)
     .maybeSingle()
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
   if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })

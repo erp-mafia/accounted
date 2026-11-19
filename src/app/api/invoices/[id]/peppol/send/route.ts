@@ -3,14 +3,9 @@ import { z } from 'zod'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import type { PeppolDeliverySummary } from '@/lib/invoices/peppol-delivery'
 import { peppolSendFailureMessageEn, sendInvoiceViaPeppol } from '@/lib/invoices/peppol-send-service'
 import { createServiceClient } from '@/lib/supabase/server'
-
-// Registers the configured Access Point adapter and wires the event bus that
-// issueAndBookInvoice() emits on.
-ensureInitialized()
 
 // The connector transport waits up to 25 s for the lookup and 50 s for the
 // submit (lib/invoices/transports/connector.ts), so the send gets 90 s.
@@ -55,7 +50,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const outcome = await sendInvoiceViaPeppol(
       { supabase, companyId, userId: user.id, log },
       parsedParams.data.id,
-      { service: createServiceClient() },
+      { service: createServiceClient(), stageAsSession: true },
     )
     if (!outcome.ok) {
       if (outcome.error) return privateNoStore(errorResponse(outcome.error, log, { requestId }))

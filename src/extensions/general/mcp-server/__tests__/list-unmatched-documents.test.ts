@@ -48,6 +48,14 @@ describe('gnubok_list_unmatched_documents', () => {
     expect(tool.description).toMatch(/journal entry/)
   })
 
+  it('says it covers the inbox only and names the archive list (feedback seq 876431)', () => {
+    // An agent read an empty inbox as "the document does not exist" while it
+    // sat in the archive: the description has to say where the rest is.
+    expect(tool.description).toMatch(/Inbox only/)
+    expect(tool.description).toContain('gnubok_list_records')
+    expect(tools.some((t) => t.name === 'gnubok_list_records')).toBe(true)
+  })
+
   it('excludes inbox rows already booked as a journal entry, not just supplier invoices', async () => {
     const inboxChain = makeRecordingChain({ data: [], error: null })
     const fromMock = vi.fn().mockReturnValue(inboxChain.proxy)
@@ -63,6 +71,21 @@ describe('gnubok_list_unmatched_documents', () => {
     expect(isCalls).toContainEqual({ method: 'is', args: ['created_supplier_invoice_id', null] })
     expect(isCalls).toContainEqual({ method: 'is', args: ['created_journal_entry_id', null] })
     expect(result).toEqual({ items: [], count: 0 })
+  })
+
+  it('excludes inbox rows whose document a verifikat already holds, as gnubok_link_document_to_voucher reads it (agent feedback seq 1003926)', async () => {
+    // The item was never stamped (it was created after the link), so the
+    // inbox row's own columns still read "unprocessed". The document's link
+    // is filtered in the query itself, so a page is never padded with rows
+    // that are dropped afterwards.
+    const inboxChain = makeRecordingChain({ data: [], error: null })
+    const fromMock = vi.fn().mockReturnValue(inboxChain.proxy)
+
+    await tool.execute({}, 'company-1', 'user-1', { from: fromMock } as never)
+
+    const select = inboxChain.calls.find((c) => c.method === 'select')?.args[0] as string
+    expect(select).toContain('document_attachments!inner(file_name, journal_entry_id)')
+    expect(inboxChain.calls).toContainEqual({ method: 'is', args: ['document_attachments.journal_entry_id', null] })
   })
 
   it('maps extracted_data fields and drops documents already pinned to a transaction', async () => {
@@ -169,6 +192,40 @@ describe('gnubok_list_unmatched_documents', () => {
     }
     expect(result.items.find((i) => i.document_id === 'doc-4')?.pending_link).toEqual({ operation_id: 'op-9d32', transaction_id: 'tx-first', journal_entry_id: null })
     expect(result.items.find((i) => i.document_id === 'doc-5')?.pending_link).toBeNull()
+  })
+
+  // crm#1783: a forwarded Stripe receipt is three documents (invoice PDF,
+  // receipt PDF, the mail's HTML) and read as three unrelated candidates.
+  it('names the other documents of the same mail on each, and nothing on an upload', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    const row = (id: string, mail: string | null) => ({
+      id,
+      document_id: `doc-${id}`,
+      source: mail ? 'email' : 'upload',
+      email_from: null,
+      email_subject: null,
+      email_received_at: null,
+      resend_email_id: mail,
+      created_at: '2026-11-10T13:20:00Z',
+      document_attachments: { file_name: `${id}.pdf` },
+      extracted_data: null,
+    })
+    enqueue({ data: [row('invoice', 'em_1'), row('receipt', 'em_1'), row('upload', null)], error: null })
+    enqueue({ data: [], error: null }) // no document pinned to a transaction
+    enqueue({ data: [], error: null }) // waiting links
+    enqueue({ data: [], error: null }) // attached transactions
+    // Every document of the mail, the HTML body already matched elsewhere included.
+    enqueue({ data: [{ id: 'invoice', resend_email_id: 'em_1' }, { id: 'receipt', resend_email_id: 'em_1' }, { id: 'html', resend_email_id: 'em_1' }], error: null })
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ inbox_item_id: string; same_mail_inbox_item_ids: string[] }>
+    }
+    const byId = new Map(result.items.map((i) => [i.inbox_item_id, i.same_mail_inbox_item_ids]))
+    expect(byId.get('invoice')).toEqual(['receipt', 'html'])
+    expect(byId.get('receipt')).toEqual(['invoice', 'html'])
+    expect(byId.get('upload')).toEqual([])
+    const mailLookup = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'in')
+    expect(mailLookup?.args).toEqual(['resend_email_id', ['em_1']])
   })
 
   it('returns an empty result when the inbox query has nothing pending', async () => {

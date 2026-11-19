@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { setDeadlineCompletion } from '@/lib/deadlines/completion'
 
 // Strict: `is_completed` must be a genuine boolean or absent. The hand-rolled
 // parser this replaces silently degraded { is_completed: "false" } (a string)
@@ -31,13 +32,14 @@ const CompleteDeadlineSchema = z
  * re-complete a Skatteverket deadline the user was trying to put back on the
  * list. It also makes the caller's own confirmation truthful: the client picks
  * its toast from the state it asked for, so the server must not silently
- * persist the opposite.
+ * persist the opposite. An explicit state the deadline already has writes
+ * nothing, so completed_at keeps the moment it was first ticked off.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'deadline.toggle_complete',
   async (request, ctx, { params }) => {
     const { id } = await params
-    const { supabase, companyId } = ctx
+    const { supabase, companyId, log, requestId } = ctx
 
     // Absent/empty body = toggle (the pre-explicit-state ergonomics); anything
     // else must validate. The raw text is read first because validateBody
@@ -57,40 +59,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       requestedState = validation.data.is_completed ?? null
     }
 
-    // First, get current deadline state
-    const { data: existing, error: fetchError } = await supabase
-      .from('deadlines')
-      .select('is_completed')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
-
-    if (fetchError) {
-      if (fetchError.code === 'PGRST116') {
-        // "Deadline" is the term the Swedish UI uses too (messages/sv.json).
-        return NextResponse.json({ error: 'Deadline hittades inte' }, { status: 404 })
-      }
-      return NextResponse.json({ error: getUserErrorMessage(fetchError) }, { status: 500 })
-    }
-
-    // Explicit state when the caller supplied one, otherwise toggle.
-    const newCompletedState = requestedState ?? !existing.is_completed
-    const { data, error } = await supabase
-      .from('deadlines')
-      .update({
-        is_completed: newCompletedState,
-        completed_at: newCompletedState ? new Date().toISOString() : null,
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select('*, customer:customers(id, name)')
-      .single()
-
-    if (error) {
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-    }
-
-    return NextResponse.json({ data })
+    // The rule (which deadline, which state, what is written) is
+    // lib/deadlines/completion.ts, shared with gnubok_complete_deadline.
+    const outcome = await setDeadlineCompletion(
+      { supabase, companyId },
+      { deadlineId: id, isCompleted: requestedState ?? undefined },
+      { dryRun: false },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data.deadline })
   },
   { requireWrite: true },
 )

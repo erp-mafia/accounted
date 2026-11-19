@@ -3,12 +3,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
-import { AlertCircle, Loader2, CheckCircle2 } from 'lucide-react'
+import { CheckCircleIcon, ExclamationCircleIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 
 interface EditableRow {
   id: string
@@ -42,18 +44,8 @@ export default function OpeningBalancePeriodStep({
   // on a background refresh of the list (that would override a user pick).
   const autoSelectedRef = useRef(false)
 
-  // Compute totals
-  let totalDebit = 0
-  let totalCredit = 0
-  for (const row of rows) {
-    totalDebit = Math.round((totalDebit + row.debit_amount) * 100) / 100
-    totalCredit = Math.round((totalCredit + row.credit_amount) * 100) / 100
-  }
-  // Compare in whole öre, mirroring the engine's validateBalance: a float
-  // epsilon like (< 0.01) would misclassify exact 1-öre imbalances as
-  // balanced, since e.g. 0.03 - 0.02 evaluates to just under 0.01.
-  const balanceDiff = Math.round((totalDebit - totalCredit) * 100) / 100
-  const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0
+  const { totalDebit, totalCredit, difference: balanceDiff } = lineBalance(rows)
+  const isBalanced = balanceDiff === 0
 
   useEffect(() => {
     if (loadingPeriods || autoSelectedRef.current) return
@@ -97,10 +89,10 @@ export default function OpeningBalancePeriodStep({
         <div className="space-y-2">
           <Label>Räkenskapsperiod</Label>
           {loadingPeriods ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Hämtar perioder...
-            </div>
+            // The field's own shape while the periods load.
+            <LateReveal aria-label="Hämtar perioder">
+              <Skeleton className="h-8 w-full rounded-lg" />
+            </LateReveal>
           ) : periods.length === 0 ? (
             <ImportNotices notices={[makeNotice('ob_no_periods', 'action')]} />
           ) : (
@@ -128,7 +120,7 @@ export default function OpeningBalancePeriodStep({
         )}
 
         {/* Summary */}
-        <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+        <div className="rounded-lg p-4 space-y-3 bg-control shadow-raised">
           <h4 className="text-sm font-medium">Sammanfattning</h4>
           <div className="grid grid-cols-2 gap-y-2 text-sm">
             <span className="text-muted-foreground">Antal konton:</span>
@@ -144,12 +136,12 @@ export default function OpeningBalancePeriodStep({
           </div>
           {isBalanced ? (
             <div className="flex items-center gap-2 pt-1 border-t text-sm">
-              <CheckCircle2 className="h-4 w-4 text-success" />
+              <CheckCircleIcon className="h-4 w-4 text-success" />
               <span className="text-success font-medium">Balanserar</span>
             </div>
           ) : (
             <div className="flex items-center gap-2 pt-1 border-t text-sm">
-              <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
+              <ExclamationCircleIcon className="h-4 w-4 text-destructive shrink-0" />
               <span className="text-destructive font-medium">
                 Balanserar inte (differens{' '}
                 <span className="tabular-nums">
@@ -163,8 +155,8 @@ export default function OpeningBalancePeriodStep({
 
         {/* Error */}
         {error && (
-          <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
-            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+          <div className="bg-destructive/8 flex items-start gap-3 rounded-lg px-4 py-3">
+            <ExclamationCircleIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-destructive">{error}</p>
           </div>
         )}

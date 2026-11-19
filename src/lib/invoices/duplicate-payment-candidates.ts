@@ -20,6 +20,7 @@ import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicat
 import { findExactCoveringSet } from '@/lib/reconciliation/covering-set'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
+import { filterOwedInvoices } from '@/lib/invoices/overdue'
 
 const log = createLogger('invoices/duplicate-payment-candidates')
 
@@ -208,9 +209,9 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   if (rows.length === 0) return aggregate()
 
   return rankCandidates(rows, {
-    // Both forms the payer could have quoted: the bare invoice number and the
-    // OCR the invoice printed. Same floor as ocrKeys(), so this is the same
-    // key set plus the one it was missing.
+    // Every form the payer could have quoted: the bare invoice number, the
+    // OCR the invoice printed and Bankgirot's length-digit OCR. Same floor as
+    // ocrKeys(), so this is the same key set plus the ones it was missing.
     invoiceOcrs: distinctiveReferenceKeys(invoice.invoice_number),
     searchTerms: counterpartySearchTerms(invoice.customer_name),
   })
@@ -475,13 +476,12 @@ async function findAggregateCandidates(
   const dateHigh = new Date(dateMs + AGGREGATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
 
   const { data: rowsData } = await supabase
-    .from('transactions')
+    .from('open_bank_rows')
     .select('id, date, amount, description, merchant_name, reference')
     .eq('company_id', companyId)
     .eq('is_business', true)
     .is('invoice_id', null)
     .is('supplier_invoice_id', null)
-    .is('journal_entry_id', null)
     .or('currency.is.null,currency.eq.SEK')
     .gt('amount', payment)
     .gte('date', dateLow)
@@ -493,15 +493,9 @@ async function findAggregateCandidates(
   const rows = (Array.isArray(rowsData) ? rowsData : []) as AggregateRow[]
   if (rows.length === 0) return []
 
-  let othersQuery = supabase
-    .from('invoices')
-    .select('id, invoice_number, remaining_amount, total, due_date')
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .is('credited_invoice_id', null)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
-    .gt('remaining_amount', 0)
-    .or('currency.is.null,currency.eq.SEK')
+  let othersQuery = filterOwedInvoices(
+    supabase.from('invoices').select('id, invoice_number, remaining_amount, total, due_date').eq('company_id', companyId),
+  ).or('currency.is.null,currency.eq.SEK')
   if (invoiceNumber) othersQuery = othersQuery.neq('invoice_number', invoiceNumber)
   const { data: othersData } = await othersQuery
     .order('due_date', { ascending: true })

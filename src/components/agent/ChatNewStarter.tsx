@@ -17,9 +17,12 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 export default function ChatNewStarter({
   intentId,
   seedUserMessage,
+  autoFocusComposer = false,
 }: {
   intentId: string
   seedUserMessage?: string
+  /** The /chat start page: the cursor starts in the text box (not on touch). */
+  autoFocusComposer?: boolean
 }) {
   const router = useRouter()
   const { identity } = useAgentSheet()
@@ -40,10 +43,10 @@ export default function ChatNewStarter({
 
   return (
     <>
-      <header className="flex items-center gap-3 border-b border-border px-6 py-4 shrink-0">
+      <header className="flex items-center gap-3 border-b-hairline px-6 py-4 shrink-0">
         <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName} />
         <div className="min-w-0">
-          <h1 className="font-display text-lg tracking-tight truncate">{agentName}</h1>
+          <h1 className="text-lg truncate">{agentName}</h1>
           <p className="text-xs text-muted-foreground truncate">
             {isSandbox ? 'Förhandsvisning: avstängd i sandlådan' : 'Ny konversation'}
           </p>
@@ -58,6 +61,7 @@ export default function ChatNewStarter({
             seedUserMessage={seedUserMessage}
             initialConversationId={null}
             onConversationCreated={swapToConversation}
+            autoFocusComposer={autoFocusComposer}
             scrollerClassName="px-6 py-8"
           />
         ) : (

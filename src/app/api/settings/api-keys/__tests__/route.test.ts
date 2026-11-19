@@ -713,6 +713,119 @@ describe('GET /api/settings/api-keys', () => {
     expect(listUserCompaniesForPickerMock).toHaveBeenCalledWith(expect.anything(), 'user-1', { activeCompanyId: ACTIVE })
   })
 
+  it("names a service-account key's account (company-scoped read), and null for a person's key", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    const ACCOUNT = '5b6c1d2e-0000-4000-8000-0000000000a1'
+    setupFrom({
+      listResult: {
+        data: [
+          { id: 'ak-sa', key_prefix: 'gnubok_sk_s', name: 'Nyckel 1', scopes: ['invoices:read'], revoked_at: null, created_at: '2026-10-16T10:00:00Z', user_id: 'user-1', service_account_id: ACCOUNT },
+          { id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'Min nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-15T10:00:00Z', user_id: 'user-1', service_account_id: null },
+        ],
+      },
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [{ api_key_id: 'ak-sa', company_id: ACTIVE, access: 'write' }] },
+      service_accounts: { data: [{ id: ACCOUNT, name: 'Nattlig synk' }] },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([
+      expect.objectContaining({ id: 'ak-sa', service_account: { id: ACCOUNT, name: 'Nattlig synk' } }),
+      expect.objectContaining({ id: 'ak-p', service_account: null }),
+    ])
+    // The raw column is folded into service_account, not returned beside it.
+    expect(body.data.every((row) => !('service_account_id' in row))).toBe(true)
+    expect(service.find('service_accounts', 'select')).toEqual(['id, name'])
+    expect(service.calls).toContainEqual({ table: 'service_accounts', method: 'in', args: ['company_id', [ACTIVE]] })
+    expect(service.calls).toContainEqual({ table: 'service_accounts', method: 'in', args: ['id', [ACCOUNT]] })
+  })
+
+  it('reads no service account when no key belongs to one', async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [{ id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'Min nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-15T10:00:00Z', user_id: 'user-1' }],
+      },
+    })
+    const service = setupServiceFrom({ api_key_companies: { data: [] } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    expect(res.status).toBe(200)
+    expect(service.calls.some((c) => c.table === 'service_accounts')).toBe(false)
+  })
+
+  it("names a colleague's key by full name, else e-mail, and never the caller's own", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    const ACCOUNT = '5b6c1d2e-0000-4000-8000-0000000000a2'
+    setupFrom({
+      listResult: {
+        data: [
+          { id: 'ak-own', key_prefix: 'gnubok_sk_o', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-21T11:36:59Z', user_id: 'user-1', client: 'local' },
+          { id: 'ak-anna', key_prefix: 'gnubok_sk_a', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-19T15:00:24Z', user_id: 'user-2', client: 'claude' },
+          { id: 'ak-bo', key_prefix: 'gnubok_sk_b', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-18T09:00:00Z', user_id: 'user-3', client: 'chatgpt' },
+          { id: 'ak-sa', key_prefix: 'gnubok_sk_s', name: 'Nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-17T09:00:00Z', user_id: 'user-4', service_account_id: ACCOUNT },
+        ],
+      },
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [] },
+      service_accounts: { data: [{ id: ACCOUNT, name: 'Nattlig synk' }] },
+      profiles: {
+        data: [
+          { id: 'user-2', full_name: 'Anna Andersson', email: 'anna@example.se' },
+          { id: 'user-3', full_name: '  ', email: 'bo@example.se' },
+        ],
+      },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([
+      expect.objectContaining({ id: 'ak-own', is_own: true, owner_name: null }),
+      expect.objectContaining({ id: 'ak-anna', is_own: false, owner_name: 'Anna Andersson' }),
+      expect.objectContaining({ id: 'ak-bo', is_own: false, owner_name: 'bo@example.se' }),
+      expect.objectContaining({ id: 'ak-sa', is_own: false, owner_name: null }),
+    ])
+    // Only colleagues' person keys are looked up: not the caller, not a service account's sponsor.
+    expect(service.find('profiles', 'select')).toEqual(['id, full_name, email'])
+    expect(service.find('profiles', 'in')).toEqual(['id', ['user-2', 'user-3']])
+  })
+
+  it("reads no profiles when every key is the caller's own", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [{ id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'Min nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-15T10:00:00Z', user_id: 'user-1' }],
+      },
+    })
+    const service = setupServiceFrom({ api_key_companies: { data: [] } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    expect(res.status).toBe(200)
+    expect(service.calls.some((c) => c.table === 'profiles')).toBe(false)
+  })
+
+  it('still lists the keys, unnamed, when the owner names cannot be read', async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [{ id: 'ak-anna', key_prefix: 'gnubok_sk_a', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-19T15:00:24Z', user_id: 'user-2', client: 'claude' }],
+      },
+    })
+    setupServiceFrom({ api_key_companies: { data: [] }, profiles: { error: { message: 'boom' } } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([expect.objectContaining({ id: 'ak-anna', is_own: false, owner_name: null })])
+  })
+
   it('skips the allowlist query when there are no keys', async () => {
     setupFrom({ listResult: { data: [] } })
     const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
@@ -768,5 +881,109 @@ describe('GET /api/settings/api-keys', () => {
     setupList({ error: { message: 'boom', code: 'XX000' } })
     const res = await GET(createMockRequest('/api/settings/api-keys'), { params: Promise.resolve({}) })
     expect(res.status).toBe(500)
+  })
+})
+
+describe('GET /api/settings/api-keys?scope=mine (byrå cockpit)', () => {
+  // The cockpit sits above the clients: it lists a person's own connections,
+  // wherever each one is homed, not the keys of the company left open.
+  function setupMine(result: { data?: unknown; error?: unknown }) {
+    const eqSpy = vi.fn()
+    const chain: Record<string, unknown> = {
+      select: () => chain,
+      eq: (...args: unknown[]) => {
+        eqSpy(...args)
+        return chain
+      },
+      order: () => Promise.resolve({ data: result.data ?? null, error: result.error ?? null }),
+    }
+    mockSupabase.from.mockImplementation(() => chain)
+    return { eqSpy }
+  }
+
+  const ownKey = (id: string, companyId: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    key_prefix: `gnubok_sk_${id}`,
+    name: 'MCP-klient (OAuth)',
+    scopes: ['reports:read'],
+    revoked_at: null,
+    created_at: '2026-10-16T10:00:00Z',
+    user_id: 'user-1',
+    service_account_id: null,
+    company_id: companyId,
+    ...extra,
+  })
+
+  beforeEach(() => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const res = await GET(createMockRequest('/api/settings/api-keys?scope=mine'), noParams)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 400 for an unknown scope', async () => {
+    setupMine({ data: [] })
+    const res = await GET(createMockRequest('/api/settings/api-keys?scope=everyone'), noParams)
+    expect(res.status).toBe(400)
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
+  it("lists the caller's own keys in every company they belong to, not the active company's", async () => {
+    const { eqSpy } = setupMine({
+      data: [ownKey('k-active', ACTIVE), ownKey('k-other', OTHER), ownKey('k-left', FOREIGN)],
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [{ api_key_id: 'k-other', company_id: OTHER, access: 'write' }] },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys?scope=mine'), noParams)
+    const { status, body } = await parseJsonResponse<{
+      data: Array<Record<string, unknown>>
+      meta: { companies: Array<{ company_id: string; is_active: boolean }> }
+    }>(res)
+    expect(status).toBe(200)
+    expect(eqSpy).toHaveBeenCalledWith('user_id', 'user-1')
+    expect(eqSpy).not.toHaveBeenCalledWith('company_id', expect.anything())
+    // A key homed in a company the caller has left is not theirs to manage.
+    expect(body.data.map((row) => row.id)).toEqual(['k-active', 'k-other'])
+    expect(body.data.every((row) => row.is_own === true)).toBe(true)
+    expect(body.data[1]).toEqual(expect.objectContaining({ id: 'k-other', company_ids: [OTHER], source: 'signin' }))
+    // The response shape is the company list's: no home company, no owner id.
+    expect(body.data.every((row) => !('company_id' in row) && !('user_id' in row))).toBe(true)
+    expect(service.find('api_key_companies', 'in')).toEqual(['api_key_id', ['k-active', 'k-other']])
+    expect(body.meta.companies.map((company) => company.company_id)).toEqual([ACTIVE, OTHER, THIRD])
+  })
+
+  it('names service accounts within the companies the listed keys are homed in', async () => {
+    const ACCOUNT = '5b6c1d2e-0000-4000-8000-0000000000a2'
+    setupMine({
+      data: [
+        ownKey('k-sa', OTHER, { service_account_id: ACCOUNT, name: 'Nyckel 1' }),
+        ownKey('k-p', ACTIVE),
+      ],
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [] },
+      service_accounts: { data: [{ id: ACCOUNT, name: 'Nattlig synk' }] },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys?scope=mine'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data[0]).toEqual(
+      expect.objectContaining({ id: 'k-sa', service_account: { id: ACCOUNT, name: 'Nattlig synk' } }),
+    )
+    expect(service.calls).toContainEqual({
+      table: 'service_accounts',
+      method: 'in',
+      args: ['company_id', [OTHER, ACTIVE]],
+    })
+    expect(service.calls).not.toContainEqual(
+      expect.objectContaining({ table: 'service_accounts', method: 'eq' }),
+    )
   })
 })

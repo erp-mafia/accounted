@@ -1,8 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { dbError } from '@/lib/errors/db-error'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { roundOre } from '@/lib/money'
+import type { EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
+import { findUnlinkedOpeningBalance } from '@/lib/import/opening-balance/unlinked'
 import type { TrialBalanceRow } from '@/types'
 
 /**
@@ -30,11 +32,7 @@ import type { TrialBalanceRow } from '@/types'
  * Period activity is summed per account by the get_trial_balance_aggregates
  * RPC (migration 20260910163731, issue #2470): one round trip returns the
  * 'period' bucket and, for a sub-range, the 'rollforward' bucket, under the
- * requested ClosingEntryMode. The previous implementation walked every line
- * of the period through the shared two-step entry-lines fetch
- * (lib/bookkeeping/entry-lines.ts) in 100-entry chunks and summed in JS; it
- * is kept behind REPORTS_TB_RPC=off as the rollback for one release and is
- * removed together with the flag in the follow-up.
+ * requested ClosingEntryMode.
  */
 /**
  * How a caller treats the year-end closing entries. Required, with no default,
@@ -66,24 +64,19 @@ export type ClosingEntryMode =
    */
   | 'exclude-final'
   /**
-   * Drop every source_type 'year_end' entry and its storno/correction chain.
-   * The operational-report convention: pre-bokslut activity only.
+   * Drop every source_type 'year_end' entry and its storno/correction chain,
+   * and a resultatavslut booked in a previous system or by hand that zeroes
+   * the result accounts it books (year_end_chain_entry_ids, migration
+   * 20261024140100). The operational-report convention: pre-bokslut
+   * activity only.
    */
   | 'exclude-all-year-end'
 
-/**
- * Kill switch for the SQL aggregation (issue #2470). Unset or any value other
- * than 'off' selects the get_trial_balance_aggregates RPC; 'off' restores the
- * chunked entry-lines walk. Read per call so a test can pin either path.
- */
-function aggregatesRpcEnabled(): boolean {
-  return process.env.REPORTS_TB_RPC !== 'off'
-}
-
-type AccountSums = Map<string, { debit: number; credit: number }>
+/** Debit and credit per account number. */
+export type AccountSums = Map<string, { debit: number; credit: number }>
 
 /** Additive fold with the Number()||0 coercion the line loops always used. */
-function addActivity(target: AccountSums, accountNumber: string, debit: unknown, credit: unknown): void {
+export function addActivity(target: AccountSums, accountNumber: string, debit: unknown, credit: unknown): void {
   const existing = target.get(accountNumber) || { debit: 0, credit: 0 }
   existing.debit += Number(debit) || 0
   existing.credit += Number(credit) || 0
@@ -153,261 +146,137 @@ async function fetchActivityViaRpc(scope: ActivityScope): Promise<PeriodActivity
 }
 
 /**
- * The company's reversed year_end entries: the roots whose storno and
- * correction chain 'exclude-all-year-end' drops with them. Company-wide on
- * purpose, like the RPC's ye_reversed: a storno in this period can reverse a
- * year-end entry of another period.
+ * The entries of one fiscal period that 'exclude-all-year-end' leaves out,
+ * from the year_end_chain_entry_ids SQL function: every source_type
+ * 'year_end' entry, the storno and correction of a reversed one, and a
+ * resultatavslut booked in a previous system or by hand that zeroes the
+ * result accounts it books. get_trial_balance_aggregates,
+ * get_kpi_report_aggregates and get_dimension_pnl_buckets read the same
+ * function, so the rule has one definition; JS paths that read journal lines
+ * themselves (monthly breakdown with a dimension filter, the cash-flow tax
+ * check, the SIE export's exclude_year_end_closing, the measure drill-down)
+ * leave these ids out instead of restating it.
  */
-export async function fetchReversedYearEndEntryIds(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<string[]> {
-  const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
-    supabase
-      .from('journal_entries')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('source_type', 'year_end')
-      .eq('status', 'reversed')
-      .order('id', { ascending: true })
-      .range(from, to)
-  )
-  return rows.map((r) => r.id)
-}
-
-/**
- * 'exclude-all-year-end' as filters on a journal_entries query: every
- * source_type 'year_end' entry, and every entry that reverses or corrects
- * one of `reversedYearEndIds` (fetchReversedYearEndEntryIds). It is the JS
- * twin of the RPC's 'exclude-all-year-end' branch (get_trial_balance_
- * aggregates, migration 20260924202408). The entry-lines path below and the
- * dimension P&L's tagged-line pass (dimension-pnl.ts) both apply it from
- * here, so the rule has exactly two definitions, this one and the RPC's,
- * and they change together.
- */
-export function excludeYearEndChain(
-  query: EntryLinesQuery,
-  reversedYearEndIds: readonly string[],
-): EntryLinesQuery {
-  let q = query.neq('source_type', 'year_end')
-  if (reversedYearEndIds.length > 0) {
-    const idList = `(${reversedYearEndIds.join(',')})`
-    q = q.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
-    q = q.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
-  }
-  return q
-}
-
-/**
- * The entries 'exclude-final' drops, from the one SQL definition the RPC
- * path uses too (result_closing_entry_ids). Posted entries only, so a
- * reversed closing stays together with its storno.
- */
-async function fetchResultClosingEntryIds(
+export async function fetchYearEndEntryIds(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<string[]> {
-  const { data, error } = await supabase.rpc('result_closing_entry_ids', {
+  const { data, error } = await supabase.rpc('year_end_chain_entry_ids', {
     p_company_id: companyId,
     p_fiscal_period_id: fiscalPeriodId,
   })
-  if (error) {
-    throw dbError(error, 'result_closing_entry_ids failed')
-  }
-  return Array.isArray(data) ? (data as string[]) : []
+  if (error) throw dbError(error, 'year_end_chain_entry_ids failed')
+  return Array.isArray(data) ? data.map(String) : []
 }
 
 /**
- * The pre-#2470 implementation: the shared two-step entry-lines fetch
- * (entries first, then lines chunked by entry id, both paginated), once for
- * the roll-forward slice and once for the period, summed in JS. Verbatim
- * except that 'exclude-final' reads its set from result_closing_entry_ids.
- * Selected by REPORTS_TB_RPC=off only; deleted with the flag (the year-end
- * helpers above stay: the dimension P&L applies them too).
+ * 'exclude-all-year-end' as a filter on a journal_entries query: leave out
+ * `yearEndEntryIds`, the period's set from fetchYearEndEntryIds.
  */
-async function fetchActivityViaEntryLines(
-  scope: ActivityScope,
-  period: { period_start: string } | null,
-  yearEndEntryIds: string[],
-): Promise<PeriodActivity> {
-  const { supabase, companyId, fiscalPeriodId, obEntryId, dimensionFilter } = scope
-  const excludeAllYearEndEntries = scope.closingEntry === 'exclude-all-year-end'
-  const excludeFinalOnly = scope.closingEntry === 'exclude-final'
+export function excludeYearEndChain(
+  query: EntryLinesQuery,
+  yearEndEntryIds: readonly string[],
+): EntryLinesQuery {
+  return yearEndEntryIds.length > 0 ? query.not('id', 'in', `(${yearEndEntryIds.join(',')})`) : query
+}
 
-  const closingEntryIds = excludeFinalOnly
-    ? await fetchResultClosingEntryIds(supabase, companyId, fiscalPeriodId)
-    : []
-  const excludeClosingEntry = (query: EntryLinesQuery): EntryLinesQuery =>
-    closingEntryIds.length > 0
-      ? query.not('id', 'in', `(${closingEntryIds.join(',')})`)
-      : query
+/** The chart columns a trial balance labels its rows with. */
+export interface TrialBalanceChartAccount {
+  account_number: string
+  account_name: string
+  account_class: number
+}
 
-  // When the caller requests a sub-range starting after period_start, the
-  // "opening" of that window must include all activity since the period
-  // started (rolled forward below).
-  const rollForwardWindow =
-    scope.fromDate && period?.period_start && scope.fromDate > period.period_start
-      ? { periodStart: period.period_start, fromDate: scope.fromDate }
-      : null
+/**
+ * The company's chart as generateTrialBalance reads it for row labels. A
+ * report that builds several trial balances reads it once with this and
+ * passes it as `chart` (the read itself, still in flight, is fine), instead
+ * of every balance reading the whole chart again.
+ */
+export function fetchTrialBalanceChart(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<TrialBalanceChartAccount[]> {
+  return fetchAllRows<TrialBalanceChartAccount>(({ from, to }) =>
+    supabase
+      .from('chart_of_accounts')
+      .select('account_number, account_name, account_class')
+      .eq('company_id', companyId)
+      .order('account_number', { ascending: true })
+      .range(from, to)
+  )
+}
 
-  type Line = {
-    id: string
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-  }
+export interface TrialBalanceOptions {
+  closingEntry: ClosingEntryMode
+  fromDate?: string
+  toDate?: string
+  dimensions?: Record<string, string>
+  /**
+   * The company's chart, already read (fetchTrialBalanceChart). Omitted,
+   * the balance reads it itself. Only labels the rows: the amounts never
+   * depend on it.
+   */
+  chart?: ReadonlyArray<TrialBalanceChartAccount> | Promise<ReadonlyArray<TrialBalanceChartAccount>>
+}
 
-  // The array order [roll-forward, lines] keeps each table's queries in the
-  // same order the sequential version issued them.
-  const [priorLines, lines] = await Promise.all([
-    // ── Roll IB forward from period_start up to fromDate ───────────
-    rollForwardWindow
-      ? fetchEntryLines<Line>({
-          supabase,
-          lineColumns: 'id, account_number, debit_amount, credit_amount',
-          filterEntries: (q: EntryLinesQuery) => {
-            let query = q
-              .eq('company_id', companyId)
-              .eq('fiscal_period_id', fiscalPeriodId)
-              .in('status', ['posted', 'reversed'])
-              .gte('entry_date', rollForwardWindow.periodStart)
-              .lt('entry_date', rollForwardWindow.fromDate)
-
-            if (obEntryId) {
-              query = query.neq('id', obEntryId)
-            }
-
-            if (excludeAllYearEndEntries) {
-              query = excludeYearEndChain(query, yearEndEntryIds)
-            }
-            if (excludeFinalOnly) {
-              query = excludeClosingEntry(query)
-            }
-
-            return query
-          },
-          filterLines: dimensionFilter
-            ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
-              (q: EntryLinesQuery) => q.contains('dimensions', dimensionFilter)
-            : undefined,
-        })
-      : Promise.resolve([] as Line[]),
-    // ── Period lines (excluding opening balance entry) ─────────────
-    // If year-end closing set an OB entry, exclude it from period lines so
-    // its values aren't double-counted (they're already captured as IB).
-    // Race condition note: if year-end closing runs concurrently and sets
-    // obEntryId between the period query and this query, the OB entry could
-    // be missed from both IB and period. The window is sub-second and the
-    // consequence is a single stale report: acceptable.
-    fetchEntryLines<Line>({
-      supabase,
-      lineColumns: 'id, account_number, debit_amount, credit_amount',
-      filterEntries: (q: EntryLinesQuery) => {
-        let query = q
-          .eq('company_id', companyId)
-          .eq('fiscal_period_id', fiscalPeriodId)
-          .in('status', ['posted', 'reversed'])
-
-        // Date filters are only applied when the caller explicitly asks. The
-        // period itself is already enforced via fiscal_period_id, so adding
-        // redundant entry_date bounds for the default case would just
-        // increase query complexity (and break older mocks that don't stub gte
-        // /lte). The fiscal_period_id constraint plus a CHECK on entry_date in
-        // the engine keep activity inside the period.
-        if (scope.fromDate) {
-          query = query.gte('entry_date', scope.fromDate)
-        }
-        if (scope.toDate) {
-          query = query.lte('entry_date', scope.toDate)
-        }
-
-        if (obEntryId) {
-          query = query.neq('id', obEntryId)
-        }
-
-        if (excludeAllYearEndEntries) {
-          query = excludeYearEndChain(query, yearEndEntryIds)
-        }
-        if (excludeFinalOnly) {
-          query = excludeClosingEntry(query)
-        }
-
-        return query
-      },
-      filterLines: dimensionFilter
-        ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
-          (q: EntryLinesQuery) => q.contains('dimensions', dimensionFilter)
-        : undefined,
-    }),
-  ])
-
-  const activity: PeriodActivity = { rollforward: new Map(), period: new Map() }
-  for (const line of priorLines) {
-    addActivity(activity.rollforward, line.account_number, line.debit_amount, line.credit_amount)
-  }
-  for (const line of lines) {
-    addActivity(activity.period, line.account_number, line.debit_amount, line.credit_amount)
-  }
-  return activity
+export interface TrialBalance {
+  rows: TrialBalanceRow[]
+  totalDebit: number
+  totalCredit: number
+  isBalanced: boolean
 }
 
 export async function generateTrialBalance(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options: {
-    closingEntry: ClosingEntryMode
-    fromDate?: string
-    toDate?: string
-    dimensions?: Record<string, string>
-  }
-): Promise<{
-  rows: TrialBalanceRow[]
-  totalDebit: number
-  totalCredit: number
-  isBalanced: boolean
-}> {
+  options: TrialBalanceOptions,
+): Promise<TrialBalance> {
+  // yearOpening stays off this result: the Saldobalans route, the v1 API and
+  // the MCP tool serialize it whole.
+  const { rows, totalDebit, totalCredit, isBalanced } =
+    await generateTrialBalanceWithYearOpening(supabase, companyId, fiscalPeriodId, options)
+  return { rows, totalDebit, totalCredit, isBalanced }
+}
+
+/**
+ * The trial balance plus the fiscal year's ingående balans per account,
+ * `yearOpening`: the balance on period_start, before the activity between
+ * period_start and fromDate rolls into the rows' opening columns. With a
+ * fromDate the rows open at the ingående saldo on that date; without one,
+ * the two are the same. Under a dimension filter, yearOpening is scoped as
+ * the rows are.
+ */
+export async function generateTrialBalanceWithYearOpening(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  options: TrialBalanceOptions,
+): Promise<TrialBalance & { yearOpening: AccountSums }> {
 
   const dimensionFilter =
     options.dimensions && Object.keys(options.dimensions).length > 0
       ? options.dimensions
       : undefined
-  const excludeAllYearEndEntries = options.closingEntry === 'exclude-all-year-end'
   const excludeFinalOnly = options.closingEntry === 'exclude-final'
-  const viaRpc = aggregatesRpcEnabled()
 
-  // Wave 1: the period row (for opening balance computation), the reversed
-  // year-end entry ids (legacy path only, and only for
-  // 'exclude-all-year-end': the RPC resolves that set in SQL), and the chart
-  // of accounts are mutually independent, so they share one parallel round
-  // trip instead of three sequential ones. The accounts list is also fetched
-  // for reports that turn out empty or fail the closed-period guard below;
-  // that occasional extra read-only query is the price of a short critical
-  // path, and the returned data is unchanged.
-  const [periodResult, yearEndIds, accounts] = await Promise.all([
+  // Wave 1: the period row (for opening balance computation) and the chart
+  // of accounts are independent, so they share one parallel round trip. The
+  // accounts list is also fetched for reports that turn out empty or fail
+  // the closed-period guard below; that occasional extra read-only query is
+  // the price of a short critical path, and the returned data is unchanged.
+  // A caller that passes the chart skips the read.
+  const [periodResult, accounts] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('period_start, period_end, opening_balance_entry_id, closing_entry_id, is_closed, closed_externally')
       .eq('id', fiscalPeriodId)
       .eq('company_id', companyId)
       .single(),
-    !viaRpc && excludeAllYearEndEntries
-      ? fetchReversedYearEndEntryIds(supabase, companyId)
-      : Promise.resolve([] as string[]),
     // Account names for row labelling.
-    fetchAllRows<{
-      account_number: string
-      account_name: string
-      account_class: number
-    }>(({ from, to }) =>
-      supabase
-        .from('chart_of_accounts')
-        .select('account_number, account_name, account_class')
-        .eq('company_id', companyId)
-        .order('account_number', { ascending: true })
-        .range(from, to)
-    ),
+    options.chart ?? fetchTrialBalanceChart(supabase, companyId),
   ])
   const { data: period } = periodResult
 
@@ -431,11 +300,16 @@ export async function generateTrialBalance(
     )
   }
 
-  // getOpeningBalances always reports the period's opening_balance_entry_id
-  // back as obEntryId (see lib/reports/opening-balances.ts), so the id is
-  // known before that fetch resolves and the activity read below can run in
-  // the same round trip as the opening-balance read.
-  const obEntryId = period?.opening_balance_entry_id ?? null
+  // The IB entry the activity read leaves out is known before the
+  // opening-balance read resolves, so the two can share a round trip: the
+  // period's opening_balance_entry_id, or for a period without one its posted
+  // but unlinked IB verifikat (one small read; see findUnlinkedOpeningBalance).
+  // getOpeningBalances is handed the lookup and reports the same id back.
+  const unlinkedOpeningBalance =
+    period && !period.opening_balance_entry_id
+      ? await findUnlinkedOpeningBalance(supabase, companyId, period.period_start)
+      : null
+  const obEntryId = period?.opening_balance_entry_id ?? unlinkedOpeningBalance?.entryId ?? null
 
   const scope: ActivityScope = {
     supabase,
@@ -451,14 +325,11 @@ export async function generateTrialBalance(
   // Wave 2: opening balances (IB) at period_start and the period activity
   // (roll-forward slice + period sums) are independent reads.
   const [obResult, activity] = await Promise.all([
-    getOpeningBalances(supabase, companyId, period, { dimensions: dimensionFilter }),
-    viaRpc
-      ? fetchActivityViaRpc(scope)
-      : fetchActivityViaEntryLines(
-          scope,
-          period,
-          yearEndIds,
-        ),
+    getOpeningBalances(supabase, companyId, period, {
+      dimensions: dimensionFilter,
+      unlinked: unlinkedOpeningBalance,
+    }),
+    fetchActivityViaRpc(scope),
   ])
 
   // Under a dimension filter the IB is scoped to it as well (issue #3313):
@@ -468,10 +339,14 @@ export async function generateTrialBalance(
   // opens at zero (getOpeningBalances reads the registry flag). Result accounts never carry IB, so the P&L
   // reports built on this are unchanged. obEntryId still excludes the IB
   // entry from the activity lines.
-  const openingBalances = obResult.balances
+  const yearOpening = obResult.balances
 
-  // Additively fold the roll-forward activity into openingBalances so the
-  // downstream IB/period split stays correct without changing call sites.
+  // The rows open at fromDate: a copy of the year's IB with the roll-forward
+  // activity folded in, so yearOpening itself stays the year's IB.
+  const openingBalances: AccountSums = new Map()
+  for (const [accountNumber, sums] of yearOpening) {
+    addActivity(openingBalances, accountNumber, sums.debit, sums.credit)
+  }
   for (const [accountNumber, sums] of activity.rollforward) {
     addActivity(openingBalances, accountNumber, sums.debit, sums.credit)
   }
@@ -479,7 +354,7 @@ export async function generateTrialBalance(
   const periodBalances = activity.period
 
   if (periodBalances.size === 0 && openingBalances.size === 0) {
-    return { rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true }
+    return { rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true, yearOpening }
   }
 
   const accountMap = new Map<string, { name: string; class: number }>()
@@ -490,10 +365,64 @@ export async function generateTrialBalance(
     })
   }
 
-  // Merge account numbers from both opening and period
+  const rows = buildTrialBalanceRows(openingBalances, periodBalances, accountMap)
+
+  const totalDebit = roundOre(rows.reduce((sum, r) => sum + r.closing_debit, 0))
+  const totalCredit = roundOre(rows.reduce((sum, r) => sum + r.closing_credit, 0))
+
+  return {
+    rows,
+    totalDebit,
+    totalCredit,
+    isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
+    yearOpening,
+  }
+}
+
+/**
+ * The closing balance (UB, debit minus credit) of a set of accounts at the end
+ * of a fiscal period, read exactly as the balance sheet reads it: the trial
+ * balance with every entry included, so the ingående balans is in it however
+ * the year got one (a linked IB verifikat, kept out of the period activity so
+ * it counts once, or earlier years' verifikat carried forward). A control that
+ * compares an account with its underlag reads the account here instead of
+ * summing the year's lines itself, which left out an IB carried forward
+ * (crm#1296). Accounts without IB or activity contribute 0.
+ */
+export async function closingBalanceOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  accountNumbers: readonly string[],
+): Promise<number> {
+  const wanted = new Set(accountNumbers)
+  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    closingEntry: 'include',
+    // The chart only labels rows; the amounts never depend on it.
+    chart: [],
+  })
+  let balance = 0
+  for (const row of rows) {
+    if (wanted.has(row.account_number)) balance += row.closing_debit - row.closing_credit
+  }
+  return roundOre(balance)
+}
+
+/**
+ * The trial balance rows from per-account IB and period activity: the merged
+ * account set, `Konto <n>` and the first digit as class for an account missing
+ * from the chart, öre rounding on all six amounts (IB + period = UB), sorted
+ * by account number. The one row builder: generateTrialBalance and the KPI
+ * reports (kpi-aggregates.ts), which sum the same activity in SQL, both build
+ * their rows here.
+ */
+export function buildTrialBalanceRows(
+  openingBalances: AccountSums,
+  periodBalances: AccountSums,
+  accountMap: ReadonlyMap<string, { name: string; class: number }>,
+): TrialBalanceRow[] {
   const allAccountNumbers = new Set([...openingBalances.keys(), ...periodBalances.keys()])
 
-  // Build rows: IB + period = UB
   const rows: TrialBalanceRow[] = []
   for (const accountNumber of allAccountNumbers) {
     const opening = openingBalances.get(accountNumber) || { debit: 0, credit: 0 }
@@ -507,24 +436,15 @@ export async function generateTrialBalance(
       account_number: accountNumber,
       account_name: accountInfo.name,
       account_class: accountInfo.class,
-      opening_debit: Math.round(opening.debit * 100) / 100,
-      opening_credit: Math.round(opening.credit * 100) / 100,
-      period_debit: Math.round(periodActivity.debit * 100) / 100,
-      period_credit: Math.round(periodActivity.credit * 100) / 100,
-      closing_debit: Math.round((opening.debit + periodActivity.debit) * 100) / 100,
-      closing_credit: Math.round((opening.credit + periodActivity.credit) * 100) / 100,
+      opening_debit: roundOre(opening.debit),
+      opening_credit: roundOre(opening.credit),
+      period_debit: roundOre(periodActivity.debit),
+      period_credit: roundOre(periodActivity.credit),
+      closing_debit: roundOre(opening.debit + periodActivity.debit),
+      closing_credit: roundOre(opening.credit + periodActivity.credit),
     })
   }
 
   rows.sort((a, b) => a.account_number.localeCompare(b.account_number))
-
-  const totalDebit = Math.round(rows.reduce((sum, r) => sum + r.closing_debit, 0) * 100) / 100
-  const totalCredit = Math.round(rows.reduce((sum, r) => sum + r.closing_credit, 0) * 100) / 100
-
-  return {
-    rows,
-    totalDebit,
-    totalCredit,
-    isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
-  }
+  return rows
 }

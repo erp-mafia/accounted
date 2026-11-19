@@ -1,11 +1,36 @@
 'use client'
 
 import { useId, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
+import { NavLink } from '@/components/dashboard/NavLink'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Search } from 'lucide-react'
+import {
+  AdjustmentsHorizontalIcon,
+  BanknotesIcon,
+  BellIcon,
+  BookOpenIcon,
+  BuildingOfficeIcon,
+  CalendarIcon,
+  CheckCircleIcon,
+  CreditCardIcon,
+  DocumentTextIcon,
+  EnvelopeIcon,
+  KeyIcon,
+  LinkIcon,
+  MagnifyingGlassIcon,
+  PercentBadgeIcon,
+  QuestionMarkCircleIcon,
+  ShieldCheckIcon,
+  SparklesIcon,
+  Square2StackIcon,
+  TagIcon,
+  UserCircleIcon,
+  UsersIcon,
+  type Icon,
+} from '@/components/icons'
+import { NAV_GROUP_LABEL_CLASS, NAV_ROW_ICON_CLASS, navRowClass } from '@/components/dashboard/nav-row-class'
 import { cn } from '@/lib/utils'
+import { FIELD_CLASS, FIELD_LINE_CLASS } from '@/components/ui/field-classes'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import {
   Select,
@@ -16,11 +41,41 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { settingsMessageKey } from '@/lib/navigation/settings-sections'
 import { SETTINGS_SECTION_PARENT, useSettingsNavItems, type SettingsNavItem } from './useSettingsNavItems'
 
 interface SettingsRailProps {
-  /** 'rail' = search plus grouped vertical list (desktop); 'select' = grouped dropdown (mobile). */
+  /**
+   * 'rail' = search plus the grouped list, drawn as the Inställningar area's
+   * sidebar by the shell (DashboardNav); 'select' = grouped dropdown in the
+   * page on a phone, where the shell has no sidebar.
+   */
   display: 'rail' | 'select'
+}
+
+/** The glyph of each section's row, in the same hand as the other areas' rows. */
+const SECTION_ICON: Readonly<Record<string, Icon>> = {
+  company: BuildingOfficeIcon,
+  anpassa: AdjustmentsHorizontalIcon,
+  members: UsersIcon,
+  billing: CreditCardIcon,
+  bookkeeping: BookOpenIcon,
+  'fiscal-years': CalendarIcon,
+  tax: PercentBadgeIcon,
+  salary: BanknotesIcon,
+  attest: CheckCircleIcon,
+  templates: Square2StackIcon,
+  invoicing: DocumentTextIcon,
+  sending: EnvelopeIcon,
+  collections: BellIcon,
+  connections: LinkIcon,
+  api: KeyIcon,
+  'data-sharing': SparklesIcon,
+  account: UserCircleIcon,
+  security: ShieldCheckIcon,
+  team: UsersIcon,
+  brand: TagIcon,
+  help: QuestionMarkCircleIcon,
 }
 
 /** Case- and diacritic-insensitive match key ("Löner" matches "loner"). */
@@ -28,20 +83,31 @@ function fold(value: string): string {
   return value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 }
 
-/** The rail item for the current URL: /settings/<id>/..., mapped to its hub for off-rail pages. */
+/**
+ * The section of the current URL: /settings/<id>/..., mapped to its hub for
+ * a page without a row of its own. Undefined outside settings (the sidebar
+ * also shows on /help and /extensions, where no section is the current one).
+ */
 function useActiveSettingsSection(items: SettingsNavItem[]): string | undefined {
   const pathname = usePathname()
-  const segment = pathname.split('/')[2]
+  const [, root, segment] = pathname.split('/')
+  // Tillägg and an extension's own page are reached from Kopplingar.
+  if (root === 'extensions' || root === 'e') return items.find((i) => i.id === 'connections')?.id
+  if (root === 'help') return 'help'
+  if (root !== 'settings') return undefined
   const id = segment ? (SETTINGS_SECTION_PARENT[segment] ?? segment) : undefined
-  return items.find((i) => i.id === id)?.id ?? items[0]?.id
+  return items.find((i) => i.id === id)?.id
 }
 
 export function SettingsRail({ display }: SettingsRailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('settings_nav')
-  const { items, groups, searchLinks } = useSettingsNavItems()
-  const activeId = useActiveSettingsSection(items)
+  const tNav = useTranslations('nav')
+  const pathname = usePathname()
+  const { items, groups, allGroups, searchLinks } = useSettingsNavItems()
+  const allItems = allGroups.flatMap((g) => g.items)
+  const activeId = useActiveSettingsSection(display === 'select' ? allItems : items)
 
   // Byrå settings scope travels as ?ctx=byra: section switches must carry it
   // along or the rail would snap back to the full company section list.
@@ -50,19 +116,31 @@ export function SettingsRail({ display }: SettingsRailProps) {
     searchParams.get('ctx') === 'byra' && href.startsWith('/settings/') ? `${href}?ctx=byra` : href
 
   if (display === 'select') {
-    const activeHref = items.find((i) => i.id === activeId)?.href ?? items[0]?.href
+    // The picker names the page as the top bar does. Koppla en agent belongs
+    // to Agenter inside a company, and a page with no row in this scope (a
+    // byrå section opened inside a company) names itself.
+    const byraScope = searchParams.get('ctx') === 'byra'
+    const [, root, segment] = pathname.split('/')
+    const ownKey = segment ? settingsMessageKey(segment) : null
+    const own =
+      root === 'settings' && segment && !allItems.some((i) => i.id === segment) && !(segment in SETTINGS_SECTION_PARENT)
+        ? { href: `/settings/${segment}`, label: ownKey && t.has(ownKey as never) ? t(ownKey as never) : null }
+        : null
+    const labelOf = (i: SettingsNavItem) => (i.id === 'api' && !byraScope ? tNav('v3_connect_agent') : i.label)
+    const activeHref = (own?.label ? own.href : undefined) ?? allItems.find((i) => i.id === activeId)?.href ?? allItems[0]?.href
     return (
       <Select value={activeHref} onValueChange={(href) => router.push(withCtx(href))}>
         <SelectTrigger className="w-full" aria-label={t('aria_label')}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {groups.map((g) => (
+          {own?.label && <SelectItem value={own.href}>{own.label}</SelectItem>}
+          {allGroups.map((g) => (
             <SelectGroup key={g.key}>
               <SelectLabel>{g.label}</SelectLabel>
               {g.items.map((i) => (
                 <SelectItem key={i.id} value={i.href}>
-                  {i.label}
+                  {labelOf(i)}
                 </SelectItem>
               ))}
             </SelectGroup>
@@ -73,34 +151,27 @@ export function SettingsRail({ display }: SettingsRailProps) {
   }
 
   return (
-    <nav aria-label={t('aria_label')} className="space-y-4">
-      <SettingsSearch
-        items={[...items, ...searchLinks]}
-        groupLabel={(key) => groups.find((g) => g.key === key)?.label ?? ''}
-        onPick={(href) => router.push(withCtx(href))}
-      />
-      {groups.map((g) => (
-        <div key={g.key} className="space-y-1">
-          <p className="px-3 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {g.label}
-          </p>
-          <ul className="space-y-0.5">
+    <nav aria-label={t('aria_label')}>
+      <div className="pb-2">
+        <SettingsSearch
+          items={[...items, ...searchLinks]}
+          groupLabel={(key) => groups.find((g) => g.key === key)?.label ?? ''}
+          onPick={(href) => router.push(withCtx(href))}
+        />
+      </div>
+      {groups.map((g, index) => (
+        <div key={g.key} className={index > 0 ? 'pt-3.5' : undefined}>
+          <p className={NAV_GROUP_LABEL_CLASS}>{g.label}</p>
+          <ul className="space-y-px">
             {g.items.map((i) => {
               const isActive = i.id === activeId
+              const SectionIcon = SECTION_ICON[i.id]
               return (
                 <li key={i.id}>
-                  <Link
-                    href={withCtx(i.href)}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={cn(
-                      'flex h-8 items-center rounded-lg px-3 text-[13px] transition-colors duration-150',
-                      isActive
-                        ? 'bg-secondary font-medium text-foreground'
-                        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-                    )}
-                  >
-                    {i.label}
-                  </Link>
+                  <NavLink href={withCtx(i.href)} aria-current={isActive ? 'page' : undefined} className={navRowClass(isActive)}>
+                    {SectionIcon && <SectionIcon className={NAV_ROW_ICON_CLASS} />}
+                    <span className="min-w-0 flex-1 truncate">{i.label}</span>
+                  </NavLink>
                 </li>
               )
             })}
@@ -163,7 +234,7 @@ function SettingsSearch({
 
   return (
     <div className="relative">
-      <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-2 h-4 w-4 text-muted-foreground" />
+      <MagnifyingGlassIcon aria-hidden="true" className="pointer-events-none absolute left-2.5 top-2 z-10 h-4 w-4 text-muted-foreground pointer-coarse:top-3" />
       <input
         ref={inputRef}
         type="search"
@@ -194,7 +265,7 @@ function SettingsSearch({
             setOpen(false)
           }
         }}
-        className="h-8 w-full rounded-full border border-border bg-background pl-9 pr-3 text-[13px] text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20"
+        className={cn(FIELD_CLASS, FIELD_LINE_CLASS, 'pl-8')}
       />
       {showList ? (
         <ul
@@ -223,7 +294,7 @@ function SettingsSearch({
                 )}
               >
                 <span className="block text-foreground">{hit.term ?? hit.item.label}</span>
-                <span className="block text-[11px] text-muted-foreground">
+                <span className="block text-xs text-muted-foreground">
                   {groupLabel(hit.item.group)} · {hit.item.label}
                 </span>
               </li>

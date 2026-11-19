@@ -1,0 +1,1032 @@
+{
+  "dumps": [
+    {
+      "flow": "set: the IB typed for a year, from the dashboard",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher": "A1",
+          "lines_created": 5,
+          "total_debit": 120000,
+          "total_credit": 120000
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2025-01-01",
+          "description": "Ingående balanser",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "100000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "80000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "15000",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "correct: a corrected IB booked, the old one stornoed, the year relinked",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher": "A1",
+          "lines_created": 5,
+          "total_debit": 120000,
+          "total_credit": 120000
+        },
+        {
+          "ok": true,
+          "voucher": "A2",
+          "lines_created": 5,
+          "total_debit": 118500,
+          "total_credit": 118500
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2026-01-01",
+          "description": "Ingående balanser",
+          "source_type": "opening_balance",
+          "status": "reversed",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "100000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "80000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "15000",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2026-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "98500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "80000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "13500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2026-01-01",
+          "description": "Makulering: Ingående balanser",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": 1,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "20000",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Reversal: IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "100000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "25000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "Reversal: IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "80000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "Reversal: IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "15000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Reversal: IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "correct with cascade: the next year IB replaced in SQL with the same delta",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher": "A1",
+          "lines_created": 5,
+          "total_debit": 120000,
+          "total_credit": 120000
+        },
+        {
+          "ok": true,
+          "voucher": "A1",
+          "lines_created": 3,
+          "total_debit": 130000,
+          "total_credit": 130000
+        },
+        {
+          "ok": true,
+          "voucher": "A2",
+          "lines_created": 5,
+          "total_debit": 118500,
+          "total_credit": 118500,
+          "cascade": {
+            "corrected": [
+              "2028"
+            ],
+            "skipped": [
+              [
+                "2029",
+                "no_opening_balance"
+              ]
+            ],
+            "failed": false
+          }
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2027-01-01",
+          "description": "Ingående balanser",
+          "source_type": "opening_balance",
+          "status": "reversed",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "100000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "80000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "15000",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2028-01-01",
+          "description": "Ingående balanser",
+          "source_type": "opening_balance",
+          "status": "reversed",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "130000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "105000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2027-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "98500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "80000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "13500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2028-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0.00",
+              "credit_amount": "1500.00",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB-rättelse 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "130000.00",
+              "credit_amount": "0.00",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0.00",
+              "credit_amount": "25000.00",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0.00",
+              "credit_amount": "105000.00",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500.00",
+              "credit_amount": "0.00",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB-rättelse 2440",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2027-01-01",
+          "description": "Makulering: Ingående balanser",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": 1,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "20000",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Reversal: IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "100000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "25000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "Reversal: IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "80000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "Reversal: IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "15000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Reversal: IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2028-01-01",
+          "description": "Makulering: Ingående balanser",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": 1,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "130000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "25000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "Reversal: IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "105000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "Reversal: IB 2091",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "set inside a staged approval, from the v1 and MCP door (service role)",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher": "A1",
+          "lines_created": 5,
+          "total_debit": 120000,
+          "total_credit": 120000
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 1,
+          "entry_date": "2029-01-01",
+          "description": "Ingående balanser",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "100000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "80000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "15000",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "correct from the v1 and MCP door (service role): the corrected IB booked and linked, the old one stornoed",
+      "outcomes": [
+        {
+          "ok": true,
+          "voucher": "A2",
+          "lines_created": 5,
+          "total_debit": 118500,
+          "total_credit": 118500
+        }
+      ],
+      "entries": [
+        {
+          "voucher_series": "A",
+          "voucher_number": 2,
+          "entry_date": "2029-01-01",
+          "description": "Ingående balanser (korrigerade, rättelse av A1)",
+          "source_type": "opening_balance",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "20000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "98500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "25000",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "80000",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "13500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "A",
+          "voucher_number": 3,
+          "entry_date": "2029-01-01",
+          "description": "Makulering: Ingående balanser",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "reverses_voucher": 1,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "20000",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Reversal: IB 1510",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "100000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: IB 1930",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "25000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2081",
+              "line_description": "Reversal: IB 2081",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "80000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2091",
+              "line_description": "Reversal: IB 2091",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "15000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Reversal: IB 2440",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": [
+    {
+      "name": "2025",
+      "opening_balances_set": true,
+      "ib_series": "A",
+      "ib_voucher": 1,
+      "ib_status": "posted"
+    },
+    {
+      "name": "2026",
+      "opening_balances_set": true,
+      "ib_series": "A",
+      "ib_voucher": 2,
+      "ib_status": "posted"
+    },
+    {
+      "name": "2027",
+      "opening_balances_set": true,
+      "ib_series": "A",
+      "ib_voucher": 2,
+      "ib_status": "posted"
+    },
+    {
+      "name": "2028",
+      "opening_balances_set": true,
+      "ib_series": "A",
+      "ib_voucher": 2,
+      "ib_status": "posted"
+    },
+    {
+      "name": "2029",
+      "opening_balances_set": true,
+      "ib_series": "A",
+      "ib_voucher": 2,
+      "ib_status": "posted"
+    }
+  ]
+}

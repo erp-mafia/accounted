@@ -159,7 +159,7 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     expect(body.data.results[1].ok).toBe(true)
   })
 
-  it('writes each invoice\'s own QR mode, null when it is not given', async () => {
+  it('writes each invoice\'s own QR mode, and leaves the column alone when it is not given', async () => {
     const inserts: Array<{ table: string; payload: unknown }> = []
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase(
@@ -186,10 +186,10 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
 
     expect(res.status).toBe(200)
     const invoiceInserts = inserts.filter((i) => i.table === 'invoices').map((i) => i.payload)
-    expect(invoiceInserts).toEqual([
-      expect.objectContaining({ qr_mode: 'swish' }),
-      expect.objectContaining({ qr_mode: null }),
-    ])
+    // Omitted, as on POST /invoices: the nullable column then stays null and
+    // the invoice inherits the company's QR mode.
+    expect(invoiceInserts[0]).toMatchObject({ qr_mode: 'swish' })
+    expect(invoiceInserts[1]).not.toHaveProperty('qr_mode')
   })
 
   it('returns per-item failure when customer not found', async () => {
@@ -275,6 +275,75 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     const tables = supabase.from.mock.calls.map((c) => c[0])
     expect(tables.filter((t) => t === 'customers')).toHaveLength(1)
     expect(tables.filter((t) => t === 'invoices')).toHaveLength(1)
+  })
+
+  it('refuses a self-billing item instead of drafting it, other items unaffected', async () => {
+    const inserts: Array<{ table: string; payload: unknown }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          customers: { data: VALID_CUSTOMER, error: null },
+          invoices: { data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 1250 }, error: null },
+          invoice_items: { data: null, error: null },
+        },
+        inserts,
+      ),
+    )
+    const base = { customer_id: CUSTOMER_ID, invoice_date: '2026-09-02', due_date: '2026-10-02', currency: 'SEK' }
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        invoices: [
+          {
+            ...base,
+            is_self_billed: true,
+            external_invoice_number: 'SB-1',
+            received_date: '2026-09-02',
+            items: [SAMPLE_ITEM('A')],
+          },
+          { ...base, items: [SAMPLE_ITEM('B')] },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0]).toMatchObject({
+      ok: false,
+      error: { code: 'VALIDATION_ERROR', details: { field: 'is_self_billed' } },
+    })
+    expect(body.data.results[1].ok).toBe(true)
+    expect(inserts.filter((i) => i.table === 'invoices')).toHaveLength(1)
+  })
+
+  it('fails only the item whose payee lookup throws, and still answers for the batch', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: VALID_CUSTOMER, error: null },
+        cash_accounts: { data: null, error: { message: 'connection reset' } },
+        invoices: { data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 1250 }, error: null },
+        invoice_items: { data: null, error: null },
+      }),
+    )
+    const base = { customer_id: CUSTOMER_ID, invoice_date: '2026-09-02', due_date: '2026-10-02', currency: 'SEK' }
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        invoices: [
+          { ...base, items: [SAMPLE_ITEM('A')] },
+          { ...base, payment_cash_account_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', items: [SAMPLE_ITEM('B')] },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(true)
+    expect(body.data.results[1].ok).toBe(false)
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
   })
 
   // A validated EU business: the picker default is 0% (huvudregeln, ML 6 kap.
@@ -500,6 +569,41 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
       expect(item.vat_rate).toBe(0)
       expect(item.vat_amount).toBe(0)
     }
+  })
+
+  it('stores öre-exact line and header amounts for a three-decimal unit price', async () => {
+    // Same rule as buildInvoiceWriteData (agent feedback seq 965009): a raw
+    // 3 x 33.333 used to preview and store 99.999 / 124.999.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: VALID_CUSTOMER, error: null },
+        company_settings: { data: { vat_registered: true }, error: null },
+      }),
+    )
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create?dry_run=true`, {
+        invoices: [
+          {
+            customer_id: CUSTOMER_ID,
+            invoice_date: '2026-05-12',
+            due_date: '2026-06-11',
+            currency: 'SEK',
+            items: [{ ...SAMPLE_ITEM('Tredecimalt pris'), quantity: 3, unit_price: 33.333, vat_rate: 25 }],
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const preview = body.data.preview.results[0].data.preview
+    expect(preview.items[0]).toMatchObject({ line_total: 100, vat_amount: 25 })
+    expect(preview.subtotal).toBe(100)
+    expect(preview.vat_amount).toBe(25)
+    expect(preview.total).toBe(125)
   })
 
   it('rejects all_or_nothing: true with 501 NOT_IMPLEMENTED', async () => {

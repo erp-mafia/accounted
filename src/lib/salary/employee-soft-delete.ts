@@ -1,5 +1,6 @@
 /**
- * Soft delete of an employee: the one rule behind the v1
+ * Soft delete of an employee: the one rule behind the dashboard DELETE
+ * /api/salary/employees/{id}, the v1
  * DELETE /api/v1/companies/{companyId}/employees/{id} and the MCP tool
  * gnubok_delete_employee (lib/operations/salary-employee-setup.ts).
  *
@@ -11,11 +12,15 @@
  * and new salary runs. Deactivating an inactive employee writes nothing
  * (idempotent). A dry run reads and checks and writes nothing.
  *
- * The dashboard route (app/api/salary/employees/[id]) performs the same soft
- * delete itself, with its own error copy.
+ * A legacy row with an incomplete jämkning beslut (stored before #2240) is
+ * refused by employees_jamkning_dates_check on ANY update, this one included:
+ * the constraint is NOT VALID, so the row is checked on its next edit. That
+ * refusal is a VALIDATION_ERROR telling the user what to complete or clear,
+ * derived from the row itself, never "not found" or a 500 (#2697).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { jamkningIssueFromDbError, type JamkningFields } from '@/lib/salary/jamkning-rules'
 
 /** The employee as read before any write. */
 export interface EmployeeActivityRow {
@@ -34,6 +39,8 @@ export type SoftDeleteEmployeeOutcome =
 export type SoftDeleteEmployeeResult =
   | { ok: true; data: SoftDeleteEmployeeOutcome }
   | { ok: false; code: 'EMPLOYEE_NOT_FOUND' }
+  /** The row's incomplete jämkning beslut blocks every update (#2697). */
+  | { ok: false; code: 'VALIDATION_ERROR'; details: { field: string; message: string } }
   /**
    * A failed read or write. `cause` is the raw database error, so each door
    * classifies it the way it classifies any other database failure.
@@ -51,13 +58,19 @@ export async function softDeleteEmployee(
 ): Promise<SoftDeleteEmployeeResult> {
   const { data, error: fetchError } = await supabase
     .from('employees')
-    .select('id, first_name, last_name, is_active')
+    .select('id, first_name, last_name, is_active, jamkning_percentage, jamkning_valid_from, jamkning_valid_to')
     .eq('company_id', args.companyId)
     .eq('id', args.employeeId)
     .maybeSingle()
   if (fetchError) return { ok: false, code: 'INTERNAL_ERROR', cause: fetchError }
   if (!data) return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
-  const employee = data as unknown as EmployeeActivityRow
+  const row = data as unknown as EmployeeActivityRow & JamkningFields
+  const employee: EmployeeActivityRow = {
+    id: row.id,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    is_active: row.is_active,
+  }
 
   if (args.dryRun) return { ok: true, data: { committed: false, employee } }
 
@@ -69,7 +82,13 @@ export async function softDeleteEmployee(
     .update({ is_active: false })
     .eq('company_id', args.companyId)
     .eq('id', args.employeeId)
-  if (error) return { ok: false, code: 'INTERNAL_ERROR', cause: error }
+  if (error) {
+    const jamkningIssue = jamkningIssueFromDbError(error, row)
+    if (jamkningIssue) {
+      return { ok: false, code: 'VALIDATION_ERROR', details: { field: jamkningIssue.field, message: jamkningIssue.message } }
+    }
+    return { ok: false, code: 'INTERNAL_ERROR', cause: error }
+  }
 
   return { ok: true, data: { committed: true, employee, changed: true } }
 }

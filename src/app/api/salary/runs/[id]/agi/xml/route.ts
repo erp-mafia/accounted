@@ -1,9 +1,7 @@
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateAgiDeclaration } from '@/lib/salary/agi/generate-declaration'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/salary/runs/{id}/agi/xml
@@ -57,11 +55,6 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       '',
     )
 
-    return new Response(result.xml, {
-      headers: {
-        'Content-Type': 'application/xml; charset=utf-8',
-        'Content-Disposition': `attachment; filename="AGI_${safeOrg}_${safePeriod}.xml"`,
-      },
-    })
+    return fileResponse(result.xml, { filename: `AGI_${safeOrg}_${safePeriod}.xml`, contentType: 'application/xml; charset=utf-8' })
   },
 )

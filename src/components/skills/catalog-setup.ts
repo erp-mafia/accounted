@@ -1,7 +1,7 @@
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
 
 /**
- * The flows the page shows: few and good rather than many (founder). The
+ * The flows the page shows: few and good rather than many. The
  * other curated flows still run over MCP; they return here once they are as
  * good as these.
  */

@@ -35,7 +35,7 @@ function makeClient() {
   } as any
 }
 
-import { generateJournalRegister } from '../journal-register'
+import { generateJournalRegister, generateJournalRegisterPage } from '../journal-register'
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -295,5 +295,95 @@ describe('generateJournalRegister', () => {
 
     const report = await generateJournalRegister(supabase, 'company-1', 'period-1')
     expect(report.entries[0].voucher_series).toBe('A')
+  })
+})
+
+describe('generateJournalRegisterPage', () => {
+  const ENTRY = '00000000-0000-4000-8000-0000000000'
+
+  function pageRow(n: number, lines: Array<[string, number, number]>) {
+    return {
+      id: `${ENTRY}${String(n).padStart(2, '0')}`,
+      voucher_series: 'A',
+      voucher_number: n,
+      entry_date: '2026-03-01',
+      description: `Ver ${n}`,
+      source_type: 'manual',
+      status: n === 2 ? 'reversed' : 'posted',
+      lines: lines.map(([account_number, debit_amount, credit_amount]) => ({ account_number, debit_amount, credit_amount })),
+    }
+  }
+
+  function client(results: Record<string, { data: unknown; error: unknown }>) {
+    const table = (name: string) => {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'order', 'range']) b[m] = vi.fn().mockReturnValue(b)
+      const result = name === 'chart_of_accounts'
+        ? { data: [{ account_number: '1930', account_name: 'Företagskonto' }], error: null }
+        : { data: { period_start: '2026-01-01', period_end: '2026-12-31' }, error: null }
+      b.single = vi.fn().mockResolvedValue(result)
+      b.then = (resolve: (v: unknown) => void) => resolve(result)
+      return b
+    }
+    return {
+      from: vi.fn().mockImplementation(table),
+      rpc: vi.fn().mockImplementation(async (fn: string) => results[fn] ?? { data: null, error: null }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+  }
+
+  it('reads one page in registration order, with the totals on the first page and a cursor when more follow', async () => {
+    const supabase = client({
+      get_journal_register_page: {
+        data: [pageRow(1, [['1930', 100, 0], ['3001', 0, 100]]), pageRow(2, [['1930', 0, 33.33], ['5010', 33.33, 0]]), pageRow(3, [])],
+        error: null,
+      },
+      get_journal_register_totals: { data: { total_entries: 3, total_debit: 133.33, total_credit: 133.33 }, error: null },
+    })
+    const page = await generateJournalRegisterPage(supabase, 'company-1', 'period-1', { limit: 2 })
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_journal_register_page', {
+      p_company_id: 'company-1', p_fiscal_period_id: 'period-1',
+      p_after_series: null, p_after_number: null, p_after_id: null, p_limit: 3,
+    })
+    expect(page.entries).toEqual([
+      {
+        voucher_series: 'A', voucher_number: 1, date: '2026-03-01', description: 'Ver 1', source_type: 'manual', status: 'posted',
+        lines: [
+          { account_number: '1930', account_name: 'Företagskonto', debit: 100, credit: 0 },
+          { account_number: '3001', account_name: 'Konto 3001', debit: 0, credit: 100 },
+        ],
+        total_debit: 100, total_credit: 100,
+      },
+      {
+        voucher_series: 'A', voucher_number: 2, date: '2026-03-01', description: 'Ver 2', source_type: 'manual', status: 'reversed',
+        lines: [
+          { account_number: '1930', account_name: 'Företagskonto', debit: 0, credit: 33.33 },
+          { account_number: '5010', account_name: 'Konto 5010', debit: 33.33, credit: 0 },
+        ],
+        total_debit: 33.33, total_credit: 33.33,
+      },
+    ])
+    expect(page.next).toEqual({ voucher_series: 'A', voucher_number: 2, id: `${ENTRY}02` })
+    expect(page.totals).toEqual({
+      total_entries: 3, total_debit: 133.33, total_credit: 133.33, period: { start: '2026-01-01', end: '2026-12-31' },
+    })
+  })
+
+  it('continues after a cursor without totals, and ends on a short page', async () => {
+    const supabase = client({ get_journal_register_page: { data: [pageRow(3, [['1930', 1, 0]])], error: null } })
+    const page = await generateJournalRegisterPage(supabase, 'company-1', 'period-1', {
+      after: { voucher_series: 'A', voucher_number: 2, id: `${ENTRY}02` },
+      limit: 2,
+    })
+    expect(supabase.rpc).not.toHaveBeenCalledWith('get_journal_register_totals', expect.anything())
+    expect(page.totals).toBeUndefined()
+    expect(page.next).toBeNull()
+    expect(page.entries.map((e) => e.voucher_number)).toEqual([3])
+  })
+
+  it('throws when the page cannot be read', async () => {
+    const supabase = client({ get_journal_register_page: { data: null, error: { code: '57014', message: 'timeout' } } })
+    await expect(generateJournalRegisterPage(supabase, 'company-1', 'period-1')).rejects.toThrow(/get_journal_register_page/)
   })
 })

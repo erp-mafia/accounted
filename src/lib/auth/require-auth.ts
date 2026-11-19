@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
+import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { mfaStepUpApplies } from './mfa'
+import { MFA_ASSURANCE_HEADER, verifyNoVerifiedFactor } from './mfa-assurance'
 import type { JwtPayload, User, SupabaseClient } from '@supabase/supabase-js'
 import { claimsPinned, userFromClaims } from './claims'
 
@@ -92,12 +94,16 @@ export async function requireAuth(): Promise<AuthResult> {
  * Whether the session may pass the MFA gate.
  *
  * An AAL2 session, per the signature-verified claims, passes with no extra
- * round trip. Anything else (AAL1, no `aal` claim, or the getUser fallback
- * path where no verified claims exist) asks the auth server through
- * listFactors() (a getUser() call under the hood) whether a verified factor
- * exists: if one does, the session is stuck below the level it could reach
- * and is refused. A failed or throwing lookup is refused too (fail closed):
- * the alternative lets a transient auth error switch MFA off.
+ * round trip. So does a session the proxy vouched for on this very request:
+ * it read the user's factor list off its server-authenticated getUser() and
+ * signed that there is no verified factor, for this user and session
+ * (lib/auth/mfa-assurance.ts). Anything else (AAL1 without that verdict, no
+ * `aal` claim, or the getUser fallback path where no verified claims exist)
+ * asks the auth server through listFactors() (a getUser() call under the
+ * hood) whether a verified factor exists: if one does, the session is stuck
+ * below the level it could reach and is refused. A failed or throwing lookup
+ * is refused too (fail closed): the alternative lets a transient auth error
+ * switch MFA off.
  *
  * Never `mfa.getAuthenticatorAssuranceLevel()` without a JWT: its `nextLevel`
  * is computed from `session.user.factors`, i.e. from the unsigned
@@ -111,6 +117,7 @@ async function sessionIsMfaAssured(
   claims: JwtPayload | null,
 ): Promise<boolean> {
   if (claims?.aal === 'aal2') return true
+  if (claims && (await proxyVouchedNoVerifiedFactor(claims))) return true
 
   try {
     const { data, error } = await supabase.auth.mfa.listFactors()
@@ -123,6 +130,20 @@ async function sessionIsMfaAssured(
     console.error('requireAuth: listFactors threw; treating session as not MFA-assured', err)
     return false
   }
+}
+
+/** The proxy's signed verdict for these claims' user and session, if any. */
+async function proxyVouchedNoVerifiedFactor(claims: JwtPayload): Promise<boolean> {
+  const sessionId = typeof claims.session_id === 'string' ? claims.session_id : null
+  if (!claims.sub || !sessionId) return false
+  let verdict: string | null
+  try {
+    verdict = (await headers()).get(MFA_ASSURANCE_HEADER)
+  } catch {
+    // Outside a request (a script, a test): there is no verdict.
+    return false
+  }
+  return verifyNoVerifiedFactor(verdict, { userId: claims.sub, sessionId })
 }
 
 type FactorList = ReadonlyArray<{ status: string }> | undefined

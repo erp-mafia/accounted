@@ -5,10 +5,12 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   lte: vi.fn(),
   createServiceClient: vi.fn(),
+  sealLegacyConsentTokens: vi.fn(),
 }))
 
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: mocks.createServiceClient }))
 vi.mock('@/lib/observability', () => ({ captureException: vi.fn(), captureMessage: vi.fn() }))
+vi.mock('@/lib/providers/consent-tokens', () => ({ sealLegacyConsentTokens: mocks.sealLegacyConsentTokens }))
 
 import { GET } from '../route'
 
@@ -22,6 +24,7 @@ describe('provider OAuth expiry cleanup', () => {
     mocks.from.mockReturnValue({ delete: mocks.delete })
     mocks.delete.mockReturnValue({ lte: mocks.lte })
     mocks.lte.mockResolvedValue({ count: 3, error: null })
+    mocks.sealLegacyConsentTokens.mockResolvedValue({ found: 0, sealed: 0 })
   })
 
   afterEach(() => {
@@ -39,6 +42,7 @@ describe('provider OAuth expiry cleanup', () => {
     const response = await GET(request(authorization))
     expect(response.status).toBe(401)
     expect(mocks.createServiceClient).not.toHaveBeenCalled()
+    expect(mocks.sealLegacyConsentTokens).not.toHaveBeenCalled()
   })
 
   it('fails closed when the cron secret is not configured', async () => {
@@ -50,7 +54,7 @@ describe('provider OAuth expiry cleanup', () => {
   it('deletes only rows that have reached expiry and reports the count', async () => {
     const response = await GET(request())
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { deleted: 3 } })
+    expect(await response.json()).toEqual({ data: { deleted: 3, legacyTokensSealed: 0 } })
     expect(mocks.from).toHaveBeenCalledWith('provider_otc')
     expect(mocks.delete).toHaveBeenCalledWith({ count: 'exact' })
     expect(mocks.lte).toHaveBeenCalledWith('expires_at', '2026-09-05T12:00:00.000Z')
@@ -60,11 +64,28 @@ describe('provider OAuth expiry cleanup', () => {
     mocks.lte.mockResolvedValue({ count: 0, error: null })
     const response = await GET(request())
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { deleted: 0 } })
+    expect(await response.json()).toEqual({ data: { deleted: 0, legacyTokensSealed: 0 } })
   })
 
   it('reports database failures without exposing their details', async () => {
     mocks.lte.mockResolvedValue({ count: null, error: new Error('private database detail') })
+    const response = await GET(request())
+    expect(response.status).toBe(500)
+    expect(await response.text()).not.toContain('private database detail')
+  })
+
+  // accounted#58: provider tokens written before the seal are sealed a batch
+  // per run through the accessor; the response carries counts only.
+  it('seals a batch of legacy provider tokens with the service client and reports the count', async () => {
+    mocks.sealLegacyConsentTokens.mockResolvedValue({ found: 100, sealed: 98 })
+    const response = await GET(request())
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ data: { deleted: 3, legacyTokensSealed: 98 } })
+    expect(mocks.sealLegacyConsentTokens).toHaveBeenCalledWith({ from: mocks.from })
+  })
+
+  it('reports a failed token read without exposing its details', async () => {
+    mocks.sealLegacyConsentTokens.mockRejectedValue(new Error('private database detail'))
     const response = await GET(request())
     expect(response.status).toBe(500)
     expect(await response.text()).not.toContain('private database detail')

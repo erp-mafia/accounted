@@ -189,6 +189,10 @@ describe('delete_last_voucher returns bank anchors to the corrected original (#2
         { journal_entry_id: s.originalId, role: 'bank_line', allocated_amount: '-400.00' },
       ])
       expect(await pointerOf(client, txA)).toBeNull()
+      // Mid-undo the original is reversed: nothing books the rows yet.
+      expect(await isBooked(client, txA)).toBe(false)
+
+      await deleteVoucher(client, s.companyId, s.stornoId)
       expect(await isBooked(client, txA)).toBe(true)
       expect(await isBooked(client, txB)).toBe(true)
     })

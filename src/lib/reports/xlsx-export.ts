@@ -1,5 +1,3 @@
-import * as XLSX from 'xlsx'
-
 /**
  * Generic xlsx workbook builder for reports.
  *
@@ -20,6 +18,10 @@ import * as XLSX from 'xlsx'
  * Column widths are computed automatically from the maximum content length per
  * column. This keeps the produced file legible in Excel/Numbers without any
  * post-processing by the caller.
+ *
+ * xlsx itself is imported inside reportToWorkbook, not at the top: the column
+ * and filename helpers here are reached from every route (behandlingshistorik
+ * through the operations registry), and only an export needs the library.
  */
 
 export type CellValue = string | number | Date | null | undefined
@@ -120,11 +122,12 @@ function displayLength(value: CellValue, format: ColumnFormat): number {
 // single type parameter. Per-sheet type safety still applies inside each
 // `SheetSpec<TRow>` declaration.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-export function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any>>, options: { bookType?: 'xlsx' | 'csv' } = {}): Buffer {
+export async function reportToWorkbook<_T = unknown>(spec: ReadonlyArray<SheetSpec<any>>, options: { bookType?: 'xlsx' | 'csv' } = {}): Promise<Buffer> {
   if (spec.length === 0) {
     throw new Error('reportToWorkbook: at least one sheet spec is required')
   }
 
+  const XLSX = await import('xlsx')
   const workbook = XLSX.utils.book_new()
 
   for (const sheet of spec) {

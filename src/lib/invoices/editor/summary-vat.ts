@@ -4,7 +4,8 @@ import type { VatTreatment } from '@/types'
  * The VAT lines of the editor's Summering.
  *
  * A 0 % rate prints a "Moms 0 %" line with its reason (omvänd
- * skattskyldighet, export, momsfri) instead of no line at all: an EU or
+ * skattskyldighet, omvänd betalningsskyldighet for construction services,
+ * export, momsfri) instead of no line at all: an EU or
  * export invoice that showed only Delsumma and Att betala read as if the
  * VAT had been forgotten. A seller who is not VAT registered charges no VAT
  * and gets no VAT line, as before.
@@ -13,7 +14,7 @@ import type { VatTreatment } from '@/types'
  */
 
 /** Why a 0 % rate charges no VAT. */
-export type ZeroVatReason = 'reverse_charge' | 'export' | 'exempt'
+export type ZeroVatReason = 'reverse_charge' | 'reverse_charge_domestic' | 'export' | 'exempt'
 
 /** The priced lines at one rate (text rows excluded). */
 export interface SummaryVatGroup {
@@ -33,11 +34,12 @@ export type SummaryVatLine =
 
 /**
  * The reason a 0 % rate is 0, from the invoice's VAT treatment as the write
- * path derives it (deriveInvoiceVatHeader): reverse charge and export say so,
- * anything else at 0 % is a momsfri supply.
+ * path derives it (deriveInvoiceVatHeader): reverse charge (EU or domestic)
+ * and export say so, anything else at 0 % is a momsfri supply.
  */
 export function zeroVatReason(treatment: VatTreatment): ZeroVatReason {
   if (treatment === 'reverse_charge') return 'reverse_charge'
+  if (treatment === 'reverse_charge_domestic') return 'reverse_charge_domestic'
   if (treatment === 'export') return 'export'
   return 'exempt'
 }

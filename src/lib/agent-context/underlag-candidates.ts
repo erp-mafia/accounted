@@ -26,12 +26,15 @@ import {
   CONVERTED_AMOUNT_TOLERANCE_PERCENT,
   DATE_TOLERANCE_DAYS,
   FALLBACK_CONFIDENCE_FACTOR,
+  amountAgreesForMatch,
   amountVarianceForMatch,
   bestProminentAmountVariance,
   calculateMatchConfidence,
   calculateMerchantSimilarity,
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
+import { bankAmountGoesTheWay, directionWhenNamed, underlagPaymentDirection } from '@/lib/documents/underlag-bank-candidates'
 import { roundOre } from '@/lib/money'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
@@ -73,6 +76,12 @@ export interface UnderlagCandidate {
    * must treat 'prominent' as weaker evidence or exclude it.
    */
   amountSource: 'total' | 'prominent'
+  /**
+   * The document's amount is the row's own sum (core-receipt-matcher
+   * amountAgreesForMatch), not merely near it. Consumers that act with less
+   * human scrutiny (the nightly receipt hunt) propose only these.
+   */
+  amountAgrees: boolean
   /** Swedish reasons the match scored, for display. */
   matchReasons: string[]
   /** Answers already captured for this item, so they travel with it. */
@@ -153,6 +162,11 @@ export function scoreUnderlagCandidates(
     // An extraction with neither a date nor any amount carries no signal the
     // matcher can use; scoring it returns noise dressed as confidence.
     if (!sig.date && sig.total == null && sig.prominentAmounts.length === 0) continue
+    // The matcher compares magnitudes, so the sign is checked here: a
+    // purchase from a named seller is never the underlag of money that came
+    // in, nor a refund or a credit note of money that went out (crm#1779).
+    const direction = directionWhenNamed(underlagPaymentDirection(item.extracted_data), sig.supplier)
+    if (!bankAmountGoesTheWay(tx.amount, direction)) continue
 
     let amountVariance = amountVarianceForMatch(
       sig.total,
@@ -228,6 +242,10 @@ export function scoreUnderlagCandidates(
     }
     if (confidence < CANDIDATE_MIN_CONFIDENCE) continue
 
+    const amountAgrees = fallbackMatch
+      ? amountAgreesForMatch(fallbackMatch.amount, sig.currency, null, tx.amount, txCurrency, txSek) === true
+      : amountAgreesForMatch(sig.total, sig.currency, item.sek_total ?? null, tx.amount, txCurrency, txSek) === true
+
     scored.push({
       inbox_item_id: item.id,
       document_id: item.document_id,
@@ -238,22 +256,30 @@ export function scoreUnderlagCandidates(
       currency: sig.currency,
       confidence,
       amountSource: fallbackMatch ? 'prominent' : 'total',
+      amountAgrees,
       matchReasons,
       channelContext: item.channel_context ?? null,
     })
   }
 
-  scored.sort((a, b) => b.confidence - a.confidence)
-  return scored.slice(0, CANDIDATE_LIMIT)
+  // A document whose amount is the row's own sum wins over one that is only
+  // near it, whatever the dates and names add to the near one's score, and
+  // the near one is not offered beside it (crm#1962). With no sum that
+  // agrees, the near ones stay candidates for a reader who compares amounts.
+  const agreeing = scored.filter((candidate) => candidate.amountAgrees)
+  const ranked = agreeing.length > 0 ? agreeing : scored
+  ranked.sort((a, b) => b.confidence - a.confidence)
+  return ranked.slice(0, CANDIDATE_LIMIT)
 }
 
 /**
  * Find probable underlag for a transaction among the company's unconsumed
  * inbox items.
  *
- * Only unconsumed items are considered: one already booked, already turned into
- * a supplier invoice, or already matched elsewhere belongs to a different
- * economic event, and proposing it here would invite a double booking.
+ * Only open items are considered (lib/documents/inbox-item-state.ts): one already booked,
+ * already turned into a supplier invoice, already matched elsewhere or taken
+ * by Arkiv belongs to a different economic event, and proposing it here would
+ * invite a double booking.
  */
 export async function findUnderlagCandidates(
   supabase: SupabaseClient,
@@ -262,14 +288,17 @@ export async function findUnderlagCandidates(
 ): Promise<UnderlagCandidate[]> {
   if (tx.amount == null || !tx.date) return []
 
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id, extracted_data, channel_context')
-    .eq('company_id', companyId)
-    .is('matched_transaction_id', null)
-    .is('created_journal_entry_id', null)
-    .is('created_supplier_invoice_id', null)
-    .not('document_id', 'is', null)
+  // A link is permanent, so a document on any verifikat cannot go on this
+  // transaction's, a reversed one's included: the same bar as
+  // gnubok_list_unmatched_documents and the attach picker.
+  const { data, error } = await whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select('id, document_id, extracted_data, channel_context, document_attachments!inner(journal_entry_id)')
+      .eq('company_id', companyId)
+      .not('document_id', 'is', null),
+  )
+    .is('document_attachments.journal_entry_id', null)
     .order('created_at', { ascending: false })
     .limit(CANDIDATE_SCAN_LIMIT)
 

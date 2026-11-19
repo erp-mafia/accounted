@@ -120,7 +120,7 @@ describe('loadCancelledEntryIds', () => {
         { id: 'l4', journal_entry_id: 'a178', account_number: '2940', debit_amount: 0, credit_amount: 7704 },
       ],
     })
-    const result = await loadCancelledEntryIds(supabase as never, 'company-1', '2026-06-29', '2026-07-27')
+    const result = await loadCancelledEntryIds(supabase as never, 'company-1', '2026-06-29', '2026-07-27', '1630')
     expect(result).toEqual(new Set(['a177', 'a178']))
     expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-05-29'])
     expect(findCalls('journal_entries', 'lte')).toContainEqual(['entry_date', '2026-08-27'])

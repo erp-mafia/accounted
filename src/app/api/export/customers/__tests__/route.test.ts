@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as XLSX from 'xlsx'
 import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -193,5 +193,22 @@ describe('GET /api/export/customers', () => {
     const text = Buffer.from(await res.arrayBuffer()).toString('utf-8')
     expect(text).toContain('********-1234')
     expect(text).not.toContain('19900101')
+  })
+
+  it('pages in a total order: name, then id (accounted#58)', async () => {
+    // fetchAllRows pages with .range(); names repeat, so ordering by name
+    // alone let a tie on a page boundary repeat or drop a row.
+    mockFetchAllRows.mockImplementation(async (build: (r: { from: number; to: number }) => unknown) => {
+      build({ from: 0, to: 999 })
+      return [CUSTOMER]
+    })
+    enqueue({ data: { company_name: 'Acme AB' } })
+    const res = await GET(createMockRequest('/api/export/customers'), { params: Promise.resolve({}) })
+
+    expect(res.status).toBe(200)
+    expect(findCalls('customers', 'order')).toEqual([
+      ['name', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
   })
 })

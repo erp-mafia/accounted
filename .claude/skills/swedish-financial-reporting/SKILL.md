@@ -32,7 +32,7 @@ For questions spanning multiple areas (e.g. "what's the full timeline from boksl
 - Balansomslutning > 1.5 MSEK
 - Nettoomsättning > 3 MSEK
 
-Both sets of thresholds are unchanged in 2026 (ÅRL company-categories inquiry Ju 2025:11 reports by 2026-09-29).
+Both sets of thresholds are unchanged in 2026. The ÅRL company-categories inquiry (Ju 2025:11) reported in SOU 2026:59: a proposed mikroföretag category from the FY beginning after 2027-12-31, not law yet.
 
 ### Key deadlines (calendar year AB, FY ending Dec 31)
 - Årsredovisning to Bolagsverket: **7 months** (July 31)

@@ -1,6 +1,6 @@
 # Accounted
 
-Swedish accounting SaaS: double-entry bookkeeping under Bokföringslagen for sole traders and limited companies, sold directly and (from 2026) resold white-label by accounting firms under their own brand.
+Swedish accounting SaaS: double-entry bookkeeping under Bokföringslagen for sole traders and limited companies, with white-label brands for accounting firms.
 
 ## Language
 
@@ -18,7 +18,7 @@ _Avoid_: Agency, firm team
 The silent auto-created team every user gets (`ensure_user_team()`); an implementation detail of company ownership, never a byrå.
 
 **Partner**:
-Prose word for the commercial relationship: a byrå with an agreement and usually a brand. Not an entity in the schema.
+A byrå that runs Accounted for its clients, usually under its own brand. Not an entity in the schema.
 
 **Canonical domain**:
 app.accounted.se (and legacy app.gnubok.se): the domains carrying the default Accounted brand, external OAuth flows, and cron entry points.
@@ -30,7 +30,7 @@ The one domain a company is opened and worked in: its byrå's brand domain if th
 The screen shown when a logged-in user's company lives on a different host ("Kalles Bygg AB hanteras via app.siffra.se"), with a link there. Never a silent redirect: sessions are per domain, so the user must log in again on the home domain.
 
 **Umbrella subdomain**:
-A brand domain hosted under our own zone (siffra.accounted.se): the starter shape, zero partner DNS work. A custom domain (app.siffra.se) is the upgrade; the brand model treats both as the same single hostname.
+A brand domain hosted under our own zone (siffra.accounted.se): no partner DNS work. A custom domain (app.siffra.se) is the alternative; the brand model treats both as the same single hostname.
 
 **Invoice branding**:
 The per-company logo and colors printed on that company's customer invoices. Unrelated to a byrå brand; never shorten to "branding".

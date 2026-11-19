@@ -28,40 +28,52 @@ export const WORKLIST_CATEGORIES = [
    * Unbooked skattekonto rows ("N st skattekontohändelser att bokföra").
    * Pending:  skattekonto_transactions with status = 'booked' (Skatteverket's
    *           "tidigare": the event has happened on the tax account),
-   *           journal_entry_id IS NULL and is_ignored = false. Rows with
+   *           journal_entry_id IS NULL, is_ignored = false, dated on or
+   *           after the ingående balans on the skattekonto account (a row
+   *           before it is carried by the IB, crm#2010). Rows with
    *           status = 'upcoming' are future charges with nothing to book
    *           yet and never reach the Transaktioner inbox, so they are not
    *           pending work either.
    * Done:     the skattekonto booking flows set journal_entry_id (here it IS
    *           the booked marker, unlike bank transactions), or the user
-   *           ignores the row (is_ignored = true). Same predicate as the
-   *           Transaktioner inbox's Skatteverket rows.
+   *           ignores the row (is_ignored = true). One reading with the
+   *           Transaktioner inbox's Skatteverket rows:
+   *           lib/skatteverket/skattekonto-open-rows.ts.
    */
   'book_skattekonto',
   /**
-   * Unconsumed documents in the inbox ("N st underlag att hantera").
-   * Pending:  invoice_inbox_items with a document and no
-   *           created_supplier_invoice_id / created_journal_entry_id /
-   *           matched_transaction_id, whose document is still unlinked.
-   * Done:     any of those three columns gets stamped (match, book-direct,
-   *           supplier-invoice conversion) or the document is linked to a
-   *           journal entry. Mirrors /api/documents/inbox-available.
+   * Open documents in the inbox ("N st underlag att hantera").
+   * Pending:  invoice_inbox_items with a document that are open
+   *           (isOpenInboxItem, lib/documents/inbox-item-state.ts).
+   * Done:     a link gets stamped (match, book-direct, supplier-invoice
+   *           conversion), Arkiv takes it, or a verifikat comes to hold the
+   *           document.
    */
   'inbox_document',
   /**
    * Suggested transaction↔invoice matches awaiting one-click confirm.
    * Pending:  unbooked transactions (see book_transaction) carrying a
-   *           potential_invoice_id or potential_supplier_invoice_id hint.
+   *           potential_invoice_id or potential_supplier_invoice_id hint, or
+   *           settling several open invoices of one counterparty to the öre
+   *           (recomputed at read time, no hint column; the row carries
+   *           `allocations`).
    * Done:     the match is confirmed (booking clears is_business) or the
-   *           hint column is cleared. NOTE: a subset of book_transaction:
-   *           excluded from `total` to avoid double-counting.
+   *           hint column is cleared (for a set: an invoice of it is settled
+   *           elsewhere, so the set no longer adds up). NOTE: a subset of
+   *           book_transaction: excluded from `total` to avoid double-counting.
    */
   'suggested_match',
   /**
    * Supplier invoices awaiting approval ("attestera").
-   * Pending:  supplier_invoices.status = 'registered' and not a credit note
-   *           (a credit note is a reversal, never a payable).
-   * Done:     status moves to approved/paid/credited/….
+   * Pending:  supplier_invoices.status 'registered' or 'overdue' with
+   *           approved_at null (ATTESTABLE_SUPPLIER_INVOICE_STATUSES: an
+   *           unattested invoice past its due date still waits, crm#1631),
+   *           not a credit note (a credit note is a reversal, never a
+   *           payable), in a company that attests at all: never under
+   *           kontantmetoden, which has no attest step
+   *           (companyAttestsSupplierInvoices).
+   * Done:     attested (approved_at set), or the status moves to
+   *           paid/partially_paid/credited/….
    */
   'supplier_invoice_approval',
   /**
@@ -73,9 +85,18 @@ export const WORKLIST_CATEGORIES = [
    */
   'verifikat_missing_document',
   /**
-   * Overdue customer invoices ("förfallna kundfakturor").
-   * Pending:  invoices.status = 'overdue', not credited.
-   * Done:     paid/credited (status leaves 'overdue').
+   * Overdue customer invoices ("N kundfakturor har förfallit"), ONE item per
+   * company: the count is the invoices, the total adds 1 (see
+   * OverdueInvoicesDue and getWorklistCounts).
+   * Pending:  a real invoice (not a credit note) still owed (sent, overdue,
+   *           partially_paid) with remaining_amount > 0 and due_date before
+   *           today in Stockholm: lib/invoices/overdue.ts, the same rows as
+   *           the Förfallna view. Derived, never the stored status. An
+   *           invoice the "Hos inkasso" view lists (an open collection case
+   *           past delivery, or a case a person must look at) is left out:
+   *           it has its own rows (collection_decision, collection_attention).
+   * Done:     paid in full, credited or cancelled, handed to collections,
+   *           or the due date moved.
    */
   'overdue_invoice',
   /**
@@ -88,10 +109,23 @@ export const WORKLIST_CATEGORIES = [
   'deadline_action',
   /**
    * Agent-staged operations awaiting review ("Granskning").
-   * Pending:  pending_operations.status = 'pending'.
+   * Pending:  pending_operations.status = 'pending', staged by anyone but the
+   *           system (a suggestion has its own row, below).
    * Done:     committed or rejected.
    */
   'pending_operations',
+  /**
+   * Suggestions: package switches the system proposed (lib/suggestions),
+   * one Förslag card each with Ja, Inte nu and Visa aldrig, at most three
+   * at a time, ranked (lib/suggestions/list.ts listOpenSuggestions; the
+   * agent briefing shows the same three).
+   * Pending:  a company_suggestions row in state 'open' whose
+   *           pending_operations row (actor 'system') is still 'pending'.
+   * Done:     approved (accepted), "Inte nu" or any other rejection (snoozed
+   *           30 days), "Visa aldrig" (declined for good), or expired.
+   * Counts what is shown: a fourth open suggestion waits for a free place.
+   */
+  'suggestion',
   /**
    * Accounts not signed off through the end of the previous month
    * ("N konton att stämma av"), only for companies that have adopted the
@@ -108,11 +142,14 @@ export const WORKLIST_CATEGORIES = [
   /**
    * People the company owes for out-of-pocket purchases ("Betala ut utlägg
    * till Anna"), one item per person.
-   * Pending:  expense_claims.status = 'registered' (booked as cost against a
-   *           person-liability account 2893/2820/2018, nothing paid out yet),
-   *           grouped by employee_id, or by claimant_name for the owner.
+   * Pending:  a claim that waits for a payout: expense_claims.status =
+   *           'registered' (booked as cost against a person-liability account
+   *           2893/2820/2018, nothing paid out yet) and on no payslip line
+   *           (lib/salary/expense-claim-payout-state.ts), grouped by
+   *           employee_id, or by claimant_name for the owner.
    * Done:     every claim of that person is marked 'paid' (a payout batch
-   *           posted the 1930 leg), or the claim is deleted (storno).
+   *           posted the 1930 leg), put on a salary run (repaid with that
+   *           salary), or deleted (storno).
    * Counts PEOPLE, not receipts: the action is one transfer per person.
    */
   'expense_payout',
@@ -180,9 +217,299 @@ export const WORKLIST_CATEGORIES = [
    *           and overdue (paid, partly paid, credited, cancelled).
    */
   'peppol_delivery_failed',
+  /**
+   * Invoices handed over to the collections provider whose case waits for
+   * the company's decision ("N inkassoärenden väntar på ditt beslut"): the
+   * next step to approve, a dispute, the customer's "already paid", legal
+   * action.
+   * Pending:  collection_cases open with stage 'awaiting_decision', less
+   *           those the pending daily batch proposes (an approve_step item
+   *           still in it counts in collection_batch_ready, so an invoice is
+   *           counted once; lib/collections/batch.ts collectionWorkCounts).
+   * Done:     the stage leaves 'awaiting_decision' (the company decided, or
+   *           the provider moved on), read by the sync or the invoice page.
+   */
+  'collection_decision',
+  /**
+   * Collections cases a person must look at ("N saker kring inkasso behöver
+   * åtgärdas"): the SQL function collection_attention_case_ids. In this
+   * version: a handover the provider refused (until a new handover of the
+   * invoice, or the invoice is paid or credited), an open case whose last
+   * read or retry failed (until the next good read), a payment or credit
+   * note report the drain gave up on (until a person retries it or marks it
+   * handled), and a reported amount above what the provider still claims
+   * (until a person marks it handled), a bank row the payment-candidate
+   * sweep found for an open case (until it is booked or a person says it
+   * pays something else, and a case the sweep paused until it is resumed or
+   * closes), and a provider principal that differs from what the books
+   * expect (until the daily reconcile finds them equal, and a case it paused
+   * until it is resumed or closes). Settlements join it with their tables.
+   * Done:     each source row leaves its state.
+   */
+  'collection_attention',
+  /**
+   * Payouts from the collections provider to book ("Utbetalningar från
+   * inkasso att bokföra"): booking waits for a click until the company turns
+   * on automatic booking, and a payout the ledger could not book on its own
+   * waits for a person (a line it cannot place, VAT it does not deduct on
+   * its own, a possible duplicate of a payout booked by hand, a reversed
+   * payout voucher). The Avräkningar page counts the same statuses.
+   * Pending:  collection_settlements with status 'received' or 'needs_mapping'.
+   * Done:     the payout is booked, or a person marks it handled elsewhere
+   *           (status booked or ignored), in Avräkningar.
+   */
+  'collection_settlements_to_book',
+  /**
+   * Payments a debtor made to the collections provider, to book ("Inbetalningar
+   * via inkasso att bokföra"): not booked yet (booking waits for a click until
+   * the company turns on automatic booking), or refused by the books (a
+   * locked period, an invoice already paid, another currency).
+   * Pending:  collection_collected_payments with status 'pending' or 'needs_review'.
+   * Done:     the payment is booked in Avräkningar (status booked).
+   */
+  'collected_payments_to_book',
+  /**
+   * The day's collections batch waiting for an administrator ("N förfallna
+   * fakturor att skicka vidare via {provider}"): the items of the one pending
+   * collections_daily_batch operation the ladder cron staged. Counted here,
+   * not under pending_operations.
+   * Pending:  a collections_daily_batch operation with status 'pending':
+   *           its items less those an administrator took out, the decisions
+   *           it proposes included.
+   * Done:     an administrator approved or rejected it, or the cron rejected
+   *           it after 72 hours.
+   */
+  'collection_batch_ready',
+  /**
+   * The day's reminders waiting for an owner or administrator ("N
+   * påminnelser väntar på godkännande"): the items of the one pending
+   * reminder_daily_batch operation the reminders cron staged
+   * (lib/reminders/batch.ts). Counted here, not under pending_operations.
+   * Pending:  a reminder_daily_batch operation with status 'pending': its
+   *           items less those a person took out (collection_batch_removals
+   *           rows of kind 'reminder'), read by lib/reminders/pending-batch.ts.
+   * Done:     an owner or administrator approved or rejected it, or it
+   *           left 'pending' any other way (withdrawn, expired). The
+   *           invoices it leaves out today get no row here: the review
+   *           lists each with its reason.
+   */
+  'reminder_batch_ready',
+  /**
+   * Bank connections to switch from Enable Banking to Open Payments before
+   * the campaign deadline ("Byt bankkopplingen för {bank} senast {date}"),
+   * one item per connection.
+   * Pending:  the campaign is on (OPENPAYMENTS_SWITCH_DEADLINE) and applies
+   *           to the company (lib/bank-feed/door.ts), and an active Enable
+   *           Banking row at a bank Open Payments reaches has no Open Payments
+   *           sibling yet (lib/bank-feed/switch-campaign.ts switchStateFor).
+   * Done:     the switch supersedes the row (status revoked, superseded_by
+   *           set), an Open Payments connection at the same bank goes live,
+   *           the row is removed, or the campaign is switched off.
+   * Banks Open Payments does not reach are never counted here: their path is
+   * file import, said by the bank_switch_uncovered notice.
+   */
+  'bank_switch',
+  /**
+   * The company's verification (know your customer) at the payment provider
+   * is about to run out or has ("Förnya verifieringen för betalningar"), or
+   * was never started by a company that pays its suppliers through Accounted
+   * ("Verifiera företaget för betalningar via banken"), one item at most.
+   * Bank payments are refused without it.
+   * Pending:  payments through the bank are open to the company
+   *           (lib/payments/orders/switched-on.ts) and the stored record
+   *           (company_payment_verifications, refreshed by the payment status
+   *           cron daily and by every read of the status) derives to expiring
+   *           (valid_until within 30 days) or expired (valid_until passed, or
+   *           invalid after having been valid): lib/payments/orders/
+   *           verification-state.ts.
+   *           Or, the first time: the provider has answered not verified
+   *           and no form was ever made here (not_started), the company made
+   *           a bank payment or a payment file within the last 60 days, and
+   *           an account it can pay from needs the verification
+   *           (lib/payments/orders/readiness.ts).
+   * Done:     the provider answers valid with a new valid_until (a signatory
+   *           signed the form), read by the dialog's poll, the page, or the
+   *           next sweep; a form is started (the first-time row); or
+   *           payments close for the company.
+   * A company with nothing on file, or that has not paid a supplier through
+   * Accounted for 60 days, is not counted for the first time: it has not
+   * shown it pays here, and the Koppla banken step is where it starts.
+   */
+  'payments_verification_renewal',
+  /**
+   * Supplier invoices that state bank details the supplier card does not
+   * have ("Nya bankuppgifter hos {leverantör}"), one item per invoice: the
+   * classic invoice fraud, shown to whoever books invoices, not only to the
+   * person who pays. Payment of the invoice is held until it is done.
+   * Pending:  an unpaid supplier invoice (registered, approved, partially
+   *           paid or overdue; not a credit note) whose stated account
+   *           (payee_*) is on none of the supplier card's accounts while the
+   *           card has some, or names an account for a supplier the company
+   *           has paid before while the card has none, and no person has
+   *           decided on that account for that supplier
+   *           (lib/payments/payee-alerts.ts listSupplierPayeeAlerts).
+   * Done:     a person confirms the account (supplier_payee_confirmations,
+   *           which also covers later invoices with it) or rejects it (the
+   *           payment then stays held, shown on the invoice), the card is
+   *           given the account, or the invoice is paid or credited.
+   */
+  'supplier_payee_change',
+  /**
+   * Documents waiting for the signed-in user's BankID signature ("Signera
+   * {rubrik}"), one item per signer row, opening /signering/<signerId>.
+   * Per person, like the attest rows: counted only for whoever is asked.
+   * Pending:  a signing_request_signers row of the active company with
+   *           user_id = the user and status = 'pending', on a request that
+   *           is open and not past expires_at, while signing is switched
+   *           on (lib/signing/switched-on.ts); a row nobody can sign is no
+   *           work.
+   * Done:     the user signs (record_signing_signature sets the row signed)
+   *           or declines, or the request completes, is declined by someone
+   *           else, is cancelled by the sender or runs past its expiry.
+   * A signer asked by address only (no member) is not counted: they sign
+   * through the mailed link.
+   */
+  'documents_to_sign',
+  /**
+   * Supplier invoices whose bank payment did not go through ("Betalningen
+   * till {mottagare} gick inte igenom"), one item per invoice, opening the
+   * invoice, where it is paid again. Shown in the Nu band: the supplier is
+   * not paid.
+   * Pending:  the invoice's newest payment_orders row (by created_at) has
+   *           status 'rejected' or 'failed' and the invoice is still payable
+   *           (registered, approved, partially paid or overdue):
+   *           lib/payments/orders/failed-payments.ts
+   *           listInvoicesAfterFailedPayment.
+   * Done:     a newer payment order of the invoice (a new attempt, whatever
+   *           became of it), or the invoice is paid, credited or otherwise
+   *           settled.
+   * The people behind the payment are also mailed once
+   * (lib/payments/orders/outcome-notify.ts).
+   */
+  'payment_failed',
+  /**
+   * Supplier invoices that wait to be paid ("Betala 3 leverantörsfakturor"),
+   * one grouped row, the invoices the Att betala tab lists.
+   * Pending:  waitsToBePaid of lib/supplier-invoices/to-pay.ts (loadToPayQueue):
+   *           a payable status with money left, not a credit note, not
+   *           debited by the supplier itself (auto_debit), not at the bank,
+   *           not held back by the attest policy; less what the
+   *           payment_failed row shows.
+   * Done:     paid (a bank payment opens, or the invoice is settled).
+   * Counts INVOICES, but the total takes the row as one thing to do (one
+   * payment run), like overdue_invoice.
+   */
+  'attested_to_pay',
+  /**
+   * Bank payments that wait for a person ("Signera 3 betalningar"), one
+   * grouped row, opening Betalningar, where they are approved and signed.
+   * Pending:  payment_orders with status 'draft' (prepared by a person, the
+   *           API or an agent, approved by nobody) or 'approved' (not signed;
+   *           where an order lands again when its BankID ends unsigned):
+   *           paymentOrderWaitsFor of lib/payments/orders/status.ts, read by
+   *           lib/payments/orders/unsigned-payments.ts. Every purpose (a
+   *           supplier invoice, the skattekonto, a salary): the orders
+   *           Betalningar lists under Att godkänna and Att signera.
+   * Done:     signed (the BankID takes the order to the bank), or cancelled.
+   * The order already covers its invoice, which has left attested_to_pay, so
+   * no invoice is in both rows. Counts PAYMENTS, but the total takes the row
+   * as one thing to do (one visit to Betalningar), like attested_to_pay.
+   */
+  'payments_to_sign',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
+
+/**
+ * One supplier invoice whose newest bank payment the bank rejected or that
+ * failed: the Att göra row "Betalningen till {mottagare} gick inte igenom",
+ * opening the invoice.
+ */
+export interface PaymentFailedDue {
+  payment_order_id: string
+  supplier_invoice_id: string
+  /** Who the payment was to (payment_orders.payee_name). */
+  payee_name: string
+  supplier_invoice_number: string | null
+  arrival_number: number | null
+  due_date: string | null
+  amount: number
+  currency: string
+  status: 'rejected' | 'failed'
+  /** The bank's reason code (payment_orders.provider_error_code); null when it gave none. */
+  reason_code: string | null
+  /** When the bank answered (provider_status_at, ISO); null when unknown. */
+  ended_at: string | null
+}
+
+/**
+ * One supplier invoice whose stated bank details wait for a person: the Att
+ * göra row "Nya bankuppgifter hos {leverantör}", whose action opens the
+ * decision (approve, optionally onto the supplier card, or reject).
+ */
+export interface SupplierPayeeChangeDue {
+  supplier_invoice_id: string
+  supplier_id: string
+  supplier_name: string
+  supplier_invoice_number: string | null
+  arrival_number: number | null
+  due_date: string
+  /** changed: the card has other accounts; new_supplier_account: the card has none, for a supplier paid before. */
+  alert: 'changed' | 'new_supplier_account'
+  /** Null while nobody decided; rejected keeps the payment held (and the row gone). */
+  decision: 'confirmed' | 'rejected' | null
+  hold: 'payee_unconfirmed' | 'payee_rejected' | null
+  /** The account the supplier card pays today, as a label; null for an empty card. */
+  old_payee: string | null
+  /** The account the invoice states, as a label. */
+  new_payee: string
+}
+
+/**
+ * One document waiting for the signed-in user's BankID signature: the Att
+ * göra row "Signera {rubrik}", which opens the member signing page
+ * /signering/<signerId> (no mailed link needed).
+ */
+export interface DocumentToSignDue {
+  signer_id: string
+  signing_request_id: string
+  title: string
+  /** The signer's role on the request ("Styrelseledamot"), when the sender gave one. */
+  role_label: string | null
+  /** When the request stops taking signatures (ISO timestamp). */
+  expires_at: string
+}
+
+/**
+ * The payments verification a company must start or renew: the Att göra row
+ * "Verifiera företaget för betalningar via banken" or "Förnya verifieringen
+ * för betalningar", which opens Betalningar, where the form is started.
+ */
+export interface PaymentsVerificationDue {
+  state: 'not_started' | 'expiring' | 'expired'
+  /** The date the provider holds the verification valid through (ISO date); null when it never said. */
+  valid_until: string | null
+  /** Whole days left; 0 on the day, negative after; null without a date. */
+  days_left: number | null
+}
+
+/**
+ * One Enable Banking connection the switch campaign still waits for: the Att
+ * göra row "Byt bankkopplingen för {bank} senast {date}", which opens Koppla
+ * banken in switch mode for exactly that connection.
+ */
+export interface BankSwitchDue {
+  connection_id: string
+  bank_name: string
+  /** The campaign deadline (ISO date). */
+  deadline: string
+  /** Whole days left; 0 on the day, negative after. */
+  days_left: number
+  /** The deadline has passed: the row says the feed has stopped. */
+  passed: boolean
+  /** Inside 14 days of the deadline, or past it: the row moves to the top. */
+  urgent: boolean
+}
 
 /**
  * One person the company owes for registered, unpaid utlägg: the Att göra
@@ -205,6 +532,54 @@ export interface ExpensePayoutDue {
 }
 
 /**
+ * One supplier invoice waiting for the signed-in user's attest under the
+ * company's attest policy: the Att göra row "Attestera {leverantör}
+ * {belopp}". Per person, not per company: only an attester the policy lets
+ * attest the invoice, who has not approved it in the current round, gets it.
+ * A view of supplier_invoice_approval for one person, so it is not added to
+ * the total (the company count already holds the invoice).
+ */
+export interface SupplierInvoiceAttestDue {
+  supplier_invoice_id: string
+  supplier_name: string | null
+  supplier_invoice_number: string | null
+  arrival_number: number
+  total: number
+  currency: string
+  due_date: string
+}
+
+/**
+ * The supplier invoices waiting to be paid: the Att göra row "Betala N
+ * leverantörsfakturor" (attested_to_pay). Null when there are none.
+ */
+export interface AttestedToPayDue {
+  count: number
+  /** The earliest due date among them (ISO yyyy-MM-dd). */
+  next_due: string
+  /** How many have passed their due date. */
+  overdue: number
+}
+
+/**
+ * The bank payments that wait for a person's approval or BankID signature:
+ * the Att göra row "Signera N betalningar" (payments_to_sign), which opens
+ * Betalningar. Null when there are none.
+ */
+export interface PaymentsToSignDue {
+  /** Payments nobody has signed: the ones to approve and the ones to sign together. */
+  count: number
+  /** How many of them nobody has approved yet; the rest wait only for the BankID. */
+  to_approve: number
+  /** The earliest day the bank is asked to pay one of them (requested_execution_date, ISO yyyy-MM-dd). */
+  next_date: string
+  /** What they add up to when they share one currency; null across currencies. */
+  amount: number | null
+  /** The currency of `amount`; null across currencies. */
+  currency: string | null
+}
+
+/**
  * The next charge Skatteverket will draw that the skattekonto balance does
  * not cover: the Att göra row "Betala in till Skatteverket". Same math as the
  * /skattekonto page's Nästa dragning line and its payment dialog.
@@ -216,7 +591,11 @@ export interface SkattekontoPaymentDue {
   charge: number
   /** Last synced saldo; null when no balance snapshot exists. */
   balance: number | null
-  /** What has to be paid in: charge minus balance (never below 0), or the full charge when the balance is unknown. */
+  /**
+   * What has to be paid in: charge minus balance, or the full charge when the balance is unknown, less what
+   * bank payments to the skattekonto already cover (on their way, or executed after the saldo was fetched).
+   * Always above 0: nothing left to pay in is no row at all.
+   */
   amount: number
   /** Number of skattekonto rows drawn on `due`. */
   count: number
@@ -230,9 +609,45 @@ export interface WorklistCounts {
   counts: Record<WorklistCategory, number>
   /**
    * Distinct actionable items. Excludes suggested_match, which is a fast
-   * path over transactions already counted in book_transaction.
+   * path over transactions already counted in book_transaction, and counts
+   * the overdue customer invoices as one item (one grouped row), not one per
+   * invoice.
    */
   total: number
+  /**
+   * The grouped overdue row's facts (count, amount, oldest due date), so
+   * the row and its count can never disagree after a refetch. Null when
+   * nothing is overdue; absent from older payloads.
+   */
+  overdueInvoices?: OverdueInvoicesDue | null
+  /**
+   * Where the inbox lives for this company (lib/inkorg/flag.ts inboxHref):
+   * the new Inkorg in the rollout, else the workspace under Inköp. The
+   * inbox row links here. Absent from older payloads.
+   */
+  inboxHref?: string
+}
+
+/**
+ * A company's overdue customer invoices as ONE Att göra row ("N
+ * kundfakturor har förfallit", linking to Förfallna), never one row per
+ * invoice. The same rows the Förfallna view lists (lib/invoices/overdue.ts),
+ * the "Hos inkasso" view's invoices left out.
+ */
+export interface OverdueInvoicesDue {
+  /** Overdue invoices in the group. */
+  count: number
+  /**
+   * What the customers still owe on them, in SEK: remaining_amount for a
+   * SEK invoice, the same share of total_sek for one in another currency.
+   */
+  remaining_sek: number
+  /** Invoices in another currency with no SEK amount stored: counted, not summed. */
+  unconverted_count: number
+  /** YYYY-MM-DD: the earliest due date in the group. */
+  oldest_due_date: string
+  /** Days the oldest is past due (the day after the due date is day 1). */
+  oldest_days_overdue: number
 }
 
 /** A transaction↔invoice match suggestion, ready for one-click confirm. */
@@ -263,7 +678,25 @@ export interface SuggestedMatch {
   request_ids?: string[]
   /** expense_payout only: the registered claims this transfer pays. */
   claim_ids?: string[]
+  /**
+   * invoice / supplier_invoice only: the row settles SEVERAL open invoices of
+   * one counterparty (lib/transactions/invoice-combination.ts), one
+   * allocation each at what it still owes, summing to the row. Confirmed in
+   * the batch allocation (POST /api/transactions/{id}/match-batch), never
+   * one-click; candidate_id is then the first invoice and candidate_number
+   * joins their numbers. Absent for a single-invoice hint.
+   */
+  allocations?: InvoiceSetAllocation[]
 }
+
+/**
+ * One allocation of a several-invoice suggestion, in the shape the batch
+ * allocation dialog takes (lib/transactions/parts-read.ts
+ * BatchAllocationPrefill; repeated here so this file stays dependency-free).
+ */
+export type InvoiceSetAllocation =
+  | { kind: 'customer_invoice'; invoice_id: string; amount: number }
+  | { kind: 'supplier_invoice'; supplier_invoice_id: string; amount: number }
 
 /**
  * Journal-entry source types that require underlag (BFL 5 kap 7 §). Source
@@ -272,7 +705,8 @@ export interface SuggestedMatch {
  *
  * Single source of truth for EVERY TS surface (worklist counts, journal-list
  * chip/waiver UI, no-doc-required batch route, push notifications); the SQL
- * mirror lives in the verifikat_without_documents RPC, pinned by
+ * mirrors live in the verifikat_without_documents RPC and the journal list's
+ * list_verifikat_missing_underlag RPC (change both together), pinned by
  * tests/pg/document-surfaces-unification.pg.test.ts. Lives here (not in
  * categories.ts) because this module is dependency-free and safe to import
  * from client components.
@@ -287,6 +721,10 @@ export const NEEDS_DOC_SOURCE_TYPES = [
   // Webshop order bookings rest on the generated orderunderlag (#1881); an
   // entry whose underlag failed to attach must surface here.
   'webshop_order',
+  // A point-of-sale day rests on the day report archived at booking
+  // (lib/pos-sales/book-day.ts); a verifikat whose report did not attach
+  // must surface here.
+  'pos_daily_sales',
   // An inbox item booked directly (book-direct) rests on the item's archived
   // document; an item without one (error row, upload that never completed)
   // books a verifikat with no underlag and must surface here (#1317).

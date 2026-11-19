@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AgentIntent } from '@/lib/agent/intents/types'
 import { buildIdentityBlock } from '../system-prompt'
+import { replyLanguageRule } from '@/lib/agent/reply-language'
 
 // buildIdentityBlock is the always-on Block 2 of the chat system prompt. Unlike
 // the per-intent ground rules (which sit only in the first user message and
@@ -51,6 +52,19 @@ const VAT_STATES: VatStatus[] = [
   { vat_registered: true, vat_number: 'SE556677889901' },
   { vat_registered: false, vat_number: null },
 ]
+
+describe('chat system prompt: UI it names exists', () => {
+  it('forbids inventing buttons and menus, and gives no example buttons of its own', () => {
+    const out = block(null)
+    expect(out).toContain('Hitta ALDRIG på knappar')
+    expect(out).toContain('säg det i stället för att gissa')
+    // It used to point at a per-transaction-row button no page renders.
+    expect(out).not.toContain('transaktionsrad')
+    expect(out).not.toContain('motsvarande knapp')
+    // gnubok_load_skill takes `slug`; "(skill_id)" taught a parameter that does not exist.
+    expect(out).not.toContain('gnubok_load_skill(skill_id)')
+  })
+})
 
 describe('chat system prompt: always-on epistemics rules', () => {
   it('forces load-before-answer for regulatory figures, on every VAT status', () => {
@@ -133,5 +147,46 @@ describe('chat system prompt: räkenskapsår inventory', () => {
   it('renders no section when the company has no periods', () => {
     expect(block(null, [])).not.toContain('# Räkenskapsår')
     expect(block(null)).not.toContain('# Räkenskapsår')
+  })
+})
+
+describe('chat system prompt: answer language follows the UI locale', () => {
+  function blockIn(locale: 'sv' | 'en' | undefined, glossary: string[] = []): string {
+    return buildIdentityBlock(
+      {
+        intent,
+        companyId: 'c1',
+        companyName: 'Testbolaget AB',
+        firstName: 'Jakob',
+        profileSummary: null,
+        rankedMemory: [],
+        vatStatus: null,
+        today: '2026-01-01 (torsdag)',
+        locale,
+        supabase: {} as unknown as SupabaseClient,
+      },
+      glossary,
+    )
+  }
+
+  it('answers in Swedish by default and in a Swedish UI, with no glossary', () => {
+    for (const locale of [undefined, 'sv'] as const) {
+      const out = blockIn(locale)
+      expect(out).toContain(replyLanguageRule('sv'))
+      expect(out).not.toContain('# Appens namn på engelska')
+    }
+  })
+
+  it('answers in English in an English UI, and no Swedish rule contradicts it', () => {
+    const out = blockIn('en')
+    expect(out).toContain(replyLanguageRule('en'))
+    expect(out).not.toContain(replyLanguageRule('sv'))
+  })
+
+  it('renders the English label glossary it is given', () => {
+    const out = blockIn('en', ['Inköp = Purchases', 'Rätta = Correct'])
+    expect(out).toContain('# Appens namn på engelska')
+    expect(out).toContain('- Inköp = Purchases')
+    expect(out).toContain('- Rätta = Correct')
   })
 })

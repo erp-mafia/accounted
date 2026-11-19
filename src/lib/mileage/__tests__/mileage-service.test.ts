@@ -14,6 +14,10 @@ vi.mock('@/lib/salary/payroll-config', async (importOriginal) => {
 vi.mock('@/lib/core/bookkeeping/period-service', () => ({
   resolvePeriodStatusForDate: vi.fn(),
 }))
+vi.mock('@/lib/company/entity-type', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/company/entity-type')>()
+  return { ...actual, resolveCompanyEntityType: vi.fn() }
+})
 
 import {
   bookMileagePeriod,
@@ -25,7 +29,15 @@ import {
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { loadPayrollConfig } from '@/lib/salary/payroll-config'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const CONFIG = {
   milersattningEgenBil: 25,
@@ -63,6 +75,7 @@ function trip(overrides: Partial<MileageTrip>): MileageTrip {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(resolveCompanyEntityType).mockResolvedValue('aktiebolag')
 })
 
 describe('ratePerMil', () => {
@@ -181,6 +194,25 @@ describe('pushMileageToSalaryRun', () => {
     }
   }
 
+  it('reverts the claimed trips and inserts nothing when the calculation cannot be cleared', async () => {
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1', employee_id: 'emp-1', distance_km: 100 })])
+    vi.mocked(loadPayrollConfig).mockResolvedValue(CONFIG)
+    vi.mocked(invalidateRunCalculation).mockResolvedValueOnce({
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      details: { message: 'boom' },
+    })
+    const supabase = salarySupabase({
+      run: { id: 'run-1', status: 'draft' },
+      sre: { id: 'sre-1' },
+      claimIds: ['t1'],
+    })
+
+    await expect(pushMileageToSalaryRun(supabase as never, 'company-1', params)).rejects.toThrow('boom')
+    expect(supabase.insert).not.toHaveBeenCalled()
+    expect(supabase.tripChain.update).toHaveBeenCalledTimes(2)
+  })
+
   it('maps missing run / wrong status / missing employee to their codes', async () => {
     const missingRun = salarySupabase({ run: null })
     expect(
@@ -218,8 +250,15 @@ describe('pushMileageToSalaryRun', () => {
       is_taxable: false,
       is_avgift_basis: false,
       is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
       account_number: '7331',
     })
+    // A run in review takes mileage too: its figures are stale until recalculated.
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(supabase, 'company-1', { salaryRunEmployeeId: 'sre-1' })
+    expect(vi.mocked(invalidateRunCalculation).mock.invocationCallOrder[0]).toBeLessThan(
+      supabase.insert.mock.invocationCallOrder[0],
+    )
     // The claim ran before the insert (retry cannot double-pay).
     const claimOrder = (supabase.tripChain.update as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0]
@@ -408,6 +447,94 @@ describe('bookMileagePeriod', () => {
     expect(credit?.account_number).toBe('2820')
     const totalDebit = debits.reduce((sum, l) => sum + l.debit_amount, 0)
     expect(Math.round(totalDebit * 100) / 100).toBe(credit?.credit_amount)
+  })
+
+  it('credits 2018 by default for an enskild firma owner\'s own trips', async () => {
+    vi.mocked(resolveCompanyEntityType).mockResolvedValue('enskild_firma')
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1', distance_km: 120 })])
+    vi.mocked(resolvePeriodStatusForDate).mockResolvedValue({
+      status: 'open',
+      period_id: 'period-1',
+    } as never)
+    vi.mocked(loadPayrollConfig).mockResolvedValue(CONFIG)
+    vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-1' } as never)
+
+    const supabase = stampSupabase([['t1'], ['t1']])
+    const result = await bookMileagePeriod(supabase as never, 'company-1', 'user-1', {
+      ...params,
+      counterAccount: undefined,
+    })
+
+    expect(result).toMatchObject({ ok: true, totalAmount: 300 })
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3]
+    const credit = input.lines.find((l) => l.credit_amount > 0)
+    expect(credit).toMatchObject({
+      account_number: '2018',
+      credit_amount: 300,
+      line_description: 'Milersättning, egen insättning',
+    })
+    expect(input.lines.find((l) => l.debit_amount > 0)?.account_number).toBe('7331')
+  })
+
+  it('refuses skuld till anställda for an enskild firma owner\'s trips before claiming them', async () => {
+    vi.mocked(resolveCompanyEntityType).mockResolvedValue('enskild_firma')
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1' })])
+
+    const supabase = stampSupabase([])
+    const result = await bookMileagePeriod(supabase as never, 'company-1', 'user-1', params)
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'COUNTER_ACCOUNT_NOT_ALLOWED',
+      allowed: ['2018', '1930'],
+    })
+    expect(supabase.chain.update).not.toHaveBeenCalledWith({ status: 'booked' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('keeps 2820 for an employee\'s trips in an enskild firma', async () => {
+    vi.mocked(resolveCompanyEntityType).mockResolvedValue('enskild_firma')
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1', employee_id: 'emp-1' })])
+    vi.mocked(resolvePeriodStatusForDate).mockResolvedValue({
+      status: 'open',
+      period_id: 'period-1',
+    } as never)
+    vi.mocked(loadPayrollConfig).mockResolvedValue(CONFIG)
+    vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-1' } as never)
+
+    // The employee lookup (motpart in the verifikationstext) reads its own table.
+    const stamp = stampSupabase([['t1'], ['t1']])
+    const employees: Record<string, unknown> = {}
+    employees.select = vi.fn(() => employees)
+    employees.eq = vi.fn(() => employees)
+    employees.maybeSingle = vi.fn(() =>
+      Promise.resolve({ data: { first_name: 'Anna', last_name: 'Andersson' }, error: null })
+    )
+    const supabase = {
+      from: vi.fn((table: string) => (table === 'employees' ? employees : stamp.chain)),
+    }
+    const result = await bookMileagePeriod(supabase as never, 'company-1', 'user-1', {
+      ...params,
+      counterAccount: undefined,
+    })
+
+    expect(result).toMatchObject({ ok: true })
+    const credit = vi.mocked(createJournalEntry).mock.calls[0][3].lines.find((l) => l.credit_amount > 0)
+    expect(credit).toMatchObject({ account_number: '2820', line_description: 'Milersättning att utbetala' })
+  })
+
+  it('refuses the enskild firma owner account in an aktiebolag', async () => {
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1' })])
+    const result = await bookMileagePeriod(stampSupabase([]) as never, 'company-1', 'user-1', {
+      ...params,
+      counterAccount: '2018',
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: 'COUNTER_ACCOUNT_NOT_ALLOWED',
+      allowed: ['2820', '2893', '1930'],
+    })
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
   it('surfaces STAMP_FAILED with the entry id when the entry link mismatches', async () => {

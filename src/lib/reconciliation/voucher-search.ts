@@ -1,5 +1,4 @@
-import { parseAmountTerm } from '@/lib/invoices/invoice-search'
-import { equalOre } from '@/lib/money'
+import { equalOre, parseAmountTerm } from '@/lib/money'
 
 /**
  * Search predicate for the manual bank-match voucher picker

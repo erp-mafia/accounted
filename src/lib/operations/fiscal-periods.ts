@@ -4,14 +4,14 @@
  * undo that). Rules live in lib/core/bookkeeping/fiscal-year-service.ts;
  * lock, close and year-end keep their hand-written v1 routes.
  *
- * fiscal-periods.unlock has no MCP binding on purpose: gnubok_unlock_period
- * (staged as unlock_period) already serves that door, and a second tool for
- * the same verb would only split agents between two names.
+ * MCP: fiscal-periods.unlock is gnubok_unlock_period, staged as unlock_period.
+ * fiscal-periods.delete removes only an empty first year (crm#1450).
  */
 import { z } from 'zod'
 import {
   closeFiscalPeriodExternally,
   createFiscalPeriod,
+  deleteEmptyFiscalPeriod,
   reopenExternallyClosedFiscalPeriod,
   unlockFiscalPeriod,
   updateFiscalPeriod,
@@ -60,7 +60,7 @@ function publicOutcome(outcome: OperationOutcome<FiscalPeriodRow>): OperationOut
 const FISCAL_PERIOD_ID = z
   .string()
   .uuid()
-  .describe('The fiscal period (räkenskapsår) id, from GET /fiscal-periods.')
+  .describe('The räkenskapsår id, from GET /fiscal-periods.')
 
 const PERIOD_EXAMPLE = {
   id: 'a8f1…',
@@ -86,15 +86,16 @@ export const fiscalPeriodsCreate = defineOperation({
   docs: {
     summary: 'Create a fiscal year (räkenskapsår).',
     description:
-      'Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§). It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap, it also ends the day before the next year starts; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.',
+      'Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§); for an enskild firma it ends on 31 December and only the earliest year may start after 1 January. It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap of at most 18 months, it also ends the day before the next year starts; a longer gap is filled one year at a time from its oldest end; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.',
     useWhen:
       'The company needs the next räkenskapsår to book in (e.g. January arrives), or an earlier year must exist before its SIE file or opening balances can be imported.',
     doNotUseFor:
       'Closing the prior year (run the year-end), or changing an existing year (PATCH /fiscal-periods/{id}).',
     pitfalls: [
       'A start that does not continue the preceding year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS with details.expected_start (or details.expected_end): retry with that date.',
+      'A gap of more than 18 months between two years takes several creates, since one year over all of it answers 400 FISCAL_PERIOD_TOO_LONG: create a 12-month year starting on details.expected_start, then the next, until the last one ends on details.gap_end. The year that closes the gap becomes the previous year of the one after it.',
       'Overlapping an existing year answers 409 FISCAL_PERIOD_OVERLAP.',
-      'An enskild firma normally runs the calendar year; a brutet räkenskapsår needs Skatteverket\'s permission.',
+      'An enskild firma uses the calendar year: any other year answers 400 FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR, with details.rule end_31_december or start_1_january.',
       'There is no delete: a wrong year can be re-dated with PATCH only while nothing is posted in it.',
     ],
     example: {
@@ -118,6 +119,7 @@ export const fiscalPeriodsCreate = defineOperation({
   output: z.object({ fiscal_period: FiscalPeriod }),
   errorCodes: [
     'FISCAL_PERIOD_INVALID_DATES',
+    'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
     'FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH',
     'FISCAL_PERIOD_END_NOT_MONTH_END',
     'FISCAL_PERIOD_TOO_LONG',
@@ -150,14 +152,15 @@ export const fiscalPeriodsUpdate = defineOperation({
   docs: {
     summary: 'Rename or re-date an open fiscal year.',
     description:
-      'Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year; the dates only while no posted or reversed verifikat exist in it. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma) and may not overlap another year. Idempotent. Dry-runnable.',
-    useWhen: 'A year was created with the wrong dates or name and nothing has been booked in it yet.',
+      'Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year. The dates can move also when the year already holds verifikat, as long as nothing it holds is affected: every verifikat and draft stays inside the new dates, posted opening balances keep the start, and no lock, year-end work, filing or SIE hold covers the change. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma), may not overlap another year and keep the chain to the neighbouring years. Idempotent. Dry-runnable.',
+    useWhen:
+      'A year was created with the wrong dates or name, for example a first year that starts a day after the registration date at Bolagsverket.',
     doNotUseFor:
-      'Moving verifikat between years, changing a locked or closed year, or lengthening a year that already has bookings.',
+      'Moving verifikat between years, changing a locked or closed year (beyond correcting the earliest year start within its month), or re-dating a year whose annual report or declaration is already filed.',
     pitfalls: [
-      'Any posted or reversed verifikat in the year answers 409 FISCAL_PERIOD_HAS_POSTED_ENTRIES when dates are sent: send only name to rename.',
-      'A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED.',
-      'Re-dating does not re-chain previous_period_id: keep the years contiguous yourself.',
+      'A re-date that would affect what the year holds answers 409 FISCAL_PERIOD_DATES_BLOCKED; details.blockers names every reason (for example entries_outside with the first and last date outside the new dates). Send only name to rename.',
+      'A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED. One exception: the earliest year may move only its start within the month it starts in (to the registration day), also when closed or locked.',
+      'Only the earliest year can move its start and only the latest year its end: a boundary shared with a neighbouring year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS.',
     ],
     example: {
       request: { period_end: '2027-06-30' },
@@ -179,11 +182,12 @@ export const fiscalPeriodsUpdate = defineOperation({
     'PERIOD_NOT_FOUND',
     'FISCAL_PERIOD_UPDATE_CLOSED',
     'FISCAL_PERIOD_UPDATE_LOCKED',
-    'FISCAL_PERIOD_HAS_POSTED_ENTRIES',
+    'FISCAL_PERIOD_DATES_BLOCKED',
     'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
     'FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH',
     'FISCAL_PERIOD_END_NOT_MONTH_END',
     'FISCAL_PERIOD_TOO_LONG',
+    'FISCAL_PERIOD_NOT_CONTIGUOUS',
     'FISCAL_PERIOD_OVERLAP',
     'FISCAL_PERIOD_UPDATE_FAILED',
   ],
@@ -196,7 +200,7 @@ export const fiscalPeriodsUpdate = defineOperation({
     name: 'gnubok_update_fiscal_period',
     title: 'Update Fiscal Period',
     description:
-      'Stage a rename or re-date of an open, unlocked räkenskapsår. Dates can only move while no posted verifikat exist in the year; the name can always change.',
+      'Stage a rename or re-date of an open, unlocked räkenskapsår. Dates may move while every verifikat stays inside them; the name can always change.',
     keywords: ['ändra räkenskapsår', 'byt namn räkenskapsår', 'förläng räkenskapsår', 'förkorta räkenskapsår'],
     stage: { pendingType: 'update_fiscal_period', title: () => 'Ändra räkenskapsår' },
   },
@@ -234,6 +238,34 @@ export const fiscalPeriodsUnlock = defineOperation({
     path: '/api/v1/companies/:companyId/fiscal-periods/:id/unlock',
     pathParams: { id: 'fiscal_period_id' },
   },
+  mcp: {
+    name: 'gnubok_unlock_period',
+    title: 'Unlock Fiscal Period',
+    description:
+      'Stage period unlock: clears locked_at so entries can be posted again. Cannot unlock a closed period.',
+    visibility: 'default',
+    keywords: ['lås upp period', 'öppna period'],
+    stage: {
+      pendingType: 'unlock_period',
+      title: (_input, preview = {}) =>
+        `Lås upp period: ${preview.name} (${preview.period_start} till ${preview.period_end})`,
+      preview: (_input, preview) => ({
+        period_name: preview.name,
+        period_start: preview.period_start,
+        period_end: preview.period_end,
+        locked_at: preview.locked_at,
+        will: 'clear locked_at: new entries can be posted into the period again',
+      }),
+      extras: (input) => ({
+        next: {
+          description:
+            'After approval, post the rättelse via gnubok_correct_entry or new entries via gnubok_create_voucher, then re-lock with gnubok_lock_period.',
+          tool: 'gnubok_lock_period',
+          args: { fiscal_period_id: input.fiscal_period_id },
+        },
+      }),
+    },
+  },
   run: async (ctx, { fiscal_period_id }, { dryRun }) =>
     publicOutcome(await unlockFiscalPeriod(ctx, fiscal_period_id, { dryRun })),
 })
@@ -255,6 +287,7 @@ export const fiscalPeriodsCloseExternal = defineOperation({
       'A year bookkept here with result accounts answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING: run the year-end instead.',
       'A running year answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED.',
       'Unbooked bank transactions answer 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS with the count in details.reason.',
+      'A year that an SIE import, or its undo, still holds answers 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume or undo the import first.',
     ],
     example: {
       response: {
@@ -282,6 +315,7 @@ export const fiscalPeriodsCloseExternal = defineOperation({
     'FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING',
     'FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED',
     'PERIOD_HAS_UNBOOKED_TRANSACTIONS',
+    'PERIOD_HAS_UNFINISHED_SIE_IMPORT',
   ],
   http: {
     method: 'POST',
@@ -342,4 +376,48 @@ export const fiscalPeriodsReopenExternal = defineOperation({
   },
   run: async (ctx, { fiscal_period_id }, { dryRun }) =>
     publicOutcome(await reopenExternallyClosedFiscalPeriod(ctx, fiscal_period_id, { dryRun })),
+})
+
+export const fiscalPeriodsDelete = defineOperation({
+  id: 'fiscal-periods.delete',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'high',
+  reversible: false,
+  docs: {
+    summary: 'Remove an empty first fiscal year.',
+    description:
+      'Removes the company\'s earliest räkenskapsår when it holds nothing: no verifikat or draft of any status, no issued voucher number, no SIE import or other record pointing at it, not closed, locked, behind the lock date or filed. The next year becomes the first year, so its start may then move to the registration day (PATCH, 18-month cap). The removal is written to the audit log. Dry-runnable.',
+    useWhen:
+      'An empty year lies before the company existed (seeded by an older onboarding) and keeps the real first year from starting on the registration day.',
+    doNotUseFor:
+      'Removing a year that holds verifikat (correct them, or reset the year first), a year after the first, or merging two years.',
+    pitfalls: [
+      'Any reason answers 409 FISCAL_PERIOD_DELETE_BLOCKED; details.blockers names each (has_entries, not_first_year, only_year, period_locked, linked_records, ...).',
+    ],
+    example: { response: { data: PERIOD_EXAMPLE, meta: META_EXAMPLE } },
+  },
+  input: z.object({ fiscal_period_id: FISCAL_PERIOD_ID }),
+  output: FiscalPeriod,
+  errorCodes: ['PERIOD_NOT_FOUND', 'FISCAL_PERIOD_DELETE_BLOCKED'],
+  http: {
+    method: 'DELETE',
+    path: '/api/v1/companies/:companyId/fiscal-periods/:id',
+    pathParams: { id: 'fiscal_period_id' },
+  },
+  mcp: {
+    name: 'gnubok_delete_fiscal_period',
+    title: 'Delete Empty Fiscal Period',
+    description:
+      'Stage removal of an empty first räkenskapsår (no verifikat, drafts, voucher numbers or linked records), e.g. one seeded before the company existed. The next year becomes the first and may then start on the registration day.',
+    keywords: ['ta bort räkenskapsår', 'radera räkenskapsår', 'tomt räkenskapsår', 'första räkenskapsåret'],
+    hints: { destructive: true },
+    stage: {
+      pendingType: 'delete_fiscal_period',
+      title: (_input, preview = {}) =>
+        `Ta bort tomt räkenskapsår: ${preview.name} (${preview.period_start} till ${preview.period_end})`,
+    },
+  },
+  run: async (ctx, { fiscal_period_id }, { dryRun }) =>
+    publicOutcome(await deleteEmptyFiscalPeriod(ctx, fiscal_period_id, { dryRun })),
 })

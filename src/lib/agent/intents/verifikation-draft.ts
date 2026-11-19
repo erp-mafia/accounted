@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { renderAgentGroundRules } from './shared-rules'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 
@@ -248,8 +249,9 @@ export const verifikationDraft = defineAgentIntent<
         lines.push(`  ${r.account_number ?? '????'}  ${dStr.padStart(12)}  ${cStr.padStart(12)}  ${r.description ?? ''}`)
       }
       lines.push(`  SUMMA          ${debits.toLocaleString('sv-SE').padStart(12)}  ${credits.toLocaleString('sv-SE').padStart(12)}`)
-      if (Math.abs(debits - credits) > 0.005) {
-        lines.push(`  ⚠ Diff: ${(debits - credits).toLocaleString('sv-SE')}: debet ≠ kredit`)
+      const { difference } = lineBalance(captured.current_lines)
+      if (difference !== 0) {
+        lines.push(`  ⚠ Diff: ${difference.toLocaleString('sv-SE')}: debet ≠ kredit`)
       }
     }
 
@@ -284,14 +286,17 @@ export const verifikationDraft = defineAgentIntent<
         })`,
       )
       if (periodState === 'closed') {
-        lines.push('PERIODEN ÄR STÄNGD: ingenting får bokföras på detta datum, och en stängd period kan inte låsas upp. Vägled användaren att flytta verifikationsdatumet till en öppen period.')
+        // Moving the date is only right once the year's årsredovisning has
+        // legal weight; before that the event belongs in its own year, which
+        // the owner can reopen (crm#1290).
+        lines.push('PERIODEN ÄR STÄNGD (bokslut): ingenting får bokföras på detta datum, och en stängd period kan inte låsas upp. Fråga om årsredovisningen för året är undertecknad, fastställd eller inskickad. Är den inte det hör händelsen hemma i det året: företagets ägare kan öppna året igen under Inställningar → Bokföring → Räkenskapsår (bokslutet återförs med storno), bokföra händelsen där och köra bokslutet igen. Är den det bokförs händelsen som rättelse i det öppna räkenskapsåret: vägled användaren att sätta verifikationsdatumet i en öppen period och hänvisa till det stängda året i texten.')
       } else if (periodState === 'locked') {
-        lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden under Bokföring → Räkenskapsår om datumet måste stå kvar.')
+        lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden om datumet måste stå kvar: ett låst räkenskapsår under Inställningar → Bokföring → Räkenskapsår, bolagets låsdatum (Periodlåsning, "Bokföring låst t.o.m.") under Inställningar → Bokföring → Bokföring.')
       } else if (periodState === 'unknown') {
         // Fail closed: the lock lookup failed, so we cannot claim the period is
         // open. Posting into a locked period is blocked by DB triggers anyway;
         // the agent must not promise the user that it will go through.
-        lines.push('PERIODLÅSET KUNDE INTE LÄSAS: utgå INTE från att perioden är öppen. Be användaren kontrollera periodlåset under Bokföring → Räkenskapsår innan något bokförs på detta datum.')
+        lines.push('PERIODLÅSET KUNDE INTE LÄSAS: utgå INTE från att perioden är öppen. Be användaren kontrollera låsen innan något bokförs på detta datum: Periodlåsning under Inställningar → Bokföring → Bokföring och räkenskapsåret under Inställningar → Bokföring → Räkenskapsår.')
       } else if (periodState === 'open' && captured.period_status.period_id === null) {
         lines.push('INGET RÄKENSKAPSÅR TÄCKER DATUMET: periodlåset gick inte att avgöra. Kontrollera att verifikationsdatumet ligger inom ett upplagt räkenskapsår innan du föreslår bokföring.')
       }
@@ -306,15 +311,15 @@ export const verifikationDraft = defineAgentIntent<
     }
     lines.push('')
     lines.push('Arbetssätt:')
-    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta i Dokumentinkorgen med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
+    lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta bland underlagen (menyn: Dokument → Inkommande) med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
     lines.push('2. Föreslå rätt BAS-konton utifrån underlaget och beskrivningen. Syns en motpart: kolla historiken med gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) och följ tidigare mönster.')
     lines.push('3. Säkerställ att debet = kredit. Förklara varje rad kort (i kategori-/kontonamn, inte kontonummer).')
     lines.push('4. Är detta egentligen en kund-/leverantörsfaktura eller en bankrad? Be användaren matcha den istället: direktbokning skapar dubbletter.')
     lines.push('5. Skapa verifikationen:')
-    lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget i Dokumentinkorgen: skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')
+    lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget under Underlag: skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')
     lines.push('   • BEFINTLIGT utkast (visas ovan): föreslå konton/moms och kontrollera balansen så att användaren kan färdigställa utkastet i formuläret. Staga INTE en ny verifikation för ett utkast som redan finns: det skapar en dubblett.')
     lines.push('')
-    lines.push('Svara på svenska, kort och konkret.')
+    lines.push('Svara kort och konkret.')
     return lines.join('\n')
   },
 })

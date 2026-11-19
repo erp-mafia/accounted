@@ -15,6 +15,12 @@
  * queued page happens to be empty. The whole finding lives in the arguments.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The payment date's lock: mocked so it consumes no slot in the Supabase mock;
+// pinned by lib/api/v1/__tests__/check-period-lock.test.ts.
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn(async () => ({ locked: false })),
+}))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   createMockRequest,
@@ -174,6 +180,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
         },
       ],
       transactions: [{ data: [bankRow()] }],
+      company_settings: [{ data: { accounting_method: 'accrual' } }],
     })
 
     const response = await markPaid()
@@ -225,6 +232,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
       // EUR sweep finds nothing; the kronor sweep finds the row that actually
       // paid the invoice, at the converted magnitude.
       transactions: [{ data: [] }, { data: [bankRow({ amount: -11500 })] }],
+      company_settings: [{ data: { accounting_method: 'accrual' } }],
     })
 
     const response = await markPaid()
@@ -266,28 +274,30 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
             exchange_rate: null,
             remaining_amount: 1000,
             paid_amount: 0,
+            registration_journal_entry_id: null,
             supplier: makeSupplier({ name: 'Leverantör AB' }),
             items: [],
           }),
         },
+        { data: [{ id: 'si-1' }] },
       ],
       // The single EUR sweep returns a kronor row anyway (PostgREST `.or()`
       // composes with the other filters and this stub ignores them): the
       // per-row re-check must drop it rather than read -1000 kr as -1000 EUR.
       transactions: [{ data: [bankRow({ amount: -1000, currency: 'SEK' })] }],
-      company_settings: [{ data: { accounting_method: 'accrual' } }],
+      // Kontantmetoden: no SEK to resolve before the guard. Under
+      // faktureringsmetoden the 2440 clearing refuses this invoice first:
+      // with no rate there is no SEK to clear (#2955).
+      company_settings: [{ data: { accounting_method: 'cash' } }],
+      supplier_invoice_payments: [{ data: { id: 'pay-1' } }],
     })
-    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    mockCreateSupplierInvoiceCashEntry.mockResolvedValue({ id: 'je-1' })
 
     const response = await markPaid()
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    // The guard lets it through; the 2440 clearing then refuses, since with no
-    // rate and no registration verifikat there is no SEK to clear (#2955: it
-    // used to book 1 000 EUR as 1 000 kr).
-    expect(status).toBe(400)
-    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
-    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+    // The guard lets it through.
+    expect(response.status).toBe(200)
+    expect(mockCreateSupplierInvoiceCashEntry).toHaveBeenCalledTimes(1)
     expect(txQueries()).toHaveLength(1)
     expect(txQueries()[0].calls.or).toEqual([[
       'and(or(currency.eq.EUR),or(merchant_name.ilike.*leverantör*,description.ilike.*leverantör*))',

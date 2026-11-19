@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, testRoutes } from '@/tests/helpers'
 import { skatteverketExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -17,7 +17,7 @@ const ROW_ID = '11111111-1111-4111-8111-111111111111'
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 function findRoute() {
-  const route = skatteverketExtension.apiRoutes?.find(
+  const route = testRoutes(skatteverketExtension).find(
     (r) => r.method === 'PATCH' && r.path === ROUTE_PATH,
   )
   if (!route) throw new Error('ignore route not registered')
@@ -59,11 +59,6 @@ describe('PATCH /skattekonto/transaktioner/:id/ignore', () => {
     reset()
   })
 
-  it('returns 500 without an extension context', async () => {
-    const res = await findRoute().handler(makeRequest({ is_ignored: true }))
-    expect(res.status).toBe(500)
-  })
-
   it('returns 400 without a transaction id', async () => {
     const res = await findRoute().handler(makeRequest({ is_ignored: true }, null), makeContext())
     expect(res.status).toBe(400)
@@ -103,7 +98,8 @@ describe('PATCH /skattekonto/transaktioner/:id/ignore', () => {
 
     const updates = findCalls('skattekonto_transactions', 'update')
     expect(updates).toHaveLength(1)
-    expect(updates[0][0]).toEqual({ is_ignored: true })
+    // The reconciliation page's rule: ignoring also drops a standing proposal.
+    expect(updates[0][0]).toEqual({ is_ignored: true, suggested_journal_entry_id: null, suggested_at: null })
     // The `.is('journal_entry_id', null)` race guard must be on the write.
     expect(findCalls('skattekonto_transactions', 'is')).toContainEqual([
       'journal_entry_id',

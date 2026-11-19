@@ -18,15 +18,15 @@ Needs Node.js 20 or later. `npx accounted ...` also works, but starts slower on 
 accounted login
 ```
 
-The browser opens the Accounted consent page, the same one the Claude and ChatGPT connectors use. Every permission your role allows is ticked; untick what you do not want, or choose read only. With several companies you choose the access per company.
+The browser opens the Accounted consent page, the same one the Claude and ChatGPT connectors use. Every permission your role allows is ticked except Approve (Godkänn); untick what you do not want, choose read only, or tick Approve to let the CLI approve what it stages. With several companies you choose the access per company.
 
 If the browser cannot reach this machine (SSH, a container, an agent's sandbox), or with `--no-browser`, the browser ends on a page that cannot load: copy that page's whole address and paste it into the terminal.
 
 Run `accounted login` yourself, in your own terminal. In Claude Code: `! accounted login`.
 
-The sign-in is saved in `~/.config/accounted/credentials.json` (`$XDG_CONFIG_HOME`, or `%APPDATA%\accounted` on Windows), readable only by you. `accounted logout` removes it from this computer; the key keeps working until you disconnect it under Settings › API & MCP, and logout prints which key to look for.
+The sign-in is saved in `~/.config/accounted/credentials.json` (`$XDG_CONFIG_HOME`, or `%APPDATA%\accounted` on Windows), readable only by you. `accounted logout` removes it from this computer; the key keeps working until you disconnect it under Agents › Connect an agent (`/settings/api`), and logout prints which key to look for.
 
-For CI and servers, set `ACCOUNTED_API_KEY` to an API key from Settings instead of logging in.
+For CI and servers, set `ACCOUNTED_API_KEY` to an API key from Agents › Connect an agent (the Developers group) instead of logging in.
 
 ## Use
 
@@ -54,7 +54,7 @@ The result is JSON on stdout (indented in a terminal, one line in a pipe). Notes
 
 ### Writes and approval
 
-A write stages a pending operation and shows a preview. The CLI then prints the exact command that approves it, and the link to approve it in the browser (`/pending`). Approve only when the user says so. A high-risk operation (a voucher, a correction, a year-end close) is irreversible once approved: show the user the preview, get an explicit acknowledgment, and only then add `"confirmed": true` to the approve arguments.
+A write stages a pending operation and shows a preview. The CLI then prints the link to approve it in the browser (`/pending`) and, when the sign-in has the Approve permission, the exact command that approves it. Approve only when the user says so. A high-risk operation (a voucher, a correction, a year-end close) is irreversible once approved: show the user the preview, get an explicit acknowledgment, and only then add `"confirmed": true` to the approve arguments.
 
 ### Companies
 

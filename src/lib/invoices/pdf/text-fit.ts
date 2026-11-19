@@ -41,12 +41,14 @@ export function approxWidthPt(word: string): number {
 }
 
 /**
- * The narrowest description column (the VAT column shown) is about 220pt; a
- * full-width box is about 495pt. The budgets sit well under those so an
- * estimate error still lands inside the column.
+ * The narrowest description column (the VAT and the article number columns
+ * shown) is about 200pt; a full-width box is about 495pt. The article number
+ * column is about 43pt at its narrowest. The budgets sit well under those so
+ * an estimate error still lands inside the column.
  */
 export const DESCRIPTION_COLUMN_PT = 160
 export const FULL_WIDTH_BOX_PT = 440
+export const ARTICLE_NUMBER_COLUMN_PT = 36
 
 export function wrapWholeWordsWithin(budgetPt: number): (word: string) => string[] {
   return (word: string): string[] => {
@@ -72,6 +74,7 @@ export function wrapWholeWordsWithin(budgetPt: number): (word: string) => string
 }
 
 export const wrapDescriptionWords = wrapWholeWordsWithin(DESCRIPTION_COLUMN_PT)
+export const wrapArticleNumberWords = wrapWholeWordsWithin(ARTICLE_NUMBER_COLUMN_PT)
 export const wrapFullWidthWords = wrapWholeWordsWithin(FULL_WIDTH_BOX_PT)
 
 /**
@@ -156,6 +159,25 @@ export function keepTogetherLineCap(fontFamily: string, fontSizePt: number, chro
  * other two thirds for what the estimate does not count.
  */
 export const MAX_KEEP_TOGETHER_LINES = 12
+
+/**
+ * How long the fine print (the payment terms, 8pt across the page) may be and
+ * still travel as one unit with the payment area's reservation, or with the
+ * summary when there is none, so it is never stranded alone on a page
+ * (crm#242). Past this it is ordinary text that follows the summary and may
+ * break across pages, while the reservation stays one unit of its own
+ * (crm#1787): a long text, such as the statutory information an electricity
+ * invoice must carry, otherwise dragged the whole unit to a fresh page and
+ * left the page above it mostly empty.
+ *
+ * Counted with estimateLines at FULL_WIDTH_BOX_PT, which overstates 8pt text
+ * across the full content width (a printed line holds some 130 characters,
+ * an estimated one about 80): 4 estimated lines come to two or three printed
+ * ones, a sentence or two for each of the two texts, what nearly every
+ * company sets. Either side of the line is safe: a short unit always fits on
+ * a page, and text that may break is never lost past the page edge.
+ */
+export const FINE_PRINT_KEEP_TOGETHER_LINES = 4
 
 export function estimateLines(text: string, budgetPt: number): number {
   let lines = 0

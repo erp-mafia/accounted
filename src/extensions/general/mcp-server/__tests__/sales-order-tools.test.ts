@@ -242,6 +242,22 @@ describe('gnubok_create_sales_order', () => {
     expect(findCalls('pending_operations', 'insert')).toEqual([])
   })
 
+  it("dry run: an article line takes the article's English name for an English-language customer (crm#1084)", async () => {
+    const ARTICLE_ID = '00000000-0000-4000-8000-0000000000cc'
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeCustomer({ id: CUSTOMER_ID, customer_type: 'swedish_business', vat_number_validated: false, language: 'en' }) })
+    enqueue({
+      data: [{ id: ARTICLE_ID, name: 'Konsulttimme', name_en: 'Consulting hour', unit: 'tim', price_excl_vat: 1000, vat_rate: 25, revenue_account: null, currency: 'SEK', active: true }],
+    })
+
+    const result = (await byName('gnubok_create_sales_order').execute(
+      { customer_id: CUSTOMER_ID, items: [{ article_id: ARTICLE_ID, quantity: 2 }], dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: Record<string, unknown> }
+
+    expect((result.preview.items as Record<string, unknown>[])[0]).toMatchObject({ description: 'Consulting hour', line_total: 2000 })
+  })
+
   it('refuses a VAT rate outside the customer permitted set (same gate as the service)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeCustomer({ id: CUSTOMER_ID, customer_type: 'swedish_business', vat_number_validated: false }) })

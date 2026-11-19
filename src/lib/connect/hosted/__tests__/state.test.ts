@@ -18,7 +18,7 @@ describe('connector state', () => {
   it('rejects a tampered payload', () => {
     vi.stubEnv('CONNECTOR_STATE_SECRET', 'secret')
     const token = signConnectorState(BASE, 1000)
-    const [ver, body, sig] = token.split('.')
+    const [ver, , sig] = token.split('.')
     const tamperedBody = Buffer.from(JSON.stringify({ ...BASE, cref: 'other', iat: 1000 })).toString('base64url')
     expect(verifyConnectorState(`${ver}.${tamperedBody}.${sig}`, 1000)).toEqual({ ok: false, reason: 'bad_signature' })
   })

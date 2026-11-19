@@ -1,7 +1,7 @@
 /**
  * Tests for GET /api/bookkeeping/accounts/reference and /bas-lookup.
  *
- * reference: the chart query must carry a stable unique order — a full-BAS
+ * reference: the chart query must carry a stable unique order - a full-BAS
  * chart exceeds fetchAllRows' 1000-row page size and unordered .range()
  * paging can duplicate/skip rows on page boundaries.
  */
@@ -89,7 +89,7 @@ describe('GET /api/bookkeeping/accounts/reference', () => {
  * bas-lookup answers "can this number be activated at all?", which is what
  * gates ActivateAccountsDialog's confirm button. It consults the company's own
  * chart first, so a custom (non-BAS) account the company deactivated still
- * comes back known — before that it read as unknown and the button stayed dead.
+ * comes back known - before that it read as unknown and the button stayed dead.
  */
 describe('GET /api/bookkeeping/accounts/bas-lookup', () => {
   function authWith(chartRows: unknown[]) {

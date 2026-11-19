@@ -94,3 +94,13 @@ describe('partlyPaidRemainder', () => {
     expect(partlyPaidRemainder({ paid_amount: null, remaining_amount: null }, 1000)).toBe(1000)
   })
 })
+
+describe('a credit note imported without a link', () => {
+  it('asks for no payment, a draft included', () => {
+    for (const status of ['draft', 'sent', 'overdue'] as const) {
+      const imported = makeInvoice({ status, total: -500, credited_invoice_id: null })
+      expect(isInvoicePayableStatus(imported), status).toBe(false)
+      expect(invoiceAmountDue(imported, company), status).toBe(0)
+    }
+  })
+})

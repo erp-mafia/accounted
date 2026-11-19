@@ -24,8 +24,7 @@ import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
  *                       lands (DECISIONS.md archive 2026-07-29) the families converge and
  *                       EXPECTED_OPERATIONAL_GAP can be dropped.
  *
- * Swedish labels: this surfaces next to the bokslut and declaration figures
- * (see .claude/rules/i18n.md).
+ * Swedish labels: this surfaces next to the bokslut and declaration figures.
  */
 
 /** Öre truncation across a form can legitimately accumulate a krona or two. */

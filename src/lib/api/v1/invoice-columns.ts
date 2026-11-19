@@ -11,8 +11,11 @@
  * field becomes visible on the public API.
  */
 
+// external_invoice_number + is_self_billed: a received self-billed sale has
+// no invoice_number of ours; the customer's number is how it is found
+// (crm#1367).
 export const INVOICE_FULL_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, ore_rounding, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, invoice_marking, notes, payment_link_url, stripe_payment_link_id, payment_link_auto, payment_cash_account_id, payment_details, qr_mode, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, valid_until, quote_status, quote_decided_at, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
+  'id, invoice_number, external_invoice_number, is_self_billed, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, ore_rounding, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, invoice_marking, notes, payment_link_url, stripe_payment_link_id, payment_link_auto, payment_cash_account_id, payment_details, qr_mode, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, valid_until, quote_status, quote_decided_at, paid_at, paid_amount, remaining_amount, default_dimensions, deduction_total, deduction_personnummer_last4, created_at, updated_at'
 
 /**
  * Projection for the v1 PDF download route. Narrower than INVOICE_FULL_COLUMNS
@@ -41,5 +44,7 @@ export const INVOICE_PDF_COLUMNS =
   // shows the same code as the dashboard one.
   'qr_mode, payment_link_url'
 
+// article_number: the frozen copy the PDF and the e-invoice print (crm#1084);
+// v1 send renders from this list.
 export const INVOICE_ITEM_FULL_COLUMNS =
-  'id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, sales_order_item_id, created_at'
+  'id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, article_number, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions, sales_order_item_id, created_at'

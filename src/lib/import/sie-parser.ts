@@ -10,7 +10,8 @@
  * Reference: https://sie.se/format/
  */
 
-import { monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+import { exceedsFiscalYearCap, monthsBetween } from '@/lib/bookkeeping/validate-period-duration'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import {
   describeObjectBalancePlan,
@@ -24,6 +25,7 @@ import type {
   SIEAccount,
   SIEBalance,
   SIEObjectBalance,
+  SIEPeriodBudget,
   SIEVoucher,
   SIETransactionLine,
   SIEDimension,
@@ -33,6 +35,7 @@ import type {
   ParseIssueSeverity,
   ValidationResult,
 } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // CP437 to UTF-8 mapping: full 0x80-0x9F range
 // CP437 was the standard encoding for DOS/early Windows (used by SIE #FORMAT PC8)
@@ -512,11 +515,57 @@ function parseTransactionLine(
  * otherwise share the single key "0".
  */
 export function formatVoucherRef(
-  voucher: { series: string; number: number; numberOmitted?: boolean },
+  voucher: { series: string; number: number; numberOmitted?: boolean; numberRepeated?: boolean },
   ordinal: number
 ): string {
   const series = voucher.series.trim()
-  return voucher.numberOmitted ? `${series}#${ordinal}` : `${series}${voucher.number}`
+  if (voucher.numberOmitted) return `${series}#${ordinal}`
+  // A repeated number names its source voucher and stays unique: "A762#909".
+  return voucher.numberRepeated ? `${series}${voucher.number}#${ordinal}` : `${series}${voucher.number}`
+}
+
+/** How many repeated voucher numbers the preview warning names. */
+const REPEATED_REFS_NAMED = 10
+
+/**
+ * Moves every #VER whose series and number an earlier #VER of the file
+ * already used to the end of the file order, marked `numberRepeated`, and
+ * returns their references ("A762").
+ *
+ * A Capego Bokslut export numbered two year-end vouchers with numbers the
+ * year's own vouchers already had (crm#1653). journal_import_source_owned_idx
+ * keeps (series, source number) unique per year, so the import wrote the file
+ * up to the repeat and then failed the same chunk on every retry. A repeat is
+ * therefore no source key (like numberOmitted: no source_voucher_number, no
+ * held number), and as the last voucher of its series it takes the next free
+ * number there, and no other voucher's number moves. Only vouchers
+ * with a series: without one there is no source key to collide. The order of
+ * a file without repeats is untouched.
+ */
+export function moveRepeatedVoucherNumbersLast(vouchers: SIEVoucher[]): string[] {
+  const seen = new Set<string>()
+  const kept: SIEVoucher[] = []
+  const repeated: SIEVoucher[] = []
+  for (const voucher of vouchers) {
+    const series = voucher.series.trim()
+    if (voucher.numberOmitted || !series) {
+      kept.push(voucher)
+      continue
+    }
+    const key = `${series}\u0000${voucher.number}`
+    if (seen.has(key)) {
+      repeated.push({ ...voucher, numberRepeated: true })
+    } else {
+      seen.add(key)
+      kept.push(voucher)
+    }
+  }
+  if (repeated.length === 0) return []
+  // In place, without spreading: a file can hold tens of thousands of vouchers.
+  vouchers.length = 0
+  for (const voucher of kept) vouchers.push(voucher)
+  for (const voucher of repeated) vouchers.push(voucher)
+  return repeated.map((voucher) => `${voucher.series.trim()}${voucher.number}`)
 }
 
 /**
@@ -552,6 +601,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const dimensionValues: SIEDimensionValue[] = []
   const objectOpeningBalances: SIEObjectBalance[] = []
   const objectClosingBalances: SIEObjectBalance[] = []
+  const periodBudgets: SIEPeriodBudget[] = []
 
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
@@ -681,7 +731,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           // reported and skipped so fiscalYears never carries an entry the
           // rest of the pipeline cannot trust. The one exception is the
           // 18-month BFL 3 kap. cap: an over-long span is reported as a
-          // warning but the entry is KEPT, because executeSIEImport refuses
+          // warning but the entry is KEPT, because ensureFiscalPeriod refuses
           // the current year (#RAR 0) with a precise Swedish error that needs
           // the real dates, and dropping the record here would degrade that
           // message to "no fiscal year defined".
@@ -710,13 +760,12 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             break
           }
 
-          const rarMonths = monthsBetween(start, end)
-          if (rarMonths > 18) {
+          if (exceedsFiscalYearCap(start, end)) {
             addIssue(
               issues,
               'warning',
               lineNum,
-              `Räkenskapsåret i #RAR ${yearIndex} (${start} till ${end}) omfattar ${rarMonths} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.)`,
+              `Räkenskapsåret i #RAR ${yearIndex} (${start} till ${end}) omfattar ${monthsBetween(start, end)} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.)`,
               tag
             )
           }
@@ -835,6 +884,41 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           const row: SIEObjectBalance = { yearIndex, account, dimNo, code, amount }
           if (fields[5]) row.quantity = parseNumberField(fields[5])
           ;(tag === 'OIB' ? objectOpeningBalances : objectClosingBalances).push(row)
+          break
+        }
+
+        case 'PBUDGET': {
+          // #PBUDGET yearIndex period account {objects} amount [quantity]
+          // The month's budgeted change (not cumulative), SIE sign. Kept apart
+          // from the bookkeeping: only the budget import reads these rows.
+          const yearIndex = parseInt(parseStringField(fields[1] ?? ''), 10)
+          const period = parseStringField(fields[2] ?? '').trim()
+          const account = parseStringField(fields[3] ?? '').trim()
+          const periodMatch = /^(\d{4})(0[1-9]|1[0-2])$/.exec(period)
+          if (!Number.isInteger(yearIndex) || !periodMatch || !account) {
+            addIssue(issues, 'warning', lineNum, 'Ogiltig budgetrad (#PBUDGET): raden hoppas över', tag)
+            break
+          }
+          // The object list is compulsory in the record ({} when empty);
+          // a writer that leaves it out still gets its amount read.
+          let fieldIndex = 4
+          let dims: Record<string, string> | undefined
+          if (fields[fieldIndex]?.startsWith('{')) {
+            dims = parseObjectList(fields[fieldIndex], issues, lineNum)
+            fieldIndex++
+          }
+          const amount = parseAmountField(fields[fieldIndex++], tag, issues, lineNum, account, yearIndex)
+          if (amount === null) break
+          const row: SIEPeriodBudget = {
+            yearIndex,
+            month: `${periodMatch[1]}-${periodMatch[2]}`,
+            account,
+            amount,
+            line: lineNum,
+          }
+          if (dims) row.dimensions = dims
+          if (fields[fieldIndex]) row.quantity = parseNumberField(fields[fieldIndex])
+          periodBudgets.push(row)
           break
         }
 
@@ -968,7 +1052,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
         default:
           // Unknown tag - add info issue for notable ones.
-          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'PSALDO'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag}, ignoreras`, tag)
           }
       }
@@ -1000,6 +1084,23 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         referencedAccounts.add(line.account)
       }
     }
+  }
+
+  // A #VER that repeats the series and number of an earlier #VER (crm#1653).
+  // SIE 4B wants verno unique per series, but both are bookkeeping the
+  // balances need, so neither is dropped: see moveRepeatedVoucherNumbersLast.
+  const repeatedRefs = moveRepeatedVoucherNumbersLast(vouchers)
+  if (repeatedRefs.length > 0) {
+    const named = repeatedRefs.slice(0, REPEATED_REFS_NAMED).join(', ')
+    const more = repeatedRefs.length > REPEATED_REFS_NAMED ? ` med flera (${repeatedRefs.length} totalt)` : ''
+    addIssue(
+      issues,
+      'warning',
+      0,
+      `Filen använder samma verifikationsnummer två gånger: ${named}${more}. Båda verifikationerna bokförs: ` +
+        'den senare får nästa lediga nummer sist i sin serie, och ingen annan verifikations nummer flyttas.',
+      'VER'
+    )
   }
 
   for (const accountNumber of referencedAccounts) {
@@ -1056,6 +1157,18 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     )
   }
 
+  // A budget in the file is not bookkeeping: the ledger import leaves it
+  // out, and says where it goes instead of dropping it silently.
+  if (periodBudgets.length > 0) {
+    addIssue(
+      issues,
+      'info',
+      0,
+      `Filen innehåller ${periodBudgets.length} budgetrader (#PBUDGET). De ingår inte i bokföringen: läs in filen under Budget, Importera, för att få med budgeten.`,
+      'PBUDGET'
+    )
+  }
+
   // Calculate statistics
   const currentFiscalYear = header.fiscalYears.find((fy) => fy.yearIndex === 0)
   const totalTransactionLines = vouchers.reduce((sum, v) => sum + v.lines.length, 0)
@@ -1068,6 +1181,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     resultBalances,
     objectOpeningBalances,
     objectClosingBalances,
+    periodBudgets,
     vouchers,
     dimensions,
     dimensionValues,
@@ -1302,11 +1416,30 @@ export function selectObjectOpeningBalances(
 }
 
 /**
+ * The refusal for a file kept in another currency than kronor, or null.
+ *
+ * #VALUTA names the currency of every amount in the file (ISO 4217; absent
+ * means SEK, SIE 4B). The ledger is kronor only and the import never
+ * converts, so a EUR file would post EUR figures as kronor, and an entry
+ * scaled by an exchange rate still balances: nothing later would catch it.
+ * Both gates call this (validateSIEFile for the preview, validateSIEJobInput
+ * at submit and in the worker), so every door refuses before any write.
+ */
+export function sieCurrencyRefusal(header: Pick<SIEHeader, 'currency'>): string | null {
+  const currency = header.currency.trim().toUpperCase().slice(0, 10)
+  if (isLedgerCurrency(currency)) return null
+  return `SIE-filens belopp är i ${currency} (#VALUTA ${currency}). Accounted bokför bara i svenska kronor, och beloppen skulle bokföras som kronor utan omräkning, så filen importeras inte. Exportera bokföringen i SEK om källsystemet kan det.`
+}
+
+/**
  * Validate a parsed SIE file
  */
 export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
+
+  const currencyRefusal = sieCurrencyRefusal(parsed.header)
+  if (currencyRefusal) errors.push(currencyRefusal)
 
   // Check #FLAGGA for already-imported files
   if (parsed.header.flagga === 1) {
@@ -1421,7 +1554,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   // every subsequent year. SIE amounts are debit-positive, so the class 3-8
   // sum is the un-transferred result with flipped sign.
   const currentFiscalYear = parsed.header.fiscalYears.find((fy) => fy.yearIndex === 0)
-  if (currentFiscalYear?.end && currentFiscalYear.end < formatLocalDate(new Date())) {
+  if (currentFiscalYear?.end && currentFiscalYear.end < todayIsoStockholm()) {
     const plResidual = parsed.vouchers.reduce(
       (sum, voucher) =>
         sum +
@@ -1435,7 +1568,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
     if (Math.abs(plResidual) > 0.01) {
       warnings.push(
         `Räkenskapsåret är avslutat men filen saknar omföring av årets resultat (${Math.abs(plResidual).toFixed(2)} kr ligger kvar på resultatkonton). ` +
-        `Om senare räkenskapsår importeras kommer balansräkningen att visa en differens på ${Math.abs(plResidual).toFixed(2)} kr tills omföringen bokförs.`
+        'Året efter öppnar ändå med resultatet i eget kapital.'
       )
     }
   }

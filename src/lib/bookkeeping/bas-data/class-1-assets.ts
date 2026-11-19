@@ -162,7 +162,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '10',
     account_type: 'asset',
     normal_balance: 'debit',
-    description: 'Goodwill som uppkommer vid forvrav av rörelse eller inkråmsförvärv.',
+    description: 'Goodwill som uppkommer vid förvärv av rörelse eller inkråmsförvärv.',
     sru_code: '7201',
     k2_excluded: false,
   },
@@ -274,9 +274,9 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     normal_balance: 'debit',
     description: 'Pågående projekt för immateriella anläggningstillgångar',
     sru_code: '7201',
-    // Ej K2: pagaende egenupparbetade immateriella projekt ar forbjudna under
-    // BFNAR 2016:10 punkt 10.4 (egenupparbetade immateriella far inte aktiveras).
-    // Saknades i 20260225103139-backfillen; DB-raderna rattas i 20260805112000.
+    // Ej K2: pågående egenupparbetade immateriella projekt är förbjudna under
+    // BFNAR 2016:10 punkt 10.4 (egenupparbetade immateriella får inte aktiveras).
+    // Saknades i 20260225103139-backfillen; DB-raderna rättas i 20260805112000.
     k2_excluded: true,
   },
   {
@@ -506,7 +506,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '12',
     account_type: 'asset',
     normal_balance: 'debit',
-    description: 'Maskiner, produktionsutrustning och andra tekniska anlaggningar.',
+    description: 'Maskiner, produktionsutrustning och andra tekniska anläggningar.',
     sru_code: '7215',
     k2_excluded: false,
   },
@@ -594,7 +594,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '12',
     account_type: 'asset',
     normal_balance: 'debit',
-    description: 'Kontorsinventarier, datorer, mobler och verktyg over halva prisbasbeloppet.',
+    description: 'Kontorsinventarier, datorer, möbler och verktyg över halva prisbasbeloppet.',
     sru_code: '7215',
     k2_excluded: false,
   },
@@ -1364,7 +1364,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '14',
     account_type: 'asset',
     normal_balance: 'debit',
-    description: 'Ravaror och material som används i produktion men inte är färdiga produkter.',
+    description: 'Råvaror och material som används i produktion men inte är färdiga produkter.',
     sru_code: '7241',
     k2_excluded: false,
   },
@@ -1452,7 +1452,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '14',
     account_type: 'asset',
     normal_balance: 'debit',
-    description: 'Fardiga varor klara att levereras till kund.',
+    description: 'Färdiga varor klara att levereras till kund.',
     sru_code: '7243',
     k2_excluded: false,
   },
@@ -2497,7 +2497,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '19',
     account_type: 'asset',
     normal_balance: 'debit',
-    description: 'Bankcertifikat och liknande kortfristiga vardepapper.',
+    description: 'Bankcertifikat och liknande kortfristiga värdepapper.',
     sru_code: '7281',
     k2_excluded: false,
   },

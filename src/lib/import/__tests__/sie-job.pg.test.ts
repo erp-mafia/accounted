@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import type { PoolClient } from 'pg'
 import { getPool } from '@/tests/pg/setup'
 import { stagingSIEClient } from '@/tests/pg/sie-client'
@@ -8,6 +8,16 @@ import { prepareSIEJob } from '../sie-job-preparation'
 import { runSIEWorker } from '../sie-job-worker'
 import { createHash } from 'node:crypto'
 import type { SIEJob } from '../sie-job-contract'
+import type { SIEVoucher } from '../types'
+
+// The learning after completion (sie-import-learning.ts) is observed here,
+// not run: the staging client has no insert. Its wiring is what this checks.
+const learn = vi.hoisted(() => vi.fn(async (_supabase: unknown, _job: SIEJob, _vouchers: SIEVoucher[]) =>
+  ({ templates: 0, parties: null })))
+vi.mock('../sie-import-learning', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../sie-import-learning')>()),
+  learnFromCompletedSIEImport: learn,
+}))
 
 // Fixtures and optional migration dry run always roll back on staging.
 let client: PoolClient
@@ -36,6 +46,7 @@ afterAll(async () => {
   if (client) { await client.query('ROLLBACK'); client.release() }
 })
 beforeEach(async () => {
+  learn.mockClear()
   await client.query('SAVEPOINT scenario')
   ;[company, actor, period, worker] = Array.from({ length: 4 }, () => randomUUID())
   await client.query(`INSERT INTO auth.users(id,email,instance_id) VALUES($1,$2,'00000000-0000-0000-0000-000000000000')`, [actor, `sie-${actor}@test.invalid`])
@@ -167,6 +178,62 @@ describe('SIE database execution protocol', () => {
     await undoOne()
     expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
   })
+  // The next year has no IB verifikat: its IB is derived from this year's
+  // lines, as for every year after the first in a multi-year migration.
+  async function nextDerived() {
+    const next=randomUUID()
+    await client.query('RESET ROLE')
+    await client.query("INSERT INTO fiscal_periods(id,company_id,user_id,name,period_start,period_end) VALUES($1,$2,$3,'Next year','2027-01-01','2027-12-31')",[next,company,actor])
+    await client.query('SET LOCAL ROLE service_role')
+    return next
+  }
+  it('reviews a derived next-year IB when the source year is undone, never on completion (crm#1099)',async()=>{
+    const next=await nextDerived()
+    await finishOne()
+    expect((await client.query('SELECT job_result FROM sie_imports WHERE id=$1',[job])).rows[0].job_result.nextPeriodOpeningBalanceReview).toBeUndefined()
+    expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
+    await undoOne()
+    const flagged=(await client.query('SELECT * FROM fiscal_periods WHERE id=$1',[next])).rows[0]
+    expect(flagged).toMatchObject({opening_balance_review_reason:'undo',opening_balance_review_import_id:job,
+      opening_balance_review_entry_id:null,opening_balance_entry_id:null})
+    expect(flagged.opening_balance_review_token).not.toBeNull()
+    const undone=(await client.query('SELECT job_result FROM sie_imports WHERE id=$1',[job])).rows[0].job_result
+    expect(undone.nextPeriodOpeningBalanceReview).toMatchObject({nextPeriodId:next,openingBalanceEntryId:null,importId:job,
+      reason:'undo',reviewToken:flagged.opening_balance_review_token})
+    expect(undone.warnings.at(-1)).toContain('räknades fram från föregående räkenskapsår')
+    await client.query('SELECT acknowledge_sie_opening_balance_review($1,$2,$3,$4,$5)',[company,next,actor,flagged.opening_balance_review_token,null])
+    expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
+  })
+  it('does not flag a derived next year after a preparation-only undo',async()=>{
+    const next=await nextDerived()
+    await undoOne()
+    expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
+  })
+  it('carries an IB booked after the undo into later years, without the undone year (crm#1099)',async()=>{
+    const next=await nextDerived()
+    await finishOne()
+    const equity=randomUUID()
+    async function post(date:string,source:string,lines:[string,string,number,number][]) {
+      const entry=randomUUID()
+      await client.query("INSERT INTO journal_entries(id,company_id,user_id,fiscal_period_id,voucher_number,voucher_series,entry_date,description,source_type,status) VALUES($1,$2,$3,$4,0,'A',$5,'Synthetic',$6,'draft')",[entry,company,actor,next,date,source])
+      for (const [account,number,debit,credit] of lines) {
+        await client.query('INSERT INTO journal_entry_lines(journal_entry_id,account_id,account_number,debit_amount,credit_amount) VALUES($1,$2,$3,$4,$5)',[entry,account,number,debit,credit])
+      }
+      await client.query('SELECT commit_journal_entry($1,$2)',[company,entry])
+    }
+    await client.query('RESET ROLE')
+    await client.query("INSERT INTO chart_of_accounts(id,company_id,user_id,account_number,account_name,account_type,account_class,normal_balance) VALUES($1,$2,$3,'2091','Equity','equity',2,'credit')",[equity,company,actor])
+    await post('2027-03-01','manual',[[accounts[0],'1930',10,0],[accounts[1],'3001',0,10]])
+    await client.query('SET LOCAL ROLE service_role')
+    await undoOne()
+    await client.query('RESET ROLE')
+    await post('2027-01-01','opening_balance',[[accounts[0],'1930',500,0],[equity,'2091',0,500]])
+    await client.query('SET LOCAL ROLE service_role')
+    const rows=(await client.query("SELECT account_number,debit::float8 AS debit,credit::float8 AS credit FROM compute_prior_opening_balances($1,'2028-01-01') ORDER BY account_number",[company])).rows
+    // 2027 earned 10 and was never closed: the derived IB carries it on 2099
+    // (20261024140000), so the opening balance balances.
+    expect(rows).toEqual([{account_number:'1930',debit:510,credit:0},{account_number:'2091',debit:0,credit:500},{account_number:'2099',debit:0,credit:10}])
+  })
   it('keeps reset preview and execution fail-closed for retained import history, including after storno',async()=>{
     await finishOne()
     for(const undone of [false,true]) {
@@ -237,6 +304,35 @@ describe('SIE database execution protocol', () => {
     await client.query('SELECT start_sie_import_job($1,$2,$3,$4,$5,$6)',[company,actor,nextPeriod,'2027.se','b'.repeat(64),JSON.stringify(nextManifest)])
     await rejects(()=>client.query('SELECT request_sie_import_undo($1,$2,$3)',[company,job,actor]),/Another SIE execution/)
   })
+  // The job's IB and migration adjustment follow its vouchers (sieFinalOrdinals).
+  // They sat at 50 000 and 50 001, where a file of more than 50 000 vouchers
+  // has vouchers of its own; such a file seals another pair in its manifest.
+  async function completeWithAdjustment(vouchers: unknown[], adjustmentAt: number, sealed: Record<string, unknown>) {
+    await client.query('SELECT save_sie_import_chunk($1,$2,$3,$4,$5,$6,$7)',[company,job,worker,attempt,'vouchers',0,JSON.stringify(vouchers)])
+    await client.query('SELECT save_sie_import_chunk($1,$2,$3,$4,$5,$6,$7)',[company,job,worker,attempt,'finalize',0,
+      JSON.stringify([{...voucher(adjustmentAt,7),sourceId:'MIGRATION_ADJUSTMENT',sourceSeries:null,sourceNumber:null}])])
+    await client.query('SELECT seal_sie_import_preparation($1,$2,$3,$4,$5,$6)',[company,job,worker,attempt,JSON.stringify(sealed),1])
+    await chunk(0)
+    await client.query('SELECT import_sie_chunk($1,$2,$3,$4,$5,$6)',[company,job,worker,attempt,'finalize',0])
+    await client.query('SELECT complete_sie_import_job($1,$2,$3,$4,$5,$6)',
+      [company,job,worker,attempt,JSON.stringify({success:true,journalEntriesCreated:vouchers.length+1}),'{}'])
+    const entries=(await client.query('SELECT id,source_ordinal FROM journal_entries WHERE import_batch_id=$1 ORDER BY source_ordinal',[job])).rows
+    const completed=(await client.query('SELECT job_state,manifest FROM sie_imports WHERE id=$1',[job])).rows[0]
+    return {entries,completed}
+  }
+  it('records the adjustment at the ordinal the job sealed, past its own vouchers at 50 000 and 50 001', async () => {
+    const at=(ordinal:number,number:number)=>({...voucher(ordinal),sourceId:`A${number}`,sourceNumber:number})
+    const {entries,completed}=await completeWithAdjustment([at(50_000,1),at(50_001,2)],1_000_001,
+      {...manifest,finalOrdinals:{openingBalance:1_000_000,adjustment:1_000_001}})
+    expect(completed.job_state).toBe('completed')
+    expect(entries.map(e=>e.source_ordinal)).toEqual([50_000,50_001,1_000_001])
+    expect(completed.manifest.adjustmentEntryId).toBe(entries[2].id)
+  })
+  it('records the adjustment at 50 001 for a job sealed before its manifest named the ordinals', async () => {
+    const {entries,completed}=await completeWithAdjustment([voucher(0)],50_001,manifest)
+    expect(entries.map(e=>e.source_ordinal)).toEqual([0,50_001])
+    expect(completed.manifest.adjustmentEntryId).toBe(entries[1].id)
+  })
   it('prepares repeated identical account definitions, resumes, and finalizes through the real engine', async () => {
     const content = '#FLAGGA 0\n#PROGRAM "Synthetic" 1\n#SIETYP 4\n#FNAMN "Synthetic AB"\n#RAR 0 20260101 20261231\n#KONTO 1930 "Bank"\n#KONTO 1930 "Bank"\n#KONTO 3001 "Sales"\n'+
       Array.from({length:205},(_,i)=>`#VER A ${i+1} 20260201 "Test"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}`).join('\n')
@@ -259,12 +355,28 @@ describe('SIE database execution protocol', () => {
     expect(finished.job_state).toBe('completed')
     expect(finished.transactions_count).toBe(205)
     expect(finished.job_result.journalEntriesCreated).toBe(205)
+    // At most 50 000 vouchers: the IB and adjustment keep the ordinals every earlier job used.
+    expect(finished.manifest.finalOrdinals).toEqual({openingBalance:50_000,adjustment:50_001})
     expect((await client.query('SELECT count(*)::int n FROM journal_entry_no_doc_required WHERE company_id=$1',[company])).rows[0].n).toBe(205)
     expect((await client.query("SELECT count(*)::int n FROM sie_import_chunks WHERE import_id=$1 AND phase='vouchers' AND payload IS NOT NULL",[job])).rows[0].n).toBe(0)
     // Issue #2835: the worker follows a completed import with the bank sweep and
     // leaves its receipt. This company has no bank rows, so the matcher is skipped.
     expect(finished.bank_sweep).toMatchObject({state:'done',attempt:1,skipped:'no_unlinked_bank_rows',
       auto_linked:0,date_from:'2026-01-01',date_to:'2026-12-31'})
+    // The completing invocation teaches the company once, from the source
+    // vouchers on the company's accounts, read before completion deleted them.
+    expect(learn).toHaveBeenCalledTimes(1)
+    const [, learnedJob, learnedVouchers] = learn.mock.calls[0]
+    expect(learnedJob).toMatchObject({id:job,job_state:'completed'})
+    expect(learnedVouchers).toHaveLength(205)
+    expect(learnedVouchers[0].date).toBeInstanceOf(Date)
+    expect(learnedVouchers[0].lines.map(line=>line.account)).toEqual(['1930','3001'])
+    expect((await client.query("SELECT count(*)::int n FROM sie_import_chunks WHERE import_id=$1 AND phase='prepare' AND chunk_no > 100000 AND chunk_no < 200000 AND payload IS NOT NULL",[job])).rows[0].n).toBe(0)
+    // An undo through the worker never learns.
+    await client.query('SELECT request_sie_import_undo($1,$2,$3)',[company,job,actor])
+    await runSIEWorker({supabase,importId:job,budgetMs:60_000})
+    expect((await client.query('SELECT job_state FROM sie_imports WHERE id=$1',[job])).rows[0].job_state).toBe('undone')
+    expect(learn).toHaveBeenCalledTimes(1)
   },60_000)
   it('splits the IB per project from #OIB through the resumable job path (issue #3313)', async () => {
     const content = ['#FLAGGA 0','#PROGRAM "Synthetic" 1','#SIETYP 4','#FNAMN "Synthetic AB"','#RAR 0 20260101 20261231',

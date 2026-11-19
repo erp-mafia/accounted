@@ -1,0 +1,848 @@
+[
+  {
+    "flow": "expenses: owner claim in SEK with ingående moms",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 1,
+        "entry_date": "2026-03-02",
+        "description": "Utlägg: USB-hubb (Joakim Hansson)",
+        "source_type": "expense_claim",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "400",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "5410",
+            "line_description": "Utlägg: USB-hubb (Joakim Hansson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "100",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Ingående moms, Utlägg: USB-hubb (Joakim Hansson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "500",
+            "exchange_rate": null,
+            "account_number": "2893",
+            "line_description": "Utlägg: USB-hubb (Joakim Hansson)",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "expenses: employee claim with a project tag",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 2,
+        "entry_date": "2026-03-03",
+        "description": "Utlägg: Tågbiljett (Sofie Persson)",
+        "source_type": "expense_claim",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {
+              "6": "P100"
+            },
+            "sort_order": 0,
+            "debit_amount": "250",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "5810",
+            "line_description": "Utlägg: Tågbiljett (Sofie Persson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "15",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Ingående moms, Utlägg: Tågbiljett (Sofie Persson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "265",
+            "exchange_rate": null,
+            "account_number": "2820",
+            "line_description": "Utlägg: Tågbiljett (Sofie Persson)",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "expenses: claim in euro at an explicit rate",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 3,
+        "entry_date": "2026-03-04",
+        "description": "Utlägg: Konferensavgift (Joakim Hansson)",
+        "source_type": "expense_claim",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "EUR",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "1125",
+            "credit_amount": "0",
+            "exchange_rate": "11.25",
+            "account_number": "6990",
+            "line_description": "Utlägg: Konferensavgift (Joakim Hansson)",
+            "amount_in_currency": "100"
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "1125",
+            "exchange_rate": null,
+            "account_number": "2893",
+            "line_description": "Utlägg: Konferensavgift (Joakim Hansson)",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "expenses: service bought abroad under reverse charge",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 4,
+        "entry_date": "2026-03-05",
+        "description": "Utlägg: Molntjänst (Joakim Hansson)",
+        "source_type": "expense_claim",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "800",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "6540",
+            "line_description": "Utlägg: Molntjänst (Joakim Hansson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "200",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2645",
+            "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "200",
+            "exchange_rate": null,
+            "account_number": "2614",
+            "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 3,
+            "debit_amount": "800",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "4535",
+            "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 4,
+            "debit_amount": "0",
+            "credit_amount": "800",
+            "exchange_rate": null,
+            "account_number": "4598",
+            "line_description": "Motkonto beräknad omvänd moms 25%",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 5,
+            "debit_amount": "0",
+            "credit_amount": "800",
+            "exchange_rate": null,
+            "account_number": "2893",
+            "line_description": "Utlägg: Molntjänst (Joakim Hansson)",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "expenses: custom lines from the advanced booking step",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 5,
+        "entry_date": "2026-03-06",
+        "description": "Utlägg: Lunch med kund (Joakim Hansson)",
+        "source_type": "expense_claim",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "500",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "6071",
+            "line_description": "Representation",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "60",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Moms",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "560",
+            "exchange_rate": null,
+            "account_number": "2893",
+            "line_description": "Utlägg: Lunch med kund (Joakim Hansson)",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "expenses: a registered claim removed again (storno)",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 6,
+        "entry_date": "2026-03-09",
+        "description": "Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+        "source_type": "expense_claim",
+        "status": "reversed",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "240",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "5460",
+            "line_description": "Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "60",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Ingående moms, Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "300",
+            "exchange_rate": null,
+            "account_number": "2893",
+            "line_description": "Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+            "amount_in_currency": null
+          }
+        ]
+      },
+      {
+        "voucher_series": "A",
+        "voucher_number": 7,
+        "entry_date": "2026-03-09",
+        "description": "Makulering: Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+        "source_type": "storno",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": null,
+            "debit_amount": "0",
+            "credit_amount": "60",
+            "exchange_rate": null,
+            "account_number": "2641",
+            "line_description": "Reversal: Ingående moms, Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": null,
+            "debit_amount": "300",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2893",
+            "line_description": "Reversal: Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": null,
+            "debit_amount": "0",
+            "credit_amount": "240",
+            "exchange_rate": null,
+            "account_number": "5460",
+            "line_description": "Reversal: Utlägg: Felregistrerat utlägg (Joakim Hansson)",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "mileage: owner trips of an aktiebolag on the default counter account",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 8,
+        "entry_date": "2026-04-30",
+        "description": "Milersättning 2026-04-01 till 2026-04-30 (2 resor, 14.25 mil)",
+        "source_type": "manual",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "356.25",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "7331",
+            "line_description": "Milersättning egen bil: 14.25 mil × 25 kr",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "356.25",
+            "exchange_rate": null,
+            "account_number": "2820",
+            "line_description": "Milersättning att utbetala",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "mileage: employee trips in two vehicle types on 2820",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 9,
+        "entry_date": "2026-05-31",
+        "description": "Milersättning 2026-05-01 till 2026-05-31 (2 resor, 18 mil, Sofie Persson)",
+        "source_type": "manual",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "57",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "7331",
+            "line_description": "Milersättning förmånsbil (el): 6 mil × 9.5 kr",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "300",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "7331",
+            "line_description": "Milersättning egen bil: 12 mil × 25 kr",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "357",
+            "exchange_rate": null,
+            "account_number": "2820",
+            "line_description": "Milersättning att utbetala",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "mileage: approved from a staged operation, the trip set frozen",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 10,
+        "entry_date": "2026-06-30",
+        "description": "Milersättning 2026-06-01 till 2026-06-30 (1 resor, 1.8 mil)",
+        "source_type": "manual",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "45",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "7331",
+            "line_description": "Milersättning egen bil: 1.8 mil × 25 kr",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "45",
+            "exchange_rate": null,
+            "account_number": "1930",
+            "line_description": "Milersättning att utbetala",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "kassa: card day at 12 % moms",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 11,
+        "entry_date": "2026-09-30",
+        "description": "Dagskassa 2026-09-30 Restaurang Test (Heynow)",
+        "source_type": "pos_daily_sales",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "112",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "1686",
+            "line_description": "Kortbetalningar",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "100",
+            "exchange_rate": null,
+            "account_number": "3002",
+            "line_description": "Försäljning 12 % moms",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "12",
+            "exchange_rate": null,
+            "account_number": "2621",
+            "line_description": "Utgående moms 12 %",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "kassa: mixed tenders, two rates, tips and öresutjämning",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 12,
+        "entry_date": "2026-10-01",
+        "description": "Dagskassa 2026-10-01 Restaurang Test (Heynow)",
+        "source_type": "pos_daily_sales",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "900",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "1686",
+            "line_description": "Kortbetalningar",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "167.75",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "1910",
+            "line_description": "Kontant",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "750",
+            "exchange_rate": null,
+            "account_number": "3002",
+            "line_description": "Försäljning 12 % moms",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 3,
+            "debit_amount": "0",
+            "credit_amount": "90",
+            "exchange_rate": null,
+            "account_number": "2621",
+            "line_description": "Utgående moms 12 %",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 4,
+            "debit_amount": "0",
+            "credit_amount": "150",
+            "exchange_rate": null,
+            "account_number": "3001",
+            "line_description": "Försäljning 25 % moms",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 5,
+            "debit_amount": "0",
+            "credit_amount": "37.5",
+            "exchange_rate": null,
+            "account_number": "2611",
+            "line_description": "Utgående moms 25 %",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 6,
+            "debit_amount": "0",
+            "credit_amount": "40",
+            "exchange_rate": null,
+            "account_number": "2820",
+            "line_description": "Dricks att betala ut till personalen",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 7,
+            "debit_amount": "0",
+            "credit_amount": "0.25",
+            "exchange_rate": null,
+            "account_number": "3740",
+            "line_description": "Öres- och kronutjämning",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "webbshop: paid order in SEK at 25 % moms",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 13,
+        "entry_date": "2026-08-01",
+        "description": "Order 1001 (swish)",
+        "source_type": "webshop_order",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "500",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "1686",
+            "line_description": "Order 1001 (swish)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "400",
+            "exchange_rate": null,
+            "account_number": "3001",
+            "line_description": "Order 1001 (swish)",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "100",
+            "exchange_rate": null,
+            "account_number": "2611",
+            "line_description": "Order 1001 (swish)",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "webbshop: refund row of an order",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 14,
+        "entry_date": "2026-08-05",
+        "description": "Återbetalning order 1001",
+        "source_type": "webshop_order",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "0",
+            "credit_amount": "125",
+            "exchange_rate": null,
+            "account_number": "1686",
+            "line_description": "Återbetalning order 1001",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "100",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "3001",
+            "line_description": "Återbetalning order 1001",
+            "amount_in_currency": null
+          },
+          {
+            "currency": "SEK",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "25",
+            "credit_amount": "0",
+            "exchange_rate": null,
+            "account_number": "2611",
+            "line_description": "Återbetalning order 1001",
+            "amount_in_currency": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "flow": "webbshop: order in euro with a resolved SEK total, two rates",
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 15,
+        "entry_date": "2026-08-11",
+        "description": "Order 1003 (swish)",
+        "source_type": "webshop_order",
+        "status": "posted",
+        "lines": [
+          {
+            "currency": "EUR",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "688.5",
+            "credit_amount": "0",
+            "exchange_rate": "11.25",
+            "account_number": "1686",
+            "line_description": "Order 1003 (swish)",
+            "amount_in_currency": "61.2"
+          },
+          {
+            "currency": "EUR",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "450",
+            "exchange_rate": "11.25",
+            "account_number": "3001",
+            "line_description": "Order 1003 (swish)",
+            "amount_in_currency": "40"
+          },
+          {
+            "currency": "EUR",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "112.5",
+            "exchange_rate": "11.25",
+            "account_number": "2611",
+            "line_description": "Order 1003 (swish)",
+            "amount_in_currency": "10"
+          },
+          {
+            "currency": "EUR",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 3,
+            "debit_amount": "0",
+            "credit_amount": "112.5",
+            "exchange_rate": "11.25",
+            "account_number": "3002",
+            "line_description": "Order 1003 (swish)",
+            "amount_in_currency": "10"
+          },
+          {
+            "currency": "EUR",
+            "tax_code": null,
+            "dimensions": {},
+            "sort_order": 4,
+            "debit_amount": "0",
+            "credit_amount": "13.5",
+            "exchange_rate": "11.25",
+            "account_number": "2621",
+            "line_description": "Order 1003 (swish)",
+            "amount_in_currency": "1.2"
+          }
+        ]
+      }
+    ]
+  }
+]

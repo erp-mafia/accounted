@@ -1,6 +1,6 @@
 'use client'
 
-import { Briefcase } from 'lucide-react'
+import { BriefcaseIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -32,7 +32,7 @@ export function ActiveCompanyBadge({ className }: { className?: string }) {
       )}
       title={`${t('active_company')}: ${company.name}`}
     >
-      <Briefcase className="h-3 w-3 shrink-0" aria-hidden="true" />
+      <BriefcaseIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
       <span className="sr-only">{t('active_company')}: </span>
       <span className="truncate">{company.name}</span>
     </Badge>

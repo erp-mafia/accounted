@@ -1,5 +1,7 @@
 /** Calendar arithmetic on ISO dates (YYYY-MM-DD), in UTC so no local timezone shifts a day. */
 
+import { todayIsoStockholm } from '@/lib/dates/iso'
+
 const DAY_MS = 86_400_000
 
 export function parseIso(iso: string): Date {
@@ -11,8 +13,9 @@ export function toIso(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
+/** The Swedish calendar day, not the UTC one (see lib/dates/iso). */
 export function todayIso(now: Date = new Date()): string {
-  return toIso(now)
+  return todayIsoStockholm(now)
 }
 
 export function addDays(iso: string, days: number): string {

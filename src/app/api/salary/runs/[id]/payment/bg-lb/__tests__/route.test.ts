@@ -94,7 +94,31 @@ describe('GET /api/salary/runs/[id]/payment/bg-lb', () => {
     const body = await response.json()
     // The message must name where the setting lives: the settings overview
     // shows a registry bankgiro this route does not read.
-    expect(body.error).toContain('Inställningar → Fakturering')
+    expect(body.error).toContain('Inställningar → Fakturor')
+  })
+
+  it('returns 400 and makes no file when a correction run has no difference to pay', async () => {
+    // effectiveNetPayout is stubbed to 20 000 for every row: the correction
+    // pays exactly what the run it corrects paid, so nothing is left to pay.
+    const { enqueueMany } = authed()
+    const employee = { employee_id: 'e1', employee: { first_name: 'Anna', last_name: 'A', clearing_number: '6000', bank_account_number: '123456789' } }
+    enqueueMany([
+      { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25', corrects_run_id: 'run-0' } },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
+      { data: { company_name: 'Bolaget AB', bankgiro: '123-4567' } }, // company_settings
+      { data: [employee] }, // salary_run_employees
+      { data: { id: 'run-0', corrects_run_id: null } }, // the corrected run
+      { data: [{ id: 'sre-0', ...employee }] }, // its roster
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payment/bg-lb'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('Rättelsen ger ingen skillnad att betala ut jämfört med den tidigare körningen.')
+    expect(generateBgLb).not.toHaveBeenCalled()
   })
 
   it('returns 404 when the run does not exist', async () => {

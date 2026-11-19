@@ -95,6 +95,17 @@ Buyer self-assesses both output and input VAT. Applies in two contexts:
 
 Standard journal entry (EU consulting at 25%): Debit cost account + 2645, credit 2614 + leverantörsskulder (2440). Net VAT effect is zero with full deduction right. BOTH sides must be reported; silent netting is prohibited.
 
+**Foreign seller wrongly charged its own VAT on a purchase where the buyer is liable:** the buyer still accounts for reverse charge, the taxable amount includes the wrongly charged VAT, and the foreign VAT is not deductible in Sweden.
+
+- Liability follows the law, not the invoice: ML 6 kap. 33 § (place of supply) and 16 kap. 9 § ("är den som förvärvar tjänsten skyldig att betala mervärdesskatt för tillhandahållandet").
+- Taxable amount: ML 8 kap. 2 § ("utgörs beskattningsunderlaget av ersättningen"), 8 kap. 3 § and 8 kap. 13 § ("I beskattningsunderlaget ska det ingå skatter och avgifter utom skatt enligt denna lag."). Skatteverket, "Momslagens regler om fakturering" (goods or services): "Vid försäljning av varor eller tjänster där omvänd betalningsskyldighet ska tillämpas och moms felaktigt har debiterats i fakturan ska momsen ingå i beskattningsunderlaget (det värde som momsen beräknas på). I en sådan situation ska köparen beräkna och redovisa moms på hela ersättningen, det vill säga inklusive den felaktigt debiterade momsen."
+- Foreign VAT, stated by Skatteverket for goods ("Köpa varor från andra EU-länder"): "Om förutsättningarna för att köpa varor utan moms från ett annat EU-land är uppfyllda men säljaren felaktigt har tagit ut moms i ett annat EU-land, måste du ändå räkna fram och redovisa svensk moms på inköpet i din momsdeklaration." and "Du beräknar momsen på varans pris inklusive den utländska momsen."
+- No deduction: ML 13 kap. 4 § (ingående skatt is "mervärdesskatt enligt denna lag") and 2 kap. 12 § (felaktigt debiterad mervärdesskatt). Skatteverket: "Däremot får du inte göra avdrag för den utländska momsen som säljaren har tagit ut av dig." The buyer asks the seller for an ändringsfaktura (for example a kreditfaktura) on the wrongly charged VAT.
+- **Services: inference, not a Skatteverket quote.** Skatteverket names the foreign VAT case only for goods. For a service bought under 16 kap. 9 § the same result follows from the general sentence above and ML 8 kap. 3 and 13 §§; no Skatteverket sentence, ställningstagande or ruling naming the service case was found.
+- Not settled: a 25 percent VAT line from a foreign seller of electronic services may be Swedish VAT charged through OSS, not foreign VAT. Flag it to the user; do not decide automatically.
+
+Example: price 100, foreign VAT 21, paid 121. Reverse charge base 121, output VAT 30.25 (2614), calculated input VAT 30.25 (2645) with full deduction right; the 21 is never booked as input VAT.
+
 ### 2.2 Trade in services within EU
 
 **Huvudregeln** (ML 6 kap. 33 §, Article 44 VAT Directive): B2B services taxed where buyer established.
@@ -135,7 +146,7 @@ Exports outside EU: 0% moms, full avdragsrätt retained. Ruta 36, BAS 3105. Proo
 
 ### 2.6 Periodisk sammanställning (EC Sales List)
 
-Required for VAT-registered businesses selling goods/services to VAT-registered EU buyers. Monthly for goods (or goods + services), quarterly for services-only (35 kap. 3 § SFL). Goods may be reported quarterly on request if goods supplies do not exceed SEK 500,000 excl. moms in the current quarter or any of the four preceding quarters (35 kap. 4 § SFL). Electronic deadline: 25th of month after period; paper: 20th (35 kap. 9 § SFL). Late filing penalty: SEK 1,250 per report (48 kap. 6 § SFL). No extension available. Amounts must match Ruta 35 + 38 (goods) and Ruta 39 (services).
+Required for VAT-registered businesses selling goods/services to VAT-registered EU buyers. Monthly for goods (or goods + services), quarterly for services-only (35 kap. 3 § SFL). Goods may be reported quarterly on request if goods supplies do not exceed SEK 500,000 excl. moms in the current quarter or any of the four preceding quarters (35 kap. 4 § SFL). Electronic deadline: 25th of month after period; paper: 20th (35 kap. 9 § SFL). Late filing penalty: SEK 1,250 per report (48 kap. 6 § SFL). No extension available. Skatteverket: PS amounts match the momsdeklaration "i de flesta fall" (Ruta 35 + 38 goods, Ruta 39 services), not always. A services row is owed only for main-rule B2B services where the buyer has given a VAT number, so Ruta 39 can legitimately exceed the PS total.
 
 From 1 July 2030, ViDA replaces the periodisk sammanställning with mandatory e-invoicing and transaction-based digital reporting for intra-EU B2B supplies (Directive (EU) 2025/516).
 
@@ -459,9 +470,9 @@ Deducting full VAT without 300 SEK cap. Confusing income tax deductibility (abol
 
 | Violation | Consequence |
 |------|------|
-| Incorrect declaration | Skattetillägg: 20% of underpaid/overclaimed |
-| Period error within 4 months | Skattetillägg: 2% |
-| Period error in annual reporting | Skattetillägg: 5% |
+| Incorrect declaration | Skattetillägg: 20% of underpaid/overclaimed (49 kap. 11 § SFL) |
+| Period error, redovisningsperiod max 3 months, moved max 4 months | Skattetillägg: 2% (49 kap. 13 § SFL) |
+| Other period errors (longer period, or moved more than 4 months) | Skattetillägg: 5% (49 kap. 13 § SFL) |
 | Late filing (skattedeklaration) | Förseningsavgift: 625 SEK (1,250 after föreläggande) |
 | Late periodisk sammanställning | 1,250 SEK per report |
 | Failure to file (skönsbeskattning) | 20% skattetillägg on estimated amount |
@@ -497,8 +508,8 @@ Replaced ML (1994:200) on 1 July 2023. Key terminology: "omsättning" → "lever
 | 7 kap. | Registration (§1 who must register, §4 notification, §§10-12 refusal/deregistration/VIES invalid from 2026-07-01) |
 | 26 kap. | Skattedeklaration (§§10-11 periods, §13 voluntary changes/24mo lock-in, §§15-16 timing, §26 deadline 12th, §30 large entity 26th, §§33-33b annual) |
 | 35 kap. | Periodisk sammanställning (§§3-4 periods, §9 deadline) |
-| 48 kap. | Förseningsavgift |
-| 49 kap. | Skattetillägg (§4: 20%, §11: 2% period errors) |
+| 48 kap. | Förseningsavgift (§1 grounds, §6 amounts) |
+| 49 kap. | Skattetillägg (§4 oriktig uppgift, §10 exemptions incl. own rättelse, §11: 20% on VAT, §13: 2%/5% period errors) |
 | 62 kap. | Payment deadlines (§3) |
 | 63 a kap. | Withheld crediting of överskjutande ingående moms (from 2026-07-01) |
 

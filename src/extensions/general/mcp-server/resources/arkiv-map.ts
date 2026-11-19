@@ -1,5 +1,5 @@
 import type { McpResource } from './types'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { buildArkivMap } from '@/lib/arkiv/map'
 
 /**
@@ -15,7 +15,6 @@ export const arkivMapResource: McpResource = {
     'Orientation before searching the archive: document counts by group, the latest documents and which tool gathers, finds and reads them. Where the company brain is on, also running agreements, registered facts and what waits. Refs, not data.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
-    if (!isArkivEnabled(companyId)) return { enabled: false, reason: 'Arkiv is not switched on for this company.' }
     return buildArkivMap(supabase, companyId, { brain: isArkivBrainEnabled(companyId) })
   },
 }

@@ -1,3 +1,4 @@
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 /**
  * When the repository must carry next year's statutory figures.
  *
@@ -35,10 +36,10 @@ export const PAYROLL_RATES_DUE: DueDay = { month: 12, day: 15 }
  */
 export const TAX_TABLE_FALLBACK_DUE: DueDay = { month: 12, day: 20 }
 
-/** True once `due` has been reached in `now`'s own year (UTC). */
+/** True once `due` has been reached in `now`'s own Swedish year. */
 export function isDue(due: DueDay, now: Date): boolean {
-  const year = now.getUTCFullYear()
-  return now.getTime() >= Date.UTC(year, due.month - 1, due.day)
+  const dueDay = `${String(due.month).padStart(2, '0')}-${String(due.day).padStart(2, '0')}`
+  return todayIsoStockholm(now).slice(5) >= dueDay
 }
 
 /**
@@ -46,6 +47,6 @@ export function isDue(due: DueDay, now: Date): boolean {
  * plus the next one once `due` has passed.
  */
 export function requiredYears(due: DueDay, now: Date): number[] {
-  const year = now.getUTCFullYear()
+  const { year } = stockholmYearMonth(now)
   return isDue(due, now) ? [year, year + 1] : [year]
 }

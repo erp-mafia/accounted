@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -23,6 +25,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn } from '@/lib/utils'
 import { ReceiptHuntStatus } from './ReceiptHuntStatus'
+import { RequestGmailAccessButton } from './RequestGmailAccessButton'
 import {
   disconnectMailbox,
   reconnectReason,
@@ -53,6 +56,8 @@ export function MailConnectionsPanel({
 }) {
   const t = useTranslations('mail')
   const { toast } = useToast()
+  // Connecting a mailbox and the receipt hunt are writes; disconnecting one's own mailbox is not locked.
+  const { canWrite, lockedTitle } = useViewerLock()
   const { formatDateLong } = useFormat()
   const hasAi = useCapability(CAPABILITY.ai)
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -141,8 +146,9 @@ export function MailConnectionsPanel({
     <Button
       type="button"
       variant="outline"
-      size="sm"
       loading={connecting}
+      disabled={!canWrite}
+      title={lockedTitle}
       onClick={() => void connect()}
       aria-label={ariaLabel}
     >
@@ -188,20 +194,25 @@ export function MailConnectionsPanel({
             <SettingsRowNote>{t('not_configured')}</SettingsRowNote>
           </SettingsRow>
         ) : mail.loading ? (
-          <div aria-busy="true" className="flex items-center justify-between gap-8 py-6">
+          <LateReveal className="flex items-center justify-between gap-8 py-6">
             <Skeleton className="h-4 w-56" />
-            <Skeleton className="h-8 w-28 rounded-full" />
-          </div>
+            <Skeleton className="h-8 w-28 rounded-md" />
+          </LateReveal>
         ) : !view ? (
-          <div className="px-1 pt-3">
-            <AttnLine action={{ label: t('retry'), onClick: () => void mail.reload() }}>{t('load_failed')}</AttnLine>
-          </div>
+          <LoadError title={t('load_failed')} onRetry={() => void mail.reload()} />
         ) : connections.length === 0 ? (
           <SettingsRow label={t('none_label')} borderless>
             {summary.canConnect ? (
               <SettingsRowEnd>{connectButton(t('connect'))}</SettingsRowEnd>
+            ) : view.configured ? (
+              <>
+                <SettingsRowNote>{t('request_access')}</SettingsRowNote>
+                <SettingsRowEnd>
+                  <RequestGmailAccessButton />
+                </SettingsRowEnd>
+              </>
             ) : (
-              <SettingsRowNote>{view.configured ? t('connect_closed') : t('not_configured')}</SettingsRowNote>
+              <SettingsRowNote>{t('not_configured')}</SettingsRowNote>
             )}
           </SettingsRow>
         ) : (
@@ -231,7 +242,6 @@ export function MailConnectionsPanel({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
                       onClick={() => void disconnect(connection)}
                       aria-label={t('disconnect_aria', { address: connection.emailAddress })}
                     >
@@ -256,20 +266,20 @@ export function MailConnectionsPanel({
             <ReceiptHuntStatus
               hunt={hunt}
               blocked={!hasAi}
-              className="min-w-0 text-[12.5px] text-muted-foreground"
+              className="min-w-0 text-xs text-muted-foreground"
             />
             <SettingsRowEnd>
               {hunt.hunting && !hunt.stopping ? (
-                <Button type="button" variant="ghost" size="sm" onClick={hunt.stop}>
+                <Button type="button" variant="ghost" onClick={hunt.stop}>
                   {t('hunt_stop')}
                 </Button>
               ) : null}
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 loading={hunt.hunting}
-                disabled={!hasAi}
+                disabled={!canWrite || !hasAi}
+                title={lockedTitle}
                 onClick={() => void hunt.hunt()}
               >
                 {hunt.hunting ? t('hunt_running') : t('hunt_action')}
@@ -279,24 +289,35 @@ export function MailConnectionsPanel({
         </SettingsGroup>
       ) : null}
 
-      {/* What the grant allows, stated before and after connecting: the
-          consent screen itself only says "read your email". */}
-      <SettingsGroup label={t('access_group')}>
-        <SettingsRow label={t('access_read_label')}>
-          <SettingsRowNote>{t('access_read')}</SettingsRowNote>
-        </SettingsRow>
-        <SettingsRow label={t('access_scope_label')}>
-          <SettingsRowNote>{t('access_scope')}</SettingsRowNote>
-        </SettingsRow>
-        <SettingsRow label={t('access_kept_label')}>
-          <SettingsRowNote>{t('access_kept')}</SettingsRowNote>
-        </SettingsRow>
-        <SettingsRow label={t('access_revoke_label')} borderless>
-          <SettingsRowNote>{t('access_revoke')}</SettingsRowNote>
-        </SettingsRow>
-      </SettingsGroup>
-
       <DestructiveConfirmDialog {...dialogProps} />
     </>
+  )
+}
+
+/**
+ * What the grant allows, stated before and after connecting: the consent
+ * screen itself only says "read your email". Prose with no control, so it
+ * lives behind the section's "?" (MailSettingsContent), not as rows.
+ */
+export function MailAccessFacts({ className }: { className?: string }) {
+  const t = useTranslations('mail')
+  const facts = [
+    ['access_read_label', 'access_read'],
+    ['access_scope_label', 'access_scope'],
+    ['access_kept_label', 'access_kept'],
+    ['access_revoke_label', 'access_revoke'],
+  ] as const
+  return (
+    <div className={className}>
+      <p className="font-medium">{t('access_group')}</p>
+      <dl className="mt-2 space-y-2">
+        {facts.map(([label, text]) => (
+          <div key={label}>
+            <dt className="font-medium">{t(label)}</dt>
+            <dd className="m-0 text-muted-foreground">{t(text)}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   )
 }

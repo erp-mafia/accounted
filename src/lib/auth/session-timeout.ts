@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { shouldUseSecureCookies } from '@/lib/supabase/cookie-options'
 import {
   SESSION_TIMEOUT_COOKIE,
   type SessionAuthMethod,
@@ -97,7 +98,7 @@ export function createSessionTimeoutState(args: {
 
 /**
  * Whether timeouts actually apply to this session. Auto logout is opt-in
- * per user (founder decision 2026-08-12): without the opt-in snapshot, or
+ * per user (product decision 2026-08-12): without the opt-in snapshot, or
  * the global force-all override, a session lives as long as the Supabase
  * refresh token.
  */
@@ -168,7 +169,12 @@ export function evaluateSessionTimeout(
   return null
 }
 
-function getSigningSecret(env: Environment): string {
+/**
+ * The server-only secret the proxy signs its own state with: the dedicated
+ * SESSION_TIMEOUT_SECRET, else the service role key. Every signer derives
+ * its own key from it with a purpose-bound HKDF info string.
+ */
+export function getSigningSecret(env: Environment): string {
   const dedicated = env.SESSION_TIMEOUT_SECRET?.trim()
   if (dedicated) return dedicated
 
@@ -330,7 +336,7 @@ export function sessionTimeoutCookieOptions(): SessionTimeoutCookieOptions {
   return {
     path: '/',
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: shouldUseSecureCookies(),
     sameSite: 'lax',
     maxAge: COOKIE_MAX_AGE_SECONDS,
   }

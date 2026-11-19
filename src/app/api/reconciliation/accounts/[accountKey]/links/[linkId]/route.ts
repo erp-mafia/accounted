@@ -5,15 +5,13 @@ import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { unmatchLink } from '@/lib/reconciliation/actions'
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * DELETE /api/reconciliation/accounts/{accountKey}/links/{linkId}
  *
  * The page's "Koppla bort": clears the link on one outside row (linkId = the
- * row id). The verifikat is untouched.
+ * row id), or undoes verifikat settled against each other on a bank account
+ * (linkId = the settlement_id). The verifikat are untouched.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ accountKey: string; linkId: string }> }>(
   'reconciliation.accounts.links.delete',

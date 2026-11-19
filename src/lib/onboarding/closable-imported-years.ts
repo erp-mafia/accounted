@@ -9,6 +9,7 @@
  * import, which left migrating customers unable to attach their old
  * underlag without reopening every year (support ticket crm#104).
  */
+import { hasEnded } from '@/lib/dates/iso'
 
 export interface ClosableYearInput {
   id: string
@@ -30,7 +31,7 @@ export function closableImportedYears<T extends ClosableYearInput>(periods: T[],
   const sorted = [...periods].sort((a, b) => a.period_start.localeCompare(b.period_start))
   const latest = sorted[sorted.length - 1]
   return sorted.filter(
-    (p) => p.id !== latest.id && p.period_end < today && !p.is_closed && !p.closed_externally && !p.locked_at,
+    (p) => p.id !== latest.id && hasEnded(p.period_end, today) && !p.is_closed && !p.closed_externally && !p.locked_at,
   )
 }
 

@@ -1,8 +1,9 @@
 'use client'
 
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { PlusIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import {
@@ -14,13 +15,15 @@ import {
   SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { createClient } from '@/lib/supabase/client'
 import { formatIbanGroups } from '@/lib/company/connection-iban'
 import { bankgiroFromTicSnapshot } from '@/lib/company/snapshot-bank'
-import { formatBankgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import { formatBankgiroNumber, formatPlusgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import { fetchCompanyGiroNumbers, type RegisteredGiroNumber } from '@/components/payments/payments-client'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   INVOICE_PAYMENT_ACCOUNT_CURRENCIES,
@@ -31,10 +34,19 @@ import {
   normalizeInvoicePaymentAccount,
   printedLegacySekAccount,
   summarizeInvoicePaymentAccount,
-} from '@/lib/invoices/payment-accounts'
-import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
+import {
+  accountsPrintingOtherAccountIban,
+  accountsPrintingOtherAccountNumber,
+  blankPrimaryPayeeAccount,
+  cashAccountPayee,
+  isUsableInvoicePayee,
+  type PrintedIbanOfOtherAccount,
+  type PrintedNumberOfOtherAccount,
+} from '@/lib/cash-accounts/invoice-payee-rules'
 import { isValidSwish, normaliseSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { foreignInvoicePayeeCandidates } from '@/lib/cash-accounts/invoice-payee-rules'
 import type {
   CashAccount,
   CashAccountPayeeFields,
@@ -52,6 +64,11 @@ interface InvoicePaymentAccountsSettingsProps {
 type PayeeForm = Record<keyof CashAccountPayeeFields, string> & { name: string }
 
 const NONE = '__none__'
+
+/** One account whose invoices print another account's IBAN or domestic number. */
+type PrintedElsewhere =
+  | (PrintedIbanOfOtherAccount & { kind: 'iban' })
+  | (PrintedNumberOfOtherAccount & { kind: 'account_number' })
 
 function formFromAccount(account: CashAccount): PayeeForm {
   return {
@@ -157,10 +174,19 @@ export function InvoicePaymentAccountsSettings({
   const [form, setForm] = useState<PayeeForm>(EMPTY_FORM)
   const [isSaving, setIsSaving] = useState(false)
   const [isAdding, setIsAdding] = useState(false)
+  // "Lägg till bankkonto" opened the blank primary instead of a new account.
+  const [addingToPrimary, setAddingToPrimary] = useState(false)
   const [newCurrency, setNewCurrency] = useState<Currency>('SEK')
+  // Blank: the next free bank ledger is picked, as before.
+  const [newLedger, setNewLedger] = useState('')
   const [currencyToAdd, setCurrencyToAdd] = useState<Currency | ''>('')
   const [extraCurrencies, setExtraCurrencies] = useState<Currency[]>([])
   const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
+  // Bankgirot's own register (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP on
+  // the server): the giro numbers registered to the company, offered as picks
+  // while no account carries a bankgiro yet. Null until asked; asked only when
+  // a form is open, since every answer may cost the provider's fee.
+  const [registeredGiros, setRegisteredGiros] = useState<RegisteredGiroNumber[] | null>(null)
 
   const load = useCallback(async () => {
     const res = await fetch('/api/cash-accounts/payee-defaults')
@@ -208,6 +234,24 @@ export function InvoicePaymentAccountsSettings({
     }
   }, [company?.id])
 
+  const noAccountHasBankgiro = accounts.every((a) => !a.bankgiro)
+  const formOpen = editingId !== null || isAdding
+  useEffect(() => {
+    if (!formOpen || !noAccountHasBankgiro || registeredGiros !== null) return
+    let cancelled = false
+    fetchCompanyGiroNumbers()
+      .then((answer) => {
+        if (!cancelled) setRegisteredGiros(answer.enabled && answer.available ? answer.giro_numbers : [])
+      })
+      .catch(() => {
+        // Quiet: the picks are a convenience, the fields still take a typed number.
+        if (!cancelled) setRegisteredGiros([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [formOpen, noAccountHasBankgiro, registeredGiros])
+
   const defaultByCurrency = useMemo(
     () => new Map(defaults.map((d) => [d.currency, d.cash_account_id] as const)),
     [defaults],
@@ -215,6 +259,17 @@ export function InvoicePaymentAccountsSettings({
   const editingAccount = useMemo(
     () => accounts.find((a) => a.id === editingId) ?? null,
     [accounts, editingId],
+  )
+  const blankPrimary = useMemo(() => blankPrimaryPayeeAccount(accounts), [accounts])
+  // Accounts whose invoices print another account's bank IBAN (crm#1483) or
+  // clearing and account number: one attention line for the first, the rest
+  // counted; each fix brings up the next.
+  const printedElsewhere = useMemo<PrintedElsewhere[]>(
+    () => [
+      ...accountsPrintingOtherAccountIban(accounts).map((hit) => ({ ...hit, kind: 'iban' as const })),
+      ...accountsPrintingOtherAccountNumber(accounts).map((hit) => ({ ...hit, kind: 'account_number' as const })),
+    ],
+    [accounts],
   )
   // Legacy entries: payment instructions saved per currency before accounts
   // existed, with no account to land on. They still print (the resolver
@@ -244,20 +299,35 @@ export function InvoicePaymentAccountsSettings({
 
   function startEdit(account: CashAccount) {
     setIsAdding(false)
+    setAddingToPrimary(false)
     setEditingId(account.id)
     setForm(formFromAccount(account))
   }
 
-  function startAdd() {
+  /**
+   * While the primary account prints nothing, adding a bank account fills
+   * in that one: a second row would be a second ledger for the same money
+   * (crm#1270). The form offers a new account for when it really is another.
+   */
+  function startAdd(options: { newAccount?: boolean } = {}) {
+    if (blankPrimary && !options.newAccount) {
+      startEdit(blankPrimary)
+      setAddingToPrimary(true)
+      return
+    }
     setEditingId(null)
+    setAddingToPrimary(false)
     setIsAdding(true)
     setNewCurrency('SEK')
+    setNewLedger('')
     setForm(EMPTY_FORM)
   }
 
   function cancelEdit() {
     setEditingId(null)
     setIsAdding(false)
+    setAddingToPrimary(false)
+    setNewLedger('')
     setForm(EMPTY_FORM)
   }
 
@@ -350,13 +420,25 @@ export function InvoicePaymentAccountsSettings({
       toast({ title: t('validation_title'), description: error, variant: 'destructive' })
       return
     }
+    const ledger = newLedger.trim()
+    // Four digits here; the server owns which accounts a bank account may take.
+    if (ledger && !ACCOUNT_NUMBER_RE.test(ledger)) {
+      toast({ title: t('validation_title'), description: t('validation_ledger'), variant: 'destructive' })
+      return
+    }
     setIsSaving(true)
     try {
       const { name, ...payee } = payeeBody(form)
       const res = await fetch('/api/cash-accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, currency: newCurrency, invoice_payee: true, payee }),
+        body: JSON.stringify({
+          name,
+          currency: newCurrency,
+          ...(ledger ? { ledger_account: ledger } : {}),
+          invoice_payee: true,
+          payee,
+        }),
       })
       const json = await res.json().catch(() => null)
       if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
@@ -439,6 +521,56 @@ export function InvoicePaymentAccountsSettings({
     }
   }
 
+  /**
+   * Make a bank-connected account whose IBAN only the connection knows the
+   * default for a foreign currency: print that IBAN on it first, then
+   * choose it (crm#1273). The same two writes as typing the IBAN into the
+   * account's form and picking it here.
+   */
+  async function chooseBankIbanAsDefault(currency: Currency, cashAccountId: string, bankIban: string) {
+    setIsSaving(true)
+    try {
+      const res = await fetch(`/api/cash-accounts/${cashAccountId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iban: bankIban, invoice_payee: true }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      await setDefault(currency, cashAccountId)
+    } catch (err) {
+      toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  /**
+   * Print the account's own bank IBAN (crm#1483) or account number instead
+   * of another account's. The same PATCH as typing it into the account's
+   * form; the route's twin check lets an IBAN through because it is the
+   * row's own.
+   */
+  async function printOwnDetails(account: CashAccount, own: { iban: string } | { account_number: string }) {
+    if (isSaving) return
+    setIsSaving(true)
+    try {
+      const res = await fetch(`/api/cash-accounts/${account.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(own),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      cancelEdit()
+      await afterWrite(t('saved_account', { account: accountLabel(account) }))
+    } catch (err) {
+      toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   /** Attach a legacy per-currency entry to an account: copy its fields, then make it the default. */
   async function attachUnlinked(currency: Currency, cashAccountId: string) {
     const entry = settings.invoice_payment_accounts?.[currency]
@@ -465,6 +597,26 @@ export function InvoicePaymentAccountsSettings({
     } finally {
       setIsSaving(false)
     }
+  }
+
+  /** One pick per registered giro of a type, while the field is empty: "Registrerat hos Bankgirot: 5050-1055 (Acme AB)". */
+  function registeredGiroPicks(type: 'bankgiro' | 'plusgiro', currency: string, current: string, skipDigits: string | null) {
+    if (currency !== 'SEK' || current || !registeredGiros) return null
+    const picks = registeredGiros.filter((g) => g.type === type && g.number.replace(/\D/g, '') !== skipDigits)
+    if (picks.length === 0) return null
+    return picks.map((g) => {
+      const value = type === 'bankgiro' ? formatBankgiroNumber(g.number) : formatPlusgiroNumber(g.number)
+      return (
+        <button
+          key={g.number}
+          type="button"
+          onClick={() => updateField(type, value)}
+          className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+        >
+          {g.name ? t('giro_registered_pick_named', { value, name: g.name }) : t('giro_registered_pick', { value })}
+        </button>
+      )
+    })
   }
 
   function renderPayeeFields(currency: string, idPrefix: string, bankIban: string | null = null) {
@@ -517,6 +669,7 @@ export function InvoicePaymentAccountsSettings({
               {t('bankgiro_prefill', { value: formatBankgiroNumber(snapshotBankgiro) })}
             </button>
           )}
+          {registeredGiroPicks('bankgiro', currency, form.bankgiro, showBankgiroPrefill && snapshotBankgiro ? snapshotBankgiro.replace(/\D/g, '') : null)}
         </SettingsRow>
         <SettingsRow label={t('plusgiro_label')} htmlFor={`${idPrefix}-plusgiro`} align="baseline">
           <SettingsInput
@@ -525,6 +678,7 @@ export function InvoicePaymentAccountsSettings({
             onChange={(event) => updateField('plusgiro', event.target.value)}
             className="max-w-40 flex-none tabular-nums"
           />
+          {registeredGiroPicks('plusgiro', currency, form.plusgiro, null)}
         </SettingsRow>
         <SettingsRow label={t('swish_label')} htmlFor={`${idPrefix}-swish`} align="baseline">
           <SettingsInput
@@ -590,15 +744,51 @@ export function InvoicePaymentAccountsSettings({
     )
   }
 
+  /** The one action the attention line offers: print the account's own IBAN or number, or open the account to fix it by hand. */
+  function printedElsewhereAction(hit: PrintedElsewhere) {
+    const { account } = hit
+    if (hit.kind === 'iban' && hit.ownIban) {
+      const iban = hit.ownIban
+      return { label: t('printed_iban_use_own'), onClick: () => void printOwnDetails(account, { iban }) }
+    }
+    if (hit.kind === 'account_number' && hit.ownAccountNumber) {
+      const accountNumber = hit.ownAccountNumber
+      return { label: t('printed_account_number_use_own'), onClick: () => void printOwnDetails(account, { account_number: accountNumber }) }
+    }
+    return { label: t('printed_iban_edit'), onClick: () => startEdit(account) }
+  }
+
+  const printedFix = printedElsewhere[0] ?? null
+
   return (
     <SettingsGroup label={t('heading')} help={t('description')}>
       {isLoading ? (
         <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
           {t('loading')}
         </div>
       ) : (
         <>
+          {printedFix && (
+            <AttnLine
+              className="px-1 py-3"
+              action={printedElsewhereAction(printedFix)}
+              trailing={
+                printedElsewhere.length > 1 ? (
+                  <span className="text-muted-foreground">
+                    {' · '}
+                    {t('printed_iban_more', { count: printedElsewhere.length - 1 })}
+                  </span>
+                ) : undefined
+              }
+            >
+              {t(printedFix.kind === 'iban' ? 'printed_iban_other_account' : 'printed_account_number_other_account', {
+                last4: (printedFix.kind === 'iban' ? printedFix.printedIban : printedFix.printedAccountNumber).slice(-4),
+                account: accountLabel(printedFix.account),
+                other: printedFix.other.ledger_account,
+              })}
+            </AttnLine>
+          )}
           {accounts.length === 0 && !isAdding && (
             <p className="px-1 py-3 text-sm text-muted-foreground">{t('empty')}</p>
           )}
@@ -631,6 +821,18 @@ export function InvoicePaymentAccountsSettings({
                 <SettingsReveal open={isEditing}>
                   {isEditing && (
                     <>
+                      {addingToPrimary && (
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-1 py-2 text-xs text-muted-foreground">
+                          <span>{t('add_to_primary_hint', { account: accountLabel(account) })}</span>
+                          <button
+                            type="button"
+                            onClick={() => startAdd({ newAccount: true })}
+                            className="underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+                          >
+                            {t('add_other_account')}
+                          </button>
+                        </div>
+                      )}
                       <SettingsRow label={t('name_label')} htmlFor={`payee-${account.id}-name`} align="baseline">
                         <SettingsInput
                           id={`payee-${account.id}-name`}
@@ -651,10 +853,10 @@ export function InvoicePaymentAccountsSettings({
                           {account.invoice_payee ? t('hide_on_invoices') : t('show_on_invoices')}
                         </button>
                         <div className="flex gap-2">
-                          <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
+                          <Button type="button" variant="outline" onClick={cancelEdit} disabled={isSaving}>
                             {t('cancel')}
                           </Button>
-                          <Button type="button" size="sm" onClick={saveEdit} disabled={isSaving}>
+                          <Button type="button" onClick={saveEdit} disabled={isSaving}>
                             {isSaving ? t('saving') : t('save_account')}
                           </Button>
                         </div>
@@ -668,12 +870,13 @@ export function InvoicePaymentAccountsSettings({
 
           {!isAdding ? (
             <div className="flex justify-end px-1 py-3">
-              <Button type="button" variant="outline" size="sm" onClick={startAdd} disabled={isSaving}>
+              <Button type="button" variant="outline" onClick={() => startAdd()} disabled={isSaving}>
+                <PlusIcon className="h-4 w-4" />
                 {t('add_account')}
               </Button>
             </div>
           ) : (
-            <div className="mt-2 border-t border-border">
+            <div className="mt-2 border-t-hairline">
               <SettingsRow label={t('name_label')} htmlFor="payee-new-name" align="baseline">
                 <SettingsInput
                   id="payee-new-name"
@@ -695,23 +898,40 @@ export function InvoicePaymentAccountsSettings({
                   ))}
                 </SettingsSelect>
               </SettingsRow>
+              <SettingsRow label={t('ledger_label')} htmlFor="payee-new-ledger" align="baseline">
+                <SettingsInput
+                  id="payee-new-ledger"
+                  value={newLedger}
+                  onChange={(event) => setNewLedger(event.target.value)}
+                  placeholder={t('ledger_placeholder')}
+                  inputMode="numeric"
+                  maxLength={4}
+                  className="max-w-32 tabular-nums"
+                />
+                <SettingsRowNote fill>{t('ledger_hint')}</SettingsRowNote>
+              </SettingsRow>
               {renderPayeeFields(newCurrency, 'payee-new')}
               <div className="flex justify-end gap-2 px-1 py-3">
-                <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
+                <Button type="button" variant="outline" onClick={cancelEdit} disabled={isSaving}>
                   {t('cancel')}
                 </Button>
-                <Button type="button" size="sm" onClick={saveNew} disabled={isSaving}>
+                <Button type="button" onClick={saveNew} disabled={isSaving}>
                   {isSaving ? t('saving') : t('create_account')}
                 </Button>
               </div>
             </div>
           )}
 
-          <p className="mt-6 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="mt-6 px-1 text-xs font-medium text-muted-foreground">
             {t('defaults_heading')}
           </p>
           {shownCurrencies.map((currency, i) => {
             const usable = accounts.filter((a) => isUsableInvoicePayee(a, currency))
+            // A foreign currency can also go to an account whose IBAN only
+            // its bank connection knows: choosing it prints that IBAN (crm#1273).
+            const withBankIban = foreignInvoicePayeeCandidates(accounts, currency).filter(
+              (candidate): candidate is { account: CashAccount; bankIban: string } => candidate.bankIban !== null,
+            )
             const current = defaultByCurrency.get(currency) ?? NONE
             const unlinked = unlinkedCurrencies.includes(currency)
             const legacy = currency === 'SEK' && !unlinked && current === NONE ? legacySek : null
@@ -727,7 +947,9 @@ export function InvoicePaymentAccountsSettings({
                   value={current}
                   onChange={(event) => {
                     const value = event.target.value
+                    const viaBank = withBankIban.find((candidate) => candidate.account.id === value)
                     if (unlinked && value !== NONE) void attachUnlinked(currency, value)
+                    else if (viaBank) void chooseBankIbanAsDefault(currency, value, viaBank.bankIban)
                     else void handleDefaultChange(currency, value)
                   }}
                   disabled={isSaving}
@@ -739,12 +961,17 @@ export function InvoicePaymentAccountsSettings({
                   {usable.map((account) => (
                     <option key={account.id} value={account.id}>{accountLabel(account)}</option>
                   ))}
+                  {withBankIban.map(({ account, bankIban }) => (
+                    <option key={account.id} value={account.id}>
+                      {t('default_bank_iban_option', { account: accountLabel(account), iban: formatIbanGroups(bankIban) })}
+                    </option>
+                  ))}
                 </SettingsSelect>
                 {unlinked && <SettingsRowNote>{t('unlinked_hint', { currency })}</SettingsRowNote>}
                 {legacy && (
                   <SettingsRowNote>{t('legacy_hint', { summary: summarizeInvoicePaymentAccount(legacy) })}</SettingsRowNote>
                 )}
-                {!unlinked && usable.length === 0 && (
+                {!unlinked && usable.length === 0 && withBankIban.length === 0 && (
                   <SettingsRowNote>{t(currency === 'SEK' ? 'no_usable_sek' : 'no_usable_foreign', { currency })}</SettingsRowNote>
                 )}
               </SettingsRow>
@@ -765,7 +992,6 @@ export function InvoicePaymentAccountsSettings({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 disabled={!currencyToAdd}
                 onClick={() => {
                   if (!currencyToAdd) return

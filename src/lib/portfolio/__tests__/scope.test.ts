@@ -4,7 +4,17 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 const mocks = vi.hoisted(() => ({
   getUserCompanies: vi.fn(),
   getByraMembership: vi.fn(),
+  getMultiUserState: vi.fn(),
 }))
+
+// The seat gate's per-company state read; isMultiUserEnforced stays real and
+// follows MULTI_USER_SEAT_GATE (stubbed per test).
+vi.mock('@/lib/entitlements/multi-user', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/entitlements/multi-user')>(
+    '@/lib/entitlements/multi-user',
+  )
+  return { ...actual, getMultiUserState: (...args: unknown[]) => mocks.getMultiUserState(...args) }
+})
 
 vi.mock('@/lib/company/context', () => ({
   getUserCompanies: (...args: unknown[]) => mocks.getUserCompanies(...args),
@@ -31,7 +41,7 @@ function uuid(n: number): string {
 function membership(over: {
   id: string
   name: string
-  role?: 'owner' | 'admin' | 'member' | 'viewer'
+  role?: 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
   teamId?: string | null
   archived?: boolean
   asArray?: boolean
@@ -57,8 +67,10 @@ function membership(over: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.unstubAllEnvs()
   reset()
   mocks.getByraMembership.mockResolvedValue(null)
+  mocks.getMultiUserState.mockResolvedValue({ state: 'entitled', graceEndsAt: null })
 })
 
 describe('resolveCompanyScope', () => {
@@ -99,6 +111,21 @@ describe('resolveCompanyScope', () => {
     const inCalls = findCalls('company_settings', 'in')
     expect(inCalls).toHaveLength(1)
     expect(inCalls[0][1]).toEqual([uuid(1), uuid(2), uuid(4)])
+  })
+
+  it('leaves an invoicing-only membership out of every portfolio read, even when named', async () => {
+    mocks.getUserCompanies.mockResolvedValue([
+      membership({ id: uuid(1), name: 'Egna AB', role: 'owner' }),
+      membership({ id: uuid(2), name: 'Säljbolaget AB', role: 'invoicer' }),
+    ])
+    enqueue({ data: [] })
+    const all = await resolveCompanyScope(client, USER_ID, {})
+    expect(all.companies.map((c) => c.companyId)).toEqual([uuid(1)])
+
+    enqueue({ data: [] })
+    const named = await resolveCompanyScope(client, USER_ID, { companies: [uuid(2), uuid(1)] })
+    expect(named.companies.map((c) => c.companyId)).toEqual([uuid(1)])
+    expect(named.unresolved).toEqual([uuid(2)])
   })
 
   it('returns an empty scope without querying settings when the user has no memberships', async () => {
@@ -242,6 +269,68 @@ describe('resolveCompanyScope', () => {
     enqueue({ data: [] })
     const scope = await resolveCompanyScope(client, USER_ID, { restrictTo: null })
     expect(scope.companies).toHaveLength(2)
+  })
+
+  describe('multi-user seat gate', () => {
+    const FROZEN = { state: 'frozen', graceEndsAt: null }
+
+    it('drops a frozen non-owner membership into dormant and keeps owners', async () => {
+      vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
+      mocks.getUserCompanies.mockResolvedValue([
+        membership({ id: uuid(1), name: 'Owned AB', role: 'owner' }),
+        membership({ id: uuid(2), name: 'Frozen AB', role: 'member' }),
+      ])
+      mocks.getMultiUserState.mockResolvedValue(FROZEN)
+      enqueue({ data: [] })
+
+      const scope = await resolveCompanyScope(client, USER_ID, {})
+
+      expect(scope.companies.map((c) => c.companyId)).toEqual([uuid(1)])
+      expect(scope.dormant).toEqual([uuid(2)])
+      // Owners pass without a state read.
+      expect(mocks.getMultiUserState).toHaveBeenCalledTimes(1)
+      expect(mocks.getMultiUserState).toHaveBeenCalledWith(client, uuid(2))
+    })
+
+    it('reports an explicit frozen id as dormant, not unresolved', async () => {
+      vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
+      mocks.getUserCompanies.mockResolvedValue([membership({ id: uuid(2), name: 'Frozen AB', role: 'admin' })])
+      mocks.getMultiUserState.mockResolvedValue(FROZEN)
+
+      const scope = await resolveCompanyScope(client, USER_ID, { companies: [uuid(2), uuid(9)] })
+
+      expect(scope.companies).toEqual([])
+      expect(scope.dormant).toEqual([uuid(2)])
+      expect(scope.unresolved).toEqual([uuid(9)])
+    })
+
+    it('applies the gate before the cap, so a frozen company never takes a slot', async () => {
+      vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
+      const memberships = Array.from({ length: SCOPE_MAX_COMPANIES + 1 }, (_, i) =>
+        membership({ id: uuid(i + 1), name: `Bolag ${String(i + 1).padStart(2, '0')}`, role: i === 0 ? 'member' : 'owner' }),
+      )
+      mocks.getUserCompanies.mockResolvedValue(memberships)
+      mocks.getMultiUserState.mockResolvedValue(FROZEN)
+      enqueue({ data: [] })
+
+      const scope = await resolveCompanyScope(client, USER_ID, {})
+
+      expect(scope.companies).toHaveLength(SCOPE_MAX_COMPANIES)
+      expect(scope.truncated).toBe(false)
+      expect(scope.dormant).toEqual([uuid(1)])
+    })
+
+    it('reads no seat state while the gate is off', async () => {
+      mocks.getUserCompanies.mockResolvedValue([membership({ id: uuid(2), name: 'Member AB', role: 'member' })])
+      mocks.getMultiUserState.mockResolvedValue(FROZEN)
+      enqueue({ data: [] })
+
+      const scope = await resolveCompanyScope(client, USER_ID, {})
+
+      expect(scope.companies.map((c) => c.companyId)).toEqual([uuid(2)])
+      expect(scope.dormant).toEqual([])
+      expect(mocks.getMultiUserState).not.toHaveBeenCalled()
+    })
   })
 
   it('falls back to companies.name when the settings lookup fails', async () => {

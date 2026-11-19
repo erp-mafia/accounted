@@ -66,7 +66,7 @@ const SKV_ERROR_CODES = [
 ]
 
 const CONNECTION_PITFALL =
-  'Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.'
+  'Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about ten hours by design). Only a person can reconnect; do not retry until they confirm.'
 
 const EXAMPLE_KONTROLLSVAR = {
   status: 'INFO',

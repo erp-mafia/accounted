@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   outstandingAsOf,
+  paymentsAsOfFromFacts,
   resolveOutstandingAsOf,
   type PaymentsAsOf,
 } from '../reskontra-payments'
@@ -70,5 +71,32 @@ describe('resolveOutstandingAsOf', () => {
       expect(outstandingAsOf(invoice, 1000, 250, history, AS_OF))
         .toBe(resolveOutstandingAsOf(invoice, 1000, 250, history, AS_OF).outstanding)
     }
+  })
+})
+
+describe('paymentsAsOfFromFacts', () => {
+  it('sums the dated amounts per invoice with the öre walk fetchPaymentsAsOf takes', () => {
+    // Thousandths round as they are added, as the walk over the rows did:
+    // 33.33, 66.66, 99.99 (not 99.999 rounded once).
+    const payments = paymentsAsOfFromFacts([
+      { id: 'a', has_payment_rows: true, payment_amounts: [33.333, 33.333, 33.333] },
+      { id: 'b', has_payment_rows: true, payment_amounts: ['400.50', 99.5] },
+    ])
+    expect(payments.paidThrough.get('a')).toBe(99.99)
+    expect(payments.paidThrough.get('b')).toBe(500)
+    expect([...payments.hasRows]).toEqual(['a', 'b'])
+  })
+
+  it('marks an invoice whose rows all came after the date as having rows, paid through nothing', () => {
+    const payments = paymentsAsOfFromFacts([{ id: 'a', has_payment_rows: true, payment_amounts: [] }])
+    expect(payments.hasRows.has('a')).toBe(true)
+    expect(payments.paidThrough.has('a')).toBe(false)
+    expect(outstandingAsOf({ id: 'a', paid_at: '2026-06-01' }, 1000, 0, payments, AS_OF)).toBe(1000)
+  })
+
+  it('leaves out an invoice without payment rows, so its paid_at decides', () => {
+    const payments = paymentsAsOfFromFacts([{ id: 'a', has_payment_rows: false, payment_amounts: null }])
+    expect(payments.hasRows.size).toBe(0)
+    expect(payments.paidThrough.size).toBe(0)
   })
 })

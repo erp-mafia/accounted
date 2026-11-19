@@ -1,7 +1,7 @@
 import 'server-only'
 
 /**
- * Invite-only signup gate for white-label brand domains (founder decision
+ * Invite-only signup gate for white-label brand domains (product decision
  * 2026-08-27): a brand domain belongs to the partner's people, so when a
  * brand has signup_mode = 'invite_only', creating an account on that domain
  * requires either a brand_signup_allowlist entry for the email or a valid

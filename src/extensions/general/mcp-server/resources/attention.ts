@@ -1,12 +1,27 @@
 import type { McpResource } from './types'
 import { ACTION_NEEDED_THRESHOLD_DAYS } from '@/lib/deadlines/status-engine'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import {
   fetchUnlinkedDocuments,
   UNLINKED_DOCUMENT_SCAN_CAP,
 } from '@/lib/documents/unlinked-documents'
-import { countReconciliationDue, listExpensePayoutsDue } from '@/lib/worklist/categories'
-import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
+import {
+  countPendingOperations,
+  countReconciliationDue,
+  countSupplierInvoicesAwaitingApproval,
+  listExpensePayoutsDue,
+  listOverdueInvoiceRows,
+  summarizeOverdueInvoices,
+  type OverdueInvoiceRow,
+} from '@/lib/worklist/categories'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { createLogger } from '@/lib/logger'
+import { effectiveInvoiceStatus } from '@/lib/invoices/overdue'
+import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
+import { addDaysIso, todayIsoStockholm, isPastDue } from '@/lib/dates/iso'
+import { formatActorAttribution } from '@/lib/attribution/format-actor'
+import { resolvePersonNames } from '@/lib/attribution/person-names'
+import { readWithOperationNumber } from '@/lib/pending-operations/operation-number-read'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -15,6 +30,8 @@ interface AttentionCategory {
   label_sv: string
   severity: Severity
   count: number
+  /** Facts about the whole category beyond its count (the overdue group's amount and age). */
+  summary?: Record<string, unknown>
   samples: Array<Record<string, unknown>>
   next?: {
     description: string
@@ -45,17 +62,18 @@ export const attentionResource: McpResource = {
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
     const now = new Date()
-    const today = now.toISOString().slice(0, 10)
-    const horizonDate = new Date(now.getTime() + ACTION_NEEDED_THRESHOLD_DAYS * 86_400_000)
-    const horizon = horizonDate.toISOString().slice(0, 10)
+    // Overdue, the deadline horizon and the open period are judged on the
+    // Swedish calendar day, the day the user and the deadlines live in.
+    const today = todayIsoStockholm(now)
+    const horizon = addDaysIso(today, ACTION_NEEDED_THRESHOLD_DAYS)
 
     const [
       unbooked,
       unbookedSamples,
       overdueRows,
-      pendingSupplierHead,
+      pendingSupplierCount,
       pendingSupplierSamples,
-      pendingOpsHead,
+      pendingOpsCount,
       pendingOpsSamples,
       unmatchedReceiptsHead,
       unmatchedReceiptsSamples,
@@ -77,49 +95,44 @@ export const attentionResource: McpResource = {
         return null
       }),
       supabase
-        .from('transactions')
+        .from('open_bank_rows')
         .select('id, date, amount, currency, description, merchant_name')
         .eq('company_id', companyId)
-        .eq('is_ignored', false)
-        .is('journal_entry_id', null)
-        .or('is_business.is.null,is_business.eq.true')
         .order('date', { ascending: true })
-        .limit(SAMPLE_LIMIT * 4),
-      supabase
-        .from('invoices')
-        .select('id, invoice_number, customer_id, due_date, total, currency, status')
-        .eq('company_id', companyId)
-        // Proformas, delivery notes and quotes are never receivables: a sent
-        // quote past its valid_until is expired, not overdue.
-        .eq('document_type', 'invoice')
-        .in('status', ['sent', 'overdue'])
-        .lt('due_date', today)
-        .order('due_date', { ascending: true })
-        .limit(100),
-      supabase
-        .from('supplier_invoices')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('status', 'registered'),
+        .limit(SAMPLE_LIMIT),
+      // The Att göra group's rows (lib/worklist listOverdueInvoiceRows): the
+      // Förfallna view's invoices, oldest first, every one of them counted.
+      // A failed read skips the category rather than claiming zero.
+      listOverdueInvoiceRows(supabase, companyId, today).catch((err: unknown) => {
+        log.warn('attention overdue invoices unavailable', { companyId, reason: failureReason(err) })
+        return [] as OverdueInvoiceRow[]
+      }),
+      // The Att göra counts (lib/worklist/categories.ts): the same number the
+      // dashboard badge shows, so the agent and the user see one queue.
+      countSupplierInvoicesAwaitingApproval(supabase, companyId),
       supabase
         .from('supplier_invoices')
         .select('id, supplier_invoice_number, supplier_id, total, currency, due_date')
         .eq('company_id', companyId)
         .eq('status', 'registered')
+        .eq('is_credit_note', false)
         .order('due_date', { ascending: true })
         .limit(SAMPLE_LIMIT),
-      supabase
-        .from('pending_operations')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('status', 'pending'),
-      supabase
-        .from('pending_operations')
-        .select('id, operation_type, title, risk_level, actor_label, created_at')
-        .eq('company_id', companyId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
-        .limit(SAMPLE_LIMIT),
+      countPendingOperations(supabase, companyId),
+      // operation_number: the number the person sees ("Förslag 128"); read
+      // without it while the column is not there yet.
+      readWithOperationNumber((withOperationNumber) => {
+        const numbered = () =>
+          supabase
+            .from('pending_operations')
+            .select('id, operation_number, operation_type, title, risk_level, actor_type, actor_label, user_id, created_at')
+        const samples = withOperationNumber
+          ? numbered()
+          : (supabase
+              .from('pending_operations')
+              .select('id, operation_type, title, risk_level, actor_type, actor_label, user_id, created_at') as unknown as ReturnType<typeof numbered>)
+        return samples.eq('company_id', companyId).eq('status', 'pending').order('created_at', { ascending: false }).limit(SAMPLE_LIMIT)
+      }),
       supabase
         .from('receipts')
         .select('id', { count: 'exact', head: true })
@@ -138,11 +151,14 @@ export const attentionResource: McpResource = {
         .from('voucher_sequences')
         .select('voucher_series, fiscal_period_id')
         .eq('company_id', companyId),
-      supabase
-        .from('deadlines')
-        .select('id, title, due_date, deadline_type, tax_deadline_type, status')
-        .eq('company_id', companyId)
-        .eq('is_completed', false)
+      // Open deadlines only (lib/deadlines/open.ts): a dismissed deadline is
+      // gone from /deadlines and Att göra, so it is gone for the agent too.
+      filterOpenDeadlines(
+        supabase
+          .from('deadlines')
+          .select('id, title, due_date, deadline_type, tax_deadline_type, status')
+          .eq('company_id', companyId),
+      )
         .lte('due_date', horizon)
         .order('due_date', { ascending: true })
         .limit(20),
@@ -171,25 +187,7 @@ export const attentionResource: McpResource = {
 
     // ── Unbooked business transactions ──────────────────────────────
     const unbookedCount = unbooked?.total ?? 0
-    const sampleCandidates = unbookedSamples.data ?? []
-    const anchoredSamples =
-      unbookedCount > 0 && sampleCandidates.length > 0
-        ? await fetchAnchoredTransactionIds(
-            supabase,
-            companyId,
-            sampleCandidates.map((row) => row.id as string),
-          ).catch((err: unknown) => {
-            // Counts are unaffected; at worst a sample row is already booked.
-            log.warn('attention unbooked sample anchor lookup failed', {
-              companyId,
-              reason: failureReason(err),
-            })
-            return new Set<string>()
-          })
-        : new Set<string>()
-    const samples = sampleCandidates
-      .filter((row) => !anchoredSamples.has(row.id as string))
-      .slice(0, SAMPLE_LIMIT)
+    const samples = unbookedSamples.data ?? []
     if (unbookedCount > 0) {
       const oldest = samples[0]
       const oldestAgeDays = oldest?.date ? daysBetween(oldest.date, today) : 0
@@ -207,28 +205,48 @@ export const attentionResource: McpResource = {
       })
     }
 
-    // ── Overdue invoices ────────────────────────────────────────────
-    const overdueAll = overdueRows.data ?? []
-    if (overdueAll.length > 0) {
-      const maxOverdueDays = overdueAll.reduce((max, inv) => {
-        const days = inv.due_date ? daysBetween(inv.due_date, today) : 0
-        return Math.max(max, days)
-      }, 0)
+    // ── Overdue customer invoices: one group, as on Att göra ────────
+    // The same group as the Att göra row "N kundfakturor har förfallit"
+    // (lib/worklist OverdueInvoicesDue): one category with the true count and
+    // the amount still owed, never one entry per invoice. A fact to follow
+    // up, not an alarm: severity stays at warning however old the oldest is.
+    const overdueGroup = summarizeOverdueInvoices(overdueRows, today)
+    if (overdueGroup) {
       categories.push({
         key: 'overdue_invoices',
-        label_sv: 'Förfallna fakturor',
-        severity: maxOverdueDays > 30 ? 'critical' : 'warning',
-        count: overdueAll.length,
-        samples: overdueAll.slice(0, SAMPLE_LIMIT),
+        label_sv: 'Förfallna kundfakturor',
+        severity: 'warning',
+        count: overdueGroup.count,
+        summary: {
+          remaining_sek: overdueGroup.remaining_sek,
+          unconverted_count: overdueGroup.unconverted_count,
+          oldest_due_date: overdueGroup.oldest_due_date,
+          oldest_days_overdue: overdueGroup.oldest_days_overdue,
+        },
+        // The oldest first, with the status gnubok_list_invoices reports.
+        samples: overdueRows.slice(0, SAMPLE_LIMIT).map((inv) => ({
+          id: inv.id,
+          invoice_number: inv.invoice_number,
+          customer_id: inv.customer_id,
+          due_date: inv.due_date,
+          total: inv.total,
+          remaining_amount: inv.remaining_amount,
+          currency: inv.currency,
+          status: effectiveInvoiceStatus(
+            { status: inv.status, due_date: inv.due_date, remaining_amount: Number(inv.remaining_amount) },
+            today,
+          ),
+        })),
         next: {
-          description: 'Granska förfallna fakturor och skicka påminnelser.',
-          resource: 'Accounted://recent-activity?limit=20',
+          description:
+            'Visa användaren gruppen (Kundfakturor › Förfallna). Har en betalning kommit in: matcha den mot fakturan. Resten följer användaren upp med kunden.',
+          tool: 'gnubok_list_invoices',
+          args: { status: 'overdue' },
         },
       })
     }
 
     // ── Pending supplier invoices (status='registered') ─────────────
-    const pendingSupplierCount = pendingSupplierHead.count ?? 0
     if (pendingSupplierCount > 0) {
       const oldestRegistered = pendingSupplierSamples.data?.[0]
       categories.push({
@@ -246,16 +264,21 @@ export const attentionResource: McpResource = {
     }
 
     // ── Pending operations awaiting approval ────────────────────────
-    const pendingOpsCount = pendingOpsHead.count ?? 0
     if (pendingOpsCount > 0) {
       const ops = pendingOpsSamples.data ?? []
       const hasHighRisk = ops.some((o) => o.risk_level === 'high')
+      // Who staged each one, named with the person it acted for ("Claude åt
+      // Jonas Ek", lib/attribution) rather than the credential's label.
+      const personNames = await resolvePersonNames(supabase, ops.map((o) => o.user_id))
       categories.push({
         key: 'pending_operations',
         label_sv: 'Operationer som väntar på godkännande',
         severity: hasHighRisk ? 'critical' : 'warning',
         count: pendingOpsCount,
-        samples: ops,
+        samples: ops.map(({ actor_type: actorType, actor_label: actorLabel, user_id: personId, ...op }) => ({
+          ...op,
+          proposed_by: formatActorAttribution({ actorType, actorLabel, personName: personId ? personNames.get(personId) : null }),
+        })),
         next: {
           description:
             'Visa kön för användaren. När användaren godkänner en specifik operation_id i chatten, anropa gnubok_approve_pending_operation direkt: /pending är ett alternativ, inte ett krav.',
@@ -315,66 +338,56 @@ export const attentionResource: McpResource = {
     }
 
     // ── Voucher gaps without explanations ──────────────────────────
+    // The listing every door shares (lib/core/bookkeeping/voucher-gaps.ts),
+    // per (year, series). A series whose check fails is skipped and logged,
+    // as the unbooked count is: this summary is advisory, and the year-end
+    // gate itself blocks on a failed check (VOUCHER_GAP_CHECK_FAILED).
     const seriesRows = (voucherSeriesRows.data ?? []) as Array<{ voucher_series: string; fiscal_period_id: string }>
-    const allGaps: Array<{ series: string; gap_start: number; gap_end: number; fiscal_period_id: string }> = []
+    const unexplained: Array<{ series: string; gap_start: number; gap_end: number; fiscal_period_id: string }> = []
     for (const row of seriesRows) {
-      const { data: gaps } = await supabase.rpc('detect_voucher_gaps', {
-        p_company_id: companyId,
-        p_fiscal_period_id: row.fiscal_period_id,
-        p_series: row.voucher_series,
-      })
-      if (gaps && Array.isArray(gaps)) {
-        for (const g of gaps as Array<{ gap_start: number; gap_end: number }>) {
-          allGaps.push({
-            series: row.voucher_series,
-            gap_start: g.gap_start,
-            gap_end: g.gap_end,
-            fiscal_period_id: row.fiscal_period_id,
-          })
+      try {
+        const listing = await listVoucherGaps(supabase, companyId, row.fiscal_period_id, { series: row.voucher_series })
+        for (const g of listing.gaps) {
+          if (!g.explanation) {
+            unexplained.push({ series: g.series, gap_start: g.gap_start, gap_end: g.gap_end, fiscal_period_id: row.fiscal_period_id })
+          }
         }
-      }
-    }
-    if (allGaps.length > 0) {
-      const { data: explanations } = await supabase
-        .from('voucher_gap_explanations')
-        .select('voucher_series, gap_start, gap_end, fiscal_period_id')
-        .eq('company_id', companyId)
-      const explainedKeys = new Set(
-        (explanations ?? []).map(
-          (e) => `${e.fiscal_period_id}:${e.voucher_series}:${e.gap_start}:${e.gap_end}`
-        )
-      )
-      const unexplained = allGaps.filter(
-        (g) => !explainedKeys.has(`${g.fiscal_period_id}:${g.series}:${g.gap_start}:${g.gap_end}`)
-      )
-      if (unexplained.length > 0) {
-        const first = unexplained[0]
-        categories.push({
-          key: 'voucher_gaps_unexplained',
-          label_sv: 'Verifikationshål utan förklaring (BFNAR 2013:2)',
-          severity: 'critical',
-          count: unexplained.length,
-          samples: unexplained.slice(0, SAMPLE_LIMIT),
-          next: {
-            description: 'Dokumentera hålet i verifikationsserien.',
-            tool: 'gnubok_explain_voucher_gap',
-            args: first
-              ? {
-                  fiscal_period_id: first.fiscal_period_id,
-                  voucher_series: first.series,
-                  gap_start: first.gap_start,
-                  gap_end: first.gap_end,
-                }
-              : undefined,
-          },
+      } catch (err) {
+        log.warn('attention voucher gap check unavailable', {
+          companyId,
+          fiscalPeriodId: row.fiscal_period_id,
+          series: row.voucher_series,
+          reason: failureReason(err),
         })
       }
+    }
+    if (unexplained.length > 0) {
+      const first = unexplained[0]
+      categories.push({
+        key: 'voucher_gaps_unexplained',
+        label_sv: 'Verifikationshål utan förklaring (BFNAR 2013:2)',
+        severity: 'critical',
+        count: unexplained.length,
+        samples: unexplained.slice(0, SAMPLE_LIMIT),
+        next: {
+          description: 'Dokumentera hålet i verifikationsserien.',
+          tool: 'gnubok_explain_voucher_gap',
+          args: first
+            ? {
+                fiscal_period_id: first.fiscal_period_id,
+                voucher_series: first.series,
+                gap_start: first.gap_start,
+                gap_end: first.gap_end,
+              }
+            : undefined,
+        },
+      })
     }
 
     // ── Deadlines upcoming (within 14 days) ─────────────────────────
     const deadlines = deadlineRows.data ?? []
     if (deadlines.length > 0) {
-      const anyOverdue = deadlines.some((d) => d.due_date && d.due_date < today)
+      const anyOverdue = deadlines.some((d) => d.due_date && isPastDue(d.due_date, today))
       categories.push({
         key: 'deadlines_upcoming',
         label_sv: 'Deadlines inom 14 dagar',

@@ -106,6 +106,25 @@ describe('GET /api/transactions/[id]/underlag', () => {
     enqueue({ data: null })
     const { status, body } = await parseJsonResponse<Body>(await GET(req(), createMockRouteParams({ id: 'tx-1' })))
     expect(status).toBe(200)
-    expect(body.data).toEqual({ source: null, document: null, inbox_item_id: null, facts: null })
+    expect(body.data).toEqual({
+      source: null,
+      document: null,
+      inbox_item_id: null,
+      facts: null,
+      row: { date: null, text: null, amount: null, currency: 'SEK' },
+    })
+  })
+
+  it('answers the bank row itself, named by its counterparty, else by its title (crm#1977)', async () => {
+    // The review of a samlingsverifikat holds only the ids of its rows.
+    enqueue({ data: { id: 'tx-1', document_id: null, date: '2026-11-03', description: 'Kortköp 8823', merchant_name: 'Pressbyrån', amount: -49, currency: null } })
+    enqueue({ data: null })
+    const named = await parseJsonResponse<{ data: { row: unknown } }>(await GET(req(), createMockRouteParams({ id: 'tx-1' })))
+    expect(named.body.data.row).toEqual({ date: '2026-11-03', text: 'Pressbyrån', amount: -49, currency: 'SEK' })
+
+    enqueue({ data: { id: 'tx-1', document_id: null, date: '2026-11-03', description: 'Kortköp 8823', merchant_name: null, amount: 120.5, currency: 'EUR' } })
+    enqueue({ data: null })
+    const titled = await parseJsonResponse<{ data: { row: unknown } }>(await GET(req(), createMockRouteParams({ id: 'tx-1' })))
+    expect(titled.body.data.row).toEqual({ date: '2026-11-03', text: 'Kortköp 8823', amount: 120.5, currency: 'EUR' })
   })
 })

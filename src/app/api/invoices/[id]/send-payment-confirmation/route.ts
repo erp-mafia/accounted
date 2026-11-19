@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { getEmailService } from '@/lib/email/service'
@@ -21,14 +20,12 @@ import {
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/send-payment-confirmation (#1693)
@@ -55,7 +52,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.email_send)
     if (capBlocked) return capBlocked
 
-    const emailService = getEmailService()
+    const emailService = await getEmailService()
     if (!emailService.isConfigured()) {
       return errorResponseFromCode('INVOICE_SEND_EMAIL_NOT_CONFIGURED', opLog, { requestId })
     }

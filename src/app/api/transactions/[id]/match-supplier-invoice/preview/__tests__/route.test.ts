@@ -15,8 +15,15 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+// The registration-first planner (defer_invoice_booking) has its own suite;
+// here it answers per test, by default "nothing to book first".
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+}))
+
 import { GET } from '../route'
 import { buildSupplierInvoicePaymentLines } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
@@ -558,5 +565,138 @@ describe('GET /api/transactions/[id]/match-supplier-invoice/preview: refuses wha
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
     expect(status).toBe(400)
     expect(body.error.code).toBe('MATCH_SI_CASH_FX_UNSUPPORTED')
+  })
+})
+
+describe('GET /api/transactions/[id]/match-supplier-invoice/preview: a deferred invoice paid before Bokför', () => {
+  const registrationEntry = {
+    entry_date: '2026-01-20',
+    description: 'Leverantörsfaktura',
+    lines: [
+      { account_number: '6110', debit_amount: 600, credit_amount: 0, line_description: null },
+      { account_number: '2641', debit_amount: 150, credit_amount: 0, line_description: null },
+      { account_number: '2440', debit_amount: 0, credit_amount: 750, line_description: null },
+    ],
+    total_debit: 750,
+    total_credit: 750,
+    balanced: true,
+    note: '',
+  }
+  const enqueueUnbooked = () => {
+    enqueue({
+      data: { id: TX_UUID, date: '2026-02-01', amount: -750, currency: 'SEK', amount_sek: null, cash_account_id: null },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        total: 750,
+        remaining_amount: 750,
+        registration_journal_entry_id: null,
+        items: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null }) // cash_accounts fallback listing
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(401)
+  })
+
+  it('shows the registration Bokför books first above the 2440 clearing', async () => {
+    enqueueUnbooked()
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      required: true,
+      supplierInvoiceId: SI_UUID,
+      entry: registrationEntry,
+      payableSek: 750,
+      createsAccrualSchedules: false,
+    })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      books_registration_first: boolean
+      registration_entry: typeof registrationEntry | null
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.books_registration_first).toBe(true)
+    expect(body.registration_entry).toEqual(registrationEntry)
+    expect(body.lines.find((l) => l.account_number === '2440')?.debit_amount).toBe(750)
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ id: SI_UUID }),
+      { settlementDate: '2026-02-01' },
+    )
+  })
+
+  it('clears what the registration will leave on 2440, off its dry run, as the POST does', async () => {
+    // 141.36 + 35.34 EUR at 11.123: the registration credits 1965.44, the rate says 1965.43.
+    enqueue({
+      data: { id: TX_UUID, date: '2026-02-01', amount: -176.7, currency: 'EUR', amount_sek: -1979.04, cash_account_id: null },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'EUR',
+        exchange_rate: 11.123,
+        total: 176.7,
+        remaining_amount: 176.7,
+        registration_journal_entry_id: null,
+        items: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+    enqueue({ data: [], error: null }) // cash_accounts fallback listing
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      required: true,
+      supplierInvoiceId: SI_UUID,
+      entry: registrationEntry,
+      payableSek: 1965.44,
+      createsAccrualSchedules: false,
+    })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.lines.find((l) => l.account_number === '2440')?.debit_amount).toBe(1965.44)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('answers the Bokför refusal the POST would give', async () => {
+    enqueueUnbooked()
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { invoice_date: '2025-12-20', registration_first: true, supplier_invoice_id: SI_UUID },
+    })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+  })
+
+  it('an invoice that needs nothing booked first previews one verifikat', async () => {
+    enqueueUnbooked()
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { body } = await parseJsonResponse<{ books_registration_first: boolean; registration_entry: unknown }>(res)
+    expect(body.books_registration_first).toBe(false)
+    expect(body.registration_entry).toBeNull()
   })
 })

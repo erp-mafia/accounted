@@ -142,15 +142,25 @@ describe('GET /api/rot-rut/payout-requests/[id]/link-voucher', () => {
   })
 
   it('lists candidates dated from the day the request was created', async () => {
-    enqueue({ data: { id: REQUEST_ID, created_at: '2026-08-25T09:12:00Z' } })
+    enqueue({ data: { id: REQUEST_ID, created_at: '2026-08-25T09:12:00Z', requested_total: 671, decided_total: null } })
+    enqueue({ data: { accounting_method: 'accrual' } })
     mockCandidates.mockResolvedValue({
-      data: [{ journal_entry_id: VOUCHER_ID, receivable_credit: 671.25, bank_amount: 671 }],
+      data: [{ journal_entry_id: VOUCHER_ID, receivable_credit: 671.25, bank_amount: 671, share_credit: 0 }],
       error: null,
     })
     const response = await GET(createMockRequest(URL), routeParams)
     const { status, body } = await parseJsonResponse<{ data: unknown[] }>(response)
     expect(status).toBe(200)
     expect(body.data).toHaveLength(1)
-    expect(mockCandidates).toHaveBeenCalledWith(mockSupabase, 'company-1', '2026-08-25')
+    expect(mockCandidates).toHaveBeenCalledWith(mockSupabase, 'company-1', '2026-08-25', undefined)
+  })
+
+  it('under kontantmetoden also asks for two-step payouts of the expected amount (issue #93)', async () => {
+    enqueue({ data: { id: REQUEST_ID, created_at: '2026-08-25T09:12:00Z', requested_total: 3750, decided_total: 3000 } })
+    enqueue({ data: { accounting_method: 'cash' } })
+    mockCandidates.mockResolvedValue({ data: [], error: null })
+    const response = await GET(createMockRequest(URL), routeParams)
+    expect(response.status).toBe(200)
+    expect(mockCandidates).toHaveBeenCalledWith(mockSupabase, 'company-1', '2026-08-25', { expectedAmount: 3000 })
   })
 })

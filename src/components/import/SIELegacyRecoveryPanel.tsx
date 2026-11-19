@@ -5,7 +5,8 @@ import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { SlideOver, SlideOverBody, SlideOverClose, SlideOverContent, SlideOverFooter } from '@/components/ui/slide-over'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { legacySIENextStep, type SIELegacyRecoveryAssessment } from '@/lib/import/sie-legacy-recovery'
@@ -52,27 +53,27 @@ export default function SIELegacyRecoveryPanel({ importId, filename, onClose, on
         event.preventDefault()
         onCloseAutoFocus()
       }}>
-        <div className="shrink-0 border-b border-border px-6 py-4">
-          <DialogTitle className="font-display text-lg leading-6">{t('title')}</DialogTitle>
+        <div className="shrink-0 border-b-hairline px-6 py-4">
+          <DialogTitle className="text-lg leading-6">{t('title')}</DialogTitle>
           <DialogDescription data-ph-mask="" className="mt-2 break-words">{filename}</DialogDescription>
         </div>
         <SlideOverBody className="space-y-6">
           {error ? (
-            <div className="space-y-3" role="alert">
-              <p className="text-sm">{t('loadError')}</p>
-              <p className="text-sm text-muted-foreground">{error}</p>
-              <Button variant="outline" onClick={() => {
+            <LoadError
+              title={t('loadError')}
+              description={error}
+              onRetry={() => {
                 setError(null)
                 setAssessment(null)
                 setAttempt(value => value + 1)
-              }}>{t('refresh')}</Button>
-            </div>
+              }}
+            />
           ) : !assessment ? (
-            <div role="status" aria-label={t('loading')} className="space-y-3">
+            <LateReveal role="status" aria-label={t('loading')} className="space-y-3">
               <Skeleton className="h-8 w-full" />
               <Skeleton className="h-8 w-full" />
               <Skeleton className="h-8 w-full" />
-            </div>
+            </LateReveal>
           ) : (
             <>
               <p className="text-sm leading-6">{t('reviewRequired')}</p>
@@ -118,7 +119,7 @@ export default function SIELegacyRecoveryPanel({ importId, filename, onClose, on
               {legacySIENextStep(assessment) === 'reset_year' ? (
                 <p className="text-sm leading-6 text-muted-foreground">
                   {t('nextStepResetYear')}{' '}
-                  <Link href="/settings/bookkeeping" className="underline underline-offset-4">{t('openFiscalYears')}</Link>
+                  <Link href="/settings/fiscal-years" className="underline underline-offset-4">{t('openFiscalYears')}</Link>
                 </p>
               ) : (
                 <p className="text-sm leading-6 text-muted-foreground">{t('nextStep')}</p>

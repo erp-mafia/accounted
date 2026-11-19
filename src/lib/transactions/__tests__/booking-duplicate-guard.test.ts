@@ -68,7 +68,7 @@ describe('runBookingDuplicateGuard', () => {
   it('passes when nothing in the ledger books this bank line', async () => {
     const verdict = await runBookingDuplicateGuard(supabase, 'company-1', 'user-1', target, {}, log)
 
-    expect(verdict).toEqual({ ok: true })
+    expect(verdict).toEqual({ ok: true, verdict: { kind: 'clear' } })
     expect(detectDupMock).toHaveBeenCalledWith(supabase, 'company-1', target, undefined)
   })
 
@@ -109,7 +109,7 @@ describe('runBookingDuplicateGuard', () => {
       { via: 'api_force' },
     )
 
-    expect(verdict).toEqual({ ok: true })
+    expect(verdict).toEqual({ ok: true, verdict: { kind: 'forced', journal_entry_id: SIBLING_JE, transaction_id: SIBLING_TX } })
     expect(appendHistoryMock).toHaveBeenCalledTimes(1)
     expect(appendHistoryMock).toHaveBeenCalledWith({
       companyId: 'company-1',
@@ -163,7 +163,7 @@ describe('runBookingDuplicateGuard', () => {
       { recordDismissal: false },
     )
 
-    expect(verdict).toEqual({ ok: true })
+    expect(verdict).toEqual({ ok: true, verdict: { kind: 'forced', journal_entry_id: SIBLING_JE, transaction_id: SIBLING_TX } })
     expect(appendHistoryMock).not.toHaveBeenCalled()
   })
 
@@ -210,7 +210,7 @@ describe('runBookingDuplicateGuard', () => {
 
     const verdict = await runBookingDuplicateGuard(supabase, 'company-1', 'user-1', target, {}, log)
 
-    expect(verdict).toEqual({ ok: true })
+    expect(verdict).toEqual({ ok: true, verdict: { kind: 'detection_failed' } })
     expect(log.warn).toHaveBeenCalledWith('booking-time duplicate detection failed (continuing)', expect.any(Error))
   })
 
@@ -246,7 +246,7 @@ describe('runBookingDuplicateGuard', () => {
       log,
     )
 
-    expect(verdict).toEqual({ ok: true })
+    expect(verdict).toEqual({ ok: true, verdict: { kind: 'forced', journal_entry_id: SIBLING_JE, transaction_id: SIBLING_TX } })
     expect(log.error).toHaveBeenCalled()
   })
 })

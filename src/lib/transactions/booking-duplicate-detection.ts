@@ -19,6 +19,17 @@
  * same-(date,amount) payments do occur (e.g. several identical Swish transfers
  * in one day). The user confirms with force=true after reviewing the candidate.
  *
+ * Identity beats content: two rows of ONE feed that its ids prove to be two
+ * entries are never twins, however alike they look (idsProveDistinctBookings
+ * in lib/transactions/external-id.ts): two Stripe balance-transaction ids,
+ * two bank-feed rows booked on different days or carrying two bank ids
+ * (crm#1312: a second Swish batch of the same ticket price), two rows of one
+ * uploaded bank file. The guard is for one movement stored twice, which is a
+ * cross-channel pair (a bank file on top of the feed, a hand-entered row, a
+ * reconnected bank) or a same-feed copy the ids cannot tell apart (a repeated
+ * bank id, an old id format, a second upload); those, and a voucher with no
+ * transaction behind it, are judged on content exactly as before.
+ *
  * Mirrors the invoice-side `detectDuplicatePaymentVoucher`
  * (lib/invoices/duplicate-payment-detection.ts), but keyed on an already-booked
  * sibling TRANSACTION rather than a manually-posted journal entry.
@@ -27,11 +38,21 @@
  * {@link resolveTransactionAmountSek} for why, and for what happens when a bank
  * line cannot be expressed in SEK at all.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, resolveSekAmountOrNull, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getPrimaryJournalEntryId } from '@/lib/transactions/is-booked'
+import { idsProveDistinctBookings, type TransactionIdentity } from '@/lib/transactions/external-id'
+import { BANK_LEG_ROOM_TOLERANCE, holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
+import { isAccountNumber } from '@/lib/invariants/account-number'
+import { sameCashAccount } from '@/lib/cash-accounts/ledger-slots'
+import { readPhysicalKeys } from '@/lib/cash-accounts/twins'
+import { chunk } from '@/lib/utils'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('transactions/booking-duplicate-detection')
 
 /** Integer öre: representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
@@ -107,7 +128,7 @@ export function resolveTransactionAmountSek(tx: TransactionAmountFields): number
   }
   if (tx.exchange_rate != null) {
     const rate = Number(tx.exchange_rate)
-    if (Number.isFinite(rate) && rate > 0) return roundOre(Math.abs(amount) * rate)
+    if (Number.isFinite(rate) && rate > 0) return sekOfForeign(Math.abs(amount), rate)
   }
 
   // Non-SEK row carrying neither a converted amount nor a rate: the shape a row
@@ -203,13 +224,48 @@ export interface BookedDuplicateCandidate {
    * {@link resolveTransactionAmountSek}).
    */
   unverified_reason: 'transaction_missing_sek_value' | null
+  /**
+   * Set only by detectCoveringVoucher: the candidate is not the same movement
+   * but a samlingsverifikat entered outside the feed that books the row's
+   * account, in the row's direction, for a period holding the row's day, and
+   * still has at least the row's amount that no transaction is linked to
+   * (issue #101). `amount` is then what the verifikat books on the account
+   * in that direction, never a figure for the row. Absent on every
+   * same-movement candidate.
+   */
+  covering?: CoveringVoucherFacts
 }
 
-/** Minimal shape of the transaction about to be booked. */
-export interface BookingTarget extends TransactionAmountFields {
+/** What a covering samlingsverifikat holds on the row's account (kr, positive). */
+export interface CoveringVoucherFacts {
+  /** What the verifikat books on the account in the row's direction. */
+  booked: number
+  /** What transactions already linked to it hold of that. */
+  held: number
+  /** booked - held: the part no transaction is linked to, at least the row's amount. */
+  unlinked: number
+}
+
+/**
+ * Minimal shape of the transaction about to be booked.
+ *
+ * The TransactionIdentity fields (external_id, import_source,
+ * bank_connection_id) let the guard tell two provider bookings apart by id
+ * (idsProveDistinctBookings). Optional on purpose: a door that omits them gets
+ * the content-only comparison, which can over-warn but never lets a real
+ * double through.
+ */
+export interface BookingTarget extends TransactionAmountFields, TransactionIdentity {
   id: string
   date: string
   cash_account_id?: string | null
+  /**
+   * The row's settlement ledger account when the caller already resolved it:
+   * the invoice-match door resolves it fail-closed
+   * (lib/invoices/duplicate-payment-detection.ts). Skips the cash-account
+   * lookup; undefined looks it up from cash_account_id, null scans 19xx.
+   */
+  settlement_account?: string | null
 }
 
 /**
@@ -259,9 +315,17 @@ const SIBLING_DUPLICATE_DATE_WINDOW_DAYS = 3
  * candidates and the candidate's verifikat resolves via
  * getPrimaryJournalEntryId.
  *
- * Account guard mirrors the import dedup bridge: when BOTH sides know their
- * cash_account_id they must match; a null on either side is treated as
- * compatible (single-account companies and un-backfilled rows behave as before).
+ * Account guard is the import dedup's (sameCashAccount): when BOTH sides know
+ * their cash_account_id they must be one bank account, the same row or twin
+ * rows of one IBAN and currency; a null on either side is treated as compatible
+ * (single-account companies and un-backfilled rows behave as before).
+ *
+ * Identity guard mirrors the ingest identity guard: a sibling the same feed's
+ * ids prove to be another entry is another movement and is skipped
+ * (idsProveDistinctBookings: another Stripe balance transaction, a bank-feed
+ * row of another booking day or another bank id, another row of the same
+ * uploaded file). A second upload of a bank file, a bank-feed copy the ids
+ * cannot separate, and every cross-channel pair still dedup on content.
  *
  * Currency guard: both sides are `transactions.amount`, each denominated in its
  * own row's `transactions.currency` (which, unlike journal_entry_lines.currency,
@@ -313,7 +377,7 @@ export async function detectBookedDuplicateTransaction(
   // deterministic even at the limit.
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, date, amount, currency, amount_sek, exchange_rate, description, cash_account_id, journal_entry_id')
+    .select('id, date, amount, currency, amount_sek, exchange_rate, description, cash_account_id, journal_entry_id, is_booked, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
     .eq('company_id', companyId)
     .gte('date', siblingLowDate)
     .lte('date', siblingHighDate)
@@ -333,24 +397,38 @@ export async function detectBookedDuplicateTransaction(
     description: string | null
     cash_account_id: string | null
     journal_entry_id: string | null
+    is_booked?: boolean | null
+    external_id: string | null
+    import_source: string | null
+    bank_connection_id: string | null
+    provider_transaction_id: string | null
+    bank_file_import_id: string | null
   }
   const targetAccount = target.cash_account_id ?? null
-  const matches = (data as unknown as Row[]).filter((r) => {
+  const sameMovement = (data as unknown as Row[]).filter((r) => {
     if (excludeTransactionIds.has(r.id)) return false
+    // Not booked by a live verifikat: open work, not a booked twin.
+    if (r.is_booked === false) return false
+    // Identity guard: two rows the same feed's ids prove to be two entries are
+    // two movements (two Stripe fees of the same öre, two customers paying the
+    // same price, two Swish payments of one ticket price), never a copy of
+    // one another.
+    if (idsProveDistinctBookings(target, r)) return false
     // Currency guard first: `amount` is only comparable to `amount` when both
     // rows are denominated in the same currency. Null normalises to SEK (the
     // column default), so SEK-only companies see no behaviour change.
     if ((r.currency || 'SEK').toUpperCase() !== targetCurrency) return false
     if (toOre(r.amount) !== targetOre) return false
-    // Account guard: both-known must match; a null on either side is compatible.
-    if (targetAccount !== null && r.cash_account_id !== null && r.cash_account_id !== targetAccount) {
-      return false
-    }
     // Window re-check in JS (the query already ranged on date): keeps the
     // window authoritative in one place and drops rows with unparseable dates.
     const rowMs = new Date(r.date).getTime()
     return Number.isFinite(rowMs) && Math.abs(rowMs - targetDateMs) <= siblingWindowMs
   })
+  if (sameMovement.length === 0) return null
+  // Account guard, on one bank account: a reconnect's twin row is not another
+  // account. Last, because it is the one test that may need a read.
+  const physicalKeyById = await readPhysicalKeys(supabase, companyId, [targetAccount, ...sameMovement.map((r) => r.cash_account_id)])
+  const matches = sameMovement.filter((r) => sameCashAccount(targetAccount, r.cash_account_id, physicalKeyById))
   if (matches.length === 0) return null
 
   // Resolve booked-ness with the full is_transaction_booked semantics: the
@@ -423,7 +501,7 @@ export async function detectBookedDuplicateTransaction(
     .maybeSingle()
   if (je) {
     const j = je as { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }
-    voucherLabel = `${j.voucher_series ?? 'A'}${j.voucher_number ?? ''}`
+    voucherLabel = formatVoucher(j)
     entryDate = j.entry_date ?? best.date
   }
 
@@ -491,6 +569,15 @@ const BANK_ACCOUNT_LOW = 1910
 const BANK_ACCOUNT_HIGH = 1949
 
 /**
+ * True for an account inside the range the ledger guards scan when a bank
+ * row names no account. Compared as text, like the PostgREST range filter
+ * below: account numbers are identifiers, never quantities.
+ */
+export function isBankRangeAccount(account: string): boolean {
+  return isAccountNumber(account) && account >= String(BANK_ACCOUNT_LOW) && account <= String(BANK_ACCOUNT_HIGH)
+}
+
+/**
  * Find an unlinked posted voucher whose bank/cash (19xx) leg already books this
  * exact bank movement: the ledger-only twin of the bank line.
  *
@@ -523,12 +610,13 @@ const BANK_ACCOUNT_HIGH = 1949
  * must be on that account's ledger account; otherwise any 19xx leg matches
  * (single-account companies, legacy rows with no cash_account_id).
  *
- * Excludes vouchers already linked to a transaction or an invoice_payment
- * (those are reconciled, not orphans) and storno/correction entries (valid
+ * Excludes vouchers already linked to a transaction (its journal_entry_id, or
+ * a bulk link in transaction_voucher_links) or an invoice_payment (those are
+ * reconciled, not orphans) and storno/correction entries (valid
  * second vouchers, not duplicates): EXCEPT a voucher whose linking transaction
  * itself matches the target (same öre in the same currency, compatible
- * account, date in the window), which is returned as the twin with
- * `transaction_id` set. Fail-open: a query error returns null so a detection
+ * account, date in the window, and not proven another booking by its provider
+ * id), which is returned as the twin with `transaction_id` set. Fail-open: a query error returns null so a detection
  * failure never blocks a legitimate booking. The pick is deterministic
  * (closest date, then lowest journal_entry id, then account) so a force
  * re-detect is stable.
@@ -564,8 +652,9 @@ export async function detectLedgerDuplicateVoucher(
   // Resolve the bank line's settlement ledger account, when known, so a movement
   // on one bank account never deduplicates a voucher on a different account of
   // the same company (the 19xx leg below is matched against it).
-  let settlementAccount: string | null = null
-  if (target.cash_account_id) {
+  let settlementAccount: string | null =
+    target.settlement_account !== undefined ? target.settlement_account?.trim() || null : null
+  if (target.settlement_account === undefined && target.cash_account_id) {
     const { data: ca } = await supabase
       .from('cash_accounts')
       .select('ledger_account')
@@ -589,6 +678,7 @@ export async function detectLedgerDuplicateVoucher(
       voucher_number: number | null
       status: string
       source_type: string | null
+      source_id?: string | null
     }
   }
 
@@ -604,7 +694,7 @@ export async function detectLedgerDuplicateVoucher(
   try {
     lines = await fetchEntryLines<LineRow>({
       supabase,
-      entryColumns: 'id, entry_date, description, voucher_series, voucher_number, status, source_type, company_id',
+      entryColumns: 'id, entry_date, description, voucher_series, voucher_number, status, source_type, source_id, company_id',
       lineColumns: 'account_number, debit_amount, credit_amount',
       filterEntries: (q: EntryLinesQuery) =>
         q
@@ -677,15 +767,24 @@ export async function detectLedgerDuplicateVoucher(
   // Such a voucher is returned as the twin WITH transaction_id set so the UI
   // can offer match/ignore instead of a blind second booking.
   const entryIds = candidates.map((l) => l.journal_entry.id)
-  const [{ data: txLinks }, { data: payLinks }] = await Promise.all([
+  const [{ data: txLinks }, { data: payLinks }, { data: voucherLinks }] = await Promise.all([
     supabase
       .from('transactions')
-      .select('id, date, amount, currency, cash_account_id, journal_entry_id')
+      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
       .eq('company_id', companyId)
       .in('journal_entry_id', entryIds),
     supabase
       .from('invoice_payments')
       .select('journal_entry_id, transaction_id')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', entryIds),
+    // Rows bulk-booked onto a voucher, or linked to an existing one, are
+    // anchored here and not in transactions.journal_entry_id. Unseen, such a
+    // voucher read as an orphan, and every same-amount row of the week was
+    // called its duplicate (crm#1312).
+    supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id, journal_entry_id')
       .eq('company_id', companyId)
       .in('journal_entry_id', entryIds),
   ])
@@ -697,24 +796,95 @@ export async function detectLedgerDuplicateVoucher(
     currency: string | null
     cash_account_id: string | null
     journal_entry_id: string | null
+    external_id?: string | null
+    import_source?: string | null
+    bank_connection_id?: string | null
+    provider_transaction_id?: string | null
+    bank_file_import_id?: string | null
   }
+  // The bulk-linked rows themselves, for the twin test below (a samlingsverifikat
+  // links up to 200 rows, so the id list is fetched in chunks).
+  const bulkLinks = ((voucherLinks ?? []) as { transaction_id: string | null; journal_entry_id: string | null }[])
+    .filter((l): l is { transaction_id: string; journal_entry_id: string } => !!l.transaction_id && !!l.journal_entry_id)
+  const bulkLinkedIds = [...new Set(bulkLinks.map((l) => l.transaction_id))]
+  const bulkLinkedRows = new Map<string, LinkedTxRow>()
+  for (const ids of chunk(bulkLinkedIds, 100)) {
+    const { data: rows } = await supabase
+      .from('transactions')
+      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+      .eq('company_id', companyId)
+      .in('id', ids)
+    for (const r of (rows ?? []) as LinkedTxRow[]) bulkLinkedRows.set(r.id, r)
+  }
+  // The bank row a bank_transaction verifikat was booked FROM (its source_id)
+  // is that verifikat's identity even while the row's pointer does not name
+  // it: a booking whose link has not landed yet (a parallel booking of the
+  // same batch, between its commit and its link) or a link that was lost. Such
+  // a verifikat books that row, so it is a twin of this one only when that
+  // row is (the test below); unread, it read as a ledger-only orphan and every
+  // same-amount row of the week was called its duplicate (2026-10-29: one
+  // unlinked Stripe-fee verifikat refused dozens of other fees, each with its
+  // own Stripe id). A verifikat booked from THIS row stays a candidate: the
+  // row is booked already.
+  const sourceRowIds = [
+    ...new Set(
+      candidates
+        .filter((l) => l.journal_entry.source_type === 'bank_transaction' && l.journal_entry.source_id && l.journal_entry.source_id !== target.id)
+        .map((l) => l.journal_entry.source_id as string),
+    ),
+  ]
+  const sourceRows = new Map<string, LinkedTxRow>()
+  for (const ids of chunk(sourceRowIds, 100)) {
+    const { data: rows } = await supabase
+      .from('transactions')
+      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+      .eq('company_id', companyId)
+      .in('id', ids)
+    for (const r of (rows ?? []) as LinkedTxRow[]) sourceRows.set(r.id, r)
+  }
+
+  const physicalKeyById = await readPhysicalKeys(supabase, companyId, [
+    targetAccount,
+    ...((txLinks ?? []) as LinkedTxRow[]).map((r) => r.cash_account_id),
+    ...[...bulkLinkedRows.values(), ...sourceRows.values()].map((r) => r.cash_account_id),
+  ])
   const linkedTxMatchesTarget = (r: LinkedTxRow): boolean => {
     if (r.id === target.id) return false
+    // Same identity guard as the sibling scan: a voucher linked to ANOTHER
+    // booking of the same provider feed is reconciled to that booking, not
+    // this row's twin, and falls to the "reconciled to something else"
+    // exclusion below.
+    if (idsProveDistinctBookings(target, r)) return false
     if ((r.currency || 'SEK').toUpperCase() !== targetCurrency) return false
     if (toOre(r.amount) !== targetOre) return false
-    if (targetAccount !== null && r.cash_account_id !== null && r.cash_account_id !== targetAccount) {
-      return false
-    }
+    if (!sameCashAccount(targetAccount, r.cash_account_id, physicalKeyById)) return false
     const linkedMs = new Date(r.date).getTime()
     return Number.isFinite(linkedMs) && Math.abs(linkedMs - dateMs) <= windowMs
   }
 
   const linkedTxByEntry = new Map<string, LinkedTxRow[]>()
+  const addLinked = (entryId: string, r: LinkedTxRow) => {
+    const arr = linkedTxByEntry.get(entryId) ?? []
+    if (!arr.some((x) => x.id === r.id)) arr.push(r)
+    linkedTxByEntry.set(entryId, arr)
+  }
   for (const r of (txLinks ?? []) as LinkedTxRow[]) {
-    if (!r.journal_entry_id) continue
-    const arr = linkedTxByEntry.get(r.journal_entry_id) ?? []
-    arr.push(r)
-    linkedTxByEntry.set(r.journal_entry_id, arr)
+    if (r.journal_entry_id) addLinked(r.journal_entry_id, r)
+  }
+  // A bulk link counts as a link even when its row could not be read: the
+  // voucher is then reconciled to something, never an orphan.
+  for (const l of bulkLinks) {
+    addLinked(l.journal_entry_id, bulkLinkedRows.get(l.transaction_id) ?? {
+      id: l.transaction_id, date: '', amount: 0, currency: null, cash_account_id: null, journal_entry_id: l.journal_entry_id,
+    })
+  }
+  // A source row that could not be read adds nothing: the verifikat is then
+  // judged as before.
+  for (const l of candidates) {
+    const source = l.journal_entry.source_type === 'bank_transaction' && l.journal_entry.source_id
+      ? sourceRows.get(l.journal_entry.source_id)
+      : undefined
+    if (source) addLinked(l.journal_entry.id, source)
   }
   // Only a payment row that carries a bank transaction means "reconciled to
   // a bank line". A row with transaction_id NULL is a manual / Stripe
@@ -764,7 +934,7 @@ export async function detectLedgerDuplicateVoucher(
     // (the de-excluded shape above); null for a true ledger-only orphan.
     transaction_id: survivors[0].twinTransactionId,
     journal_entry_id: best.journal_entry.id,
-    voucher_label: `${best.journal_entry.voucher_series ?? 'A'}${best.journal_entry.voucher_number ?? ''}`,
+    voucher_label: formatVoucher(best.journal_entry),
     entry_date: best.journal_entry.entry_date,
     description: best.journal_entry.description,
     // Always the leg's SEK figure, matched or not, so the UI never prints a
@@ -781,12 +951,228 @@ export async function detectLedgerDuplicateVoucher(
 }
 
 /**
+ * The row's settlement ledger account, looked up once from its cash account
+ * when the caller did not resolve it. Null when the row has no cash account
+ * or the lookup finds none: the ledger scan then covers the bank range, and
+ * the covering check has no account to judge and stays silent.
+ */
+async function withSettlementAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  target: BookingTarget,
+): Promise<BookingTarget> {
+  if (target.settlement_account !== undefined) return target
+  if (!target.cash_account_id) return { ...target, settlement_account: null }
+  const { data } = await supabase
+    .from('cash_accounts')
+    .select('ledger_account')
+    .eq('company_id', companyId)
+    .eq('id', target.cash_account_id)
+    .maybeSingle()
+  return { ...target, settlement_account: (data as { ledger_account?: string | null } | null)?.ledger_account ?? null }
+}
+
+/**
+ * The last day a samlingsverifikat may be dated and still hold a row of
+ * `rowDate` on `settlementAccount`, or null for a malformed date.
+ *
+ * A bank account (1910-1949) carries each movement on its own verifikat, and
+ * a gemensam verifikation covers affärshändelser of one kind on one day
+ * (BFL 5 kap. 6 §), so only a verifikat of the row's own day can hold it: a
+ * later hand-entered verifikat on 1930 is, in production, nearly always
+ * another payment. A payment provider's account (1686 Stripe, a card
+ * clearing account) is booked per week or per month instead, by hand or in
+ * the old system, and dated at the period's end or early in the next month
+ * (seen: "Stripe försäljning augusti" dated 4 September), so a verifikat up
+ * to the end of the month after the row's month can hold it. Löpande
+ * bokföring of a non-cash event is due in the month after it (BFL 5 kap.
+ * 2 §), which bounds the window.
+ */
+export function coveringVoucherWindowEnd(rowDate: string, settlementAccount: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(rowDate)
+  if (!match) return null
+  if (isBankRangeAccount(settlementAccount)) return rowDate
+  // Day 0 of the month after next is the last day of the next month.
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) + 1, 0)).toISOString().slice(0, 10)
+}
+
+/**
+ * Which verifikat count as a samlingsverifikat entered outside the feed. On a
+ * bank account only a hand-entered one: an imported (SIE) verifikat on 1930
+ * is the old system's booking of one movement, and counting it flagged 20
+ * legitimate bookings in 60 days of prod. On a payment provider's account an
+ * imported verifikat is the old system's period summary (seen: monthly
+ * Stripe sales on 1686) and counts too.
+ */
+export function coveringVoucherSourceTypes(settlementAccount: string): readonly string[] {
+  return isBankRangeAccount(settlementAccount) ? ['manual'] : ['manual', 'import']
+}
+
+/** One line on the row's account of a verifikat that may cover the row. */
+export interface CoveringVoucherLine {
+  debit_amount: number | string
+  credit_amount: number | string
+  journal_entry: {
+    id: string
+    entry_date: string
+    description: string | null
+    voucher_series: string | null
+    voucher_number: number | null
+  }
+}
+
+/**
+ * Pure: the verifikat among `lines` (all on the row's account, inside the
+ * window) whose part in the row's direction that no transaction holds is at
+ * least the row's amount. The earliest such verifikat wins (the period the
+ * row most likely belongs to), then the lowest id, so a force re-detect
+ * returns the candidate the user reviewed.
+ */
+export function pickCoveringVoucher(
+  row: { amountSek: number },
+  lines: readonly CoveringVoucherLine[],
+  heldByEntry: ReadonlyMap<string, number>,
+): { entry: CoveringVoucherLine['journal_entry']; facts: CoveringVoucherFacts } | null {
+  const inbound = row.amountSek > 0
+  const magnitude = roundOre(Math.abs(row.amountSek))
+  if (magnitude === 0) return null
+  const bookedByEntry = new Map<string, { entry: CoveringVoucherLine['journal_entry']; booked: number }>()
+  for (const line of lines) {
+    const amount = Number(inbound ? line.debit_amount : line.credit_amount)
+    if (!Number.isFinite(amount) || amount <= 0) continue
+    const slot = bookedByEntry.get(line.journal_entry.id)
+    if (slot) slot.booked += amount
+    else bookedByEntry.set(line.journal_entry.id, { entry: line.journal_entry, booked: amount })
+  }
+  const fitting: { entry: CoveringVoucherLine['journal_entry']; facts: CoveringVoucherFacts }[] = []
+  for (const { entry, booked } of bookedByEntry.values()) {
+    const held = roundOre(heldByEntry.get(entry.id) ?? 0)
+    const unlinked = roundOre(booked - held)
+    if (magnitude <= unlinked + BANK_LEG_ROOM_TOLERANCE) {
+      fitting.push({ entry, facts: { booked: roundOre(booked), held, unlinked } })
+    }
+  }
+  fitting.sort((a, b) =>
+    a.entry.entry_date !== b.entry.entry_date
+      ? a.entry.entry_date.localeCompare(b.entry.entry_date)
+      : a.entry.id.localeCompare(b.entry.id),
+  )
+  return fitting[0] ?? null
+}
+
+/**
+ * Third half of the booking-time guard (issue #101, crm#1386): a bank or feed
+ * row whose day a samlingsverifikat entered outside the feed already holds.
+ *
+ * A company that kept its Stripe sales (or a day's Swish) as one hand-entered
+ * verifikat, and later connected the feed or fetched older rows with "Hämta
+ * ändå", has those sales twice: once in the samlingsverifikat and once as
+ * unbooked rows. Booking a row then books the sale a second time (felaktig
+ * bokföring, BFL 5 kap. 1-2 §). The other two halves cannot see it: no
+ * sibling row is booked, and the samlingsverifikat books the period's sum,
+ * not the row's amount.
+ *
+ * The rule, the same for every door: a posted verifikat of the kinds in
+ * coveringVoucherSourceTypes, on the row's settlement account, dated inside
+ * [row day, coveringVoucherWindowEnd], that books the account in the row's
+ * direction and still has at least the row's amount that no transaction is
+ * linked to (the voucher-bank-leg holders: pointers and bank_line slices).
+ * A verifikat whose part is fully held by linked rows does not hold this row
+ * (seen: an agent bulk-booked each day's Stripe rows into one verifikat and
+ * booked the other rows of the same days separately; none of those was a
+ * double booking). The candidate is a warning like the other halves: the
+ * user links the row to it, ignores the row, or books anyway with force
+ * bound to it.
+ *
+ * Silent (null) for a row without a settlement account, a non-SEK row (the
+ * held amounts are compared in kronor), a zero row, and on any read error: a
+ * failed check never blocks a booking.
+ */
+export async function detectCoveringVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  target: BookingTarget,
+  opts?: BookingDuplicateExclusions,
+): Promise<BookedDuplicateCandidate | null> {
+  try {
+    if (!isKronorCurrency(target.currency)) return null
+    const amountSek = roundOre(Number(target.amount))
+    if (!Number.isFinite(amountSek) || amountSek === 0) return null
+    const resolved = await withSettlementAccount(supabase, companyId, target)
+    const account = resolved.settlement_account?.trim() || null
+    if (!account || !isAccountNumber(account)) return null
+    const windowEnd = coveringVoucherWindowEnd(target.date, account)
+    if (!windowEnd) return null
+    const amountColumn = amountSek > 0 ? 'debit_amount' : 'credit_amount'
+    const sourceTypes = [...coveringVoucherSourceTypes(account)]
+    const excluded = new Set(opts?.excludeJournalEntryIds ?? [])
+
+    const lines = (
+      await fetchEntryLines<CoveringVoucherLine>({
+        supabase,
+        entryColumns: 'id, entry_date, description, voucher_series, voucher_number',
+        lineColumns: 'debit_amount, credit_amount',
+        filterEntries: (q: EntryLinesQuery) =>
+          q
+            .eq('company_id', companyId)
+            .eq('status', 'posted')
+            .in('source_type', sourceTypes)
+            .gte('entry_date', target.date)
+            .lte('entry_date', windowEnd),
+        filterLines: (q: EntryLinesQuery) => q.eq('account_number', account).gt(amountColumn, 0),
+        attachEntriesAs: 'journal_entry',
+      })
+    ).filter((l) => l.journal_entry && !excluded.has(l.journal_entry.id))
+    if (lines.length === 0) return null
+
+    const entryIds = [...new Set(lines.map((l) => l.journal_entry.id))]
+    const read = await readBankLegHolders(supabase, companyId, entryIds, [target.id])
+    if (!read.ok) return null
+    const heldByEntry = new Map<string, number>()
+    for (const id of entryIds) {
+      const onAccount = holdersOnAccount(read.holders.get(id) ?? [], {
+        cashAccountId: target.cash_account_id ?? null,
+        currency: 'SEK',
+      })
+      let held = 0
+      for (const h of onAccount) {
+        if (amountSek > 0 ? h.amount > 0 : h.amount < 0) held += Math.abs(h.amount)
+      }
+      heldByEntry.set(id, held)
+    }
+
+    const pick = pickCoveringVoucher({ amountSek }, lines, heldByEntry)
+    if (!pick) return null
+    const { entry, facts } = pick
+    return {
+      transaction_id: null,
+      journal_entry_id: entry.id,
+      voucher_label: formatVoucher(entry),
+      entry_date: entry.entry_date,
+      description: entry.description,
+      amount: facts.booked,
+      account_number: account,
+      currency: null,
+      amount_in_currency: null,
+      amount_verified: true,
+      unverified_reason: null,
+      covering: facts,
+    }
+  } catch (err) {
+    log.warn('covering voucher probe failed: no covering warning shown', err)
+    return null
+  }
+}
+
+/**
  * Unified booking-time duplicate guard. Returns the single best already-booked
  * candidate for this bank line: a sibling transaction first (the cheaper,
- * higher-confidence signal), then a ledger-only voucher. Null when neither
- * fires. This is the function every booking chokepoint should call (web /book +
- * /categorize routes and the agent commit executors) so all paths reject the
- * same double-bookings.
+ * higher-confidence signal), then a ledger-only voucher that books the same
+ * movement, then a samlingsverifikat that holds the row's day
+ * (detectCoveringVoucher). Null when none fires. This is the function every
+ * booking chokepoint should call (web /book + /categorize routes, bulk book
+ * and the agent commit executors) so all paths reject the same
+ * double-bookings.
  */
 export async function detectBookingDuplicate(
   supabase: SupabaseClient,
@@ -796,5 +1182,9 @@ export async function detectBookingDuplicate(
 ): Promise<BookedDuplicateCandidate | null> {
   const sibling = await detectBookedDuplicateTransaction(supabase, companyId, target, opts)
   if (sibling) return sibling
-  return detectLedgerDuplicateVoucher(supabase, companyId, target, opts)
+  // Both ledger halves judge the row on its settlement account: read it once.
+  const resolved = await withSettlementAccount(supabase, companyId, target)
+  const twin = await detectLedgerDuplicateVoucher(supabase, companyId, resolved, opts)
+  if (twin) return twin
+  return detectCoveringVoucher(supabase, companyId, resolved, opts)
 }

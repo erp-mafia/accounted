@@ -2,14 +2,11 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { getAttachmentRow } from '@/lib/reconciliation/attachments-store'
 import { downloadUnderlag, ReconciliationAttachmentError, removeUnderlag } from '@/lib/reconciliation/attachments'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
 
 const UUID = z.string().uuid()
 
@@ -38,12 +35,12 @@ export const GET = withRouteContext<{ params: Promise<{ accountKey: string; atta
       log.error('underlag download failed', error, { companyId, accountKey, attachmentId })
       return NextResponse.json({ error: 'Kunde inte hämta underlaget. Försök igen om en stund.' }, { status: 500 })
     }
-    return new NextResponse(blob, {
-      status: 200,
+    return fileResponse(blob, {
+      filename: row.file_name,
+      contentType: row.mime_type,
+      disposition: 'inline',
+      cacheControl: 'private, no-store',
       headers: {
-        'Content-Type': row.mime_type,
-        'Content-Disposition': contentDisposition('inline', row.file_name),
-        'Cache-Control': 'private, no-store',
         'X-Content-Type-Options': 'nosniff',
       },
     })

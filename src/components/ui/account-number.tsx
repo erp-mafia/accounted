@@ -91,8 +91,10 @@ export function AccountNumber({
         <TooltipTrigger asChild>
           <span
             className={cn(
-              'inline-flex items-center gap-1 cursor-help',
-              'decoration-dotted underline underline-offset-4 decoration-muted-foreground/40',
+              // Baseline: a name that wraps (a narrow voucher table) keeps
+              // the number on its first line instead of centered beside it.
+              'inline-flex items-baseline gap-1 cursor-help',
+              'decoration-dotted underline underline-offset-4 decoration-foreground/25',
             )}
           >
             <span

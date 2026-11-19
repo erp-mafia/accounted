@@ -1,3 +1,4 @@
+import { roundOre } from '@/lib/money'
 import type { SalaryLineItemType } from '@/types'
 
 /**
@@ -22,8 +23,15 @@ export function isTaxFreeReimbursementType(itemType: string): boolean {
   return (TAX_FREE_REIMBURSEMENT_TYPES as readonly string[]).includes(itemType)
 }
 
-/** Default BAS account for each salary line item type */
-const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
+/**
+ * A line type that books money. A text row (item_type 'text',
+ * lib/salary/text-rows.ts) carries words only and never reaches the
+ * booking, so it has no account.
+ */
+export type MoneyLineItemType = Exclude<SalaryLineItemType, 'text'>
+
+/** Default BAS account for each salary line item type that books money. */
+const LINE_ITEM_ACCOUNTS: Record<MoneyLineItemType, string> = {
   // Salary components
   monthly_salary: '7210',
   hourly_salary: '7210',
@@ -71,10 +79,9 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   // third party, so the default account is the credit-side settlement account,
   // not a 7xxx salary expense. Advance repayments credit the receivable (1613),
   // union fees credit 2794, everything unmapped lands on 2799 Övriga
-  // löneavdrag. There is a single benefit-payment item type, so its default
-  // credits 7385 Kostnader för fri bil, the dominant co-payment case;
-  // co-payments for other benefit kinds must set account_number on the line
-  // (7381/7382/7388/7389/7699).
+  // löneavdrag. A benefit payment that names its benefit credits that
+  // benefit's cost account (netDeductionAccount below); an unnamed one keeps
+  // 7385 Kostnader för fri bil, the dominant co-payment case.
   net_deduction_advance: '1613',
   net_deduction_union: '2794',
   net_deduction_benefit_payment: '7385',
@@ -87,39 +94,151 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   other: '7210',
 }
 
-/**
- * Get the BAS account number for a salary line item type.
- * Can be overridden per line item via account_number field.
- */
-export function getLineItemAccount(
-  itemType: SalaryLineItemType,
-  employmentType: string = 'employee'
-): string {
-  // Company owner uses 7220 instead of 7210
-  if (employmentType === 'company_owner') {
-    const baseAccount = LINE_ITEM_ACCOUNTS[itemType]
-    if (baseAccount === '7210') return '7220'
-    if (baseAccount === '7281') return '7282'
-    if (baseAccount === '7285') return '7286'
-  }
+/** The item types the account map covers: every type that books money. */
+export const SALARY_LINE_ITEM_TYPES = Object.keys(LINE_ITEM_ACCOUNTS) as MoneyLineItemType[]
 
-  // Board member uses 7240
-  if (employmentType === 'board_member') {
-    const baseAccount = LINE_ITEM_ACCOUNTS[itemType]
-    if (baseAccount === '7210') return '7240'
-  }
+/**
+ * The item type's account before any employee context: the tjänsteman
+ * account for wage types, the fixed account for everything else. For callers
+ * with no employee (the mileage register's tax-free account); a payslip line
+ * resolves through lineItemAccount.
+ */
+export function baseLineItemAccount(itemType: MoneyLineItemType): string {
   return LINE_ITEM_ACCOUNTS[itemType]
+}
+
+/** Who a salary line is booked for: the inputs of the account resolver. */
+export interface SalaryAccountContext {
+  employmentType: string
+  /** employees.personnel_category (PersonnelCategory): arbetare book the 70xx
+   *  series, tjänstemän 72xx (bas-7xxx.md). Read only for employment_type
+   *  'employee'; missing reads tjänsteman. */
+  personnelCategory?: string | null
+}
+
+// Company owners: företagsledare accounts (7220 löner, 7282 sjuklöner,
+// 7286 semesterlöner).
+const OWNER_ACCOUNTS: Record<string, string> = { '7210': '7220', '7281': '7282', '7285': '7286' }
+// Board members: styrelsearvoden.
+const BOARD_ACCOUNTS: Record<string, string> = { '7210': '7240' }
+// Arbetare: the kollektivanställda series. OB and övertid follow the base
+// wage account (ob-overtime.md), so they land on 7010 with it.
+const ARBETARE_ACCOUNTS: Record<string, string> = {
+  '7210': '7010',
+  '7218': '7018',
+  '7281': '7081',
+  '7285': '7082',
+}
+
+/**
+ * The account a payslip line books on when it carries no override.
+ *
+ * salary_line_items.account_number is an explicit override only: NULL means
+ * this default, resolved at booking, so a line follows its item type and the
+ * employee's current employment type and category until the run is booked.
+ * Rules in order: owners book on the företagsledare accounts, board members
+ * on 7240, arbetare on the 70xx series, everyone else on the item type's
+ * base account. Owners and board members ignore the category.
+ */
+export function lineItemAccount(itemType: MoneyLineItemType, ctx: SalaryAccountContext): string {
+  const base = LINE_ITEM_ACCOUNTS[itemType]
+  if (ctx.employmentType === 'company_owner') return OWNER_ACCOUNTS[base] ?? base
+  if (ctx.employmentType === 'board_member') return BOARD_ACCOUNTS[base] ?? base
+  if (ctx.personnelCategory === 'arbetare') return ARBETARE_ACCOUNTS[base] ?? base
+  return base
+}
+
+/**
+ * The account a net deduction row books on when it carries no override. A
+ * benefit payment that names its benefit (salary_line_items.benefit_type,
+ * crm#1492) lowers the cost of THAT benefit: bostad 7381, kost 7382, bil
+ * 7385 (bas-7xxx.md), the account the benefit row itself maps to. Unnamed,
+ * it keeps the item type's 7385.
+ */
+export function netDeductionAccount(
+  itemType: MoneyLineItemType,
+  benefitType: string | null | undefined,
+  ctx: SalaryAccountContext,
+): string {
+  const benefitItemType = `benefit_${benefitType}`
+  if (itemType === 'net_deduction_benefit_payment' && benefitType && Object.hasOwn(LINE_ITEM_ACCOUNTS, benefitItemType)) {
+    return lineItemAccount(benefitItemType as MoneyLineItemType, ctx)
+  }
+  return lineItemAccount(itemType, ctx)
+}
+
+/**
+ * Whether a stored line account is a default the old code cached on the line
+ * rather than a deliberate override: the item type's base account (what the
+ * write sites without an employment type stored) or the owner/board account
+ * for that employment type. Utlägg lines carry the claim's liability
+ * account, never a cached default. The backfill migration
+ * (20261015010000_salary_line_default_accounts_resolved_at_booking.sql)
+ * applies the same rule in SQL; a vitest pins the two together.
+ */
+export function isCachedDefaultAccount(
+  itemType: string,
+  account: string | null | undefined,
+  employmentType: string,
+): boolean {
+  if (!account || itemType === 'expense_reimbursement') return false
+  if (!Object.hasOwn(LINE_ITEM_ACCOUNTS, itemType)) return false
+  const type = itemType as MoneyLineItemType
+  return (
+    account === baseLineItemAccount(type) ||
+    account === lineItemAccount(type, { employmentType, personnelCategory: 'tjansteman' })
+  )
+}
+
+/** Förändring av semesterlöneskuld: 7090 kollektivanställda, 7290 tjänstemän. */
+export type VacationLiabilityChangeAccount = '7090' | '7290'
+
+/**
+ * Förändring av semesterlöneskuld for one employee: 7090 for arbetare, 7290
+ * for tjänstemän, owners and board members (vacation-pay.md), the same rule
+ * as the wage account (an employee whose wages book on 7010 is an arbetare).
+ * The run's semesteravsättning, the vacation-year close and the bokslut
+ * accrual all read it here.
+ */
+export function vacationLiabilityChangeAccount(ctx: SalaryAccountContext): VacationLiabilityChangeAccount {
+  return lineItemAccount('monthly_salary', ctx) === '7010' ? '7090' : '7290'
+}
+
+/**
+ * Split a change of the vacation liability over the employees' 7090/7290
+ * accounts, pro rata by each employee's liability. Every part is rounded to
+ * öre and the largest part absorbs the rounding, so the parts sum to `amount`
+ * exactly and the 2920 counter line stays one line. Without any positive
+ * liability to weigh by (a drift with nothing owed) the split falls back to
+ * headcount, and with no employees at all to 7290.
+ */
+export function splitVacationLiabilityChange(
+  employees: Array<{ account: VacationLiabilityChangeAccount; liability: number }>,
+  amount: number,
+): Array<{ account: VacationLiabilityChangeAccount; amount: number }> {
+  const total = roundOre(amount)
+  if (total === 0) return []
+  const byLiability = new Map<VacationLiabilityChangeAccount, number>()
+  const byHeadcount = new Map<VacationLiabilityChangeAccount, number>()
+  for (const emp of employees) {
+    byLiability.set(emp.account, (byLiability.get(emp.account) ?? 0) + Math.max(0, emp.liability))
+    byHeadcount.set(emp.account, (byHeadcount.get(emp.account) ?? 0) + 1)
+  }
+  const weights = [...byLiability.values()].some((w) => w > 0) ? byLiability : byHeadcount
+  const weighted = [...weights.entries()].filter(([, w]) => w > 0)
+  if (weighted.length === 0) return [{ account: '7290', amount: total }]
+  const weightSum = weighted.reduce((sum, [, w]) => sum + w, 0)
+  const parts = weighted
+    .sort(([, a], [, b]) => b - a)
+    .map(([account, w]) => ({ account, amount: roundOre((total * w) / weightSum) }))
+  parts[0].amount = roundOre(parts[0].amount + total - parts.reduce((sum, p) => sum + p.amount, 0))
+  return parts
+    .filter((p) => p.amount !== 0)
+    .sort((a, b) => a.account.localeCompare(b.account))
 }
 
 /** Journal entry accounts for salary booking */
 export const SALARY_ACCOUNTS = {
-  // Salary expense (debit)
-  SALARY_EMPLOYEE: '7210',    // Löner till tjänstemän
-  SALARY_OWNER: '7220',       // Löner till företagsledare
-  SALARY_BOARD: '7240',       // Styrelsearvoden
-  SICK_PAY: '7281',           // Sjuklöner
-  VACATION_PAY: '7285',       // Semesterlöner
-
   // Tax withholding (credit)
   TAX_WITHHELD: '2710',       // Personalskatt
 
@@ -134,8 +253,8 @@ export const SALARY_ACCOUNTS = {
   // (hela kronor, öretal bortfaller), the öre difference lands here.
   ORESUTJAMNING: '3740',      // Öres- och kronutjämning (credit)
 
-  // Vacation accrual
-  VACATION_ACCRUAL_EXPENSE: '7290',   // Förändring semesterlöneskuld (debit)
+  // Vacation accrual. The expense side is per employee
+  // (vacationLiabilityChangeAccount: 7090 arbetare, 7290 everyone else).
   VACATION_ACCRUAL_LIABILITY: '2920', // Upplupna semesterlöner (credit)
 
   // Vacation accrual avgifter

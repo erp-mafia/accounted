@@ -33,6 +33,34 @@ function boundToolResult(raw: string): string {
   return `${head}\n\n[avkortat: resultatet var ${raw.length} tecken, visar de första ${MAX_TOOL_RESULT_CHARS}. Be om en smalare sökning (limit, datumintervall, specifikt id eller fält) för att se mer.]`
 }
 
+// The user-turn text of the final no-tools turn. Without it the model gets a
+// transcript that ends on tool results (or on a turn it already ended without
+// text) and nothing that says "answer now", so the forced turn can come back
+// empty too. Anthropic's stop-reason guide for an empty end_turn says exactly
+// this: add a continuation prompt as a new user message, never resend the
+// request unchanged (the model already decided it was done). Text after tool
+// results is only harmful as a recurring pattern in the history; here it
+// closes the conversation.
+const FINAL_ANSWER_REQUEST =
+  'Answer the question now, in plain text, from what you have already gathered. Do not call any more tools. If that is not enough to answer, say what is missing. Keep to the reply language your instructions set.'
+
+/**
+ * The transcript plus the final answer request. Appended to the closing user
+ * turn (tool results, or the question itself): the API merges consecutive
+ * user messages into one turn anyway, and one explicit turn is valid on every
+ * backend.
+ */
+function withFinalAnswerRequest(
+  messages: Anthropic.Messages.MessageParam[],
+): Anthropic.Messages.MessageParam[] {
+  const ask: Anthropic.Messages.TextBlockParam = { type: 'text', text: FINAL_ANSWER_REQUEST }
+  const last = messages[messages.length - 1]
+  if (last?.role !== 'user') return [...messages, { role: 'user', content: [ask] }]
+  const blocks: Anthropic.Messages.ContentBlockParam[] =
+    typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content
+  return [...messages.slice(0, -1), { role: 'user', content: [...blocks, ask] }]
+}
+
 const EMPTY_USAGE: AiUsage = {
   inputTokens: 0,
   outputTokens: 0,
@@ -67,6 +95,39 @@ function addUsage(a: AiUsage, b: AiUsage): AiUsage {
   }
 }
 
+// The 5-minute cache both backends keep. No ttl: Bedrock ignores the longer
+// one (lib/agent/composer/client.ts), and an entry only has to outlive the
+// tool loop that wrote it or the next question a few minutes later.
+const CACHE_MARK = { type: 'ephemeral' as const }
+
+/**
+ * The system prompt as one cached block. Tools render before it, so the mark
+ * covers the tool definitions too: one prefix for every caller that sends the
+ * same tools and the same prompt.
+ */
+function cachedSystem(system: string): Anthropic.Messages.TextBlockParam[] {
+  return [{ type: 'text', text: system, cache_control: CACHE_MARK }]
+}
+
+/**
+ * The transcript with a cache mark on the last block of its last message, on
+ * a copy: the transcript itself stays unmarked, so a tool loop moves one mark
+ * forward turn by turn and never collects more than the four a request may
+ * carry. Each turn then reads what the turn before it sent.
+ */
+function withCacheMark(messages: Anthropic.Messages.MessageParam[]): Anthropic.Messages.MessageParam[] {
+  const last = messages[messages.length - 1]
+  if (!last) return messages
+  const blocks: Anthropic.Messages.ContentBlockParam[] =
+    typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : [...last.content]
+  const tail = blocks[blocks.length - 1]
+  // Only the blocks this service itself puts last: the prompt text and tool results.
+  if (!tail || (tail.type !== 'text' && tail.type !== 'tool_result')) return messages
+  if (tail.type === 'text' && tail.text.length === 0) return messages
+  blocks[blocks.length - 1] = { ...tail, cache_control: CACHE_MARK }
+  return [...messages.slice(0, -1), { ...last, content: blocks }]
+}
+
 /**
  * The Anthropic family (AWS Bedrock and the direct API) behind the job-shaped
  * interface. Delegates to the existing client factory and builds the EXACT
@@ -99,6 +160,14 @@ function textOf(resp: { content: Array<{ type: string; text?: string }> }): stri
     .trim()
 }
 
+/** How the last turn ended, for the caller: cut off at max_tokens, and the raw reason for logs. */
+function endOf(resp: { stop_reason?: string | null }): Pick<GenerateTextResult, 'truncated' | 'stopReason'> {
+  return {
+    ...(resp.stop_reason === 'max_tokens' ? { truncated: true as const } : {}),
+    ...(resp.stop_reason ? { stopReason: resp.stop_reason } : {}),
+  }
+}
+
 /** User content blocks for one document + trailing instruction. Same literals the inbox extractor sent. */
 export function buildAnthropicDocumentContent(
   document: AiDocumentInput,
@@ -129,8 +198,8 @@ export function buildAnthropicDocumentContent(
 
 export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
   let client: AiClient | null = null
-  const getClient = (): AiClient => {
-    if (!client) client = createAiClient()
+  const getClient = async (): Promise<AiClient> => {
+    if (!client) client = await createAiClient()
     return client
   }
   const modelFor = (tier: AiTier): string =>
@@ -145,6 +214,27 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
 
     async generateText(req: GenerateTextRequest): Promise<GenerateTextResult> {
       const model = modelFor(req.tier)
+      // A request option, never a body field: the request on the wire is unchanged.
+      const options = req.signal ? { signal: req.signal } : undefined
+
+      // The opt-in parts of a request (types.ts: effort, cachePrompt,
+      // onProgress). A caller that sets none of them sends exactly the
+      // literals below, as before they existed.
+      const system = req.system ? (req.cachePrompt ? cachedSystem(req.system) : req.system) : undefined
+      const effort = req.effort ? { output_config: { effort: req.effort } } : {}
+      const marked = (messages: Anthropic.Messages.MessageParam[]) =>
+        req.cachePrompt ? withCacheMark(messages) : messages
+      // One model turn. With onProgress the same request is streamed and its
+      // text handed on as it arrives; the assembled message is what the loop
+      // reads either way, so both paths decide alike.
+      const onProgress = req.onProgress
+      const send = async (params: MessageCreateParams): Promise<Anthropic.Messages.Message> => {
+        const client = await getClient()
+        if (!onProgress) return client.messages.create(params, options)
+        const stream = client.messages.stream(params, options)
+        stream.on('text', (delta) => onProgress({ type: 'text', delta }))
+        return stream.finalMessage()
+      }
 
       // Fast path (unchanged: keeps hosted byte-identical for every non-tool
       // caller, which is all of them today): one turn, no tools.
@@ -152,11 +242,12 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         const params: MessageCreateParams = {
           model,
           max_tokens: req.maxTokens,
-          ...(req.system ? { system: req.system } : {}),
+          ...(system ? { system } : {}),
+          ...effort,
           messages: messagesFor(req.prompt, req.history),
         }
-        const resp = await getClient().messages.create(params)
-        return { text: textOf(resp), model, usage: usageOf(resp) }
+        const resp = await send(params)
+        return { text: textOf(resp), model, usage: usageOf(resp), ...endOf(resp) }
       }
 
       // Bounded read-only tool loop. The same dispatch shape run-turn.ts uses,
@@ -171,24 +262,47 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
       const messages: Anthropic.Messages.MessageParam[] = messagesFor(req.prompt, req.history)
       const maxSteps = req.maxSteps ?? DEFAULT_MAX_STEPS
       let usage = EMPTY_USAGE
+      let forcedFinal: 'step_limit' | 'no_text' = 'step_limit'
 
       for (let step = 0; step < maxSteps; step++) {
-        const resp = await getClient().messages.create({
+        const resp = await send({
           model,
           max_tokens: req.maxTokens,
-          ...(req.system ? { system: req.system } : {}),
+          ...(system ? { system } : {}),
+          ...effort,
           tools,
-          messages,
+          messages: marked(messages),
         })
         usage = addUsage(usage, usageOf(resp))
-        if (resp.stop_reason !== 'tool_use') {
-          return { text: textOf(resp), model, usage }
+        const toolUses = resp.content.filter(
+          (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
+        )
+        // Tool calls, complete or cut off: whatever text this turn streamed
+        // was a remark before them, never the answer.
+        if (toolUses.length > 0) onProgress?.({ type: 'tools', names: toolUses.map((b) => b.name) })
+
+        if (resp.stop_reason !== 'tool_use' || toolUses.length === 0) {
+          // A tool call cut off at max_tokens has incomplete input: never run
+          // it, and its text is at most a preamble ("Jag hämtar..."), not an
+          // answer. Any other turn's text is the answer, cut off or not.
+          const text = toolUses.length > 0 ? '' : textOf(resp)
+          // A refusal is the model's answer: never re-ask around it.
+          if (text || resp.stop_reason === 'refusal') {
+            return { text, model, usage, ...endOf(resp) }
+          }
+          // No visible text: an end_turn with nothing in it, or a turn whose
+          // whole max_tokens budget went to (empty-text) thinking blocks or to
+          // the cut-off tool call. Returning '' here was the "Assistenten gav
+          // inget svar" bug. The turn is dropped (its blocks cannot be replayed:
+          // a cut-off tool_use has no result) and the model is asked for the
+          // answer below.
+          forcedFinal = 'no_text'
+          break
         }
 
         messages.push({ role: 'assistant', content: resp.content })
         const results: Anthropic.Messages.ContentBlockParam[] = []
-        for (const block of resp.content) {
-          if (block.type !== 'tool_use') continue
+        for (const block of toolUses) {
           const def = byName.get(block.name)
           let content: string
           let isError = false
@@ -214,20 +328,29 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         messages.push({ role: 'user', content: results })
       }
 
-      // Spent the step budget without a final answer: force one more turn that
-      // cannot call tools. The tools param MUST stay in the request: the
-      // transcript above holds tool_use/tool_result blocks, and the Messages
-      // API rejects a request that replays those without declaring the tools
-      // they refer to. tool_choice none is the sanctioned "answer in text" knob.
-      const final = await getClient().messages.create({
+      // No answer yet (step budget spent, or a turn without visible text):
+      // force one more turn that cannot call tools and is told to answer. The
+      // tools param MUST stay in the request: the transcript above holds
+      // tool_use/tool_result blocks, and the Messages API rejects a request
+      // that replays those without declaring the tools they refer to.
+      // tool_choice none is the sanctioned "answer in text" knob. One turn
+      // only: if this one is empty too, the caller fails it honestly.
+      const final = await send({
         model,
         max_tokens: req.maxTokens,
-        ...(req.system ? { system: req.system } : {}),
+        ...(system ? { system } : {}),
+        ...effort,
         tools,
         tool_choice: { type: 'none' },
-        messages,
+        messages: marked(withFinalAnswerRequest(messages)),
       })
-      return { text: textOf(final), model, usage: addUsage(usage, usageOf(final)) }
+      return {
+        text: textOf(final),
+        model,
+        usage: addUsage(usage, usageOf(final)),
+        ...endOf(final),
+        forcedFinal,
+      }
     },
 
     async generateStructured(req: GenerateStructuredRequest): Promise<GenerateStructuredResult> {
@@ -243,17 +366,21 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
             name: req.schema.name,
             ...(req.schema.description ? { description: req.schema.description } : {}),
             input_schema: req.schema.jsonSchema as Anthropic.Messages.Tool['input_schema'],
+            // Opt-in per caller, so every other request stays byte-identical on the wire.
+            ...(req.schema.strict ? { strict: true } : {}),
           },
         ],
         tool_choice: { type: 'tool', name: req.schema.name },
         messages: [{ role: 'user', content: req.prompt }],
       }
-      const resp = await getClient().messages.create(params)
+      const resp = await (await getClient()).messages.create(params, req.signal ? { signal: req.signal } : undefined)
       const toolUse = resp.content.find(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use' && b.name === req.schema.name
       )
       if (!toolUse) {
-        throw new Error(`Model answered without the forced tool "${req.schema.name}"`)
+        // The stop reason tells a safety refusal (Haiku 5.5 declines some
+        // requests and has no server-side fallback) from a cut-off answer.
+        throw new Error(`Model answered without the forced tool "${req.schema.name}" (stop_reason: ${resp.stop_reason ?? 'unknown'})`)
       }
       return { value: toolUse.input, model, usage: usageOf(resp) }
     },
@@ -271,7 +398,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: buildAnthropicDocumentContent(req.document, req.instruction) }],
       }
-      const resp = await getClient().messages.create(params)
+      const resp = await (await getClient()).messages.create(params, req.signal ? { signal: req.signal } : undefined)
       return {
         ok: true,
         text: textOf(resp),

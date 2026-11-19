@@ -20,6 +20,8 @@
  * Skill interface and bodies migrate without changes.
  */
 
+import type { Creator } from '@/lib/attribution/person-names'
+
 export type SkillTier = 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'community' | 'own'
 
 /**
@@ -53,6 +55,8 @@ export interface Skill {
   source?: 'accounted' | 'community' | 'own'
   /** For own items: a flow, knowledge or an analysis. */
   itemKind?: 'workflow' | 'rules' | 'analysis'
+  /** For own items, when the caller asked for it: who saved it (never an e-mail). */
+  createdBy?: Creator | null
   /** URL-safe id, used in tool args and resource URIs. Workflow skills use a
    *  flat slug ("month-end-close"); atoms use their tier-prefixed registry id
    *  ("vertical/konsult-it"). */

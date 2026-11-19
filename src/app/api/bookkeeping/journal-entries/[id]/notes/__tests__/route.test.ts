@@ -71,6 +71,20 @@ describe('PATCH /api/bookkeeping/journal-entries/[id]/notes', () => {
     expect(body.error.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
   })
 
+  it('returns 409 with a sentence about the note when the period is closed or locked (crm#1234)', async () => {
+    enqueue({
+      data: null,
+      error: { code: 'P0001', message: 'Cannot write to locked/closed fiscal period "Räkenskapsår 2024" (is_closed=t, locked_at=<NULL>)' },
+    })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await patch({ notes: 'En anteckning' })
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('JOURNAL_ENTRY_NOTE_PERIOD_LOCKED')
+    expect(body.error.message).toBe('Perioden är stängd eller låst, anteckningen kan inte ändras.')
+  })
+
   it('updates the note on the happy path', async () => {
     enqueue({ data: { id: 'entry-1' } })
 

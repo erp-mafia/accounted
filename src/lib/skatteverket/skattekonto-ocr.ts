@@ -9,12 +9,12 @@
  * Format (per Skatteverket "Referensnummer (OCR) för inbetalning till
  * skattekonto"):
  *   - The person-, samordnings- or organisationsnummer in its TWELVE-digit
- *     form: an organisationsnummer carries the "16" prefix (5595470021 →
- *     165595470021), a personnummer its century (880225-1234 → 198802251234)
+ *     form: an organisationsnummer carries the "16" prefix (5544668808 →
+ *     165544668808), a personnummer its century (880225-1234 → 198802251234)
  *   - Followed by a single Luhn check digit
  *   - Total: 13 digits
  *
- * Example: 559547-0021 → "165595470021" + check digit "7" = "1655954700217"
+ * Example: 554466-8808 → "165544668808" + check digit "7" = "1655446688087"
  *
  * The twelve-digit form is the same "redovisare" identity the AGI and moms
  * APIs take, so it is built with the shared `toRedovisare12` converter rather
@@ -44,10 +44,11 @@ const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
  * Compute the Skattekontot OCR reference for a company.
  *
  * Accepts org_number/personnummer in any common Swedish format
- * ("556012-3456", "5560123456", "19880225-1234", "198802251234"); a value
- * already in twelve-digit form passes through the century step untouched.
+ * ("556012-3456", "5560123456", "19880225-1234", "198802251234"); a stored
+ * century is kept.
  *
- * @throws when the input is not 10 or 12 digits after separators are stripped.
+ * @throws {FilingIdentityError} when the number does not fit the legal form:
+ * 16 in front of a birth date is a valid reference for nobody.
  */
 export function generateSkattekontoOcr(
   orgOrPersonnummer: string,
@@ -106,4 +107,29 @@ async function readReportedOcr(
   if (digits.length < 2 || digits.length > 25) return null
 
   return luhnValidate(digits) ? digits : null
+}
+
+/**
+ * The saldo Skatteverket last reported for the skattekonto (positive = money
+ * on the account), from the same snapshot, with when it was fetched; null
+ * without a snapshot or a readable saldo. Information for a person deciding
+ * what to pay in: nothing is netted against it.
+ */
+export async function readReportedSkattekontoSaldo(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<{ saldo: number; fetched_at: string | null } | null> {
+  const { data, error } = await supabase
+    .from('extension_data')
+    .select('value')
+    .eq('company_id', companyId)
+    .eq('extension_id', SKATTEVERKET_EXTENSION_ID)
+    .eq('key', BALANCE_SNAPSHOT_KEY)
+    .maybeSingle()
+  if (error || !data?.value) return null
+  const value = data.value as { saldo?: { saldoSkatteverket?: unknown }; fetchedAt?: unknown }
+  const saldo = Number(value.saldo?.saldoSkatteverket)
+  if (value.saldo?.saldoSkatteverket === null || value.saldo?.saldoSkatteverket === undefined || !Number.isFinite(saldo)) return null
+  const fetchedAt = typeof value.fetchedAt === 'number' ? new Date(value.fetchedAt).toISOString() : null
+  return { saldo, fetched_at: fetchedAt }
 }

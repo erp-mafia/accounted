@@ -11,7 +11,7 @@ vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: registryGet },
 }))
 
-import { hasSkatteverketOmbudReadAccess, isSkatteverketOmbudEnabled } from '../ombud-access'
+import { getSkatteverketOmbudAppointment, hasSkatteverketOmbudReadAccess, isSkatteverketOmbudEnabled } from '../ombud-access'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -57,5 +57,18 @@ describe('ombud access through the extension services', () => {
     })
     expect(await isSkatteverketOmbudEnabled()).toBe(false)
     expect(await hasSkatteverketOmbudReadAccess('company-1')).toBe(false)
+  })
+
+  it("passes the company's appointment state through, and reads a missing or failing lookup as not appointed", async () => {
+    const waiting = { state: 'waiting', predatesOptIn: false }
+    registryGet.mockReturnValue({
+      id: 'skatteverket',
+      services: { getOmbudAppointment: async (companyId: string) => (companyId === 'company-1' ? waiting : Promise.reject(new Error('db down'))) },
+    })
+    expect(await getSkatteverketOmbudAppointment('company-1')).toEqual(waiting)
+    expect(await getSkatteverketOmbudAppointment('company-2')).toEqual({ state: 'none', predatesOptIn: false })
+
+    registryGet.mockReturnValue({ id: 'skatteverket', services: {} })
+    expect(await getSkatteverketOmbudAppointment('company-1')).toEqual({ state: 'none', predatesOptIn: false })
   })
 })

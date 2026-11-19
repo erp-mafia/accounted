@@ -16,10 +16,12 @@ import { Badge } from '@/components/ui/badge'
 import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { AlertTriangle, Lock, ArrowRight } from 'lucide-react'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { ArrowRightIcon, ExclamationTriangleIcon, LockClosedIcon } from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface Props {
   entry: JournalEntry
@@ -33,6 +35,8 @@ type PeriodStatus = {
   period_id: string | null
   lock_date: string | null
   period_name: string | null
+  /** The filed momsperiod the date lies in, when the record has one. */
+  filed_vat?: { tax_period: string; filed_on: string } | null
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -101,7 +105,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
   const noCoveringPeriod = preview?.status === 'open' && !preview?.period_id
   // Soft, non-blocking advisory when moving into a past date: the moms for
   // that period may already have been filed.
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const movingIntoPast = dateChanged && newDate < today
 
   const canSubmit = dateChanged && targetOpen && !isSubmitting
@@ -138,7 +142,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
         title: 'Verifikationen flyttad',
         description: 'En storno och en rättelse med rätt datum har bokförts.',
         action: correctedId ? (
-          <Button variant="outline" size="sm" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
+          <Button variant="outline" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
             Visa rättelsen
           </Button>
         ) : undefined,
@@ -159,7 +163,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
@@ -210,14 +214,14 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
               {!previewLoading && previewError && (
                 <span className="inline-flex items-center gap-1.5 text-destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="h-4 w-4" />
                   {previewError}
                 </span>
               )}
 
               {!previewLoading && !previewError && targetOpen && (
                 <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                  <ArrowRight className="h-4 w-4" />
+                  <ArrowRightIcon className="h-4 w-4" />
                   Flyttas till {preview?.period_name ?? 'rätt räkenskapsår'}
                 </span>
               )}
@@ -230,28 +234,43 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
               {!previewLoading && preview?.status === 'closed' && (
                 <span className="text-destructive">
-                  Räkenskapsåret är stängt (bokslut) och kan inte återöppnas. Bokför rättelsen i innevarande period istället.
+                  {/* The registry's answer, as the refused move would give it:
+                      not "kan inte återöppnas", which is untrue while the
+                      årsredovisning is unsigned (crm#1290). */}
+                  {getErrorEntry('TARGET_PERIOD_CLOSED')?.message_sv}
                 </span>
               )}
 
               {!previewLoading && preview?.status === 'locked' && (
                 <span className="inline-flex items-center gap-1.5 text-destructive">
-                  <Lock className="h-4 w-4" />
+                  <LockClosedIcon className="h-4 w-4" />
                   Perioden är låst{preview?.lock_date ? ` t.o.m. ${formatDate(preview.lock_date)}` : ''}. Lås upp perioden för att flytta verifikationen dit.
                 </span>
               )}
             </div>
           )}
 
-          {/* Soft advisory: moving into a past period */}
-          {targetOpen && movingIntoPast && (
-            <p className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
-              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+          {/* The target date lies in a momsperiod on record as filed: said as
+              the fact it is. Without a record, the soft advisory for a past
+              date stays (a filing made elsewhere may not be on record). */}
+          {targetOpen && preview?.filed_vat ? (
+            <div className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
+              <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>
+                {t('recordate_period_filed', {
+                  period: preview.filed_vat.tax_period,
+                  date: formatDate(preview.filed_vat.filed_on),
+                })}
+              </span>
+            </div>
+          ) : targetOpen && movingIntoPast ? (
+            <div className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
+              <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 shrink-0" />
               <span>
                 Om momsen för perioden redan är inlämnad kan du behöva lämna en rättad momsdeklaration.
               </span>
-            </p>
-          )}
+            </div>
+          ) : null}
         </div>
 
         <DialogFooter>
@@ -267,7 +286,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
             already sits deep in a rättelse chain. Advisory, never a dead end:
             "Flytta ändå" resubmits with allow_deep_chain=true. */}
         <Dialog open={deepChainDepth != null} onOpenChange={(next) => { if (!next) setDeepChainDepth(null) }}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent size="confirm">
             <DialogHeader>
               <DialogTitle>{t('deep_chain_title')}</DialogTitle>
             </DialogHeader>

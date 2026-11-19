@@ -4,6 +4,7 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   generatePeppolBisBillingInvoice,
+  type PeppolAttachmentFile,
   type PeppolInvoiceResult,
   type PeppolValidationIssue,
 } from '@/lib/invoices/peppol-bis-billing'
@@ -76,10 +77,14 @@ export const PEPPOL_CUSTOMER_MISSING_MESSAGE_EN = 'The invoice has no customer a
 /**
  * Run the BIS Billing 3 generator on loaded records. A missing customer is
  * reported as `customer_missing`; a failed preflight carries the issues.
+ * `attachments` are the invoice's files (crm#1545), embedded in the message.
+ * `preview` renders a draft with a placeholder number (accounted#44).
  */
 export function generatePeppolDocument(
   invoice: PeppolInvoiceRecord,
   company: CompanySettings,
+  attachments: PeppolAttachmentFile[] = [],
+  options: { preview?: boolean } = {},
 ): GeneratedPeppolInvoice | { ok: false; reason: 'customer_missing' } | { ok: false; reason: 'invalid'; issues: PeppolValidationIssue[] } {
   if (!invoice.customer) return { ok: false, reason: 'customer_missing' }
   const document = generatePeppolBisBillingInvoice({
@@ -87,6 +92,8 @@ export function generatePeppolDocument(
     customer: invoice.customer,
     items: invoice.items ?? [],
     company,
+    attachments,
+    preview: options.preview === true,
   })
   if (!document.ok) return { ok: false, reason: 'invalid', issues: document.issues }
   return document
@@ -123,8 +130,9 @@ export function generatePeppolDocumentOrResponse(args: {
   company: CompanySettings
   log: RouteLog
   requestId: string
+  preview?: boolean
 }): { ok: true; document: GeneratedPeppolInvoice } | RefusedPeppolResult {
-  const document = generatePeppolDocument(args.invoice, args.company)
+  const document = generatePeppolDocument(args.invoice, args.company, [], { preview: args.preview })
   if (document.ok) return { ok: true, document }
   if (document.reason === 'customer_missing') {
     return {
@@ -162,12 +170,17 @@ export function peppolIssueDetails(issues: PeppolValidationIssue[]) {
   }))
 }
 
+/**
+ * Load and generate. `preview` is for the download only: it lets a draft
+ * without a number through as a marked preview that staging refuses.
+ */
 export async function loadPeppolDocument(args: {
   supabase: SupabaseClient
   companyId: string
   invoiceId: string
   log: RouteLog
   requestId: string
+  preview?: boolean
 }): Promise<LoadPeppolDocumentResult> {
   const records = await loadPeppolRecords(args)
   if (!records.ok) return records
@@ -176,6 +189,7 @@ export async function loadPeppolDocument(args: {
     company: records.company,
     log: args.log,
     requestId: args.requestId,
+    preview: args.preview,
   })
   if (!generated.ok) return generated
   return { ok: true, document: generated.document, invoice: records.invoice, company: records.company }

@@ -1,7 +1,7 @@
 import crypto from 'crypto'
+import { INVITE_TTL_HOURS } from '@/lib/auth/invite-ttl'
 
 const INVITE_PREFIX = 'gnubok_inv_'
-const INVITE_TTL_DAYS = 7
 
 /**
  * Generate an invite token and its SHA-256 hash.
@@ -22,10 +22,10 @@ export function hashInviteToken(token: string): string {
 }
 
 /**
- * Get the expiration date for a new invite.
+ * Get the expiration date for a new or re-sent invite: INVITE_TTL_HOURS from
+ * now (lib/auth/invite-ttl.ts). Every route that issues an invitation link
+ * stamps `expires_at` through this function, so the lifetime has one source.
  */
 export function getInviteExpiry(): Date {
-  const d = new Date()
-  d.setDate(d.getDate() + INVITE_TTL_DAYS)
-  return d
+  return new Date(Date.now() + INVITE_TTL_HOURS * 60 * 60 * 1000)
 }

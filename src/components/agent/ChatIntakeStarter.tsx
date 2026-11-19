@@ -28,10 +28,10 @@ export default function ChatIntakeStarter() {
 
   return (
     <>
-      <header className="flex items-center gap-3 border-b border-border px-6 py-4 shrink-0">
+      <header className="flex items-center gap-3 border-b-hairline px-6 py-4 shrink-0">
         <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName} />
         <div className="min-w-0">
-          <h1 className="font-display text-lg tracking-tight truncate">{agentName} är redo</h1>
+          <h1 className="text-lg truncate">{agentName} är redo</h1>
           <p className="text-xs text-muted-foreground">
             {isSandbox
               ? 'Förhandsvisning: den verkliga konversationen kräver ett konto.'

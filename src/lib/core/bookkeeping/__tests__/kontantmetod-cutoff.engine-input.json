@@ -1,0 +1,581 @@
+[
+  {
+    "name": "every invoice open at the year end carried by its own verifikat on period end, each linked",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfaktura F-10: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 13620,
+              "credit_amount": 0,
+              "line_description": "Kundfaktura F-10"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 10000
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Utgående moms 25%"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 120,
+              "line_description": "Utgående moms 12%"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kreditfaktura F-11: oreglerad vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-11",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 0,
+              "credit_amount": 625
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 500,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 125,
+              "credit_amount": 0
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura L-1",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 2000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura L-1"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 2500
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsfaktura L-2: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura L-2",
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 1000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            },
+            {
+              "account_number": "4535",
+              "debit_amount": 1000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "4598",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 250,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 0,
+              "credit_amount": 250
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a manual carry: the accountant's lines, posted and linked like any carry",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfaktura F-12: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Manuell årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-12",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 2500,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1513",
+              "debit_amount": 2500,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 4000
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a carry linked meanwhile: stornoed on the year end, the next carry stands",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfaktura F-10: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 13620,
+              "credit_amount": 0,
+              "line_description": "Kundfaktura F-10"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 10000
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Utgående moms 25%"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 120,
+              "line_description": "Utgående moms 12%"
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1",
+        "2025-12-31"
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura L-1",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 2000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura L-1"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 2500
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a carry neither linked nor stornoed: the run stops, naming what posted",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfaktura F-10: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 13620,
+              "credit_amount": 0,
+              "line_description": "Kundfaktura F-10"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 10000
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Utgående moms 25%"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 120,
+              "line_description": "Utgående moms 12%"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura L-1",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 2000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura L-1"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 2500
+            }
+          ]
+        }
+      ],
+      [
+        "reverseEntry",
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2",
+        "2025-12-31"
+      ]
+    ]
+  },
+  {
+    "name": "a carry refused by the engine mid-run: what posted stands and is reported",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfaktura F-10: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 13620,
+              "credit_amount": 0,
+              "line_description": "Kundfaktura F-10"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 10000
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Utgående moms 25%"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 120,
+              "line_description": "Utgående moms 12%"
+            }
+          ]
+        }
+      ],
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Leverantörsfaktura L-1: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura L-1",
+          "lines": [
+            {
+              "account_number": "4010",
+              "debit_amount": 2000,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura L-1"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 2500
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  {
+    "name": "a cash verifikat booked before the cut-off corrected after its carry, on its own date",
+    "calls": [
+      [
+        "createJournalEntry",
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2025-12-31",
+          "description": "Kundfaktura F-10: obetald vid bokslut (kontantmetoden)",
+          "source_type": "year_end",
+          "source_id": "00000000-0000-4000-8000-00000000f001",
+          "notes": "Årsomföring kontantmetoden, BFL 5 kap 2 §, faktura F-10",
+          "lines": [
+            {
+              "account_number": "1510",
+              "debit_amount": 13620,
+              "credit_amount": 0,
+              "line_description": "Kundfaktura F-10"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 10000
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 2500,
+              "line_description": "Utgående moms 25%"
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 120,
+              "line_description": "Utgående moms 12%"
+            }
+          ]
+        }
+      ],
+      [
+        "correctEntry",
+        6,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-cash",
+        [
+          {
+            "account_number": "1930",
+            "debit_amount": 13620,
+            "credit_amount": 0
+          },
+          {
+            "account_number": "1510",
+            "debit_amount": 0,
+            "credit_amount": 13620,
+            "line_description": "Kundfaktura F-10: betald efter bokslut, mot årsomföringen"
+          }
+        ],
+        {
+          "preloadedOriginal": {
+            "id": "je-cash",
+            "company_id": "00000000-0000-4000-8000-00000000c001",
+            "status": "posted",
+            "entry_date": "2026-01-14",
+            "description": "Kontantbetalning F-10",
+            "lines": [
+              {
+                "account_number": "1930",
+                "debit_amount": 13620,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "3001",
+                "debit_amount": 0,
+                "credit_amount": 10000
+              },
+              {
+                "account_number": "3002",
+                "debit_amount": 0,
+                "credit_amount": 1000
+              },
+              {
+                "account_number": "2611",
+                "debit_amount": 0,
+                "credit_amount": 2500
+              },
+              {
+                "account_number": "2621",
+                "debit_amount": 0,
+                "credit_amount": 120
+              }
+            ]
+          },
+          "description": "Rättelse: betald efter bokslut, årsomföring kontantmetoden (verifikat A1)"
+        }
+      ]
+    ]
+  }
+]

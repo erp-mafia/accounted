@@ -57,6 +57,7 @@ vi.mock('@/lib/api/idempotency', async () => {
   )
   return {
     ...actual,
+    claimIdempotencyKey: vi.fn(),
     checkIdempotencyKey: vi.fn(),
     storeIdempotencyResponse: vi.fn(),
   }
@@ -68,15 +69,51 @@ import {
   RATE_LIMIT_RETRY_AFTER_SECONDS,
 } from '@/lib/auth/api-keys'
 import {
-  checkIdempotencyKey,
+  claimIdempotencyKey,
+  IdempotencyKeyInProgressError,
   storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
-import { truncateIp, withApiV1 } from '../with-api-v1'
+import { companyWriteRefusal, truncateIp, withApiV1 } from '../with-api-v1'
+import { getTraceId } from '@/lib/observability/trace-context'
 import { ok } from '../response'
+import { z } from 'zod'
+import { registerEndpoint } from '../registry'
+
+// withApiV1 reads each handler's scope from its endpoint definition, by
+// operation id and method. These fixtures stand in for the route files the
+// tests imitate, with the scopes those routes declare. Vitest isolates module
+// state per test file, so the registrations stay in this file.
+for (const [operation, method, path, scope] of [
+  ['companies.list', 'GET', '/api/v1/companies', 'companies:read'],
+  ['api-key.get', 'GET', '/api/v1/api-key', 'authenticated'],
+  ['health.check', 'GET', '/api/v1/health', null],
+  ['journal-entries.create', 'POST', '/api/v1/companies/:companyId/journal-entries', 'bookkeeping:write'],
+  ['journal-entries.list', 'GET', '/api/v1/companies/:companyId/journal-entries', 'reports:read'],
+  ['journal-entries.get', 'GET', '/api/v1/companies/:companyId/journal-entries/:id', 'reports:read'],
+  ['accounts.get', 'GET', '/api/v1/companies/:companyId/accounts/:number', 'reports:read'],
+] as const) {
+  registerEndpoint({
+    operation,
+    method,
+    path,
+    summary: `${operation} (test fixture).`,
+    description: 'Fixture registration for the wrapper tests.',
+    useWhen: 'never: test fixture',
+    doNotUseFor: 'anything outside this test file',
+    pitfalls: [],
+    example: { response: {} },
+    scope,
+    risk: method === 'GET' ? 'low' : 'medium',
+    idempotent: method === 'GET',
+    reversible: false,
+    dryRunSupported: false,
+    response: { success: z.object({}) },
+  })
+}
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-const mockCheckIdempotency = checkIdempotencyKey as ReturnType<typeof vi.fn>
+const mockClaimIdempotency = claimIdempotencyKey as ReturnType<typeof vi.fn>
 const mockStoreIdempotency = storeIdempotencyResponse as ReturnType<typeof vi.fn>
 
 function makeSupabaseStub(membership: { company_id: string; role: string } | null) {
@@ -85,7 +122,9 @@ function makeSupabaseStub(membership: { company_id: string; role: string } | nul
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            is: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            }),
           }),
         }),
       }),
@@ -123,17 +162,17 @@ beforeEach(() => {
 
 describe('withApiV1: auth', () => {
   it('holds external reports before generating either JSON or a PDF',async()=>{
-    mockValidate.mockResolvedValue({userId:'user-1',companyId:'company-1',scopes:['reports:read'],mode:'live'})
-    const supabase=makeSupabaseStub({company_id:'company-1',role:'owner'})
+    mockValidate.mockResolvedValue({userId:'user-1',companyId:'c0ffee01-0000-4000-8000-000000000001',scopes:['reports:read'],mode:'live'})
+    const supabase=makeSupabaseStub({company_id:'c0ffee01-0000-4000-8000-000000000001',role:'owner'})
     mockServiceClient.mockReturnValue(supabase)
     externalReportGuard.mockRejectedValue(Object.assign(new Error('SIE_IMPORT_HOLD'),{code:'CONFLICT'}))
     const generate=vi.fn()
     const handler=withApiV1<{params:Promise<{companyId:string}>}>('reports.balance-sheet.pdf',generate,{requireScope:'reports:read'})
-    const response=await handler(makeRequest('https://x.test/api/v1/companies/company-1/reports/balance-sheet/pdf',
-      {headers:{Authorization:'Bearer gnubok_sk_x'}}),companyParams('company-1'))
+    const response=await handler(makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/reports/balance-sheet/pdf',
+      {headers:{Authorization:'Bearer gnubok_sk_x'}}),companyParams('c0ffee01-0000-4000-8000-000000000001'))
     expect(response.status).toBe(409)
     expect(generate).not.toHaveBeenCalled()
-    expect(externalReportGuard).toHaveBeenCalledWith(supabase,'company-1','reports.balance-sheet.pdf',expect.any(Function))
+    expect(externalReportGuard).toHaveBeenCalledWith(supabase,'c0ffee01-0000-4000-8000-000000000001','reports.balance-sheet.pdf',expect.any(Function))
   })
   it('returns 401 when Authorization header is missing', async () => {
     const handler = withApiV1('companies.list', async (_req, ctx) =>
@@ -185,6 +224,27 @@ describe('withApiV1: auth', () => {
     expect(res.headers.get('Retry-After')).toBe(String(RATE_LIMIT_RETRY_AFTER_SECONDS))
   })
 
+  it('advertises the seconds left in the key window when the database answers them', async () => {
+    mockValidate.mockResolvedValue({
+      error: 'Rate limit exceeded',
+      status: 429,
+      rateLimit: { retryAfterSeconds: 12, limitPerMinute: 100, apiKeyId: 'key-1', userId: 'u1', companyId: 'c1' },
+    })
+
+    const handler = withApiV1('companies.list', async (_req, ctx) =>
+      ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      emptyParams(),
+    )
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('12')
+  })
+
   it('does not advertise Retry-After on a non-throttle error', async () => {
     mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
 
@@ -207,7 +267,7 @@ describe('withApiV1: scope', () => {
   it('returns 403 INSUFFICIENT_SCOPE when the key lacks the required scope', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       apiKeyId: 'ak_1',
       apiKeyName: 'test key',
       scopes: ['invoices:read'], // wrong scope
@@ -230,10 +290,48 @@ describe('withApiV1: scope', () => {
     expect(body.error.details.required_scope).toBe('companies:read')
   })
 
+  it('lets an authenticated-tier route through with a valid key that holds none of the catalogue scopes', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
+      apiKeyId: 'ak_1',
+      apiKeyName: 'test key',
+      scopes: [],
+      mode: 'live',
+      allowedCompanyIds: null,
+      readOnlyCompanyIds: ['c0ffee09-0000-4000-8000-000000000009'],
+    })
+    let seen: { scopes: unknown; readOnlyCompanyIds: unknown } | undefined
+    const handler = withApiV1('api-key.get', async (_req, ctx) => {
+      seen = { scopes: ctx.scopes, readOnlyCompanyIds: ctx.readOnlyCompanyIds }
+      return ok({ ok: true }, { requestId: ctx.requestId })
+    })
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/api-key', { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      staticRouteContext(),
+    )
+    expect(res.status).toBe(200)
+    expect(seen).toEqual({ scopes: [], readOnlyCompanyIds: ['c0ffee09-0000-4000-8000-000000000009'] })
+  })
+
+  it('still requires a key on an authenticated-tier route (401, not the public anon downgrade)', async () => {
+    const handler = withApiV1('api-key.get', async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }))
+    const missing = await handler(makeRequest('https://x.test/api/v1/api-key'), staticRouteContext())
+    expect(missing.status).toBe(401)
+
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    const invalid = await handler(
+      makeRequest('https://x.test/api/v1/api-key', { headers: { Authorization: 'Bearer gnubok_sk_bad' } }),
+      staticRouteContext(),
+    )
+    expect(invalid.status).toBe(401)
+  })
+
   it('returns 404 NOT_FOUND for unregistered endpoints (no leak)', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
     })
@@ -256,7 +354,7 @@ describe('withApiV1: company membership', () => {
   it('returns 404 when the URL companyId is not a company the user belongs to', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
     })
@@ -271,10 +369,10 @@ describe('withApiV1: company membership', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/other-company', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee03-0000-4000-8000-000000000003', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('other-company'),
+      companyParams('c0ffee03-0000-4000-8000-000000000003'),
     )
     expect(res.status).toBe(404)
     const body = await res.json()
@@ -284,12 +382,12 @@ describe('withApiV1: company membership', () => {
   it('allows the request when the user has membership in the URL company', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
     })
 
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
     const handler = withApiV1(
       'companies.get',
@@ -298,26 +396,26 @@ describe('withApiV1: company membership', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.companyId).toBe('company-1')
+    expect(body.data.companyId).toBe('c0ffee01-0000-4000-8000-000000000001')
   })
 
   it('returns 404 (same shape as a non-member) for a member company outside the key allowlist', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
-      allowedCompanyIds: ['company-1'],
+      allowedCompanyIds: ['c0ffee01-0000-4000-8000-000000000001'],
     })
-    // The user IS a member of company-2; the key was not issued for it.
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'owner' }))
+    // The user IS a member of c0ffee02-0000-4000-8000-000000000002; the key was not issued for it.
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee02-0000-4000-8000-000000000002', role: 'owner' }))
 
     const handlerBody = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
       ok({ ok: true }, { requestId: ctx.requestId }),
@@ -329,15 +427,15 @@ describe('withApiV1: company membership', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-2', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee02-0000-4000-8000-000000000002', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-2'),
+      companyParams('c0ffee02-0000-4000-8000-000000000002'),
     )
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('NOT_FOUND')
-    expect(body.error.details).toEqual({ companyId: 'company-2' })
+    expect(body.error.details).toEqual({ companyId: 'c0ffee02-0000-4000-8000-000000000002' })
     expect(handlerBody).not.toHaveBeenCalled()
     expect(getMultiUserStateMock).not.toHaveBeenCalled()
   })
@@ -345,12 +443,12 @@ describe('withApiV1: company membership', () => {
   it('passes an allowlisted company through and exposes the allowlist on the context', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
-      allowedCompanyIds: ['COMPANY-1'],
+      allowedCompanyIds: ['C0FFEE01-0000-4000-8000-000000000001'],
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
     const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
       'companies.get',
@@ -359,20 +457,20 @@ describe('withApiV1: company membership', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.allowed).toEqual(['COMPANY-1'])
+    expect(body.data.allowed).toEqual(['C0FFEE01-0000-4000-8000-000000000001'])
   })
 
   it('exposes allowedCompanyIds null on the context for an unrestricted key', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
       allowedCompanyIds: null,
@@ -392,11 +490,11 @@ describe('withApiV1: company membership', () => {
   it('refuses a NON-OWNER membership in a frozen company with 403 (multi-user seat gate)', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'admin' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'admin' }))
     getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
 
     const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
@@ -406,10 +504,10 @@ describe('withApiV1: company membership', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
     expect(res.status).toBe(403)
     const body = await res.json()
@@ -420,11 +518,11 @@ describe('withApiV1: company membership', () => {
   it('OWNERS pass the seat gate without a state read; grace passes for non-owners', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
     getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
 
     const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
@@ -433,26 +531,120 @@ describe('withApiV1: company membership', () => {
       { requireScope: 'companies:read' },
     )
     const ownerRes = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
     expect(ownerRes.status).toBe(200)
     expect(getMultiUserStateMock).not.toHaveBeenCalled()
 
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'member' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'member' }))
     getMultiUserStateMock.mockResolvedValue({
       state: 'grace',
       graceEndsAt: new Date(Date.now() + 5 * 86_400_000).toISOString(),
     })
     const graceRes = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
     expect(graceRes.status).toBe(200)
+  })
+})
+
+describe('withApiV1: typed path ids that are not UUIDs', () => {
+  // Seen 2026-10-21: a client sent the OpenAPI placeholder "string" as
+  // companyId. Postgres refused it (22P02) inside the company gate, which
+  // answered a logged 500 nine times in five minutes.
+  const COMPANY = 'c0ffee01-0000-4000-8000-000000000001'
+  const ENTRY = 'c0ffee0e-0000-4000-8000-00000000000e'
+
+  function readerKey() {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: COMPANY, scopes: ['reports:read'], mode: 'live' })
+  }
+
+  function get(path: string, params: Record<string, string>, operation = 'journal-entries.get') {
+    const handlerBody = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ reached: true }, { requestId: ctx.requestId }),
+    )
+    const handler = withApiV1<{ params: Promise<Record<string, string>> }>(operation, handlerBody)
+    const call = handler(
+      makeRequest(`https://x.test/api/v1/companies/${path}`, { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      { params: Promise.resolve(params) },
+    )
+    return { call, handlerBody }
+  }
+
+  it('answers a malformed companyId with 400 VALIDATION_ERROR naming it, without a database read or an error log', async () => {
+    readerKey()
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { call, handlerBody } = get('string/journal-entries', { companyId: 'string' }, 'journal-entries.list')
+      const res = await call
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.request_id).toMatch(/^req_/)
+      const issue = {
+        field: 'companyId',
+        message:
+          'companyId must be a company id: a UUID or a cmp_ handle. "string" is neither. GET /api/v1/companies lists the companies this key reaches.',
+      }
+      // The flat field/message the routes' own id checks answer, and the issues list.
+      expect(body.error.details).toEqual({ ...issue, issues: [issue] })
+      expect(handlerBody).not.toHaveBeenCalled()
+      expect(mockServiceClient).not.toHaveBeenCalled()
+      expect(errorLog).not.toHaveBeenCalled()
+    } finally {
+      errorLog.mockRestore()
+    }
+  })
+
+  it('refuses a malformed resource id after the company gate, before the handler', async () => {
+    readerKey()
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: COMPANY, role: 'owner' }))
+    const { call, handlerBody } = get(`${COMPANY}/journal-entries/A-12`, { companyId: COMPANY, id: 'A-12' })
+    const res = await call
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    const issue = { field: 'id', message: 'id must be a journal entry id: a UUID or a je_ handle. "A-12" is neither.' }
+    expect(body.error.details).toEqual({ ...issue, issues: [issue] })
+    expect(handlerBody).not.toHaveBeenCalled()
+  })
+
+  it('keeps the 404 for a company the key cannot see, even when the resource id is malformed', async () => {
+    readerKey()
+    mockServiceClient.mockReturnValue(makeSupabaseStub(null))
+    const { call, handlerBody } = get(`${COMPANY}/journal-entries/A-12`, { companyId: COMPANY, id: 'A-12' })
+    const res = await call
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('NOT_FOUND')
+    expect(handlerBody).not.toHaveBeenCalled()
+  })
+
+  it('passes well-formed ids, upper-case UUIDs, and path parameters that are not typed ids', async () => {
+    readerKey()
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: COMPANY, role: 'owner' }))
+    const entry = get(`${COMPANY}/journal-entries/${ENTRY.toUpperCase()}`, { companyId: COMPANY, id: ENTRY.toUpperCase() })
+    expect((await entry.call).status).toBe(200)
+    expect(entry.handlerBody).toHaveBeenCalledTimes(1)
+
+    // accounts/:number is an account number, not a uuid column.
+    const account = get(`${COMPANY}/accounts/1930`, { companyId: COMPANY, number: '1930' }, 'accounts.get')
+    expect((await account.call).status).toBe(200)
+    expect(account.handlerBody).toHaveBeenCalledTimes(1)
+  })
+
+  it('caps the echoed value', async () => {
+    readerKey()
+    const long = 'x'.repeat(200)
+    const { call } = get(`${long}/journal-entries`, { companyId: long }, 'journal-entries.list')
+    const body = await (await call).json()
+    expect(body.error.details.issues[0].message).toContain(`"${'x'.repeat(64)}..."`)
+    expect(body.error.details.issues[0].message).not.toContain('x'.repeat(65))
   })
 })
 
@@ -493,16 +685,15 @@ describe('withApiV1: idempotency', () => {
   it('replays a cached response when the idempotency key matches', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['invoices:write'],
       mode: 'live',
     })
 
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
-    mockCheckIdempotency.mockResolvedValue({
-      status: 'success',
-      body: { data: { id: 'inv-cached' } },
+    mockClaimIdempotency.mockResolvedValue({
+      replay: { status: 'success', body: { data: { id: 'inv-cached' } } },
     })
 
     const handler = withApiV1(
@@ -514,7 +705,7 @@ describe('withApiV1: idempotency', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices', {
         method: 'POST',
         headers: {
           Authorization: 'Bearer gnubok_sk_x',
@@ -523,7 +714,7 @@ describe('withApiV1: idempotency', () => {
         },
         body: JSON.stringify({ customer_id: 'cust-1' }),
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.headers.get('Idempotent-Replayed')).toBe('true')
@@ -534,11 +725,11 @@ describe('withApiV1: idempotency', () => {
   it('honors the require-idempotency-key option', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['invoices:write'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
     const handler = withApiV1(
       'invoices.create',
@@ -547,11 +738,11 @@ describe('withApiV1: idempotency', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
     expect(res.status).toBe(400)
     const body = await res.json()
@@ -561,12 +752,12 @@ describe('withApiV1: idempotency', () => {
   it('hashes a cloned body and leaves the original readable by the handler', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['invoices:write'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
-    mockCheckIdempotency.mockResolvedValue(null)
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
+    mockClaimIdempotency.mockResolvedValue({ claim: { complete: vi.fn(), release: vi.fn() } })
     let observedBody: unknown
 
     const handler = withApiV1(
@@ -580,7 +771,7 @@ describe('withApiV1: idempotency', () => {
     const requestBody = { customer_id: 'cust-1', additional_cc: ['copy@example.test'] }
 
     const response = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices', {
         method: 'POST',
         headers: {
           Authorization: 'Bearer gnubok_sk_x',
@@ -589,18 +780,114 @@ describe('withApiV1: idempotency', () => {
         },
         body: JSON.stringify(requestBody),
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(response.status).toBe(200)
     expect(observedBody).toEqual(requestBody)
-    expect(mockCheckIdempotency).toHaveBeenCalledWith(
-      expect.anything(),
-      'user-1',
-      'company-1',
-      'key-body-readable',
-      expect.any(String),
+    expect(mockClaimIdempotency).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
+      scope: 'api_route',
+      key: 'key-body-readable',
+      requestHash: expect.any(String),
+    })
+  })
+})
+
+describe('withApiV1: Idempotency-Key claim', () => {
+  function keyedPost(key = 'key-claim') {
+    return makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer gnubok_sk_x',
+        'Idempotency-Key': key,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ customer_id: 'cust-1' }),
+    })
+  }
+
+  function heldClaim() {
+    const claim = { complete: vi.fn(), release: vi.fn() }
+    mockClaimIdempotency.mockResolvedValue({ claim })
+    return claim
+  }
+
+  beforeEach(() => {
+    mockValidate.mockResolvedValue({ userId: 'user-1', companyId: 'c0ffee01-0000-4000-8000-000000000001', scopes: ['invoices:write'], mode: 'live' })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
+  })
+
+  type CompanyRoute = { params: Promise<{ companyId: string }> }
+  const route = (respond: () => Response | Promise<Response>) =>
+    withApiV1<CompanyRoute>('invoices.create', async () => respond(), { requireScope: 'invoices:write' })
+
+  it('answers 409 IDEMPOTENCY_KEY_IN_PROGRESS with Retry-After while the first call runs, and runs nothing', async () => {
+    mockClaimIdempotency.mockRejectedValue(new IdempotencyKeyInProgressError('key-claim'))
+    const handler = vi.fn(async () => NextResponse.json({ data: { id: 'inv-2' } }, { status: 201 }))
+
+    const res = await withApiV1<CompanyRoute>('invoices.create', handler, { requireScope: 'invoices:write' })(
+      keyedPost(),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
+
+    expect(res.status).toBe(409)
+    expect(res.headers.get('Retry-After')).toBe('2')
+    const body = await res.json()
+    expect(body.error.code).toBe('IDEMPOTENCY_KEY_IN_PROGRESS')
+    expect(body.error.details).toEqual({ key: 'key-claim' })
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('stores a success and a returned 4xx under the claim', async () => {
+    const created = heldClaim()
+    await route(() => NextResponse.json({ data: { id: 'inv-1' } }, { status: 201 }))(keyedPost(), companyParams('c0ffee01-0000-4000-8000-000000000001'))
+    expect(created.complete).toHaveBeenCalledWith('success', { data: { id: 'inv-1' } })
+    expect(created.release).not.toHaveBeenCalled()
+
+    const refused = heldClaim()
+    await route(() => NextResponse.json({ error: { code: 'VALIDATION_ERROR' } }, { status: 400 }))(
+      keyedPost(),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
+    )
+    expect(refused.complete).toHaveBeenCalledWith('error', { error: { code: 'VALIDATION_ERROR' } })
+  })
+
+  it('releases the claim on a 5xx, a 429 and a thrown failure, so a retry runs again', async () => {
+    const serverError = heldClaim()
+    await route(() => NextResponse.json({ error: { code: 'INTERNAL_ERROR' } }, { status: 500 }))(
+      keyedPost(),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
+    )
+    expect(serverError.release).toHaveBeenCalledTimes(1)
+    expect(serverError.complete).not.toHaveBeenCalled()
+
+    const throttled = heldClaim()
+    await route(() => NextResponse.json({ error: { code: 'RATE_LIMITED' } }, { status: 429 }))(
+      keyedPost(),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
+    )
+    expect(throttled.release).toHaveBeenCalledTimes(1)
+
+    const thrown = heldClaim()
+    const res = await route(() => {
+      throw new Error('boom')
+    })(keyedPost(), companyParams('c0ffee01-0000-4000-8000-000000000001'))
+    expect(res.status).toBe(500)
+    expect(thrown.release).toHaveBeenCalledTimes(1)
+    expect(thrown.complete).not.toHaveBeenCalled()
+  })
+
+  it('answers 500 and runs nothing when claiming the key throws', async () => {
+    mockClaimIdempotency.mockRejectedValue(new Error('unexpected claim failure'))
+    const handler = vi.fn(async () => NextResponse.json({ data: {} }, { status: 201 }))
+    const res = await withApiV1<CompanyRoute>('invoices.create', handler, { requireScope: 'invoices:write' })(
+      keyedPost(),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
+    )
+    expect(res.status).toBe(500)
+    expect(handler).not.toHaveBeenCalled()
   })
 })
 
@@ -608,11 +895,11 @@ describe('withApiV1: dry-run', () => {
   it('threads dry_run=true from query string into context', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['invoices:write'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
     let observedDryRun: boolean | null = null
     const handler = withApiV1(
@@ -625,7 +912,7 @@ describe('withApiV1: dry-run', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/invoices?dry_run=true', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices?dry_run=true', {
         method: 'POST',
         headers: {
           Authorization: 'Bearer gnubok_sk_x',
@@ -633,7 +920,7 @@ describe('withApiV1: dry-run', () => {
         },
         body: JSON.stringify({}),
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(observedDryRun).toBe(true)
@@ -643,11 +930,11 @@ describe('withApiV1: dry-run', () => {
   it('threads X-Dry-Run header into context', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['invoices:write'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
     let observedDryRun: boolean | null = null
     const handler = withApiV1(
@@ -660,7 +947,7 @@ describe('withApiV1: dry-run', () => {
     )
 
     await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices', {
         method: 'POST',
         headers: {
           Authorization: 'Bearer gnubok_sk_x',
@@ -669,7 +956,7 @@ describe('withApiV1: dry-run', () => {
         },
         body: '{}',
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(observedDryRun).toBe(true)
@@ -683,11 +970,11 @@ describe('withApiV1: test mode', () => {
     // write rather than let a test key mutate real data.
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['invoices:write'],
       mode: 'test',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
     let handlerCalled = false
     const handler = withApiV1(
@@ -700,12 +987,12 @@ describe('withApiV1: test mode', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
         body: '{}',
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -717,11 +1004,11 @@ describe('withApiV1: test mode', () => {
   it('allows a test-key READ unchanged: no forced dry-run, real data, X-Gnubok-Mode header', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['companies:read'],
       mode: 'test',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
 
     let observedDryRun: boolean | null = null
     const handler = withApiV1(
@@ -734,10 +1021,10 @@ describe('withApiV1: test mode', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(200)
@@ -762,7 +1049,7 @@ describe('withApiV1: public endpoints', () => {
   it('opportunistically attributes a valid Bearer token on a public route', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       apiKeyId: 'ak_1',
       apiKeyName: 'CI key',
       scopes: ['companies:read'],
@@ -862,11 +1149,11 @@ describe('withApiV1: read-only role gate (viewer)', () => {
   function viewerKey(scopes: string[]) {
     mockValidate.mockResolvedValue({
       userId: 'user-viewer',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes,
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'viewer' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'viewer' }))
   }
 
   it('refuses a viewer key on POST journal-entries with 403 ROLE_READ_ONLY before the handler runs', async () => {
@@ -882,12 +1169,12 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: 'x', lines: [] }),
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -896,8 +1183,8 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     expect(body.error.details.code).toBe('ROLE_READ_ONLY')
     expect(body.error.details.role).toBe('viewer')
     expect(body.error.details.required_scope).toBe('bookkeeping:write')
-    // Swedish user-facing message from the registry entry.
-    expect(body.error.message).toBe('Du har inte behörighet att utföra denna åtgärd.')
+    // The sentence every door answers (readOnlyRefusal).
+    expect(body.error.message).toBe('Du har endast läsbehörighet i detta företag.')
     expect(body.error.request_id).toMatch(/^req_/)
     expect(handlerSpy).not.toHaveBeenCalled()
     // Refused before the seat gate: no extra read for a refused write.
@@ -916,11 +1203,11 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/invoices?dry_run=true', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/invoices?dry_run=true', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -941,10 +1228,10 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/webhooks', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/webhooks', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -962,15 +1249,15 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.companyId).toBe('company-1')
+    expect(body.data.companyId).toBe('c0ffee01-0000-4000-8000-000000000001')
     // A viewer is a non-owner: the dormant-seat logic still runs for reads.
     expect(getMultiUserStateMock).toHaveBeenCalledTimes(1)
   })
@@ -984,10 +1271,10 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -999,11 +1286,11 @@ describe('withApiV1: read-only role gate (viewer)', () => {
   it.each(['member', 'admin', 'owner'])('lets a %s key through the role gate on POST journal-entries', async (role) => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['bookkeeping:write'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role }))
     const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
       NextResponse.json({ data: { id: 'je-1', requestId: ctx.requestId } }, { status: 201 }),
     )
@@ -1013,12 +1300,12 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: 'x', lines: [] }),
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(201)
@@ -1028,7 +1315,7 @@ describe('withApiV1: read-only role gate (viewer)', () => {
   it('keeps the non-member answer unchanged: 404, no role information leaks', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-outsider',
-      companyId: 'company-2',
+      companyId: 'c0ffee02-0000-4000-8000-000000000002',
       scopes: ['bookkeeping:write'],
       mode: 'live',
     })
@@ -1039,17 +1326,67 @@ describe('withApiV1: read-only role gate (viewer)', () => {
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('NOT_FOUND')
     expect(body.error.details.role).toBeUndefined()
+  })
+})
+
+describe('withApiV1: invoicing-only role (invoicer)', () => {
+  // The key may hold any scope: an invoicer membership reaches customers,
+  // invoices and articles only, read or write (lib/auth/invoicer-role.ts).
+  const COMPANY = 'c0ffee01-0000-4000-8000-000000000001'
+  function invoicerKey(scopes: string[]) {
+    mockValidate.mockResolvedValue({ userId: 'user-invoicer', companyId: COMPANY, scopes, mode: 'live' })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: COMPANY, role: 'invoicer' }))
+  }
+
+  it.each([
+    ['payroll:read', 'salary-runs.list'],
+    ['reports:read', 'journal-entries.list'],
+    ['transactions:read', 'transactions.list'],
+    ['documents:read', 'documents.list'],
+    ['events:read', 'events.list'],
+    ['webhooks:manage', 'webhooks.list'],
+    ['operations:read', 'operations.get'],
+  ] as const)('refuses a read on %s with 403 ROLE_SCOPE_LIMITED before the handler runs', async (scope, operation) => {
+    invoicerKey([scope])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) => ok({}, { requestId: ctx.requestId }))
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(operation, handlerSpy, { requireScope: scope })
+
+    const res = await handler(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY}/anything`, { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      companyParams(COMPANY),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.details.code).toBe('ROLE_SCOPE_LIMITED')
+    expect(body.error.details.role).toBe('invoicer')
+    expect(body.error.details.required_scope).toBe(scope)
+    expect(handlerSpy).not.toHaveBeenCalled()
+  })
+
+  it('lets an invoicer read and write invoices', async () => {
+    invoicerKey(['invoices:read', 'invoices:write'])
+    const read = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'invoices.list',
+      async (_req, ctx) => ok({ invoices: [] }, { requestId: ctx.requestId }),
+      { requireScope: 'invoices:read' },
+    )
+    const res = await read(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY}/invoices`, { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      companyParams(COMPANY),
+    )
+    expect(res.status).toBe(200)
   })
 })
 
@@ -1060,29 +1397,29 @@ describe('withApiV1: read-only company access (per-company access level)', () =>
   function ownerKeyReadOnlyIn(readOnlyCompanyIds: string[], scopes: string[]) {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes,
       mode: 'live',
-      allowedCompanyIds: ['company-1', 'company-2'],
+      allowedCompanyIds: ['c0ffee01-0000-4000-8000-000000000001', 'c0ffee02-0000-4000-8000-000000000002'],
       readOnlyCompanyIds,
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
   }
 
   it('refuses a write in a read-only company with 403 CONNECTION_READ_ONLY before the handler runs', async () => {
-    ownerKeyReadOnlyIn(['company-1'], ['bookkeeping:write'])
+    ownerKeyReadOnlyIn(['c0ffee01-0000-4000-8000-000000000001'], ['bookkeeping:write'])
     const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
       ok({ id: 'je-1' }, { requestId: ctx.requestId }),
     )
     const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.create', handlerSpy)
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: 'x', lines: [] }),
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -1094,7 +1431,7 @@ describe('withApiV1: read-only company access (per-company access level)', () =>
   })
 
   it('refuses an elevated GET (webhooks:manage) in a read-only company, compared case-insensitively', async () => {
-    ownerKeyReadOnlyIn(['COMPANY-1'], ['webhooks:manage'])
+    ownerKeyReadOnlyIn(['C0FFEE01-0000-4000-8000-000000000001'], ['webhooks:manage'])
     const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
       ok({ webhooks: [] }, { requestId: ctx.requestId }),
     )
@@ -1103,10 +1440,10 @@ describe('withApiV1: read-only company access (per-company access level)', () =>
     })
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/webhooks', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/webhooks', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -1115,35 +1452,35 @@ describe('withApiV1: read-only company access (per-company access level)', () =>
   })
 
   it('lets reads through in a read-only company', async () => {
-    ownerKeyReadOnlyIn(['company-1'], ['reports:read'])
+    ownerKeyReadOnlyIn(['c0ffee01-0000-4000-8000-000000000001'], ['reports:read'])
     const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.list', async (_req, ctx) =>
       ok({ entries: [], companyId: ctx.companyId }, { requestId: ctx.requestId }),
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(200)
   })
 
   it('lets writes through in a company the key is not read-only in', async () => {
-    ownerKeyReadOnlyIn(['company-2'], ['bookkeeping:write'])
+    ownerKeyReadOnlyIn(['c0ffee02-0000-4000-8000-000000000002'], ['bookkeeping:write'])
     const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
       NextResponse.json({ data: { id: 'je-1', requestId: ctx.requestId } }, { status: 201 }),
     )
     const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.create', handlerSpy)
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: 'x', lines: [] }),
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(201)
@@ -1153,23 +1490,23 @@ describe('withApiV1: read-only company access (per-company access level)', () =>
   it('answers a viewer in a read-only company with the role refusal, which names the real fix', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-viewer',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['bookkeeping:write'],
       mode: 'live',
-      allowedCompanyIds: ['company-1'],
-      readOnlyCompanyIds: ['company-1'],
+      allowedCompanyIds: ['c0ffee01-0000-4000-8000-000000000001'],
+      readOnlyCompanyIds: ['c0ffee01-0000-4000-8000-000000000001'],
     })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'viewer' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'viewer' }))
     const handler = withApiV1<{ params: Promise<{ companyId: string }> }>('journal-entries.create', async (_req, ctx) =>
       ok({ ok: true }, { requestId: ctx.requestId }),
     )
 
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/journal-entries', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/journal-entries', {
         method: 'POST',
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
 
     expect(res.status).toBe(403)
@@ -1191,7 +1528,7 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
       method === 'GET' ? 'operations.get' : 'webhook_deliveries.retry',
       async (_req, ctx) => {
         const denied = await ctx.checkCompanyAccess(
-          'company-2',
+          'c0ffee02-0000-4000-8000-000000000002',
           notFoundDetails ? { notFoundDetails } : undefined,
         )
         if (denied) return denied
@@ -1216,7 +1553,7 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
   function key(extra: Record<string, unknown>) {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['operations:read', 'webhooks:manage'],
       mode: 'live',
       ...extra,
@@ -1224,8 +1561,8 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
   }
 
   it('answers NOT_FOUND with only the route-given details for a member company outside the allowlist', async () => {
-    key({ allowedCompanyIds: ['company-1'], readOnlyCompanyIds: null })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'owner' }))
+    key({ allowedCompanyIds: ['c0ffee01-0000-4000-8000-000000000001'], readOnlyCompanyIds: null })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee02-0000-4000-8000-000000000002', role: 'owner' }))
     const { call, reached } = resourceRoute('GET', { resource: 'operation' })
 
     const res = await call()
@@ -1248,14 +1585,14 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('NOT_FOUND')
-    expect(JSON.stringify(body)).not.toContain('company-2')
+    expect(JSON.stringify(body)).not.toContain('c0ffee02-0000-4000-8000-000000000002')
     expect(reached).not.toHaveBeenCalled()
   })
 
   it('lets an allowlisted company and an unrestricted key through', async () => {
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee02-0000-4000-8000-000000000002', role: 'owner' }))
 
-    key({ allowedCompanyIds: ['company-1', 'Company-2'], readOnlyCompanyIds: null })
+    key({ allowedCompanyIds: ['c0ffee01-0000-4000-8000-000000000001', 'C0FFEE02-0000-4000-8000-000000000002'], readOnlyCompanyIds: null })
     const allowlisted = resourceRoute('POST')
     expect((await allowlisted.call()).status).toBe(200)
     expect(allowlisted.reached).toHaveBeenCalledTimes(1)
@@ -1267,8 +1604,8 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
   })
 
   it('refuses a write in a read-only company with CONNECTION_READ_ONLY but serves a read', async () => {
-    key({ allowedCompanyIds: ['company-2'], readOnlyCompanyIds: ['company-2'] })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'owner' }))
+    key({ allowedCompanyIds: ['c0ffee02-0000-4000-8000-000000000002'], readOnlyCompanyIds: ['c0ffee02-0000-4000-8000-000000000002'] })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee02-0000-4000-8000-000000000002', role: 'owner' }))
 
     const write = resourceRoute('POST')
     const writeRes = await write.call()
@@ -1283,7 +1620,7 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
 
   it('refuses a viewer write with ROLE_READ_ONLY', async () => {
     key({ allowedCompanyIds: null, readOnlyCompanyIds: null })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'viewer' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee02-0000-4000-8000-000000000002', role: 'viewer' }))
     const { call, reached } = resourceRoute('POST')
 
     const res = await call()
@@ -1295,7 +1632,7 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
 
   it('applies the multi-user seat gate to a non-owner', async () => {
     key({ allowedCompanyIds: null, readOnlyCompanyIds: null })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'admin' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee02-0000-4000-8000-000000000002', role: 'admin' }))
     getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
     const { call, reached } = resourceRoute('GET', { resource: 'operation' })
 
@@ -1309,7 +1646,7 @@ describe('withApiV1: ctx.checkCompanyAccess (company resolved from a resource ro
   it('fails closed on a public endpoint context', async () => {
     const seen: { denied: Response | null } = { denied: null }
     const handler = withApiV1('health.check', async (_req, ctx) => {
-      seen.denied = await ctx.checkCompanyAccess('company-2')
+      seen.denied = await ctx.checkCompanyAccess('c0ffee02-0000-4000-8000-000000000002')
       return ok({ status: 'ok' }, { requestId: ctx.requestId })
     })
 
@@ -1326,7 +1663,7 @@ describe('withApiV1: ctx.companyWritable (the URL company gate verdict)', () => 
   function key(extra: Record<string, unknown>) {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: 'c0ffee01-0000-4000-8000-000000000001',
       scopes: ['payroll:read', 'payroll:write', 'operations:read'],
       mode: 'live',
       allowedCompanyIds: null,
@@ -1346,10 +1683,10 @@ describe('withApiV1: ctx.companyWritable (the URL company gate verdict)', () => 
       { requireScope: 'payroll:read' },
     )
     const res = await handler(
-      makeRequest('https://x.test/api/v1/companies/company-1/salary-runs/r/payslips/e/pdf', {
+      makeRequest('https://x.test/api/v1/companies/c0ffee01-0000-4000-8000-000000000001/salary-runs/r/payslips/e/pdf', {
         headers: { Authorization: 'Bearer gnubok_sk_x' },
       }),
-      companyParams('company-1'),
+      companyParams('c0ffee01-0000-4000-8000-000000000001'),
     )
     expect(res.status).toBe(200)
     return seen.writable
@@ -1357,37 +1694,37 @@ describe('withApiV1: ctx.companyWritable (the URL company gate verdict)', () => 
 
   it('is true for an owner on an unrestricted key', async () => {
     key({})
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
     expect(await writableOnUrlCompany()).toBe(true)
   })
 
   it('is true for a non-owner member the seat gate lets through', async () => {
-    key({ allowedCompanyIds: ['company-1'] })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'admin' }))
+    key({ allowedCompanyIds: ['c0ffee01-0000-4000-8000-000000000001'] })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'admin' }))
     expect(await writableOnUrlCompany()).toBe(true)
   })
 
   it('is false for a viewer membership', async () => {
     key({})
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'viewer' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'viewer' }))
     expect(await writableOnUrlCompany()).toBe(false)
   })
 
   it('is false when the key has read-only access to the URL company (case-insensitive)', async () => {
-    key({ allowedCompanyIds: ['company-1'], readOnlyCompanyIds: ['COMPANY-1'] })
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    key({ allowedCompanyIds: ['c0ffee01-0000-4000-8000-000000000001'], readOnlyCompanyIds: ['C0FFEE01-0000-4000-8000-000000000001'] })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee01-0000-4000-8000-000000000001', role: 'owner' }))
     expect(await writableOnUrlCompany()).toBe(false)
   })
 
   it('is false on a company-less route, even after ctx.checkCompanyAccess passes', async () => {
     key({})
-    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'owner' }))
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'c0ffee02-0000-4000-8000-000000000002', role: 'owner' }))
     const seen: { before?: boolean; denied?: Response | null; after?: boolean } = {}
     const handler = withApiV1<{ params: Promise<{ id: string }> }>(
       'operations.get',
       async (_req, ctx) => {
         seen.before = ctx.companyWritable
-        seen.denied = await ctx.checkCompanyAccess('company-2')
+        seen.denied = await ctx.checkCompanyAccess('c0ffee02-0000-4000-8000-000000000002')
         seen.after = ctx.companyWritable
         return ok({ ok: true }, { requestId: ctx.requestId })
       },
@@ -1422,5 +1759,67 @@ describe('withApiV1: ctx.companyWritable (the URL company gate verdict)', () => 
     )
 
     expect(seen).toEqual([false, false])
+  })
+})
+
+describe('companyWriteRefusal: the read-only rule the gate and GET /api-key share', () => {
+  const COMPANY = '8fd5b1f4-0000-4000-8000-00000000000a'
+
+  it('lets writes through for a non-viewer role in a company the key may write', () => {
+    expect(companyWriteRefusal('owner', COMPANY, null)).toBeNull()
+    expect(companyWriteRefusal('member', COMPANY, ['8fd5b1f4-0000-4000-8000-00000000000b'])).toBeNull()
+  })
+
+  it('refuses a viewer with ROLE_READ_ONLY, ahead of a read-only connection', () => {
+    expect(companyWriteRefusal('viewer', COMPANY, null)).toBe('ROLE_READ_ONLY')
+    expect(companyWriteRefusal('viewer', COMPANY, [COMPANY])).toBe('ROLE_READ_ONLY')
+  })
+
+  it('refuses a read-only connection with CONNECTION_READ_ONLY, compared case-insensitively', () => {
+    expect(companyWriteRefusal('admin', COMPANY, [COMPANY.toUpperCase()])).toBe('CONNECTION_READ_ONLY')
+  })
+})
+
+describe('withApiV1: request trace', () => {
+  const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736'
+  const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`
+
+  it('runs the handler in the trace of a valid traceparent header and names it in X-Trace-Id', async () => {
+    let seen: string | undefined
+    const handler = withApiV1('health.check', async (_req, ctx) => {
+      await Promise.resolve()
+      seen = getTraceId()
+      return ok({ status: 'ok' }, { requestId: ctx.requestId })
+    })
+
+    const res = await handler(makeRequest('https://x.test/api/v1/health', { headers: { traceparent: TRACEPARENT } }), emptyParams())
+    expect(res.status).toBe(200)
+    expect(seen).toBe(TRACE_ID)
+    expect(res.headers.get('X-Trace-Id')).toBe(TRACE_ID)
+    // The request id stays its own value.
+    expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
+    expect(getTraceId()).toBeUndefined()
+  })
+
+  it('mints a trace when the header is missing or invalid, and names it on a refusal too', async () => {
+    let seen: string | undefined
+    const handler = withApiV1('health.check', async (_req, ctx) => {
+      seen = getTraceId()
+      return ok({ status: 'ok' }, { requestId: ctx.requestId })
+    })
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/health', { headers: { traceparent: TRACEPARENT.toUpperCase() } }),
+      emptyParams(),
+    )
+    expect(seen).toMatch(/^[0-9a-f]{32}$/)
+    expect(seen).not.toBe(TRACE_ID)
+    expect(res.headers.get('X-Trace-Id')).toBe(seen)
+
+    const refused = await withApiV1('companies.list', async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }))(
+      makeRequest('https://x.test/api/v1/companies'),
+      emptyParams(),
+    )
+    expect(refused.status).toBe(401)
+    expect(refused.headers.get('X-Trace-Id')).toMatch(/^[0-9a-f]{32}$/)
   })
 })

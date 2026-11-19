@@ -20,8 +20,8 @@
 **K2 (BFNAR 2016:10 punkt 3.2)**:
 Förvaltningsberättelse → Resultaträkning → Balansräkning → (Kassaflödesanalys) → Noter
 
-**K3 (BFNAR 2012:1 punkt 3.4, 3.10)**:
-Same base order, plus optional Rapport över förändringar i eget kapital as separate statement between balansräkning and kassaflödesanalys.
+**K3 (BFNAR 2012:1 punkt 3.10)**:
+Förvaltningsberättelse → Resultaträkning → Balansräkning → (Kassaflödesanalys) → Noter. A company that specifies the year's förändring av eget kapital in a separate statement places it after the balansräkning (3.10 andra stycket). Punkt 3.4 is repealed (BFNAR 2021:3).
 
 ---
 
@@ -87,8 +87,10 @@ Notes governed by ÅRL 5 kap. §§ 4-24 (all companies) and §§ 25-49 (större 
 All K2 base notes from ÅRL 5:4-24 §§, plus:
 - Detailed **redovisningsprinciper** (punkt 8.3): all policies relevant for understanding (intäktsredovisning, leasing, materiella/immateriella anläggningstillgångar, financial instruments, inventory, uppskjuten skatt, etc.)
 - **Uppskjuten skatt** mandatory recognition (K3 kap. 29); större företag must disclose amounts and changes (ÅRL 5:36 §)
-- **Ändrade uppskattningar och bedömningar** if material (punkt 10.6, 10.12)
-- **Rättelse av fel** (punkt 10.12)
+- **Byte av redovisningsprincip** (punkt 10.6-10.7, all companies): nature of the change and adjustment amounts per post; a mindre företag that does not restate comparatives discloses the bristande jämförbarhet (kommentar to 10.7, ÅRL 3:5 fjärde stycket)
+- **Ändrade uppskattningar och bedömningar**: större företag only (punkt 10.10): nature of the change and its effect on the current year
+- **Rättelse av fel**: större företag only for the detailed note (punkt 10.13: nature, correction amount per post). A mindre företag may correct an error by restating the opening balance of the current year (punkt 10.12 tredje stycket, BFNAR 2025:3) and must then disclose the bristande jämförbarhet (punkt 10.14)
+- **Bedömningar och uppskattningsosäkerhet**: större företag only (punkt 8.4-8.5)
 
 ### Additional notes for större företag (both K2 and K3, ÅRL 5:25-49 §§)
 Könsfördelning (5:37-38 §§), löner/ersättningar/pensioner to board/CEO (5:39-44 §§), antal aktier/kvotvärde (5:34 §), koncerntransaktioner (5:26 §), dotterföretag/intresseföretag specifikation (5:27-30 §§), jämförelsetal required in all notes under K3 (punkt 3.5).
@@ -121,13 +123,21 @@ Also required: disclosure if kontrollbalansräkning prepared/should be (ABL 25:1
 
 Väsentliga händelser efter räkenskapsårets slut are NOT a förvaltningsberättelse rubrik under K2: they are disclosed in a note (ÅRL 5:22 §, punkt 18.20, 18.20A, 18.22; see section 4).
 
-### K3 additions (punkt 3.7-3.14):
-- Ägare with >10% of shares/votes must be disclosed
-- More detailed framtida utveckling och risker
-- Forsknings- och utvecklingspolicy (punkt 3.9)
-- Kontrollbalansräkning disclosure (punkt 3.11)
-- Miljöinformation for larger companies (punkt 3.12)
-- Option to place förändring av eget kapital as separate statement (punkt 3.10)
+### K3 additions (punkt 3.5A-3.14):
+All companies:
+- Punkt 3.7: (a) verksamhetens art och inriktning, (b) viktiga förändringar i verksamheten, (c) viktiga externa faktorer som påverkat ställning och resultat, (d) speciella omständigheter som i särskild grad berör företaget, (e) ägare med mer än tio procent av andelarna eller rösterna, (f) komplementär i kommanditbolag, (g) väsentliga förändringar i ägarstrukturen
+- Fortlevnad: if the company can no longer apply the going-concern principle, the förvaltningsberättelse says so (punkt 3.8; reasons and effect in a note, ÅRL 5:5)
+- Kontrollbalansräkning prepared or required (punkt 3.11)
+- Egna aktier held, acquired or transferred, and the reasons (ÅRL 6:1 andra stycket 6-9)
+- Jämförande information when needed to understand the report (punkt 3.5A)
+- Option to specify förändring av eget kapital in a separate statement after the balansräkning (punkt 3.10)
+
+Större företag only (ÅRL 6:1 femte stycket exempts mindre företag from andra stycket 3-5, tredje and fjärde stycket):
+- Förväntad framtida utveckling incl. väsentliga risker och osäkerhetsfaktorer (6:1 andra stycket 3)
+- Forskning och utveckling (6:1 andra stycket 4, punkt 3.9)
+- Filialer i utlandet (6:1 andra stycket 5)
+- Användning av finansiella instrument (6:1 tredje stycket)
+- Hållbarhetsupplysningar incl. miljö, and the miljöpåverkan of tillstånds- or anmälningspliktig verksamhet (6:1 fjärde stycket, punkt 3.12-3.13)
 
 ### Resultatdisposition
 ÅRL 6:2 § requires AB and ekonomisk förening to include förslag till resultatdisposition in förvaltningsberättelsen.
@@ -182,8 +192,8 @@ Mandatory in förvaltningsberättelsen. Minimum 4 years (current + 3 preceding).
 
 If nettoomsättning varies >30% between any two years, must be commented.
 
-### K3 (punkt 3.7)
-Rättvisande översikt over longer period, normally 4-5 years. No specific mandatory nyckeltal prescribed; company decides which KPIs best describe development.
+### K3 (BFN's kommentar to ÅRL 6:1 första stycket, before punkt 3.7)
+K3 has no flerårsöversikt point. The kommentar says the rättvisande översikt bör show the development over a longer period (normalt fyra till fem år), verbally or with nyckeltal. No mandatory nyckeltal; the company decides which describe the development.
 
 ---
 

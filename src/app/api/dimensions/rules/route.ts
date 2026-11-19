@@ -1,5 +1,5 @@
 /**
- * /api/dimensions/rules — per-account dimension policy (dimensions PR10).
+ * /api/dimensions/rules - per-account dimension policy (dimensions PR10).
  *
  * GET  ?account_number=4010 (optional) → every rule (or the account's).
  * POST → create a rule. 'required' blocks posting on the account without a
@@ -7,7 +7,7 @@
  * 'default' pre-fills at draft creation; 'fixed' always applies.
  *
  * Opt-in by construction: zero rules = the engine behaves exactly as before.
- * There is deliberately NO settings toggle for enforcement — a rule that
+ * There is deliberately NO settings toggle for enforcement - a rule that
  * exists but is ignored would be worse than either extreme; pausing a single
  * rule is what is_active is for.
  *
@@ -15,15 +15,11 @@
  * operations dimension-rules.* and their MCP tools.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateAccountDimensionRuleSchema, ListDimensionRulesQuerySchema } from '@/lib/api/schemas'
 import { createAccountDimensionRule, listAccountDimensionRules } from '@/lib/dimensions/rules-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
-
 
 export const GET = withRouteContext(
   'dimension.rules.list',

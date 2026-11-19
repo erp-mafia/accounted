@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingOperation } from '@/types'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
 import { commitPendingOperation } from '../commit'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 
@@ -86,6 +86,59 @@ describe('commitPendingOperation: update_customer', () => {
     })
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'customers')
     expect(supabase.from).toHaveBeenNthCalledWith(3, 'customers')
+  })
+
+  // crm#1198: the answer was a hand-kept field list without contact_person.
+  it('answers the record gnubok_get_customer reads, contact person and cc list included', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } }) // CAS claim
+    enqueue({ data: { id: CUSTOMER_ID, customer_type: 'swedish_business', contact_person: null } }) // current read
+    enqueue({
+      data: {
+        id: CUSTOMER_ID,
+        user_id: 'user-1',
+        company_id: 'company-1',
+        name: 'Test Customer AB',
+        customer_type: 'swedish_business',
+        contact_person: 'Anna Andersson',
+        invoice_email_cc_addresses: ['ekonomi@kund.example'],
+        invoice_email_bcc_addresses: null,
+        country: 'SE',
+        vat_number_validated: false,
+        vat_number_validated_at: null,
+        personal_number: null,
+      },
+    }) // update returning
+    enqueue({ data: null }) // dispatcher update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        customer_id: CUSTOMER_ID,
+        changes: { contact_person: 'Anna Andersson', invoice_email_cc_addresses: ['ekonomi@kund.example'] },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(findCall('customers', 'update')?.[0]).toEqual({
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['ekonomi@kund.example'],
+    })
+    expect(result.data).toMatchObject({
+      customer_id: CUSTOMER_ID,
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['ekonomi@kund.example'],
+      invoice_email_bcc_addresses: null,
+      personal_number_masked: null,
+    })
+    // The record's fields only: no internal scoping or the raw id key.
+    expect(result.data).not.toHaveProperty('id')
+    expect(result.data).not.toHaveProperty('user_id')
+    expect(result.data).not.toHaveProperty('company_id')
+    expect(result.data).not.toHaveProperty('vat_number_validated_at')
+    expect(result.data).not.toHaveProperty('personal_number')
   })
 
   it('auto-rejects when the customer no longer exists', async () => {
@@ -436,7 +489,7 @@ describe('commitPendingOperation: update_customer personal_number', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/individual/)
+    expect(result.error).toMatch(/Personnummer/)
     expect(findCall('customers', 'update')).toBeUndefined()
   })
 
@@ -457,7 +510,7 @@ describe('commitPendingOperation: update_customer personal_number', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/unrecognized key/i)
+    expect(result.error).toMatch(/personal_number/)
     expect(findCall('customers', 'update')).toBeUndefined()
   })
 
@@ -480,5 +533,49 @@ describe('commitPendingOperation: update_customer personal_number', () => {
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/encrypted personal number/i)
     expect(findCall('customers', 'update')).toBeUndefined()
+  })
+})
+
+// A privatperson has no org number: the same rule as staging, repeated at
+// commit as the tamper gate and for operations staged before staging
+// enforced it.
+describe('commitPendingOperation: update_customer org_number on an individual', () => {
+  it('refuses an org number that is not a personnummer without writing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: { customer_type: 'individual', org_number: null } })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ customer_id: CUSTOMER_ID, changes: { org_number: '556677-8899' } }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/privatperson har inget organisationsnummer/)
+    expect(findCall('customers', 'update')).toBeUndefined()
+  })
+
+  it('moves a personnummer staged in org_number into personal_number', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-customer-1' } })
+    enqueue({ data: { customer_type: 'individual', org_number: null } })
+    enqueue({ data: individualRow() })
+    enqueue({ data: null })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ customer_id: CUSTOMER_ID, changes: { org_number: PERSONAL_NUMBER } }),
+    )
+
+    expect(result.status).toBe('committed')
+    const updatePayload = findCall('customers', 'update')?.[0] as Record<string, unknown>
+    expect(updatePayload.org_number).toBeNull()
+    expect(decryptPersonnummer(updatePayload.personal_number as string)).toBe(PERSONAL_NUMBER)
   })
 })

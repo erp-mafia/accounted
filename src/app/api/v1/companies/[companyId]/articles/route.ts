@@ -4,8 +4,9 @@
  * Read-only (#895): exposes the article catalog so API callers can link
  * invoice items via items[].article_id and copy the article's price,
  * VAT rate, revenue-account override, and ROT/RUT arbetstypskod
- * (housework_type) onto the line. Article CRUD stays dashboard-only for
- * now; the register is small, so this is a plain (non-cursor) list with
+ * (housework_type) onto the line. Creating and editing an article has no
+ * v1 endpoint yet (the dashboard and the MCP tools gnubok_create_article /
+ * gnubok_update_article do); the register is small, so this is a plain (non-cursor) list with
  * an include_inactive toggle, mirroring the internal /api/articles GET.
  */
 import { z } from 'zod'

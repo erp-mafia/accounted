@@ -142,7 +142,7 @@ class SettledRecord {
    * A reading the record could not settle (the two readings disagreed, or a
    * check rejected it), as a hint for a name: shown, never cited, never in a
    * schedule. A lender whose name is under review is still better shown by
-   * that name than by nothing (prod 2026-09-22: "Lån" with no counterparty).
+   * that name than by nothing (seen 2026-09-22: "Lån" with no counterparty).
    */
   hint(name: string): string | null {
     const field = this.payload[name]

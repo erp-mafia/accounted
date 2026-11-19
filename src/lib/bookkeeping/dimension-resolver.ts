@@ -29,10 +29,9 @@ export type LineDimensions = Record<string, string>
  * layers cannot drift. Keys are canonical SIE dimension numbers (no leading
  * zeros); values must not contain characters that break SIE field framing.
  */
-export const DimensionsBagSchema = z.record(
-  z.string().regex(/^[1-9]\d*$/, 'Dimensionsnyckel måste vara ett SIE-dimensionsnummer'),
-  z.string().min(1).max(40).regex(/^[^"{}]+$/, 'Dimensionskod får inte innehålla ", { eller }')
-)
+export const DimensionKeySchema = z.string().regex(/^[1-9]\d*$/, 'Dimensionsnyckel måste vara ett SIE-dimensionsnummer')
+export const DimensionCodeSchema = z.string().min(1).max(40).regex(/^[^"{}]+$/, 'Dimensionskod får inte innehålla ", { eller }')
+export const DimensionsBagSchema = z.record(DimensionKeySchema, DimensionCodeSchema)
 
 export interface DimensionAliasInput {
   dimensions?: LineDimensions | null

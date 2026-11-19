@@ -25,6 +25,12 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+const resolveSkattekontoMock = vi.fn()
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: (...args: unknown[]) => resolveSkattekontoMock(...args),
+}))
+
 import { GET } from '../route'
 
 /** Chainable builder resolving queued {data,error} per from() in call order. */
@@ -85,6 +91,44 @@ describe('GET /api/settings/booking-templates', () => {
     expect(body.data).toHaveLength(2)
     expect(body.data.find((t) => t.id === 'tpl-1')?.is_hidden).toBe(false)
     expect(body.data.find((t) => t.id === 'tpl-2')?.is_hidden).toBe(true)
+  })
+
+  it('hands a 2012 firm the system skattekonto templates on 2012, its own templates as written (PH 175)', async () => {
+    resolveSkattekontoMock.mockResolvedValue('2012')
+    const skvLines = [
+      { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1 },
+      { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    const supabase = createQueuedSupabase([
+      { data: { team_id: null } },
+      {
+        data: [
+          { id: 'sys-skv', name: 'Insättning skattekonto', is_system: true, lines: skvLines },
+          { id: 'own-skv', name: 'Egen', is_system: false, company_id: 'c', lines: skvLines },
+        ],
+      },
+      { data: [] },
+      { data: [] },
+    ])
+    auth(supabase)
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string; lines: { account: string }[] }[]
+    }>(await GET(req(), { params: Promise.resolve({}) }))
+    expect(status).toBe(200)
+    expect(body.data.find((t) => t.id === 'sys-skv')?.lines.map((l) => l.account)).toEqual(['2012', '1930'])
+    expect(body.data.find((t) => t.id === 'own-skv')?.lines.map((l) => l.account)).toEqual(['1630', '1930'])
+  })
+
+  it('reads the skattekonto account only when a system template names 1630', async () => {
+    const supabase = createQueuedSupabase([
+      { data: { team_id: null } },
+      { data: TEMPLATES },
+      { data: [] },
+      { data: [] },
+    ])
+    auth(supabase)
+    expect((await GET(req(), { params: Promise.resolve({}) })).status).toBe(200)
+    expect(resolveSkattekontoMock).not.toHaveBeenCalled()
   })
 
   it('falls back to nothing hidden when the hidden lookup fails', async () => {

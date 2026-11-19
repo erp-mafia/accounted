@@ -4,6 +4,7 @@ import { buildSummaryVatLines, zeroVatReason } from '../summary-vat'
 describe('zeroVatReason', () => {
   it('names reverse charge and export, and calls any other 0 % momsfri', () => {
     expect(zeroVatReason('reverse_charge')).toBe('reverse_charge')
+    expect(zeroVatReason('reverse_charge_domestic')).toBe('reverse_charge_domestic')
     expect(zeroVatReason('export')).toBe('export')
     expect(zeroVatReason('standard_25')).toBe('exempt')
     expect(zeroVatReason('exempt')).toBe('exempt')
@@ -29,6 +30,16 @@ describe('buildSummaryVatLines', () => {
         groups: [{ rate: 0, base: 4200, vat: 0 }],
       }),
     ).toEqual([{ kind: 'vat', rate: 0, amount: 0, reason: 'reverse_charge' }])
+  })
+
+  it('shows Moms 0 % with omvänd betalningsskyldighet on a construction services invoice (crm#1007)', () => {
+    expect(
+      buildSummaryVatLines({
+        vatRegistered: true,
+        treatment: 'reverse_charge_domestic',
+        groups: [{ rate: 0, base: 50000, vat: 0 }],
+      }),
+    ).toEqual([{ kind: 'vat', rate: 0, amount: 0, reason: 'reverse_charge_domestic' }])
   })
 
   it('names export and momsfri for their 0 % lines', () => {

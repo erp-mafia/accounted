@@ -21,6 +21,7 @@ import {
 import { resolveInvoicePaymentQr, type InvoicePdfPaymentQr } from '@/lib/invoices/payment-qr'
 import { buildInvoicePaymentQrImage } from '@/lib/invoices/render-invoice-pdf'
 import { buildInvoicePaymentRows } from '@/lib/invoices/payment-rows'
+import { createStyles } from '@/lib/invoices/pdf/styles'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { CompanySettings, Customer, InvoiceItem } from '@/types'
 import { styleOf, treeElements, treeTextLeaves, type AnyElement } from './pdf-tree'
@@ -139,6 +140,30 @@ describe('invoice PDF: the one payment QR code', () => {
     expect(treeTextLeaves(tree).join('\n')).toContain('Skanna för att betala med Swish')
   })
 
+  it('draws no code for a company with only a bank account, and prints the account as text (crm#1191)', async () => {
+    const bankOnly = qrCompany({
+      bankgiro: null,
+      swish: null,
+      bank_name: 'Handelsbanken',
+      clearing_number: '6000',
+      account_number: '658159712',
+      iban: 'SE4560000000000658159712',
+    })
+    const resolved = resolveInvoicePaymentQr({ invoice: sentInvoice(), company: bankOnly, customer: business, lang: 'sv' })
+    expect(resolved).toEqual({ kind: null, mode: 'auto', reason: 'bank_account_only' })
+    const paymentQr = await qrFor(sentInvoice(), bankOnly, business)
+    expect(paymentQr).toBeNull()
+    const tree = render(sentInvoice(), bankOnly, { paymentQr })
+    expect(codes(tree)).toHaveLength(0)
+    expect(treeElements(tree).filter((el) => el.type === Path)).toHaveLength(0)
+    const texts = treeTextLeaves(paymentArea(tree))
+    expect(texts.join('\n')).not.toContain('Skanna med din bankapp')
+    // The page still tells the payer where to pay: the account, the IBAN and the invoice number as the message.
+    expect(texts).toContain('Handelsbanken, 6000-658159712')
+    expect(texts.join('\n')).toContain('SE45 6000 0000 0006 5815 9712')
+    expect(texts).toContain('Meddelande')
+  })
+
   it('prints exactly one code, whatever its kind', async () => {
     for (const customer of [business, privatePerson]) {
       const paymentQr = await qrFor(sentInvoice(), qrCompany(), customer)
@@ -174,6 +199,8 @@ describe('invoice PDF: payment rows come from the shared builder', () => {
     // The payment link prints short, and links to the full URL.
     const link = treeElements(area).find((el) => el.type === Link)
     expect(link?.props.src).toBe('https://pay.example.test/x')
+    // In the page's ink, underlined, not react-pdf's default web blue.
+    expect(styleOf(link!)).toMatchObject({ color: createStyles().page.color, textDecoration: 'underline' })
     expect(texts).toContain('pay.example.test/x')
     // The due date belongs to the amount, left of the rows.
     expect(texts.indexOf('Förfallodatum')).toBeGreaterThan(-1)
@@ -288,9 +315,83 @@ describe('invoice PDF: payment QR geometry', () => {
     })
   }
 
+  it('prints the payment link text in the real PDF, not only the link box', { timeout: 30_000 }, async () => {
+    // The area is drawn by a render callback, where react-pdf painted no text
+    // for a bare string child of a Link: the tree walk and the layout above
+    // still found the string, so only the PDF's own text layer shows it.
+    const invoice = sentInvoice({ payment_link_url: 'https://pay.example.test/x' })
+    const buffer = await renderToBuffer(render(invoice, qrCompany()))
+    const { getDocumentProxy, extractText } = await import('unpdf')
+    const { text } = await extractText(await getDocumentProxy(new Uint8Array(buffer)), { mergePages: true })
+    expect(text).toContain('Betala online')
+    expect(text).toContain('pay.example.test/x')
+  })
+
   it('renders a real PDF with the bank-app code drawn as a vector path', { timeout: 30_000 }, async () => {
     const paymentQr = await qrFor(sentInvoice(), qrCompany(), makeCustomer())
     const buffer = await renderToBuffer(render(sentInvoice(), qrCompany(), { paymentQr }))
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+  })
+
+  it('renders a real PDF without a code for a company that has only a bank account', { timeout: 30_000 }, async () => {
+    const bankOnly = qrCompany({ bankgiro: null, swish: null, clearing_number: '8169-5', account_number: '9139876057' })
+    const paymentQr = await qrFor(sentInvoice(), bankOnly, makeCustomer())
+    expect(paymentQr).toBeNull()
+    const pages = await layOut(render(sentInvoice(), bankOnly, { paymentQr }))
+    expect(pages).toHaveLength(1)
+    const area = findArea(pages[0])
+    expect(area).toBeTruthy()
+    const square = extents(area!).filter(
+      ({ node }) =>
+        node.type !== 'TEXT' &&
+        Math.abs((node.box?.width ?? 0) - PAYMENT_QR_PT) < 0.5 &&
+        Math.abs((node.box?.height ?? 0) - PAYMENT_QR_PT) < 0.5,
+    )
+    expect(square).toHaveLength(0)
+    const buffer = await renderToBuffer(render(sentInvoice(), bankOnly, { paymentQr }))
+    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+  })
+})
+
+describe('invoice PDF: an Autogiro invoice', () => {
+  const autogiroInvoice = sentInvoice({ autogiro_payer_number: '556677', payment_link_url: 'https://pay.example.test/x' })
+  const business = makeCustomer({ language: 'sv', customer_type: 'swedish_business' })
+
+  it('draws no code and prints the Autogiro heading, the sentence and the payer number instead of payment rows', async () => {
+    const paymentQr = await qrFor(autogiroInvoice, qrCompany(), business)
+    expect(paymentQr).toBeNull()
+    const tree = render(autogiroInvoice, qrCompany(), { paymentQr })
+    expect(codes(tree)).toHaveLength(0)
+    const texts = treeTextLeaves(paymentArea(tree))
+    const heading = texts.indexOf('Autogiro')
+    const sentence = texts.indexOf('Beloppet dras från ditt konto via Autogiro på förfallodagen.')
+    const label = texts.indexOf('Betalarnummer')
+    expect(heading).toBeGreaterThan(-1)
+    expect(sentence).toBeGreaterThan(heading)
+    expect(label).toBeGreaterThan(sentence)
+    expect(texts).toContain('556677')
+    // The amount and the due date still print.
+    expect(texts).toContain('Att betala')
+    expect(texts).toContain('Förfallodatum')
+    for (const manual of ['Bankgiro', 'OCR/Referens', 'Meddelande', 'Betala online', 'Swish']) {
+      expect(texts, manual).not.toContain(manual)
+    }
+    expect(texts.join('\n')).not.toContain('Skanna')
+  })
+
+  it('fits the block inside the fixed payment area, and the real PDF carries the words', { timeout: 30_000 }, async () => {
+    const pages = await layOut(render(autogiroInvoice, qrCompany()))
+    expect(pages).toHaveLength(1)
+    const area = findArea(pages[0])
+    expect(area).toBeTruthy()
+    for (const { node, bottom } of extents(area!)) {
+      expect(bottom, `"${textOf(node).slice(0, 30)}" spills out of the payment area`).toBeLessThanOrEqual(PAYMENT_AREA_HEIGHT_PT + 0.5)
+    }
+    const buffer = await renderToBuffer(render(autogiroInvoice, qrCompany()))
+    const { getDocumentProxy, extractText } = await import('unpdf')
+    const { text } = await extractText(await getDocumentProxy(new Uint8Array(buffer)), { mergePages: true })
+    expect(text).toContain('Autogiro')
+    expect(text).toContain('556677')
+    expect(text).not.toContain('5050-1055')
   })
 })

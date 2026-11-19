@@ -3,7 +3,7 @@ import { getTranslations } from 'next-intl/server'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { cn, formatDate } from '@/lib/utils'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table-classes'
 import { fetchClientOverview } from '@/lib/clients/fetch-client-overview'
 import { getDashboardAuthContext } from '../request-context'
 
@@ -46,33 +46,27 @@ export default async function ByraHomePage() {
     })
     .slice(0, 5)
 
-  const stats = [
-    { label: t('stats_clients'), value: clients.length },
-    { label: t('stats_attention'), value: needsAction },
-    { label: t('stats_deadlines'), value: urgentDeadlines },
-  ]
-
   return (
     <div className="space-y-8">
       <PageHeader title={overview.team.name || t('home_title')} />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {stats.map((stat) => (
-          <div key={stat.label} className="rounded-lg border border-border p-4">
-            <div className="text-xs text-muted-foreground">{stat.label}</div>
-            <div className="mt-1 font-display text-xl tabular-nums">{stat.value}</div>
-          </div>
-        ))}
-      </div>
+      {/* One line from the counts, where a strip of number cards stood: what waits first, in the strong ink. */}
+      <p className="text-base text-muted-foreground">
+        <span className="font-medium text-strong">{t('home_summary_attention', { count: needsAction })}</span>
+        {' · '}
+        {t('home_summary_deadlines', { count: urgentDeadlines })}
+        {' · '}
+        {t('home_summary_clients', { count: clients.length })}
+      </p>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-sm font-medium text-muted-foreground">
           {t('deadlines_title')}
         </h2>
         {deadlineRows.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('deadlines_empty')}</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -83,7 +77,10 @@ export default async function ByraHomePage() {
               <tbody className="stagger-enter">
                 {deadlineRows.map((row) => (
                   <tr key={row.companyId} className="transition-colors duration-150 hover:bg-secondary/35">
-                    <td className={cn(TD_CLASS, 'font-medium text-foreground')}>{row.name}</td>
+                    {/* TD_CLASS comes from a client module: on the server it is a reference, so it is passed whole and never composed with cn(). */}
+                    <td className={TD_CLASS}>
+                      <span className="whitespace-nowrap font-medium text-foreground">{row.name}</span>
+                    </td>
                     <td className={TD_CLASS}>
                       <span className="flex items-center gap-2">
                         {row.nextDeadline!.urgency === 'overdue' && (
@@ -100,7 +97,7 @@ export default async function ByraHomePage() {
                         >
                           {row.nextDeadline!.title}
                         </span>
-                        <span className="text-muted-foreground tabular-nums">
+                        <span className="whitespace-nowrap text-muted-foreground tabular-nums">
                           {formatDate(row.nextDeadline!.dueDate)}
                         </span>
                       </span>

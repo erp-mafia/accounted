@@ -4,18 +4,32 @@ import {
   convertTransaction,
   getAccountBalance,
   SessionExpiredError,
+  AspspUnavailableError,
   ConnectorSyncError,
+  ProviderCredentialError,
   bankRateLimited,
+  isCredentialRejection,
 } from './api-client'
 import { historyWindowDays } from './history-window'
+import { psuHeadersOf } from './psu-headers'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
-import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
+import { bankConnectorMode } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
-import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
+import { buildStableExternalIds, dropRepeatedBankRows, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
+import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { bankBookingDay } from '@/lib/dates/iso'
+import { ConsentOverError, ProviderUnavailableError, RateLimitedError } from '@/lib/bank-feed/connect'
+import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from '@/lib/bank-feed/party'
+import { syncOpenPaymentsAccount } from '@/lib/bank-feed/sync'
+import { recordBankFeedPageArrival } from '@/lib/bank-feed/page-arrival'
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
 import type { StoredAccount, TransactionsFetchStrategy } from '../types'
+import { createLogger } from '@/lib/logger'
+
+const archiveLog = createLogger('enable-banking/sync')
 
 /** Ingest function signature: matches lib/transactions/ingest */
 export type IngestFn = (
@@ -36,6 +50,13 @@ export interface SyncOptions {
    * to fetch the deepest available history (slower); omit for incremental syncs.
    */
   strategy?: TransactionsFetchStrategy
+  /**
+   * The person asking (IP and user agent), so the bank does not count the
+   * read against the consent's unattended budget. Sent to Open Payments and,
+   * as PSU headers (./psu-headers.ts), to Enable Banking; not through the
+   * hosted connector, whose sync contract has no field for it.
+   */
+  signer?: BankFeedSignerInput
 }
 
 /**
@@ -51,10 +72,24 @@ export interface SyncResult {
   imported: number
   duplicates: number
   errors: number
+  /** The rows this read inserted (IngestResult.transaction_ids): what transaction.synced announces. */
+  transactionIds?: string[]
   /** Earliest booking date the ASPSP returned. Undefined when no transactions came back. */
   returnedMinBookingDate?: string
   /** Latest booking date the ASPSP returned. Undefined when no transactions came back. */
   returnedMaxBookingDate?: string
+  /**
+   * Entries the bank sent that are not booked (pending, or no booking date),
+   * so not imported. Omitted when none: a sync that imported nothing can then
+   * say why instead of reading as "the connection only reads the balance" (PH 221).
+   */
+  notBooked?: number
+  /**
+   * Booked entries in another currency than the account's, set aside by
+   * ingest instead of failing the batch (IngestResult.other_currency, crm#1767).
+   * Omitted when none.
+   */
+  otherCurrency?: number
   /** The date_from asked of the bank. */
   requestedFromDate: string
   /**
@@ -66,6 +101,12 @@ export interface SyncResult {
   effectiveFromDate?: string
   /** True when the bank refused the requested window and the history was cut. */
   historyNarrowed: boolean
+  /**
+   * True when the read stopped at the page cap while the bank still had
+   * pages: the window was not read to its end, so the result is partial and a
+   * first import built on it is not complete (PH 195).
+   */
+  truncated?: boolean
 }
 
 /** The subset of a converted bank transaction that the ingest mapping below reads. */
@@ -76,12 +117,43 @@ interface BookedTransactionFields {
   counterparty_name?: string
   counterparty_account?: string
   reference?: string
+  value_date?: string
+  provider_transaction_id?: string
+  /** The end-to-end id of a payment order the debit settles; the service sends it since contract 2026-10-12. */
+  end_to_end_id?: string
+  /** The counterparty's IBAN on its own, when the service separated it from the account. */
+  counterparty_iban?: string
   merchant_category_code?: string
   bank_transaction_code?: string
   proprietary_bank_transaction_code?: string
+  /** The enrichment fields of contract 2026-10-15, when the service sends them; the direct path never does. */
+  counterparty_org_number?: string
+  instructed_amount?: number
+  instructed_currency?: string
+  exchange_rate?: number
+  balance_after?: number
+  is_enriched?: boolean
 }
 
 const CONNECTOR_SYNC_TIMEOUT_MS = 120_000
+
+/**
+ * The raw page each fetched row arrived in, rebuilt from the pages themselves:
+ * page p holds the next `transactions.length` rows, in order. Null when the
+ * counts do not add up to the fetched rows, so no row links to a wrong page.
+ */
+function pageOfEachRow(rawPages: string[], rowCount: number): number[] | null {
+  const pages: number[] = []
+  try {
+    rawPages.forEach((page, index) => {
+      const rows = (JSON.parse(page) as { transactions?: unknown[] }).transactions
+      for (let i = 0; i < (Array.isArray(rows) ? rows.length : 0); i++) pages.push(index)
+    })
+  } catch {
+    return null
+  }
+  return pages.length === rowCount ? pages : null
+}
 
 /**
  * Booked transactions through the hosted connector. The session id is the
@@ -115,12 +187,7 @@ async function fetchBookedViaConnector(
         method: 'POST',
         signal: controller.signal,
         redirect: 'error',
-        headers: {
-          Authorization: `Bearer ${connector.key}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          [CONNECTOR_COMPANY_HEADER]: args.companyId,
-        },
+        headers: connectorHeaders({ key: connector.key, companyId: args.companyId, json: true }),
         body: JSON.stringify({
           session_id: args.sessionId,
           account_uid: args.account.uid,
@@ -163,6 +230,13 @@ async function fetchBookedViaConnector(
     if (code === 'CONNECTOR_BANK_RATE_LIMITED') {
       throw bankRateLimited(response, text, args.fromDate)
     }
+    // The connector refused this installation's key (or relayed Enable
+    // Banking refusing ours): every call of the run would answer the same,
+    // so it is the credential-level error the circuit breaker reads, never a
+    // dead session.
+    if (isCredentialRejection(response.status, text)) {
+      throw new ProviderCredentialError(response.status, text.slice(0, 500))
+    }
     throw new ConnectorSyncError(response.status, code, text.slice(0, 500))
   }
   const parsed = bankSyncResponseSchema.safeParse(json)
@@ -179,6 +253,77 @@ async function fetchBookedViaConnector(
     throw new ConnectorSyncError(response.status, 'CONNECTOR_BAD_SHAPE', text.slice(0, 500), issues)
   }
   return parsed.data
+}
+
+/**
+ * Entry statuses that are not booked, whatever date the bank puts on them.
+ * Svea dates its pending card purchases (status PDNG with a booking_date, in
+ * the purchase's own currency): taken as booked, such an entry was imported
+ * before it settled, and one in USD on a SEK account stopped the account's
+ * whole sync at the ingest guard. Any other status, or none, keeps the rule
+ * that a booking_date means booked.
+ */
+const NOT_BOOKED_STATUSES = new Set(['PDNG', 'HOLD', 'SCHD', 'CNCL', 'RJCT'])
+
+function isNotBookedStatus(status: string | undefined): boolean {
+  return typeof status === 'string' && NOT_BOOKED_STATUSES.has(status.trim().toUpperCase())
+}
+
+/** The rows ingest set aside as another currency than the account's (IngestResult.other_currency). */
+const countOtherCurrency = (byCurrency: Record<string, number> | undefined) =>
+  Object.values(byCurrency ?? {}).reduce((sum, rows) => sum + rows, 0)
+
+/** A date the bank sent, as the Swedish day (bankBookingDay); a value that is no date passes as sent. */
+const trimmedDate = (value: string | null | undefined) =>
+  typeof value === 'string' && value.trim() !== '' ? bankBookingDay(value) ?? value.trim() : null
+
+/**
+ * The day a fetched entry is booked on, or null when it is not booked (and
+ * so not imported). A booking_date means booked, unless the bank marks the
+ * entry as not booked (NOT_BOOKED_STATUSES). An entry the bank itself marks
+ * BOOK but sends without a booking_date is booked too, on its value_date,
+ * else its transaction_date: PayPal sends every settled entry that way, and
+ * read as pending they left its feed empty (crm#1767). Without a booking_date
+ * and without that status nothing says the entry is settled, so it waits.
+ */
+export function bookedDateOf(entry: {
+  status?: string
+  booking_date?: string | null
+  value_date?: string | null
+  transaction_date?: string | null
+}): string | null {
+  if (isNotBookedStatus(entry.status)) return null
+  const bookingDate = trimmedDate(entry.booking_date)
+  if (bookingDate) return bookingDate
+  if (entry.status?.trim().toUpperCase() !== 'BOOK') return null
+  return trimmedDate(entry.value_date) ?? trimmedDate(entry.transaction_date)
+}
+
+/** Enable Banking's TransactionStatus values; anything else is logged as OTHER, never verbatim. */
+const TRANSACTION_STATUSES = new Set(['BOOK', 'CNCL', 'HOLD', 'OTHR', 'PDNG', 'RJCT', 'SCHD'])
+
+const present = (value: unknown) => typeof value === 'string' && value.trim() !== ''
+
+/**
+ * Why entries were skipped as not booked, counted by the bank's status and
+ * the dates the entry carried, e.g. { 'BOOK/value_date': 3 } or
+ * { 'PDNG/booking_date+value_date': 1 }. Codes and field names only, never a
+ * value, so the log line can say whether a bank marks its rows pending or
+ * books them without a booking_date (PH 221: every Wamo entry was skipped,
+ * and the archived page is the only other place that says which).
+ */
+export function notBookedReasons(
+  entries: ReadonlyArray<{ status?: string; booking_date?: string | null; value_date?: string | null; transaction_date?: string | null }>,
+): Record<string, number> {
+  const reasons: Record<string, number> = {}
+  for (const entry of entries) {
+    const raw = typeof entry.status === 'string' ? entry.status.trim().toUpperCase() : ''
+    const status = raw === '' ? 'NONE' : TRANSACTION_STATUSES.has(raw) ? raw : 'OTHER'
+    const dates = (['booking_date', 'value_date', 'transaction_date'] as const).filter((field) => present(entry[field]))
+    const key = `${status}/${dates.length > 0 ? dates.join('+') : 'no_dates'}`
+    reasons[key] = (reasons[key] ?? 0) + 1
+  }
+  return reasons
 }
 
 /**
@@ -207,12 +352,24 @@ export async function syncAccountTransactions(
   if (account.ledger_account && account.ledger_account !== bankRoute.ledgerAccount) {
     throw Object.assign(new Error('Bank account configuration changed before sync; reload the connection'), { code: 'PT409' })
   }
-  console.log('[enable-banking] syncAccountTransactions starting', {
+  // The route names the aggregator of the row it just verified. An Open
+  // Payments connection is read through Connect's AIS family
+  // (lib/bank-feed/sync.ts); its failures come back as the errors every
+  // Enable Banking caller already handles, so the row is flipped, cooled down
+  // or left alone exactly as for an Enable Banking session. Everything below
+  // this branch is the Enable Banking path, unchanged.
+  if (aggregatorOf(bankRoute) === 'open_payments') {
+    return syncOpenPaymentsAccountAsEnableBanking(supabase, companyId, userId, connectionId, account, fromDate, toDate, bankRoute, ingest, syncOptions)
+  }
+  // The person asking, as PSU headers: absent on the cron and the agent sync.
+  const psu = psuHeadersOf(syncOptions?.signer)
+  archiveLog.info('syncAccountTransactions starting', {
     connectionId,
     accountUid: account.uid,
     fromDate,
     toDate,
     strategy: syncOptions?.strategy,
+    personPresent: psu !== undefined,
   })
 
   // Two ways to obtain booked transactions. Direct: this installation's own
@@ -224,10 +381,15 @@ export async function syncAccountTransactions(
   // the connector produces byte-identical stored keys.
   const connector = bankConnectorMode(companyId)
   let rawPages: string[]
-  let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string }>
+  // page: index into rawPages, when known (the direct path rebuilds it from the
+  // pages; the connector reports it, unless the service predates the field).
+  let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string; page?: number }>
   let totalFetched: number
+  // The skipped entries by reason (notBookedReasons); the connector reports a count only.
+  let skippedReasons: Record<string, number> | undefined
   let effectiveFromDate: string | undefined
   let historyNarrowed = false
+  let truncated = false
   if (connector) {
     const remote = await fetchBookedViaConnector(connector, {
       sessionId: bankRoute.sessionId,
@@ -240,6 +402,7 @@ export async function syncAccountTransactions(
     })
     rawPages = remote.raw_pages
     totalFetched = remote.transactions.length + remote.skipped_pending
+    truncated = remote.truncated === true
     bookedEntries = remote.transactions.map((tx) => ({
       tx: {
         amount: tx.amount,
@@ -248,11 +411,24 @@ export async function syncAccountTransactions(
         counterparty_name: tx.counterparty_name ?? undefined,
         counterparty_account: tx.counterparty_account ?? undefined,
         reference: tx.reference ?? undefined,
+        value_date: tx.value_date ?? undefined,
+        provider_transaction_id: tx.provider_transaction_id ?? undefined,
+        end_to_end_id: tx.end_to_end_id ?? undefined,
+        counterparty_iban: tx.counterparty_iban ?? undefined,
         merchant_category_code: tx.merchant_category_code ?? undefined,
         bank_transaction_code: tx.bank_transaction_code ?? undefined,
         proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code ?? undefined,
+        counterparty_org_number: tx.counterparty_org_number ?? undefined,
+        instructed_amount: tx.instructed_amount ?? undefined,
+        instructed_currency: tx.instructed_currency ?? undefined,
+        exchange_rate: tx.exchange_rate ?? undefined,
+        balance_after: tx.balance_after ?? undefined,
+        is_enriched: tx.is_enriched ?? undefined,
+        // tx.parts (the Bankgirot split) is parsed and dropped here: the parts
+        // a later change stores it.
       },
       bookingDate: tx.booking_date,
+      page: tx.raw_page_index ?? undefined,
     }))
   } else {
     const fetched = await getAllTransactionsWithRaw(
@@ -260,12 +436,13 @@ export async function syncAccountTransactions(
       fromDate,
       toDate,
       syncOptions?.strategy,
-      { acceptedHistoryDays: account.accepted_history_days },
+      { acceptedHistoryDays: account.accepted_history_days, ...(psu ? { psu } : {}) },
     )
     rawPages = fetched.rawPages
     totalFetched = fetched.transactions.length
     effectiveFromDate = fetched.effectiveDateFrom
     historyNarrowed = fetched.narrowed === true
+    truncated = fetched.truncated === true
     // Remember the widest window this bank has ANSWERED for the account, so a
     // later rejection of a window no wider than it is read as the bank being
     // unavailable rather than as a too-wide window (#2202). Never shrinks:
@@ -286,6 +463,7 @@ export async function syncAccountTransactions(
       })
     }
     const bankTransactions = fetched.transactions.map(tx => convertTransaction(tx, account.currency))
+    const rowPages = pageOfEachRow(rawPages, fetched.transactions.length)
     // Only ingest BOOKED transactions: those the ASPSP returned with a real
     // booking_date. Pending entries are intentionally skipped: a pending row is
     // unstable across syncs (a later "synka nu" returns the same transaction
@@ -295,15 +473,23 @@ export async function syncAccountTransactions(
     // that already exists. Gating the import set on a stable booking_date
     // removes the drift at the source, and leaves booked rows' ids byte-identical.
     //
-    // booking_date is read from the RAW transaction, index-aligned with
+    // The booked day is read from the RAW transaction, index-aligned with
     // bankTransactions: convertTransaction's booking_date already falls back to
-    // value_date/today, so it cannot tell booked from pending.
+    // value_date/today, so it cannot tell booked from pending. A date is not
+    // enough on its own either: an entry the bank marks as not booked
+    // (NOT_BOOKED_STATUSES) is skipped whatever date it carries, and one the
+    // bank marks BOOK counts as booked without a booking_date (bookedDateOf).
+    const skippedRaw: typeof fetched.transactions = []
     bookedEntries = bankTransactions.flatMap((tx, i) => {
-      const bookingDate = fetched.transactions[i]?.booking_date
-      return typeof bookingDate === 'string' && bookingDate.trim() !== ''
-        ? [{ tx, bookingDate: bookingDate.trim() }]
-        : []
+      const raw = fetched.transactions[i]
+      const bookingDate = raw ? bookedDateOf(raw) : null
+      if (bookingDate) {
+        return [{ tx, bookingDate, page: rowPages?.[i] }]
+      }
+      if (raw) skippedRaw.push(raw)
+      return []
     })
+    if (skippedRaw.length > 0) skippedReasons = notBookedReasons(skippedRaw)
   }
 
   // Log the actual date range returned so we can compare against the requested
@@ -315,7 +501,7 @@ export async function syncAccountTransactions(
     if (!maxBookingDate || bookingDate > maxBookingDate) maxBookingDate = bookingDate
   }
 
-  console.log('[enable-banking] Fetched transactions', {
+  archiveLog.info('Fetched transactions', {
     connectionId,
     accountUid: account.uid,
     via: connector ? 'connector' : 'direct',
@@ -327,16 +513,37 @@ export async function syncAccountTransactions(
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
     strategy: syncOptions?.strategy,
+    ...(truncated ? { truncated: true } : {}),
   })
 
   const skippedPending = totalFetched - bookedEntries.length
   if (skippedPending > 0) {
-    console.log('[enable-banking] Skipped pending transactions (no booking_date)', {
+    archiveLog.info('Skipped pending transactions (not booked or no booking_date)', {
       connectionId,
       accountUid: account.uid,
       skippedPending,
       total: totalFetched,
+      ...(skippedReasons ? { reasons: skippedReasons } : {}),
     })
+  }
+
+  // A bank entry this response served more than once is one transaction: some
+  // banks repeat rows across pages (crm#1295). Dropped before the ids are
+  // built, so no copy is stored as a transaction of its own (dropRepeatedBankRows).
+  const uniqueEntries = dropRepeatedBankRows(bookedEntries, ({ tx, bookingDate }) => ({
+    providerTransactionId: tx.provider_transaction_id,
+    date: bookingDate,
+    amount: tx.amount,
+    description: tx.description,
+  }))
+  if (uniqueEntries.length < bookedEntries.length) {
+    console.warn('[enable-banking] Dropped bank rows the response repeated', {
+      connectionId,
+      accountUid: account.uid,
+      repeated: bookedEntries.length - uniqueEntries.length,
+      total: bookedEntries.length,
+    })
+    bookedEntries = uniqueEntries
   }
 
   // Derive a stable, content-based external_id per booked transaction. We
@@ -367,13 +574,44 @@ export async function syncAccountTransactions(
     bookedEntries.map(({ tx, bookingDate }) => ({ date: bookingDate, amount: tx.amount }))
   )
 
+  // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap). The
+  // id of each archived page is kept, so every row links to the page it came
+  // in, and each page is recorded as a bank_feed arrival.
+  const archivedPageIds: Array<string | null> = []
+  for (let i = 0; i < rawPages.length; i++) {
+    archivedPageIds.push(null)
+    try {
+      const fileName = `psd2-response_${connectionId}_${account.uid}_${new Date().toISOString().replace(/[:.]/g, '-')}_p${i + 1}.json`
+      const buffer = new TextEncoder().encode(rawPages[i]).buffer as ArrayBuffer
+      const archived = await uploadDocument(supabase, userId, companyId,
+        { name: fileName, buffer, type: 'application/json' },
+        { upload_source: 'api' }
+      )
+      archivedPageIds[i] = archived.id
+    } catch (archiveError) {
+      // Archival failure must not fail the sync, but the page's rows land without
+      // their BFL 7 kap evidence for good (a re-sync deduplicates them): an error.
+      archiveLog.error('raw bank response page not archived', archiveError as Error, { connectionId, companyId, accountUid: account.uid, page: i + 1 })
+    }
+    // How the page came in (best effort, never fails the sync).
+    const pageId = archivedPageIds[i]
+    if (pageId) {
+      await recordBankFeedPageArrival(supabase, {
+        companyId, userId, documentId: pageId, connectionId, accountUid: account.uid, page: i + 1, aggregator: 'enable_banking',
+      })
+    }
+  }
+
   // Convert Enable Banking format to generic RawTransaction. counterparty
   // identification: prefer IBAN (international, normalized) over BBAN/BG
   // numbers: the own-account detector matches on IBAN first, falling back
   // to counterparty_account for Swedish domestic transfers.
-  const rawTransactions: RawTransaction[] = bookedEntries.map(({ tx, bookingDate }, i) => {
+  const rawTransactions: RawTransaction[] = bookedEntries.map(({ tx, bookingDate, page }, i) => {
     const cpAccount = tx.counterparty_account ?? null
     const looksLikeIban = cpAccount && /^[A-Z]{2}\d/.test(cpAccount.replace(/\s+/g, ''))
+    const rowCurrency = (tx.currency || account.currency).toUpperCase()
+    const instructedCurrency = tx.instructed_currency?.toUpperCase() || null
+    const foreignPurchase = tx.instructed_amount != null && instructedCurrency !== null && instructedCurrency !== rowCurrency
     return {
       // The booked date is both the stable dedup anchor (see bookedEntries) and
       // the accounting-correct ledger date; keep it identical to the value the
@@ -388,10 +626,25 @@ export async function syncAccountTransactions(
       mcc_code: tx.merchant_category_code ? parseInt(tx.merchant_category_code, 10) : null,
       merchant_name: tx.counterparty_name || null,
       reference: tx.reference || null,
+      value_date: tx.value_date || null,
+      provider_transaction_id: tx.provider_transaction_id || null,
+      // Carried when the service sends them (contract 2026-10-12); the direct
+      // path never does, so every other field and every stored key is unchanged.
+      end_to_end_id: tx.end_to_end_id || null,
+      raw_document_id: page === undefined ? null : archivedPageIds[page] ?? null,
       bank_connection_id: connectionId,
       import_source: 'enable_banking',
-      counterparty_iban: looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null,
+      counterparty_iban: tx.counterparty_iban?.replace(/\s+/g, '').toUpperCase() || (looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null),
       counterparty_account: !looksLikeIban ? cpAccount : null,
+      // The enrichment fields (contract 2026-10-15), the same way the Open
+      // Payments mapper carries them (lib/bank-feed/sync.ts): the bank's rate
+      // only on a SEK account, where exchange_rate has no Riksbanken meaning.
+      counterparty_org_number: tx.counterparty_org_number || null,
+      instructed_amount: foreignPurchase ? tx.instructed_amount ?? null : null,
+      instructed_currency: foreignPurchase ? instructedCurrency : null,
+      exchange_rate: foreignPurchase && rowCurrency === 'SEK' ? tx.exchange_rate ?? null : null,
+      balance_after: tx.balance_after ?? null,
+      is_enriched: tx.is_enriched ?? null,
       // Verbatim transaction-type codes: the ingest boundary classifies them
       // into transaction_method and persists them as evidence columns.
       bank_transaction_code: tx.bank_transaction_code || null,
@@ -404,31 +657,18 @@ export async function syncAccountTransactions(
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
   // Per-account ledger routing: the mapping engine consumes settlementAccount
   // for the bank-side leg. The verified route also guards the database insert.
-  // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap)
-  for (let i = 0; i < rawPages.length; i++) {
-    try {
-      const fileName = `psd2-response_${connectionId}_${account.uid}_${new Date().toISOString().replace(/[:.]/g, '-')}_p${i + 1}.json`
-      const buffer = new TextEncoder().encode(rawPages[i]).buffer as ArrayBuffer
-      await uploadDocument(supabase, userId, companyId,
-        { name: fileName, buffer, type: 'application/json' },
-        { upload_source: 'api' }
-      )
-    } catch (archiveError) {
-      console.error(`[enable-banking] Failed to archive raw response page ${i + 1}:`, archiveError)
-      // Archival failure must not fail the sync
-    }
-  }
 
   const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)
 
-  console.log('[enable-banking] Ingest result', {
+  archiveLog.info('Ingest result', {
     connectionId,
     accountUid: account.uid,
     imported: ingestResult.imported,
     duplicates: ingestResult.duplicates,
     errors: ingestResult.errors,
+    ...(ingestResult.other_currency ? { otherCurrency: ingestResult.other_currency } : {}),
   })
-
+  const otherCurrency = countOtherCurrency(ingestResult.other_currency)
 
   if (ingestResult.errors > 0) {
     // Keep the previous cursor so a retry fetches the incomplete batch again.
@@ -451,15 +691,16 @@ export async function syncAccountTransactions(
     : Number.POSITIVE_INFINITY
   const balanceIsFresh = balanceAgeMs >= 0 && balanceAgeMs < BALANCE_MAX_AGE_MS
   if (balanceIsFresh) {
-    console.log('[enable-banking] Skipping balance refresh (stored balance is fresh)', {
+    archiveLog.info('Skipping balance refresh (stored balance is fresh)', {
       connectionId,
       accountUid: account.uid,
       balanceUpdatedAt: account.balance_updated_at,
     })
   } else {
     try {
-      const balance = await getAccountBalance(account.uid)
-      // null = the ASPSP returned no balances at all. Keep the previous
+      const balance = await getAccountBalance(account.uid, psu, account.currency)
+      // null = the ASPSP returned no balances at all, or none in the
+      // account's currency (getAccountBalance). Keep the previous
       // stored value and timestamp; writing a fabricated 0 with a fresh
       // timestamp would pin "the bank reports 0 kr" for the next 12h on
       // every balance surface.
@@ -469,6 +710,11 @@ export async function syncAccountTransactions(
         // fresh booked figure would misstate what can be spent.
         account.available_balance = balance.available ?? undefined
         account.balance_updated_at = new Date().toISOString()
+        // Replaced with the balance, never kept: an old day next to a new
+        // balance would date it wrong.
+        account.balance_reference = balance.referenceDate
+          ? { date: balance.referenceDate, type: balance.type }
+          : null
       }
     } catch {
       // Keep previous balance, don't update timestamp
@@ -479,10 +725,87 @@ export async function syncAccountTransactions(
     imported: ingestResult.imported,
     duplicates: ingestResult.duplicates,
     errors: ingestResult.errors,
+    transactionIds: ingestResult.transaction_ids,
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
     requestedFromDate: fromDate,
     effectiveFromDate,
     historyNarrowed,
+    ...(truncated ? { truncated: true } : {}),
+    ...(skippedPending > 0 ? { notBooked: skippedPending } : {}),
+    ...(otherCurrency > 0 ? { otherCurrency } : {}),
   }
+}
+
+/**
+ * The Open Payments branch of syncAccountTransactions: the same signature and
+ * result, through lib/bank-feed/sync.ts, with the typed Connect failures
+ * translated into the classes this extension's callers dispatch on.
+ */
+async function syncOpenPaymentsAccountAsEnableBanking(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  connectionId: string,
+  account: StoredAccount,
+  fromDate: string,
+  toDate: string,
+  bankRoute: Awaited<ReturnType<typeof resolveBankIngestRoute>>,
+  ingest: IngestFn,
+  syncOptions?: SyncOptions,
+): Promise<SyncResult> {
+  const { data: row } = await supabase
+    .from('bank_connections')
+    .select('affiliated_aspsp_id, psu_type')
+    .eq('id', connectionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const connection = (row ?? {}) as { affiliated_aspsp_id?: string | null; psu_type?: string | null }
+  const party = await buildBankFeedParty(supabase, {
+    companyId,
+    bic: bankRoute.bic ?? '',
+    affiliatedAspspId: connection.affiliated_aspsp_id ?? null,
+    psuType: connection.psu_type ?? null,
+    signer: syncOptions?.signer ?? UNATTENDED_SIGNER,
+    // The PSU-ID the consent was created with, when one is kept.
+    connectionId,
+  })
+  if (!party.ok) throw new Error(`Open Payments sync: ${party.outcome.code}`)
+  try {
+    const result = await syncOpenPaymentsAccount(supabase, {
+      companyId, userId, connectionId, account, fromDate, toDate, bankRoute, party: party.party, ingest,
+      options: {
+        ...(syncOptions?.skipAutoCategorization ? { skipAutoCategorization: true } : {}),
+        ...(syncOptions?.rawInsertOnly ? { rawInsertOnly: true } : {}),
+      },
+    })
+    return {
+      imported: result.imported,
+      duplicates: result.duplicates,
+      errors: result.errors,
+      transactionIds: result.transactionIds,
+      returnedMinBookingDate: result.returnedMinBookingDate,
+      returnedMaxBookingDate: result.returnedMaxBookingDate,
+      requestedFromDate: fromDate,
+      effectiveFromDate: result.effectiveFromDate,
+      historyNarrowed: result.historyNarrowed,
+      ...(result.truncated ? { truncated: true } : {}),
+      ...(result.otherCurrency ? { otherCurrency: result.otherCurrency } : {}),
+    }
+  } catch (error) {
+    throw toEnableBankingSyncError(error, fromDate)
+  }
+}
+
+/** Connect's typed AIS failures as the errors every Enable Banking sync caller dispatches on. */
+export function toEnableBankingSyncError(error: unknown, fromDate: string): unknown {
+  if (error instanceof ConsentOverError) return new SessionExpiredError(error.status ?? 410, error.code)
+  if (error instanceof RateLimitedError) {
+    return new AspspUnavailableError(error.status ?? 429, error.code, 'rate-limited', fromDate, {
+      dailyQuota: true,
+      ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+    })
+  }
+  if (error instanceof ProviderUnavailableError) return new ConnectorSyncError(error.status, error.code, '')
+  return error
 }

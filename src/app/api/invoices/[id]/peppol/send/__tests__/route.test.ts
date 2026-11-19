@@ -59,6 +59,12 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
+const downloadDocumentObjectMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/core/documents/document-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/core/documents/document-service')>()),
+  downloadDocumentObject: (...args: unknown[]) => downloadDocumentObjectMock(...args),
+}))
+
 vi.mock('@/lib/invoices/issue-and-book-invoice', () => ({
   markInvoiceSentAndBook: (...args: unknown[]) => markSentMock(...args),
   restoreUnbookedDraft: (...args: unknown[]) => restoreDraftMock(...args),
@@ -165,22 +171,28 @@ const accessRow = {
   max_sends: 50,
   receive_enabled: false,
   requested_at: null, requested_by: null, request_note: null,
-  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'jakob', disabled_at: null, note: null,
+  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'anna', disabled_at: null, note: null,
   created_at: '2026-08-21T16:00:00.000Z', updated_at: '2026-08-21T16:00:00.000Z',
 }
 /** The sandbox gate reads company_settings.is_sandbox through the user client before anything else. */
 function realCompany(isSandbox = false) {
   enqueue({ data: { is_sandbox: isSandbox }, error: null })
 }
-/** Peppol access is per company: grant it (service reads access row, then the send count). */
+/** Peppol access is per company: grant it (service reads access row, then this month's two send counts). */
 function grantAccess(maxSends: number | null = 50, sent = 0) {
   serviceTables.enqueue({ data: { ...accessRow, max_sends: maxSends }, error: null })
   serviceTables.enqueue({ data: null, error: null, count: sent })
+  serviceTables.enqueue({ data: null, error: null, count: 0 })
 }
-/** The user-client reads a send makes once it is past the gates: invoice, company settings, stage RPC. */
+/** The invoice's attachment links (crm#1545): none unless a test gives some. */
+function attachmentRows(rows: unknown[] = []) {
+  enqueue({ data: rows, error: null })
+}
+/** The user-client reads a send makes once it is past the gates: invoice, company settings, attachments, stage RPC. */
 function stageInvoice(overrides: Partial<ReturnType<typeof makeInvoice>> = {}, delivery: Record<string, unknown> = stagedDelivery) {
   enqueue({ data: invoiceRow(overrides), error: null })
   enqueue({ data: company, error: null })
+  attachmentRows()
   enqueue({ data: delivery, error: null })
 }
 
@@ -232,6 +244,12 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       createMockRequest(`/api/invoices/${INVOICE_ID}/peppol/send`, { method: 'POST' }),
       createMockRouteParams({ id: INVOICE_ID }),
     )
+  }
+
+  /** The stage RPC's arguments (the XML it stores), or undefined when nothing was staged. */
+  function findStageArgs(): Record<string, unknown> | undefined {
+    const call = (mockSupabase.rpc as ReturnType<typeof vi.fn>).mock.calls.find((c) => String(c[0]).startsWith('stage_peppol_delivery'))
+    return call?.[1] as Record<string, unknown> | undefined
   }
 
   function expectRefusalLogged(code: string) {
@@ -344,6 +362,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     grantAccess()
     enqueue({ data: invoiceRow({ your_reference: null }), error: null })
     enqueue({ data: company, error: null })
+    attachmentRows()
 
     const response = await send()
 
@@ -364,6 +383,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     grantAccess()
     enqueue({ data: invoiceRow(), error: null })
     enqueue({ data: company, error: null })
+    attachmentRows()
     enqueue({
       data: null,
       error: { code: 'P0002', message: 'Peppol delivery requires a fiscal period retention basis' },
@@ -386,6 +406,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     grantAccess()
     enqueue({ data: invoiceRow(), error: null })
     enqueue({ data: company, error: null })
+    attachmentRows()
     enqueue({
       data: null,
       error: { code: 'P0002', message: 'invoice not found or not eligible for Peppol staging' },
@@ -519,6 +540,84 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     }
     expect(markSentMock).not.toHaveBeenCalled()
     expect(logMock.info).not.toHaveBeenCalledWith('peppol send refused', expect.anything())
+  })
+
+  describe('attachments inside the e-faktura (crm#1545)', () => {
+    const pdfBytes = Buffer.from('%PDF-1.7 tidrapport')
+    const row = (overrides: Record<string, unknown> = {}) => ({
+      document_id: 'doc-1',
+      created_at: '2026-08-20T10:00:00.000Z',
+      document: {
+        file_name: 'Tidrapport.pdf',
+        mime_type: 'application/pdf',
+        file_size_bytes: pdfBytes.byteLength,
+        storage_path: 'company-1/doc-1.pdf',
+        ...overrides,
+      },
+    })
+
+    it('embeds the invoice\'s PDF in the XML it stages and submits', async () => {
+      downloadDocumentObjectMock.mockResolvedValue({ blob: new Blob([pdfBytes]) })
+      const transport = makeTransport()
+      unregister = registerPeppolTransport(transport)
+      realCompany()
+      grantAccess()
+      enqueue({ data: invoiceRow(), error: null })
+      enqueue({ data: company, error: null })
+      attachmentRows([row()])
+      enqueue({ data: stagedDelivery, error: null })
+
+      const response = await send()
+
+      expect(response.status).toBe(201)
+      expect(downloadDocumentObjectMock).toHaveBeenCalledWith(mockSupabase, 'company-1/doc-1.pdf', 'company-1')
+      const staged = findStageArgs()
+      expect(staged?.p_xml_payload).toContain(
+        `<cbc:EmbeddedDocumentBinaryObject mimeCode="application/pdf" filename="Tidrapport.pdf">${pdfBytes.toString('base64')}</cbc:EmbeddedDocumentBinaryObject>`,
+      )
+      const submission = (transport.submit as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      expect(submission.document).toBe(staged?.p_xml_payload)
+    })
+
+    it('refuses a file that is not a PDF in Swedish, staging and sending nothing', async () => {
+      downloadDocumentObjectMock.mockResolvedValue({ blob: new Blob([Buffer.from('png')]) })
+      const transport = makeTransport()
+      unregister = registerPeppolTransport(transport)
+      realCompany()
+      grantAccess()
+      enqueue({ data: invoiceRow(), error: null })
+      enqueue({ data: company, error: null })
+      attachmentRows([row({ file_name: 'kvitto.png', mime_type: 'image/png', file_size_bytes: 3 })])
+
+      const response = await send()
+
+      expect(response.status).toBe(400)
+      const body = await response.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.message).toContain('kvitto.png är ingen PDF')
+      expect(body.error.details.issues[0]).toMatchObject({ code: 'PEPPOL_ATTACHMENT_NOT_PDF' })
+      expect(findStageArgs()).toBeUndefined()
+      expect(transport.lookupRecipient).not.toHaveBeenCalled()
+      expect(transport.submit).not.toHaveBeenCalled()
+      expect(markSentMock).not.toHaveBeenCalled()
+    })
+
+    it('answers the archive\'s 503 when an attachment cannot be read, sending nothing', async () => {
+      downloadDocumentObjectMock.mockResolvedValue({ blob: null })
+      const transport = makeTransport()
+      unregister = registerPeppolTransport(transport)
+      realCompany()
+      grantAccess()
+      enqueue({ data: invoiceRow(), error: null })
+      enqueue({ data: company, error: null })
+      attachmentRows([row()])
+
+      const response = await send()
+
+      expect(response.status).toBe(503)
+      expect((await response.json()).error.code).toBe('INVOICE_ATTACHMENT_LOAD_FAILED')
+      expect(transport.submit).not.toHaveBeenCalled()
+    })
   })
 
   it('records a send through the connector under the connector label, whatever account number the environment holds', async () => {

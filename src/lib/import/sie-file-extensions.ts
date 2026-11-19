@@ -8,9 +8,20 @@
  *
  * One list on purpose: the API route, the upload UI and the MCP upload tool
  * each used to carry their own literal, and they drifted (issue #2546: `.si`
- * was accepted by MCP but rejected by the dashboard).
+ * was accepted by MCP but rejected by the dashboard; accounted#32: the
+ * onboarding step still had `.se,.sie`). check:guards fails on a new
+ * hand-written list outside this file.
  */
 export const SIE_FILE_EXTENSIONS = ['.se', '.sie', '.si'] as const
+
+/**
+ * The same list as a pattern, for schemas that validate with a regex (zod
+ * `.regex()` also publishes it as the OpenAPI `pattern` of the v1 endpoint).
+ */
+export const SIE_FILE_EXTENSION_PATTERN = new RegExp(
+  `\\.(${SIE_FILE_EXTENSIONS.map((extension) => extension.slice(1)).join('|')})$`,
+  'i',
+)
 
 /** The same list in a Swedish sentence. Keep in sync with the array above. */
 export const SIE_FILE_EXTENSIONS_SV = '.se, .sie eller .si'
@@ -22,4 +33,15 @@ export const SIE_FILE_EXTENSIONS_EN = '.se, .sie or .si'
 export function hasSIEFileExtension(filename: string): boolean {
   const lower = filename.toLowerCase()
   return SIE_FILE_EXTENSIONS.some((extension) => lower.endsWith(extension))
+}
+
+/**
+ * True when `filename` has no extension at all, the way a SIE export ends up
+ * when it is saved without its `.se` (seen 2026-10-12). The upload surfaces
+ * name the fix for it: rename the file, since the name rule is the same on
+ * every surface (the API and MCP reserve the upload from the name alone,
+ * before any byte is read).
+ */
+export function lacksFileExtension(filename: string): boolean {
+  return !/\.[a-z0-9]{1,5}$/i.test(filename)
 }

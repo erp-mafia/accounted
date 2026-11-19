@@ -5,8 +5,8 @@ import type { AtomRegistryIndexRow, ComposerInputs } from '../inputs'
 // The agent profile narrative has two voices depending on whether the user
 // is a verified director at the company:
 //
-//   - confirmed director  → "Du driver Coredination AB..."
-//   - everyone else       → "Coredination AB är..."
+//   - confirmed director  → "Du driver Exempel AB..."
+//   - everyone else       → "Exempel AB är..."
 //
 // The Sonnet path injects this via the system prompt (covered manually in
 // system-prompt eval), so these tests target the deterministic fallback:
@@ -17,7 +17,7 @@ import type { AtomRegistryIndexRow, ComposerInputs } from '../inputs'
 function makeInputs(overrides: Partial<ComposerInputs>): ComposerInputs {
   return {
     companyId: 'co-1',
-    companyName: 'Coredination AB',
+    companyName: 'Exempel AB',
     entityType: 'aktiebolag',
     ticSnapshot: null,
     ticFetchedAt: null,
@@ -34,7 +34,7 @@ function makeInputs(overrides: Partial<ComposerInputs>): ComposerInputs {
 describe('fallbackNarrative voice branching', () => {
   it('uses second-person "Du driver" when user is a confirmed director', () => {
     const text = fallbackNarrative(makeInputs({ userIsConfirmedDirector: true }))
-    expect(text).toMatch(/Du driver Coredination AB som aktiebolag\./)
+    expect(text).toMatch(/Du driver Exempel AB som aktiebolag\./)
     expect(text).toMatch(/din verksamhet/i)
   })
 
@@ -43,7 +43,7 @@ describe('fallbackNarrative voice branching', () => {
     // The form is named by its statutory label without an article: Swedish
     // gender agreement ("ett aktiebolag", "en förening") would otherwise
     // need a per-form sentence.
-    expect(text).toMatch(/Coredination AB\. Företagsform: Aktiebolag\./)
+    expect(text).toMatch(/Exempel AB\. Företagsform: Aktiebolag\./)
     // Critical: must not assume the user owns or runs the company.
     expect(text).not.toMatch(/\bDu driver\b/)
     expect(text).not.toMatch(/\bdin verksamhet\b/i)
@@ -92,7 +92,7 @@ describe('fallbackNarrative voice branching', () => {
       }),
     )
     // Generic neutral form: still no "Du driver".
-    expect(text).toMatch(/Coredination AB är ett företag/)
+    expect(text).toMatch(/Exempel AB är ett företag/)
     expect(text).not.toMatch(/Du driver/)
   })
 })

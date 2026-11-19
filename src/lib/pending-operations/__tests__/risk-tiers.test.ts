@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getRiskLevel, isHighRisk, OPERATION_RISK_TIERS } from '../risk-tiers'
+import { getRiskLevel, isHighRisk, OPERATION_RISK_TIERS, requiresWebApproval } from '../risk-tiers'
 
 describe('risk-tiers', () => {
   it('classifies all currently-staged op types', () => {
@@ -88,5 +88,34 @@ describe('risk-tiers', () => {
     // auto_send on an unrelated op neither raises nor lowers its tier.
     expect(getRiskLevel('create_customer', { auto_send: true })).toBe('low')
     expect(getRiskLevel('send_invoice', { auto_send: false })).toBe('high')
+  })
+})
+
+describe('requiresWebApproval (collections)', () => {
+  it('keeps handing an invoice over to collection high risk and for a person in the web UI', () => {
+    expect(getRiskLevel('open_collection_case')).toBe('high')
+    expect(getRiskLevel('collection_case_action')).toBe('high')
+    expect(requiresWebApproval('open_collection_case', { invoice_id: 'x' })).toBe(true)
+  })
+
+  it('keeps the daily collections batch high risk (no bulk approval, typed confirmation) and for a person in the web UI', () => {
+    expect(getRiskLevel('collections_daily_batch')).toBe('high')
+    expect(requiresWebApproval('collections_daily_batch', { items: [] })).toBe(true)
+    expect(requiresWebApproval('collections_daily_batch', null)).toBe(true)
+  })
+
+  it('lets an agent approve the case actions that serve the case, never the escalations', () => {
+    for (const action of ['pause', 'resume', 'withdraw', 'dispute', 'already_paid', 'decline_legal_action']) {
+      expect(requiresWebApproval('collection_case_action', { action })).toBe(false)
+    }
+    for (const action of ['start', 'approve_step', 'confirm_not_paid', 'contest_dispute', 'approve_legal_action']) {
+      expect(requiresWebApproval('collection_case_action', { action })).toBe(true)
+    }
+  })
+
+  it('fails safe on a missing action, and leaves every other type alone', () => {
+    expect(requiresWebApproval('collection_case_action', {})).toBe(true)
+    expect(requiresWebApproval('collection_case_action', null)).toBe(true)
+    expect(requiresWebApproval('send_invoice', { action: 'start' })).toBe(false)
   })
 })

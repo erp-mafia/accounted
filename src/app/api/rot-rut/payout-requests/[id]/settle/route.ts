@@ -4,20 +4,17 @@ import { validateBody } from '@/lib/api/validate'
 import { RotRutSettleSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { settleRotRutPayoutRequest } from '@/lib/invoices/rot-rut-settle'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/rot-rut/payout-requests/[id]/settle
  *
  * Books Skatteverkets utbetalning for a begäran:
  *
- *   Debit  19xx bank account (default 1930)  [amount]
+ *   Debit  19xx bank account  [amount]
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * The journal entry IS the accounting record here, so engine failure blocks
- * the operation (see .claude/rules/api-routes.md on entries that are the accounting record).
+ * the operation.
  * amount defaults to decided_total, falling back to requested_total. If the
  * amount equals requested_total the request completes as 'paid'; anything
  * lower records 'partially_paid' with decided_total = amount.

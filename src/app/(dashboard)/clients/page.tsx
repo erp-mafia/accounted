@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
+import { switchCampaign, switchDaysLeft } from '@/lib/bank-feed/switch-campaign'
 import { fetchClientOverview } from '@/lib/clients/fetch-client-overview'
 import { getDashboardAuthContext } from '../request-context'
 import ClientsTable from './ClientsTable'
@@ -23,7 +24,7 @@ export default async function ClientsPage() {
     redirect('/login')
   }
 
-  const overview = await fetchClientOverview(supabase, user.id)
+  const overview = await fetchClientOverview(supabase, user.id, { includeAttest: true })
   if (!overview) {
     // Not a byrå team member: the cockpit is byrå-exclusive in v1.
     redirect('/')
@@ -31,6 +32,11 @@ export default async function ClientsPage() {
 
   const t = await getTranslations('clients')
   const canCreate = overview.role === 'owner' || overview.role === 'admin'
+  // The bank connection switch campaign: the column and the nudges show
+  // while it is on. The route behind the nudge checks the caller's write role
+  // in each client company.
+  const campaign = switchCampaign()
+  const bankSwitchCampaign = campaign.on ? { deadline: campaign.deadline, passed: switchDaysLeft(campaign.deadline) < 0 } : null
 
   return (
     <div className="space-y-8">
@@ -38,14 +44,14 @@ export default async function ClientsPage() {
         title={t('title')}
         action={
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="ghost" className="text-muted-foreground" asChild>
+            <Button size="toolbar" variant="ghost" className="text-muted-foreground" asChild>
               <Link href="/clients/access">{t('access_link')}</Link>
             </Button>
             {canCreate && <NewClientCompanyButton />}
           </div>
         }
       />
-      <ClientsTable clients={overview.clients} />
+      <ClientsTable clients={overview.clients} bankSwitchCampaign={bankSwitchCampaign} canEditClientNumber={canCreate} />
     </div>
   )
 }

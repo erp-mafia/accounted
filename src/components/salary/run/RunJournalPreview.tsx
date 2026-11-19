@@ -4,9 +4,11 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { Calculator, FileText } from 'lucide-react'
-import { cn, formatCurrency } from '@/lib/utils'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
+import { CalculatorIcon, DocumentTextIcon } from '@/components/icons'
+import { formatRunAmount } from './types'
 
 export interface EntryPreviewLine {
   account_number: string
@@ -50,9 +52,14 @@ interface RunJournalPreviewProps {
   // Booked runs: the Lönesammanställning PDF, the underlag filed with the
   // vouchers listed below, downloads from the same kicker line.
   underlagHref?: string
+  // The run's taxable förmånsvärden (sum of salary_run_employees.
+  // benefit_values). They book no line of their own (salary-entries.ts), so
+  // the preview says where they went instead of leaving the reader to look
+  // for a 73xx account (crm#1354).
+  benefitValues?: number
 }
 
-export function RunJournalPreview({ preview, onRecalculate, recalculating, underlagHref }: RunJournalPreviewProps) {
+export function RunJournalPreview({ preview, onRecalculate, recalculating, underlagHref, benefitValues }: RunJournalPreviewProps) {
   const t = useTranslations('salary_run')
 
   const entries = [
@@ -67,14 +74,14 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
       kicker={preview.booked ? t('journal_booked_title') : t('journal_preview_title')}
       aside={
         onRecalculate ? (
-          <Button variant="outline" size="sm" onClick={onRecalculate} loading={recalculating} className="-my-1">
-            {!recalculating && <Calculator className="mr-2 h-4 w-4" />}
+          <Button variant="outline" onClick={onRecalculate} loading={recalculating} className="-my-1">
+            {!recalculating && <CalculatorIcon className="h-4 w-4" />}
             {t('action_recalculate')}
           </Button>
         ) : underlagHref ? (
-          <Button variant="outline" size="sm" asChild className="-my-1">
+          <Button variant="outline" asChild className="-my-1">
             <a href={underlagHref} target="_blank" rel="noopener noreferrer" title={t('journal_download_underlag_title')}>
-              <FileText className="mr-2 h-4 w-4" />
+              <DocumentTextIcon className="mr-2 h-4 w-4" />
               {t('journal_download_underlag')}
             </a>
           </Button>
@@ -101,37 +108,23 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
               </div>
               {entry.balanced === false && (
                 <p className="text-sm text-destructive" role="alert">
-                  {t('journal_preview_unbalanced', { amount: formatCurrency(entry.difference ?? 0) })}
+                  {t('journal_preview_unbalanced', { amount: formatRunAmount(entry.difference ?? 0) })}
                 </p>
               )}
               <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-[13px]">
-                  <thead>
-                    <tr>
-                      <th className={cn(TH_CLASS, 'pl-0')}>{t('journal_th_account')}</th>
-                      <th className={TH_CLASS}>{t('journal_th_description')}</th>
-                      <th className={cn(TH_CLASS, 'text-right')}>{t('journal_th_debit')}</th>
-                      <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('journal_th_credit')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entry.lines.map((line, li) => (
-                      <tr key={li}>
-                        <td className={cn(TD_CLASS, 'pl-0 tabular-nums font-mono')}>{line.account_number}</td>
-                        <td className={cn(TD_CLASS, 'text-muted-foreground')}>{line.line_description}</td>
-                        <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                          {line.debit_amount ? formatCurrency(line.debit_amount) : ''}
-                        </td>
-                        <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
-                          {line.credit_amount ? formatCurrency(line.credit_amount) : ''}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <VoucherLinesTable
+                  withCurrency
+                  lines={voucherLineViews(entry.lines)}
+                />
               </div>
             </div>
           ))}
+          {benefitValues !== undefined && benefitValues > 0 && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              {t('journal_preview_benefits_note', { amount: formatRunAmount(benefitValues) })}
+              <HelpPopover>{t('journal_preview_benefits_help')}</HelpPopover>
+            </p>
+          )}
         </div>
       )}
     </DetailSection>

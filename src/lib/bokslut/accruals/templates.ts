@@ -6,8 +6,10 @@
  *
  * BAS account choices follow the standard 2026 chart:
  *   - 17xx förutbetalda kostnader (prepaid expenses, asset side)
- *   - 29xx upplupna kostnader (accrued expenses + förutbetalda intäkter)
+ *   - 29xx upplupna kostnader (accrued expenses + förutbetalda intäkter):
+ *     2960 upplupna räntekostnader, 2990 övriga upplupna kostnader
  *   - 2970 förutbetalda intäkter (deferred revenue specifically)
+ *   - 1790 övriga förutbetalda kostnader
  *
  * Adding a new template means: 1) extend this array, 2) the wizard picks
  * it up automatically.
@@ -17,6 +19,8 @@ export type PeriodiseringTemplateKind =
   | 'prepaid_rent'
   | 'prepaid_insurance'
   | 'prepaid_subscription'
+  | 'other_prepaid_expense'
+  | 'accrued_expense'
   | 'deferred_revenue'
   | 'accrued_interest_expense'
   | 'accrued_utilities'
@@ -63,6 +67,20 @@ export const PERIODISERING_TEMPLATES: PeriodiseringTemplate[] = [
     expense_account: '5800',
   },
   {
+    kind: 'other_prepaid_expense',
+    name: 'Övrig förutbetald kostnad',
+    hint: 'Annan kostnad betald i förskott för nästa räkenskapsår; ange kostnadskontot.',
+    side: 'prepaid',
+    prepaid_account: '1790',
+  },
+  {
+    kind: 'accrued_expense',
+    name: 'Upplupen kostnad',
+    hint: 'Kostnad som hör till året men faktureras först nästa år; ange kostnadskontot.',
+    side: 'accrued',
+    accrued_account: '2990',
+  },
+  {
     kind: 'deferred_revenue',
     name: 'Förutbetald intäkt',
     hint: 'Kund har betalat för en tjänst eller prenumeration som avser nästa räkenskapsår.',
@@ -75,7 +93,8 @@ export const PERIODISERING_TEMPLATES: PeriodiseringTemplate[] = [
     name: 'Upplupen ränta',
     hint: 'Räntekostnad som löpt under perioden men ännu inte fakturerats av banken.',
     side: 'accrued_interest',
-    accrued_account: '2940',
+    // 2960 Upplupna räntekostnader (BAS 2026); 2940 is the social-fee account.
+    accrued_account: '2960',
     expense_account: '8410',
   },
   {

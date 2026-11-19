@@ -53,7 +53,7 @@ import { RESIDUAL_KINDS } from '@/lib/reconciliation/residual'
 import {
   supplierInvoiceDisplayFigures,
   type SupplierInvoiceDisplayInput,
-} from '@/lib/supplier-invoices/display-figures'
+} from '@/lib/bookkeeping/supplier-invoice-display-figures'
 
 export interface SupplierClearingArgs {
   /** SEK on 2440 to clear for this settlement: the full remaining when an öre

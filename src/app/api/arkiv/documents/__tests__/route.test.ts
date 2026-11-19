@@ -73,6 +73,23 @@ describe('GET /api/arkiv/documents', () => {
     expect(findCalls('agreements', 'in')).toEqual([])
   })
 
+  it('gives each row the stored type and size, null when the record has none (accounted#42)', async () => {
+    delete process.env.ARKIV_BRAIN_COMPANY_IDS
+    enqueue({
+      data: [
+        { id: 'doc-a', created_at: '2026-09-15T10:00:00Z', file_name: 'material.pdf', mime_type: 'application/pdf', file_size_bytes: 48213, doc_type: 'supplier_invoice', admission_state: 'admitted', journal_entry_id: 'je-1' },
+        { id: 'doc-b', created_at: '2026-09-14T10:00:00Z', file_name: 'gammal.pdf', doc_type: null, admission_state: 'admitted', journal_entry_id: null },
+      ],
+    })
+    enqueue({ data: [{ id: 'je-1', voucher_series: 'A', voucher_number: 7 }] })
+    const { status, body } = await parseJsonResponse(await call())
+    expect(status).toBe(200)
+    const rows = (body as { data: Array<Record<string, unknown>> }).data
+    expect(rows.find((r) => r.document_id === 'doc-a')).toMatchObject({ mime_type: 'application/pdf', file_size_bytes: 48213, linked: { voucher: 'A7' } })
+    expect(rows.find((r) => r.document_id === 'doc-b')).toMatchObject({ mime_type: null, file_size_bytes: null })
+    expect(findCalls('document_attachments', 'select').map((c) => c[0]).join(' ')).toContain('mime_type, file_size_bytes')
+  })
+
   it('asks a person only about what the model read and could not name; a document with no type yet is being read', async () => {
     delete process.env.ARKIV_BRAIN_COMPANY_IDS
     enqueue({

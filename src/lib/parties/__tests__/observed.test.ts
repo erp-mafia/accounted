@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getObservedParties, rhythmFromCadence } from '../observed'
+import { getObservedParties, OBSERVED_PARTIES_MAX, rhythmFromCadence } from '../observed'
 
 function clientWith(result: { data: unknown; error: { message: string } | null }): SupabaseClient {
   return { rpc: vi.fn().mockResolvedValue(result) } as unknown as SupabaseClient
@@ -40,6 +40,27 @@ describe('getObservedParties', () => {
       ['beijer byggmaterial', 'party', 'irregular'],
       ['inköp av varor', 'category', 'irregular'],
     ])
+  })
+
+  it('asks for no more than the RPC ranks, and names keys only when given (accounted#16)', async () => {
+    const client = clientWith({ data: [], error: null })
+    await getObservedParties(client, 'co-1', { limit: 5000 })
+    expect(client.rpc).toHaveBeenLastCalledWith('get_observed_parties', {
+      p_company_id: 'co-1',
+      p_from_date: null,
+      p_limit: OBSERVED_PARTIES_MAX,
+    })
+
+    await getObservedParties(client, 'co-1', { limit: 1, keys: ['loopia', 'kund ab', 'loopia'] })
+    expect(client.rpc).toHaveBeenLastCalledWith('get_observed_parties', {
+      p_company_id: 'co-1',
+      p_from_date: null,
+      p_limit: 1,
+      p_keys: ['loopia', 'kund ab'],
+    })
+
+    await getObservedParties(client, 'co-1', { keys: [] })
+    expect(client.rpc).toHaveBeenLastCalledWith('get_observed_parties', { p_company_id: 'co-1', p_from_date: null, p_limit: 200 })
   })
 
   it('filters to the requested labels', async () => {

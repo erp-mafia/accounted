@@ -4,8 +4,8 @@
  * Inline SVG rather than a bundled asset: it scales, needs no network
  * request, and survives the CSP. The green (#25D366) is WhatsApp's own and
  * is deliberately the one place in settings where a brand colour appears:
- * this marks a third-party channel, so it is identity, not chrome (see
- * .claude/rules/design.md on colour belonging to actors).
+ * this marks a third-party channel, so it is identity, not chrome (in the
+ * design system, colour belongs to actors).
  *
  * Decorative by default. Pass a `title` when the mark carries meaning that
  * the surrounding text does not already state.

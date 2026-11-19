@@ -48,6 +48,8 @@ const METADATA = {
   employee_count: 2,
   total_amount: 45000,
   generated_at: '2026-04-19T09:00:00.000Z',
+  version: 1,
+  previous_not_approved_confirmed: false,
 }
 const ARCHIVED = { ...METADATA, content: '11123456700000000000260325LÖN 2026-04\r\n' }
 

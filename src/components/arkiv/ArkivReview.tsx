@@ -4,7 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { CheckIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import type { ReviewData } from '@/app/api/arkiv/review/route'
 import type { FindingView } from '@/app/api/arkiv/findings/route'
@@ -13,12 +16,14 @@ import { DocumentDecision, type DecisionDocument } from './DocumentDecision'
 import { QuestionCard, decisionDocumentFor } from './QuestionCard'
 
 /**
- * Granska (canvas artboard Granska): the questions Arkiv has for a person,
- * each answered with one tap and its consequence stated in place. The
- * decision sheet is one link away for an answer that is not on a chip.
+ * Granska: the questions Arkiv has for a person,
+ * each answered with one tap: the card fades out and a toast says what
+ * happens next. The count sits in the top bar. The decision sheet is one
+ * link away for an answer that is not on a chip.
  */
 export function ArkivReview() {
   const t = useTranslations('arkiv')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const [data, setData] = useState<ReviewData | null>(null)
   const [findings, setFindings] = useState<FindingView[] | null>(null)
@@ -54,35 +59,48 @@ export function ArkivReview() {
     ],
     [t],
   )
-  const left = questions.filter((q) => !answered.has(q.id)).length
+  // An answered card fades out and then reports itself answered: from then on
+  // it is gone from its group and from the count in the top bar.
+  const unanswered = questions.filter((q) => !answered.has(q.id))
+  const left = unanswered.length
 
   const openSheet = (q: ArkivQuestion) => setOpen(decisionDocumentFor(q))
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t('review_title')} help={<HelpPopover>{t('review_help')}</HelpPopover>} />
+      <PageHeader
+        title={t('review_title')}
+        help={<HelpPopover>{t('review_help')}</HelpPopover>}
+        meta={data ? t('review_count', { count: left }) : undefined}
+      />
 
-      {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
+      {failed && data && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+      {failed && !data && (
+        <LoadError
+          onRetry={() => {
+            setFailed(false)
+            void load()
+          }}
+        />
+      )}
       {!data && !failed && (
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           <Skeleton className="h-6 w-1/3" />
           <Skeleton className="h-6 w-2/3" />
-        </div>
+        </LateReveal>
       )}
 
       {data && (
         <div>
-          <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
-            <h2 className="text-sm font-medium">{t('review_title')}</h2>
-            <span className="text-xs text-muted-foreground">{t('review_count', { count: left })}</span>
-          </div>
-          {questions.length === 0 && <p className="px-1 py-6 text-[13px] text-muted-foreground">{t('review_all_clear')}</p>}
+          {left === 0 && <EmptyState tone="done" icon={CheckIcon} title={t('review_all_clear')} />}
           {groups.map((group) => {
-            const list = questions.filter((q) => q.kind === group.key)
+            const list = unanswered.filter((q) => q.kind === group.key)
             if (list.length === 0) return null
             return (
               <section key={group.id} id={group.id}>
-                <div className="px-1 pb-1 pt-5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">{group.title}</div>
+                <div className="px-1 pb-1 pt-5 text-xs font-medium text-muted-foreground">{group.title}</div>
                 {list.map((q) => (
                   <QuestionCard key={q.id} question={q} onMore={openSheet} onAnswered={(a) => setAnswered((prev) => new Set(prev).add(a.id))} />
                 ))}

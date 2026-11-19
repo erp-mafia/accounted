@@ -54,12 +54,12 @@
  * longer has the invoice in hand.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { roundOre } from '@/lib/money'
+import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
 import { CURRENCIES, type Currency } from '@/types'
 
-/** Currencies Riksbanken's SWEA series cover (mirrors lib/currency/riksbanken.ts). */
+/** Currencies a supplier invoice can be registered in; each has a Riksbanken series (currencies.test.ts). */
 const SUPPORTED_CURRENCIES: ReadonlySet<string> = new Set(CURRENCIES)
 
 /**
@@ -99,7 +99,17 @@ export interface ResolvedSupplierInvoiceRate {
 
 export type SupplierInvoiceRateResult =
   | { ok: true; rate: ResolvedSupplierInvoiceRate }
-  | { ok: false; currency: string; invoiceDate: string }
+  | {
+      ok: false
+      currency: string
+      invoiceDate: string
+      /**
+       * True when the lookup failed because Riksbanken rate-limited or failed
+       * the request: the rate exists and the same call works a minute later.
+       * A staged operation is then handed back instead of consumed.
+       */
+      temporary?: boolean
+    }
 
 export interface SupplierInvoiceRateInput {
   /** `body.currency`; undefined/null means SEK (matches the column default). */
@@ -192,7 +202,9 @@ export async function resolveSupplierInvoiceExchangeRate(
   }
 
   if (!fetched || !Number.isFinite(fetched.rate) || fetched.rate <= 0) {
-    return { ok: false, currency, invoiceDate: input.invoiceDate }
+    return isExchangeRateTemporarilyUnavailable(currency)
+      ? { ok: false, currency, invoiceDate: input.invoiceDate, temporary: true }
+      : { ok: false, currency, invoiceDate: input.invoiceDate }
   }
 
   return {
@@ -222,8 +234,8 @@ export function supplierInvoiceSekAmounts(
   amounts: { subtotal: number; vatAmount: number; total: number },
 ): { subtotal_sek: number; vat_amount_sek: number; total_sek: number } {
   return {
-    subtotal_sek: roundOre(amounts.subtotal * rate.rate),
-    vat_amount_sek: roundOre(amounts.vatAmount * rate.rate),
-    total_sek: roundOre(amounts.total * rate.rate),
+    subtotal_sek: sekOfForeign(amounts.subtotal, rate.rate),
+    vat_amount_sek: sekOfForeign(amounts.vatAmount, rate.rate),
+    total_sek: sekOfForeign(amounts.total, rate.rate),
   }
 }

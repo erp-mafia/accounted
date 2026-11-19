@@ -1,42 +1,55 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import { isFiscalPeriodMissingError, stagePeppolDelivery } from '@/lib/invoices/peppol-delivery'
 import { loadPeppolDocument } from '@/lib/invoices/peppol-document'
 import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
-
-// Registers the configured Access Point adapter so `transport` below reports
-// the truth for this process, not just "nothing registered yet".
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
 
 const paramsSchema = z.object({ id: z.uuid() })
+/**
+ * preview=1 downloads a draft that has no invoice number yet (accounted#44):
+ * placeholder number and OCR, a marked preview file that staging refuses. An
+ * invoice that has its number gets its real document either way.
+ */
+const querySchema = z.object({ preview: z.enum(['0', '1']).optional() })
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.peppol',
-  async (_request, { supabase, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
     const parsedParams = paramsSchema.safeParse(await params)
-    if (!parsedParams.success) {
+    const parsedQuery = querySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams))
+    if (!parsedParams.success || !parsedQuery.success) {
       return privateNoStore(errorResponseFromCode('VALIDATION_ERROR', log, {
         requestId,
-        details: { fields: parsedParams.error.flatten().fieldErrors },
+        details: {
+          fields: {
+            ...(parsedParams.success ? {} : parsedParams.error.flatten().fieldErrors),
+            ...(parsedQuery.success ? {} : parsedQuery.error.flatten().fieldErrors),
+          },
+        },
       }))
     }
     const { id } = parsedParams.data
 
-    const loaded = await loadPeppolDocument({ supabase, companyId, invoiceId: id, log, requestId })
+    const loaded = await loadPeppolDocument({
+      supabase,
+      companyId,
+      invoiceId: id,
+      log,
+      requestId,
+      preview: parsedQuery.data.preview === '1',
+    })
     if (!loaded.ok) return loaded.response
     const result = loaded.document
 
-    return new NextResponse(result.xml, {
-      status: 200,
+    return fileResponse(result.xml, {
+      filename: result.filename,
+      contentType: 'application/xml; charset=utf-8',
+      cacheControl: 'private, no-store',
       headers: {
-        'Content-Type': 'application/xml; charset=utf-8',
-        'Content-Disposition': contentDisposition('attachment', result.filename),
-        'Cache-Control': 'private, no-store',
         'X-Content-Type-Options': 'nosniff',
       },
     })
@@ -79,7 +92,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           status: delivery.status,
           created_at: delivery.created_at,
           network_submitted: false,
-          transport: getPeppolTransportAvailability(),
+          transport: await getPeppolTransportAvailability(),
         },
       }, { status: 201 }))
     } catch (err) {

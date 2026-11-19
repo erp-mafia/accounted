@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { arkivBrainRollout, arkivSectionRollout, isArkivBrainEnabled, isArkivEnabled, isArkivSectionEnabled } from '../flag'
+import { arkivBrainRollout, arkivSectionRollout, isArkivBrainEnabled, isArkivSectionEnabled } from '../flag'
 
 const saved = { brain: process.env.ARKIV_BRAIN_COMPANY_IDS, old: process.env.ARKIV_COMPANY_IDS }
 
@@ -8,17 +8,6 @@ afterEach(() => {
   else process.env.ARKIV_BRAIN_COMPANY_IDS = saved.brain
   if (saved.old === undefined) delete process.env.ARKIV_COMPANY_IDS
   else process.env.ARKIV_COMPANY_IDS = saved.old
-})
-
-describe('isArkivEnabled (the shelf)', () => {
-  it('is on for every company and needs only a company id', () => {
-    delete process.env.ARKIV_BRAIN_COMPANY_IDS
-    delete process.env.ARKIV_COMPANY_IDS
-    expect(isArkivEnabled('co-1')).toBe(true)
-    expect(isArkivEnabled('anyone')).toBe(true)
-    expect(isArkivEnabled(null)).toBe(false)
-    expect(isArkivEnabled('')).toBe(false)
-  })
 })
 
 describe('isArkivSectionEnabled (the Dokument section in the app)', () => {
@@ -36,10 +25,9 @@ describe('isArkivSectionEnabled (the Dokument section in the app)', () => {
     expect(isArkivSectionEnabled('anyone')).toBe(true)
   })
 
-  it('does not open the shelf or the brain', () => {
+  it('does not open the brain', () => {
     process.env.ARKIV_COMPANY_IDS = 'co-1'
     delete process.env.ARKIV_BRAIN_COMPANY_IDS
-    expect(isArkivEnabled('co-9')).toBe(true)
     expect(isArkivBrainEnabled('co-1')).toBe(false)
   })
 })

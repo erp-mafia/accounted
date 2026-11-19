@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  clientBankSwitchFrom,
   countByCompany,
   deadlineUrgency,
   pickNextDeadlines,
@@ -7,17 +8,13 @@ import {
   filterClientRows,
   type ClientOverviewRow,
 } from '../aggregate'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
+// Same calendar the code under test counts on: the Swedish day, plus whole
+// calendar days, so neither the runner's time zone nor a DST change in the
+// window can shift the expected day.
 function isoDaysFromNow(days: number): string {
-  const d = new Date()
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() + days)
-  // Local date parts, not toISOString(): UTC conversion would shift the day
-  // in timezones ahead of UTC and skew the day math under test.
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+  return addDaysIso(todayIsoStockholm(), days)
 }
 
 function makeRow(overrides: Partial<ClientOverviewRow> = {}): ClientOverviewRow {
@@ -25,6 +22,7 @@ function makeRow(overrides: Partial<ClientOverviewRow> = {}): ClientOverviewRow 
     companyId: 'c-1',
     name: 'Alpha AB',
     orgNumber: null,
+    clientNumber: null,
     unbookedCount: 0,
     inboxCount: 0,
     nextDeadline: null,
@@ -192,7 +190,7 @@ describe('sortClientRows', () => {
 
 describe('filterClientRows', () => {
   const rows = [
-    makeRow({ companyId: 'a', name: 'Alfa Bygg AB', orgNumber: '556012-5790' }),
+    makeRow({ companyId: 'a', name: 'Alfa Bygg AB', orgNumber: '556012-5790', clientNumber: 'K-1042' }),
     makeRow({ companyId: 'b', name: 'Beta Konsult AB', orgNumber: '5591234567' }),
   ]
 
@@ -209,7 +207,33 @@ describe('filterClientRows', () => {
     expect(filterClientRows(rows, '559123').map((r) => r.companyId)).toEqual(['b'])
   })
 
+  it("matches the byrå's own customer number case-insensitively", () => {
+    expect(filterClientRows(rows, 'k-1042').map((r) => r.companyId)).toEqual(['a'])
+    expect(filterClientRows(rows, '1042').map((r) => r.companyId)).toEqual(['a'])
+  })
+
   it('returns nothing on a miss', () => {
     expect(filterClientRows(rows, 'gamma')).toHaveLength(0)
+  })
+})
+
+describe('clientBankSwitchFrom', () => {
+  const base = { deadline: '2026-11-09', days_left: 12, passed: false, urgent: true, open_payments: 0, uncovered: [] as Array<{ connection_id: string; bank_name: string }>, pending: [] as Array<{ connection_id: string; bank_name: string }> }
+
+  it('is null without a state, and for a company that never had a bank feed', () => {
+    expect(clientBankSwitchFrom(null)).toBeNull()
+    expect(clientBankSwitchFrom(undefined)).toBeNull()
+    expect(clientBankSwitchFrom({ ...base, state: 'done' })).toBeNull()
+  })
+
+  it('reads pending as byt senast, and stopped once the deadline has passed', () => {
+    const pending = [{ connection_id: 'c1', bank_name: 'Swedbank' }]
+    expect(clientBankSwitchFrom({ ...base, state: 'pending', pending })).toEqual({ state: 'pending', deadline: '2026-11-09', daysLeft: 12, banks: ['Swedbank'] })
+    expect(clientBankSwitchFrom({ ...base, state: 'pending', pending, passed: true, days_left: -1 })).toMatchObject({ state: 'stopped', banks: ['Swedbank'] })
+  })
+
+  it('reads uncovered banks as file import and a company on Open Payments as done', () => {
+    expect(clientBankSwitchFrom({ ...base, state: 'uncovered', uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }] })).toMatchObject({ state: 'uncovered', banks: ['Wise'] })
+    expect(clientBankSwitchFrom({ ...base, state: 'done', open_payments: 1 })).toMatchObject({ state: 'done', banks: [] })
   })
 })

@@ -148,14 +148,6 @@ describe('createExtensionContext', () => {
     await expect(ctx.settings.clear('my-key')).rejects.toThrow(/extension_data clear failed/)
   })
 
-  it('storage.getPublicUrl() returns URL string', () => {
-    const { supabase } = createMockSupabase()
-    const ctx = createExtensionContext(supabase as never, 'user-1', 'company-1', 'test-ext')
-
-    const url = ctx.storage.getPublicUrl('documents', 'path/to/file.pdf')
-    expect(typeof url).toBe('string')
-  })
-
   it('services.ingestTransactions is a function', () => {
     const { supabase } = createMockSupabase()
     const ctx = createExtensionContext(supabase as never, 'user-1', 'company-1', 'test-ext')

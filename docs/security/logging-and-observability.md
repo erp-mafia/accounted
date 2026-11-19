@@ -26,7 +26,7 @@ adapter; a no-op sink is not an alerting pipeline on its own.
 `src/lib/observability/redact.ts` is the single source of truth for what must
 never leave the process in clear text: a key denylist (passwords, tokens,
 IBAN, personnummer, ...), a personnummer regex applied to every string, and
-substring patterns for emails, Swedish IBANs, and gnubok API keys.
+substring patterns for emails, Swedish IBANs, and API keys (the `gnubok_` prefixes).
 
 Structural guarantees, verified in the code:
 

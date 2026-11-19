@@ -6,9 +6,14 @@ const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => supabase,
 }))
+// The stamp after a model call is the shared mirror's (extractAndMirror),
+// which writes through the cookieless service client.
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: () => supabase,
+}))
 
 const extractMock = vi.fn()
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', () => ({
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', () => ({
   extractInvoiceFields: (...args: unknown[]) => extractMock(...args),
   fetchOwnCompanyIdentity: vi.fn().mockResolvedValue({ orgNumber: null, name: null }),
 }))
@@ -21,6 +26,16 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 const aiStatusMock = vi.fn()
 vi.mock('@/lib/ai', () => ({
   getAiStatus: () => aiStatusMock(),
+}))
+
+const matchSupplierMock = vi.fn()
+vi.mock('@/lib/suppliers/match-supplier', () => ({
+  matchSupplierId: (...args: unknown[]) => matchSupplierMock(...args),
+}))
+
+const bankMatchMock = vi.fn()
+vi.mock('@/lib/operations/inbox-bank-match', () => ({
+  proposeBankMatchForInboxItem: (...args: unknown[]) => bankMatchMock(...args),
 }))
 
 import { documentExtractionExtension } from '../index'
@@ -60,6 +75,8 @@ beforeEach(() => {
     rawText: '{"supplier":{"name":"Elgiganten"}}',
     model: 'eu.anthropic.claude-sonnet-5',
   })
+  matchSupplierMock.mockResolvedValue(null)
+  bankMatchMock.mockResolvedValue(undefined)
 })
 
 describe('document-extraction handler', () => {
@@ -162,5 +179,63 @@ describe('document-extraction handler', () => {
     enqueue({ data: null })
     await handler(payload())
     expect(lastStamp()).toBe('failed:no_raw_text')
+  })
+
+  it('stamps failed:exception when the extraction throws, then throws to the event bus (nothing retries it)', async () => {
+    extractMock.mockRejectedValue(new Error('pdfjs blew up'))
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: null })
+    await expect(handler(payload())).rejects.toThrow('pdfjs blew up')
+    expect(lastStamp()).toBe('failed:exception')
+  })
+
+  // PH 101: a receipt dropped into Dokument is queued in Underlag by Arkiv
+  // seconds before this reading lands; the item used to stay unread.
+  describe('the Underlag item queued before the reading landed', () => {
+    const fetched = { data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } }
+
+    it('gets the reading, the supplier match and a bank check', async () => {
+      matchSupplierMock.mockResolvedValue('sup-1')
+      enqueue(fetched)
+      enqueue({ data: null }) // the mirror onto the document
+      enqueue({ data: [{ id: 'item-1' }] }) // the queued item waiting for it
+      enqueue({ data: { doc_type: 'receipt' } }) // what Arkiv typed the document
+      enqueue({ data: [{ id: 'item-1', matched_supplier_id: null }] }) // the fill
+      enqueue({ data: null }) // the supplier write
+      await handler(payload())
+      const fills = findCalls('invoice_inbox_items', 'update')
+      expect(fills[0][0]).toEqual({ extracted_data: { supplier: { name: 'Elgiganten' } }, extraction_skipped: false })
+      expect(fills[1][0]).toEqual({ matched_supplier_id: 'sup-1' })
+      expect(matchSupplierMock).toHaveBeenCalledWith(supabase, 'company-1', { name: 'Elgiganten' })
+      expect(bankMatchMock).toHaveBeenCalledWith(supabase, 'company-1', 'item-1', expect.anything())
+      expect(lastStamp()).toBe('eu.anthropic.claude-sonnet-5')
+    })
+
+    it('leaves the queue alone when nothing is waiting: no supplier lookup, no bank check', async () => {
+      enqueue(fetched)
+      enqueue({ data: null })
+      enqueue({ data: [] })
+      await handler(payload())
+      expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
+      expect(matchSupplierMock).not.toHaveBeenCalled()
+      expect(bankMatchMock).not.toHaveBeenCalled()
+    })
+
+    it('carries nothing when no reading came back', async () => {
+      extractMock.mockResolvedValue({ data: {}, rawText: null, skipped: 'pdf_rasterizer_missing' })
+      enqueue(fetched)
+      enqueue({ data: null })
+      await handler(payload())
+      expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
+    })
+
+    it('keeps the reading stamped on the document when the carry fails', async () => {
+      enqueue(fetched)
+      enqueue({ data: null })
+      enqueue({ error: { message: 'boom' } })
+      await handler(payload())
+      expect(lastStamp()).toBe('eu.anthropic.claude-sonnet-5')
+      expect(bankMatchMock).not.toHaveBeenCalled()
+    })
   })
 })

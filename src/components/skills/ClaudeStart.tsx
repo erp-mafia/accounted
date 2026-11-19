@@ -1,7 +1,15 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { ArrowUpRight, Bot, Check, ChevronDown, Globe, Monitor, type LucideIcon } from 'lucide-react'
+import {
+  ArrowUpRightIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ComputerDesktopIcon,
+  CpuChipIcon,
+  GlobeAltIcon,
+  type Icon as AppIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
@@ -9,7 +17,7 @@ import type { ClaudeTarget, StartOutcome } from './run'
 import { useClaudeTarget } from './claude-target'
 import styles from './skills.module.css'
 
-const TARGET_ICONS: Record<ClaudeTarget, LucideIcon> = { web: Globe, desktop: Monitor, cowork: Bot }
+const TARGET_ICONS: Record<ClaudeTarget, AppIcon> = { web: GlobeAltIcon, desktop: ComputerDesktopIcon, cowork: CpuChipIcon }
 
 /**
  * "Starta i Claude" as the app's split button (components/ui/split-button):
@@ -20,7 +28,7 @@ const TARGET_ICONS: Record<ClaudeTarget, LucideIcon> = { web: Globe, desktop: Mo
  * has only the web, so it gets the plain button. Only for Claude; other
  * clients keep their one button.
  */
-export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: ClaudeTarget) => Promise<StartOutcome> | void; size?: 'lg' | 'sm' }) {
+export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: ClaudeTarget) => Promise<StartOutcome> | void; size?: 'lg' | 'default' }) {
   const t = useTranslations('skills_registry')
   const [target, setTarget, targets] = useClaudeTarget()
   const logo = AI_CLIENTS.find((c) => c.id === 'claude')!.logo
@@ -36,7 +44,7 @@ export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: Claude
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={logo} alt="" width={16} height={16} className={styles.btnLogo} />
       {t(`start_in_${target}`)}
-      <ArrowUpRight className="h-4 w-4" aria-hidden />
+      <ArrowUpRightIcon className="h-4 w-4" aria-hidden />
     </Button>
   )
   if (targets.length < 2) return face
@@ -46,7 +54,7 @@ export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: Claude
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size={size} className="rounded-l-none border-l border-primary-foreground/20 px-2.5" aria-label={t('start_where')}>
-            <ChevronDown className="h-4 w-4" aria-hidden />
+            <ChevronDownIcon className="h-4 w-4" aria-hidden />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[260px]">
@@ -57,9 +65,9 @@ export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: Claude
                 <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] text-foreground">{t(`open_in_${o}`)}</span>
-                  <span className="block text-[11px] leading-snug text-muted-foreground">{t(`open_in_${o}_note`)}</span>
+                  <span className="block text-xs leading-snug text-muted-foreground">{t(`open_in_${o}_note`)}</span>
                 </span>
-                {o === target && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />}
+                {o === target && <CheckIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />}
               </DropdownMenuItem>
             )
           })}

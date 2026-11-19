@@ -1,12 +1,18 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType, InvoiceEmailTextOverrides } from '@/types'
 import { formatDate, getCompanyDisplayName } from '@/lib/utils'
-import { getAmountToPay } from '@/lib/invoices/rounding'
-import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
+import { companyWithInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
-import { buildInvoicePaymentRows } from '@/lib/invoices/payment-rows'
+import { sellerRegisteredOffice } from '@/lib/invoices/seller-registered-office'
+import {
+  buildInvoicePaymentRows,
+  INVOICE_AUTOGIRO_TEXT,
+  invoiceAutogiroPayerNumber,
+} from '@/lib/invoices/payment-rows'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
-type EmailLang = 'sv' | 'en'
+export type EmailLang = 'sv' | 'en'
 
 // Customer-facing labels. Statutory chapter references stay intact in both
 // locales. lib/utils.ts formatCurrency() keeps the Swedish "kr" symbol for
@@ -40,10 +46,17 @@ const LABELS = {
     questions: 'Har du frågor om fakturan? Svara direkt på detta mejl så hjälper vi dig.',
     sincerely: 'Med vänliga hälsningar,',
     orgNo: 'Org.nr:',
+    registeredOffice: 'Säte:',
     vat: 'VAT:',
     fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc.toLowerCase()}sammanfattning:`,
     subjectFrom: (doc: string, num: string, sender: string) => `${doc} ${num} från ${sender}`,
+    // Resend of an emailed invoice (crm#1339)
+    copySubjectPrefix: 'Kopia: ',
+    copyNotice: (doc: string, num: string, sentOn: string | null) =>
+      sentOn
+        ? `Det här är en kopia av ${doc.toLowerCase()} ${num} som skickades ${sentOn}.`
+        : `Det här är en kopia av ${doc.toLowerCase()} ${num}.`,
     // Payment confirmation (#1693)
     confirmationSubject: (num: string, sender: string) => `Betalningsbekräftelse för faktura ${num} från ${sender}`,
     confirmationHeading: (sender: string) => `Betalningsbekräftelse från ${sender}`,
@@ -76,12 +89,18 @@ const LABELS = {
     questions: 'Questions about the invoice? Reply directly to this email and we will help you.',
     sincerely: 'Kind regards,',
     orgNo: 'Reg. no.:',
+    registeredOffice: 'Registered office:',
     vat: 'VAT:',
     // Statutory Swedish phrase: kept verbatim in both locales. F-skatt is a
     // Swedish tax-authority designation; translating it has no legal standing.
     fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc} summary:`,
     subjectFrom: (doc: string, num: string, sender: string) => `${doc} ${num} from ${sender}`,
+    copySubjectPrefix: 'Copy: ',
+    copyNotice: (doc: string, num: string, sentOn: string | null) =>
+      sentOn
+        ? `This is a copy of ${doc.toLowerCase()} ${num}, sent on ${sentOn}.`
+        : `This is a copy of ${doc.toLowerCase()} ${num}.`,
     confirmationSubject: (num: string, sender: string) => `Payment confirmation for invoice ${num} from ${sender}`,
     confirmationHeading: (sender: string) => `Payment confirmation from ${sender}`,
     confirmationBody: (num: string) => `Thank you for your payment. We confirm that invoice ${num} has been paid in full. A payment confirmation is attached.`,
@@ -90,6 +109,15 @@ const LABELS = {
     confirmationQuestions: 'Questions about the payment? Reply directly to this email and we will help you.',
   },
 } as const
+
+/**
+ * The footer's säte segment (crm#1604), the same value the PDF footer prints
+ * (lib/invoices/seller-registered-office.ts). Empty when none is set.
+ */
+function registeredOfficeHtml(company: CompanySettings, L: (typeof LABELS)[EmailLang]): string {
+  const office = sellerRegisteredOffice(company)
+  return office ? ` | ${L.registeredOffice} ${escapeHtml(office)}` : ''
+}
 
 // Placeholder keys available in company-editable email texts
 // (company_settings.invoice_email_texts). Rendered as a legend in the
@@ -156,7 +184,7 @@ function quoteValidUntil(invoice: Invoice): string {
 // recipient reads "1 234,56 SEK" instead of the Swedish symbol "kr". Use the
 // English locale for digit grouping when the email is in English so the comma
 // thousands separator matches reader expectation.
-function formatCurrencyForCustomer(amount: number, currency: string, lang: EmailLang): string {
+export function formatCurrencyForCustomer(amount: number, currency: string, lang: EmailLang): string {
   const formatted = new Intl.NumberFormat(lang === 'en' ? 'en-US' : 'sv-SE', {
     style: 'decimal',
     minimumFractionDigits: 2,
@@ -180,6 +208,24 @@ export interface InvoiceEmailData {
    * whitespace-only = none.
    */
   overrides?: { subject?: string | null; body?: string | null }
+  /**
+   * Set when this email sends an already emailed invoice again (crm#1339).
+   * The subject is marked as a copy and the message opens by saying when the
+   * original went out, so the customer does not book or pay it twice.
+   * `sentAt` is the original delivery's timestamp.
+   */
+  copyOf?: { sentAt: string | null }
+}
+
+// The copy notice of a resend, or null for an ordinary send.
+function copyNoticeFor(data: InvoiceEmailData, lang: EmailLang): string | null {
+  if (!data.copyOf) return null
+  const sentOn = data.copyOf.sentAt ? todayIsoStockholm(new Date(data.copyOf.sentAt)) : null
+  return LABELS[lang].copyNotice(
+    getDocumentLabel(data.invoice, lang),
+    data.invoice.invoice_number ?? '',
+    sentOn,
+  )
 }
 
 function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record<string, string> {
@@ -279,7 +325,8 @@ export interface InvoiceEmailPaymentRow {
  * another on the faktura. The last row is the reference the customer copies
  * into the bank: the OCR reference exactly when the PDF prints one, else the
  * invoice number as a plain message. The payment link is left out here: the
- * invoice email shows it as its own "Betala online" button and line.
+ * invoice email shows it as its own "Betala online" button and line. An
+ * Autogiro invoice has the payer number as its one row (see autogiroNotice).
  */
 export function invoiceEmailPaymentRows(
   company: CompanySettings,
@@ -289,6 +336,17 @@ export function invoiceEmailPaymentRows(
   return buildInvoicePaymentRows({ company, invoice, lang })
     .filter((row) => row.key !== 'payment_link')
     .map(({ label, value, emphasis }) => (emphasis ? { label, value, emphasis } : { label, value }))
+}
+
+/**
+ * The Autogiro heading and sentence for an invoice Bankgirot debits, as the
+ * PDF prints them, or null when the customer pays it (or the document asks
+ * for no payment). It replaces the payment heading and the pay-online link:
+ * the email never also asks the customer to pay by hand.
+ */
+function autogiroNotice(invoice: Invoice, lang: EmailLang, hidePayment: boolean): { heading: string; notice: string } | null {
+  if (hidePayment || !invoiceAutogiroPayerNumber(invoice)) return null
+  return INVOICE_AUTOGIRO_TEXT[lang]
 }
 
 /**
@@ -309,8 +367,10 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   // pay-online button; its expiry replaces the due date.
   const isQuote = docType === 'quote'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
+  const autogiro = autogiroNotice(invoice, lang, hidePayment)
   const firstName = customerGreetingName(customer)
   const custom = resolveCustomTexts(data, lang)
+  const copyNotice = copyNoticeFor(data, lang)
   const stockBody = isCreditNote
     ? L.bodyCreditNote
     : isQuote
@@ -348,7 +408,8 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <div style="margin-bottom: 30px;">
       <p style="margin: 0 0 15px 0;">
         ${custom.greeting !== undefined ? userTextToHtml(custom.greeting) : escapeHtml(L.greeting(firstName))}
-      </p>
+      </p>${copyNotice ? `
+      <p style="margin: 0 0 15px 0;">${escapeHtml(copyNotice)}</p>` : ''}
       <p style="margin: 0;">
         ${custom.body !== undefined ? userTextToHtml(custom.body) : stockBody}
       </p>
@@ -386,7 +447,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <!-- Pay-online button: only when the user pasted a payment link on this
          invoice. The URL is schema-validated (https-only) but still escaped
          for the attribute context: a URL may legally contain quotes. -->
-    ${!hidePayment && invoice.payment_link_url ? `
+    ${!hidePayment && !autogiro && invoice.payment_link_url ? `
     <div style="margin-bottom: 30px; text-align: center;">
       <a href="${escapeHtml(invoice.payment_link_url)}" style="display: inline-block; background: ${primaryColor}; color: #ffffff; text-decoration: none; padding: 12px 32px; border-radius: 6px; font-size: 16px; font-weight: 600;">
         ${L.payOnline}
@@ -398,8 +459,9 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     ${!hidePayment ? `
     <div style="margin-bottom: 30px;">
       <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: ${primaryColor};">
-        ${L.paymentHeading}
-      </h2>
+        ${autogiro ? autogiro.heading : L.paymentHeading}
+      </h2>${autogiro ? `
+      <p style="margin: 0 0 10px 0;">${escapeHtml(autogiro.notice)}</p>` : ''}
       <table style="width: 100%; border-collapse: collapse;">
         ${invoiceEmailPaymentRows(company, invoice, lang).map((row) => `
         <tr>
@@ -424,7 +486,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
-        ${L.orgNo} ${company.org_number}
+        ${L.orgNo} ${company.org_number}${registeredOfficeHtml(company, L)}
         ${company.vat_number ? ` | ${L.vat} ${company.vat_number}` : ''}
         ${company.f_skatt ? ` | ${L.fSkatt}` : ''}
       </p>
@@ -452,8 +514,10 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   const isProforma = docType === 'proforma'
   const isQuote = docType === 'quote'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
+  const autogiro = autogiroNotice(invoice, lang, hidePayment)
   const firstName = customerGreetingName(customer)
   const custom = resolveCustomTexts(data, lang)
+  const copyNotice = copyNoticeFor(data, lang)
   const stockBody = isCreditNote
     ? L.bodyCreditNote
     : isQuote
@@ -464,6 +528,8 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   text += `${L.documentNumber(documentType)} ${invoice.invoice_number}\n\n`
 
   text += `${custom.greeting ?? L.greeting(firstName)}\n\n`
+
+  if (copyNotice) text += `${copyNotice}\n\n`
 
   text += `${custom.body ?? stockBody}\n\n`
 
@@ -478,8 +544,9 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   text += `---\n\n`
 
   if (!hidePayment) {
-    text += `${L.paymentHeading}:\n`
-    if (invoice.payment_link_url) text += `${L.payOnline}: ${invoice.payment_link_url}\n`
+    text += `${autogiro ? autogiro.heading : L.paymentHeading}:\n`
+    if (autogiro) text += `${autogiro.notice}\n`
+    else if (invoice.payment_link_url) text += `${L.payOnline}: ${invoice.payment_link_url}\n`
     for (const row of invoiceEmailPaymentRows(company, invoice, lang)) text += `${row.label} ${row.value}\n`
     text += `\n`
   }
@@ -490,6 +557,8 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
 
   if (company.org_number) {
     text += `\n${L.orgNo} ${company.org_number}`
+    const office = sellerRegisteredOffice(company)
+    if (office) text += ` | ${L.registeredOffice} ${office}`
     if (company.vat_number) text += ` | ${L.vat} ${company.vat_number}`
     if (company.f_skatt) text += ` | ${L.fSkatt}`
     text += `\n`
@@ -506,13 +575,16 @@ export function generateInvoiceEmailSubject(data: InvoiceEmailData): string {
   const lang = resolveLang(customer)
   const L = LABELS[lang]
 
+  // A resend keeps the subject the invoice is sent with and marks it a copy.
+  const prefix = data.copyOf ? L.copySubjectPrefix : ''
+
   // Sanitization runs after substitution, so a pathological placeholder
   // value containing a newline is also flattened to a single header line.
   const custom = resolveCustomTexts(data, lang)
-  if (custom.subject !== undefined) return sanitizeSubjectLine(custom.subject)
+  if (custom.subject !== undefined) return sanitizeSubjectLine(`${prefix}${custom.subject}`)
 
   const documentType = getDocumentLabel(invoice, lang)
-  return L.subjectFrom(documentType, invoice.invoice_number ?? '', getCompanyDisplayName(company))
+  return `${prefix}${L.subjectFrom(documentType, invoice.invoice_number ?? '', getCompanyDisplayName(company))}`
 }
 
 // ---------------------------------------------------------------------------
@@ -611,7 +683,7 @@ export function generatePaymentConfirmationEmailHtml(data: InvoiceEmailData): st
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
-        ${L.orgNo} ${escapeHtml(company.org_number)}
+        ${L.orgNo} ${escapeHtml(company.org_number)}${registeredOfficeHtml(company, L)}
         ${company.vat_number ? ` | ${L.vat} ${escapeHtml(company.vat_number)}` : ''}
         ${company.f_skatt ? ` | ${L.fSkatt}` : ''}
       </p>
@@ -647,6 +719,8 @@ export function generatePaymentConfirmationEmailText(data: InvoiceEmailData): st
 
   if (company.org_number) {
     text += `\n${L.orgNo} ${company.org_number}`
+    const office = sellerRegisteredOffice(company)
+    if (office) text += ` | ${L.registeredOffice} ${office}`
     if (company.vat_number) text += ` | ${L.vat} ${company.vat_number}`
     if (company.f_skatt) text += ` | ${L.fSkatt}`
     text += `\n`

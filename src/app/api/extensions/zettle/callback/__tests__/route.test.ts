@@ -25,7 +25,6 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 const registryGet = vi.fn((..._args: unknown[]) => ({ id: 'zettle' }) as unknown)
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
 }))

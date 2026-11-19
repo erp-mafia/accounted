@@ -9,12 +9,37 @@
  * commit executor can re-validate it.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const { mockDetectCandidate } = vi.hoisted(() => ({ mockDetectCandidate: vi.fn() }))
 vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: mockDetectCandidate,
   detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
+}))
+
+// The refusals on the row and the invoice alone have their own suite
+// (match-transaction-invoice-booked-row.test.ts) and take no slot in the queue.
+vi.mock('@/lib/invoices/book-customer-bank-match', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/book-customer-bank-match')>()),
+  refuseCustomerBankMatch: vi.fn(async () => null),
+}))
+
+// The payment verifikat's rows on the preview have their own suites
+// (match-transaction-invoice-expected-lines.test.ts and
+// lib/invoices/__tests__/customer-match-expected-lines.test.ts) and take no
+// slot in the queue.
+vi.mock('@/lib/invoices/customer-match-expected-lines', () => ({
+  customerMatchExpectedLines: vi.fn(async () => null),
 }))
 
 import { tools } from '../server'
@@ -176,7 +201,7 @@ describe('gnubok_match_transaction_to_invoice: soft-duplicate guard at stage tim
     const result = (await run(supabase)) as { staged: boolean; preview: Record<string, unknown> }
     expect(result.staged).toBe(true)
     expect(result.preview.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
-    // Persisted with the op: MatchTransactionInvoicePreview renders it on /pending.
+    // Persisted with the op: /pending renders it on the row and above the preview.
     const inserted = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
     expect(inserted.preview_data.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
   })

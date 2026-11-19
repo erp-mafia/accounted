@@ -1,4 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The registration-first rule (defer_invoice_booking) has its own suites
+// (registration-first.test.ts and the deferred-door tests); here no invoice
+// needs its registration booked first.
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planRegistrationBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+  planRegistrationsBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+  bookRegistrationsBeforeBatchSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryIds: {},
+    postedJournalEntryIds: {},
+    warnings: [],
+  })),
+}))
 import {
   createQueuedMockSupabase,
   createMockRouteParams,
@@ -7,6 +28,13 @@ import {
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
 const { mockLoggerWarn } = vi.hoisted(() => ({ mockLoggerWarn: vi.fn() }))
+// The payment-day rate is a network read; null falls back to the invoice's own.
+const { mockFetchExchangeRate } = vi.hoisted(() => ({ mockFetchExchangeRate: vi.fn() }))
+vi.mock('@/lib/currency/riksbanken', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/currency/riksbanken')>()),
+  fetchExchangeRate: mockFetchExchangeRate,
+}))
+
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({
     info: vi.fn(),
@@ -36,6 +64,13 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
+}))
+
+// Mocked so it consumes no slot in the queued Supabase mock: edited rows'
+// accounts all resolve here (the read is pinned by account-validation.test.ts).
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
 }))
 
 // Mocked so it consumes no slot in the queued Supabase mock: the helper's own
@@ -73,13 +108,34 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async (importOriginal) => 
 // engine so no path hits the queued Supabase mock.
 const mockCreateJournalEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
+const mockReverseEntry = vi.fn()
+const mockPropagateUnderlag = vi.hoisted(() => vi.fn(async () => undefined))
+vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/inbox-underlag')>()),
+  propagateUnderlagForBookedTransaction: mockPropagateUnderlag,
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
+  reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
+}))
+
+// The ledger duplicate guard (accounted#58): its own queries are pinned by
+// lib/transactions/__tests__/booking-duplicate-detection tests; here it is a
+// seam so it consumes no slot in the queued Supabase mock.
+const mockDetectDuplicate = vi.fn()
+vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
+  detectDuplicatePaymentVoucher: (...args: unknown[]) => mockDetectDuplicate(...args),
 }))
 
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
+import { logMatchEvent } from '@/lib/invoices/match-log'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlement,
+} from '@/lib/supplier-invoices/registration-first'
 import { syncInvoiceStatusFromPaymentEntry } from '@/lib/bookkeeping/payment-sync'
 import { fetchPaymentsAsOf, outstandingAsOf } from '@/lib/reports/reskontra-payments'
 
@@ -92,6 +148,8 @@ beforeEach(() => {
   mockCreateCashEntry.mockResolvedValue({ id: 'je-1' })
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
   mockFindFiscalPeriod.mockResolvedValue('fp-1')
+  mockFetchExchangeRate.mockResolvedValue(null)
+  mockDetectDuplicate.mockResolvedValue(null)
 })
 
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
@@ -125,6 +183,10 @@ function enqueueHappyPath(opts: {
   // ledger_account returned by the cash_accounts lookup; only enqueued when
   // the transaction carries a cash_account_id.
   cashAccountLedger?: string
+  // What the ledger carries for a foreign invoice, when it can say.
+  carriedSek?: number
+  // A registration booked first: its dry run says, so no ledger read happens.
+  noLedgerRead?: boolean
 }) {
   // 1. transactions fetch
   enqueue({
@@ -156,9 +218,14 @@ function enqueueHappyPath(opts: {
     },
     error: null,
   })
-  // 3. company_settings fetch
+  // 3. transaction_voucher_links: the booked-row gate (accounted#58); no
+  // pointer and no links, so the gate asks for posted verifikat booked from
+  // the row instead (#203): none.
+  enqueue({ data: [], error: null })
+  enqueue({ data: [], error: null })
+  // 4. company_settings fetch
   enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
-  // 4. cash_accounts lookup: by id when the transaction is linked to one,
+  // 5. cash_accounts lookup: by id when the transaction is linked to one,
   // otherwise the currency-fallback listing (issue #1722), empty here so the
   // 1930 fallback applies.
   if (opts.transaction.cash_account_id) {
@@ -166,12 +233,19 @@ function enqueueHappyPath(opts: {
   } else {
     enqueue({ data: [], error: null })
   }
-  // 5. supplier_invoices update (CAS)
+  // 5b. what the ledger carries for a foreign invoice: nothing linked here
+  if (opts.invoice.currency !== 'SEK' && !opts.noLedgerRead) {
+    enqueue({
+      data: opts.carriedSek !== undefined ? { ok: true, sek: opts.carriedSek } : { ok: false, reason: 'no_registration_voucher' },
+      error: null,
+    })
+  }
+  // 6. transactions update: the row claim (CAS), right after the verifikat
+  enqueue({ data: [{ id: TX_UUID }], error: null })
+  // 7. supplier_invoices update (CAS)
   enqueue({ data: [{ id: SI_UUID }], error: null })
-  // 6. supplier_invoice_payments insert
-  enqueue({ data: null, error: null })
-  // 7. transactions update (link)
-  enqueue({ data: null, error: null })
+  // 8. supplier_invoice_payments insert
+  enqueue({ data: { id: 'pay-1' }, error: null })
 }
 
 describe('POST /api/transactions/[id]/match-supplier-invoice: FX residual', () => {
@@ -371,7 +445,9 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: FX residual', () =
   it('falls back to bank SEK when the invoice has no exchange_rate on file', async () => {
     // Foreign-currency invoice but exchange_rate is null on the row.
     // Without a rate we can't compute the AP-booked SEK precisely, so we
-    // pass the actual bank SEK and skip the FX diff.
+    // pass the actual bank SEK and skip the FX diff. The payment day's rate
+    // says 239 kr is the 25 USD.
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'USD', rate: 9.56, date: '2026-05-12' })
     enqueueHappyPath({
       transaction: { amount: -239, currency: 'SEK' },
       invoice: { currency: 'USD', exchange_rate: null, remaining_amount: 25 },
@@ -419,10 +495,12 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
     })
     // Stale sticky setting from an earlier private-funds payment: must be
     // ignored now that the route no longer selects it.
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: { accounting_method: 'accrual', last_supplier_payment_account: '2893' }, error: null })
     enqueue({ data: { ledger_account: '1930' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // transactions claim (CAS)
     enqueue({ data: [{ id: SI_UUID }], error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
@@ -462,10 +540,12 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
       },
       error: null,
     })
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // transactions claim (CAS)
     enqueue({ data: [{ id: SI_UUID }], error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
@@ -521,6 +601,8 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
       },
       error: null,
     })
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
 
@@ -755,6 +837,9 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
       },
       error: null,
     })
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
+    enqueue({ data: [], error: null }) // posted verifikat booked from the row: none
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
 
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     const { status, body } = await parseJsonResponse<{ error: unknown }>(res)
@@ -778,16 +863,73 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     expect(res.status).toBe(200)
   })
 
-  it('does NOT trigger overshoot guard on currency mismatch (FX path clamps to remaining)', async () => {
-    // SEK transaction paying a EUR invoice. The currency-mismatch branch
-    // collapses paymentAmountInvoiceCurrency to invoice.remaining_amount and
-    // cannot overshoot, so the guard must not fire here.
+  it('does NOT trigger the overshoot guard on a cross-currency row inside the limit', async () => {
+    // SEK transaction paying a EUR invoice, 4 % over the rate: a card rate.
+    // The band reads it as the whole remainder, so the guard must not fire.
+    enqueueHappyPath({
+      transaction: { amount: -2400, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a SEK row past the limit of a foreign remainder: never a kursförlust of 7 700 kr', async () => {
     enqueueHappyPath({
       transaction: { amount: -10000, currency: 'SEK' },
       invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
     })
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('asks for the payment-day rate of the invoice currency on a cross-currency row, and only then', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2400, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
+    })
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(mockFetchExchangeRate).toHaveBeenCalledWith('EUR', new Date('2026-05-12'), expect.anything())
+
+    mockFetchExchangeRate.mockClear()
+    enqueueHappyPath({
+      transaction: { amount: -500, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 500 },
+    })
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('reads a part of the remainder at the payment-day rate: half a payment is a partial, not a gain', async () => {
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.4, date: '2026-05-12' })
+    enqueueHappyPath({
+      transaction: { amount: -5700, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 1000, exchange_rate: 11.3 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     expect(res.status).toBe(200)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    // 500 EUR at the booking rate off 2440, 5 700 kr off the bank, 50 kr the loss.
+    expect(args[4]).toBe(5650)
+    expect(args[6]).toBeCloseTo(-50, 2)
+    expect(findCalls('supplier_invoices', 'update').at(-1)![0]).toMatchObject({ status: 'partially_paid', remaining_amount: 500 })
+  })
+
+  it('clears what 2440 carries on a full settlement, not the rate', async () => {
+    // The carried figure comes through the door's ledger read, in the queue.
+    enqueueHappyPath({
+      transaction: { amount: -1965.43, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 176.7, exchange_rate: 11.123 },
+      carriedSek: 1965.44,
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    expect(args[4]).toBe(1965.44)
+    expect(args[6]).toBeCloseTo(0.01, 2)
   })
 })
 
@@ -937,50 +1079,19 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: cash method + FX',
   })
 })
 
-describe('POST /api/transactions/[id]/match-supplier-invoice: transaction document propagation', () => {
-  const DOC_UUID = '33333333-3333-4333-8333-333333333333'
-
-  it('links a pinned transaction document to the payment JE after the match', async () => {
+describe('POST /api/transactions/[id]/match-supplier-invoice: the row\'s underlag', () => {
+  it('runs the one underlag step on the payment verifikat', async () => {
     enqueueHappyPath({
-      transaction: { amount: -1000, currency: 'SEK', document_id: DOC_UUID },
+      transaction: { amount: -1000, currency: 'SEK', document_id: '33333333-3333-4333-8333-333333333333' },
       invoice: { currency: 'SEK', remaining_amount: 1000 },
     })
-    // 8. document_attachments update (the propagation)
-    enqueue({ data: null, error: null })
 
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { body } = await parseJsonResponse<{ journal_entry_id: string }>(res)
+
     expect(res.status).toBe(200)
-    const tables = mockSupabase.from.mock.calls.map((c) => c[0])
-    expect(tables).toContain('document_attachments')
-  })
-
-  it('does not touch document_attachments when the transaction has no pinned doc', async () => {
-    enqueueHappyPath({
-      transaction: { amount: -1000, currency: 'SEK' },
-      invoice: { currency: 'SEK', remaining_amount: 1000 },
-    })
-    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    expect(res.status).toBe(200)
-    const tables = mockSupabase.from.mock.calls.map((c) => c[0])
-    expect(tables).not.toContain('document_attachments')
-  })
-
-  it('propagation failure is non-fatal: the committed match still returns 200', async () => {
-    enqueueHappyPath({
-      transaction: { amount: -1000, currency: 'SEK', document_id: DOC_UUID },
-      invoice: { currency: 'SEK', remaining_amount: 1000 },
-    })
-    // Propagation update errors (e.g. period locked between commit and link).
-    enqueue({ data: null, error: { message: 'BFL period lock' } })
-
-    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(res)
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(mockLoggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining('failed to link transaction document'),
-      expect.anything(),
-    )
+    expect(mockPropagateUnderlag).toHaveBeenCalledTimes(1)
+    expect(mockPropagateUnderlag).toHaveBeenCalledWith(mockSupabase, 'company-1', TX_UUID, body.journal_entry_id)
   })
 })
 
@@ -1201,5 +1312,389 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: user-edited lines'
     )
     expect(res.status).toBe(400)
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/transactions/[id]/match-supplier-invoice: a deferred invoice paid before Bokför', () => {
+  const registrationEntry = {
+    entry_date: '2026-05-02',
+    description: 'Leverantörsfaktura',
+    lines: [
+      { account_number: '6110', debit_amount: 1912, credit_amount: 0, line_description: null },
+      { account_number: '2641', debit_amount: 478, credit_amount: 0, line_description: null },
+      { account_number: '2440', debit_amount: 0, credit_amount: 2390, line_description: null },
+    ],
+    total_debit: 2390,
+    total_credit: 2390,
+    balanced: true,
+    note: '',
+  }
+  const requiredPlan = {
+    ok: true as const,
+    required: true as const,
+    supplierInvoiceId: SI_UUID,
+    entry: registrationEntry,
+    payableSek: 2390,
+    createsAccrualSchedules: false,
+  }
+
+  it('books the registration first, then the 2440 clearing, and names the registration', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      journal_entry_id: string
+      registration_journal_entry_id?: string
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.registration_journal_entry_id).toBe('je-registration')
+    expect(vi.mocked(planRegistrationBeforeSettlement)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      expect.objectContaining({ id: SI_UUID }),
+      { settlementDate: '2026-05-12' },
+    )
+    const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
+    expect(bookOrder).toBeLessThan(mockCreatePaymentEntry.mock.invocationCallOrder[0])
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number }>
+    }
+    expect(input.lines.find((l) => l.account_number === '2440')?.debit_amount).toBe(2390)
+  })
+
+  it('clears what the registration will leave on 2440, off its dry run: no voucher holds it yet', async () => {
+    // 141.36 + 35.34 EUR at 11.123: the registration credits 1965.44, the rate says 1965.43.
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.123, date: '2026-05-12' })
+    enqueueHappyPath({
+      transaction: { amount: -1965.43, currency: 'SEK' },
+      invoice: { currency: 'EUR', exchange_rate: 11.123, remaining_amount: 176.7 },
+      noLedgerRead: true,
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({ ...requiredPlan, payableSek: 1965.44 })
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    expect(res.status).toBe(200)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    expect(args[4]).toBe(1965.44)
+    expect(args[6]).toBeCloseTo(0.01, 2)
+  })
+
+  it('a refused registration refuses the match: no payment verifikat, no ledger update, no link', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_ACCRUED_COST_PERIOD_LOCKED',
+      details: { registration_first: true, supplier_invoice_id: SI_UUID },
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: Record<string, unknown> }
+    }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_ACCRUED_COST_PERIOD_LOCKED')
+    expect(body.error.details).toMatchObject({ registration_first: true })
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toHaveLength(0)
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
+  })
+
+  it('a refusal at booking time (a concurrent change) books no payment', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+    vi.mocked(planRegistrationBeforeSettlement).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_CONFLICT',
+      details: { registration_first: true, supplier_invoice_id: SI_UUID },
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(409)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('a booked or kontantmetoden invoice matches as before, with no registration id', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2390, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 2390 },
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+
+    expect(status).toBe(200)
+    expect(body).not.toHaveProperty('registration_journal_entry_id')
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+  })
+})
+
+// accounted#58: matching a row that is already booked posted a second payment
+// verifikat. The refusal names the verifikat; the dialog's "Återför och
+// matcha" resends with storno_existing, which reverses the row's own
+// categorization first.
+describe('POST /api/transactions/[id]/match-supplier-invoice: a bank row that is already booked', () => {
+  const OWN_ENTRY = {
+    id: 'je-own', status: 'posted', source_type: 'bank_transaction', source_id: TX_UUID,
+    voucher_series: 'A', voucher_number: 12,
+  }
+
+  function enqueueBookedRow() {
+    enqueue({
+      data: {
+        id: TX_UUID, company_id: 'company-1', amount: -225, currency: 'SEK', amount_sek: null,
+        supplier_invoice_id: null, journal_entry_id: 'je-own', reconciliation_method: null,
+        cash_account_id: null, document_id: null, date: '2026-05-12',
+      },
+    })
+    enqueue({
+      data: {
+        id: SI_UUID, currency: 'SEK', exchange_rate: null, status: 'registered', remaining_amount: 225,
+        paid_amount: 0, supplier: { supplier_type: 'swedish_business' }, items: [],
+      },
+    })
+    enqueue({ data: [] }) // transaction_voucher_links
+    enqueue({ data: [OWN_ENTRY] }) // journal_entries: the pointer's verifikat
+  }
+
+  function makeStornoReq(body: Record<string, unknown>) {
+    return new Request(`http://localhost/api/transactions/${TX_UUID}/match-supplier-invoice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supplier_invoice_id: SI_UUID, ...body }),
+    })
+  }
+
+  it('answers 409 MATCH_SI_TX_ALREADY_BOOKED naming the verifikat, and books nothing', async () => {
+    enqueueBookedRow()
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_TX_ALREADY_BOOKED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-own', voucher: 'A12', via: 'pointer', storno_allowed: true })
+    expect(body.error.message).toContain('verifikat A12')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('with storno_existing reverses the row\'s own categorization, then books the payment on the row', async () => {
+    enqueueBookedRow()
+    enqueue({ data: [OWN_ENTRY] }) // posted verifikat booked from the row: the pointer's only (#203)
+    enqueue({ data: { accounting_method: 'accrual' } }) // company_settings
+    enqueue({ data: [] }) // cash_accounts listing: 1930
+    enqueue({ data: [{ account_number: '1930' }] }) // chart check before the storno
+    enqueue({ data: [{ id: TX_UUID }] }) // transactions claim (CAS)
+    enqueue({ data: [{ id: SI_UUID }] }) // supplier_invoices update (CAS)
+    enqueue({ data: { id: 'pay-1' } }) // supplier_invoice_payments insert
+    mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
+
+    const res = await POST(makeStornoReq({ storno_existing: true }), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(res)
+
+    expect(status).toBe(200)
+    expect(body.journal_entry_id).toBe('je-1')
+    expect(mockReverseEntry).toHaveBeenCalledTimes(1)
+    expect(mockReverseEntry.mock.calls[0].slice(1, 4)).toEqual(['company-1', 'user-1', 'je-own'])
+    expect(mockReverseEntry.mock.invocationCallOrder[0]).toBeLessThan(mockCreateJournalEntry.mock.invocationCallOrder[0])
+    expect(logMatchEvent).toHaveBeenCalledWith(expect.anything(), 'user-1', TX_UUID, 'storno_conflict_resolved', expect.anything())
+    // The claim accepts the pointer it read, or the null the storno released:
+    // literal compare-and-sets, no interpolated .or().
+    expect(findCalls('transactions', 'or')).toEqual([])
+    expect(findCalls('transactions', 'eq')).toContainEqual(['journal_entry_id', 'je-own'])
+    expect(findCalls('transactions', 'update')[0][0]).toMatchObject({ supplier_invoice_id: SI_UUID, journal_entry_id: 'je-1' })
+  })
+
+  it('rejects a storno_existing that is not a boolean with 400', async () => {
+    const res = await POST(makeStornoReq({ storno_existing: 'yes' }), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(400)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/transactions/[id]/match-supplier-invoice: a verifikat already books the payment (accounted#58)', () => {
+  const CANDIDATE_ID = '33333333-3333-4333-8333-333333333333'
+  const OTHER_ID = '44444444-4444-4444-8444-444444444444'
+  const candidate = {
+    journal_entry_id: CANDIDATE_ID,
+    voucher_label: 'A7',
+    entry_date: '2026-05-11',
+    description: 'Betalning leverantör',
+    amount: 225,
+    bank_account_number: '1930',
+    reason: 'exact_amount_within_window',
+    amount_verified: true,
+    unverified_reason: null,
+  }
+
+  function makeBodyReq(body: Record<string, unknown>) {
+    return new Request(`http://localhost/api/transactions/${TX_UUID}/match-supplier-invoice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supplier_invoice_id: SI_UUID, ...body }),
+    })
+  }
+
+  function enqueueOpenRow() {
+    enqueue({
+      data: {
+        id: TX_UUID, company_id: 'company-1', amount: -225, currency: 'SEK', amount_sek: null,
+        exchange_rate: null, supplier_invoice_id: null, journal_entry_id: null, cash_account_id: 'ca-1',
+        document_id: null, date: '2026-05-12',
+      },
+    })
+    enqueue({
+      data: {
+        id: SI_UUID, currency: 'SEK', exchange_rate: null, status: 'registered', remaining_amount: 225,
+        paid_amount: 0, supplier: { supplier_type: 'swedish_business' }, items: [],
+      },
+    })
+    enqueue({ data: [] }) // transaction_voucher_links: the booked-row gate
+    enqueue({ data: [] }) // posted verifikat booked from the row: none
+  }
+
+  function expectNothingBooked() {
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(findCalls('supplier_invoice_payments', 'insert')).toEqual([])
+  }
+
+  it('answers 409 MATCH_SI_POSSIBLE_DUPLICATE naming the verifikat, and books nothing', async () => {
+    enqueueOpenRow()
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { candidate: unknown } } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_POSSIBLE_DUPLICATE')
+    expect(body.error.details.candidate).toEqual(candidate)
+    // The row as the door read it: its own currency and settlement account.
+    expect(mockDetectDuplicate).toHaveBeenCalledWith(mockSupabase, expect.objectContaining({
+      companyId: 'company-1',
+      transactionId: TX_UUID,
+      transactionDate: '2026-05-12',
+      transactionAmount: -225,
+      transactionCurrency: 'SEK',
+      cashAccountId: 'ca-1',
+    }), { skipClaimed: true }) // the supplier reading: another invoice's payment is never named
+    expectNothingBooked()
+  })
+
+  it('books with force bound to the verifikat it named, and logs the dismissed verifikat', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -225, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 225 },
+    })
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: CANDIDATE_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(logMatchEvent)).toHaveBeenCalledWith(
+      expect.anything(), 'user-1', TX_UUID, 'matched',
+      expect.objectContaining({
+        newState: expect.objectContaining({ dismissed_duplicate_journal_entry_id: CANDIDATE_ID }),
+      }),
+    )
+  })
+
+  it('refuses force naming another verifikat with 409 MATCH_SI_FORCE_CANDIDATE_MISMATCH, booking nothing', async () => {
+    enqueueOpenRow()
+    mockDetectDuplicate.mockResolvedValue(candidate)
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: OTHER_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_FORCE_CANDIDATE_MISMATCH')
+    expect(body.error.details).toEqual({ expected_journal_entry_id: OTHER_ID, detected_journal_entry_id: CANDIDATE_ID })
+    expectNothingBooked()
+  })
+
+  it('refuses force when nothing is detected any more (the caller retries without force)', async () => {
+    enqueueOpenRow()
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: CANDIDATE_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_FORCE_CANDIDATE_MISMATCH')
+    expectNothingBooked()
+  })
+
+  it('rejects force without expected_journal_entry_id (400) before reading anything', async () => {
+    const res = await POST(makeBodyReq({ force: true }), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(400)
+    expect(mockDetectDuplicate).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('a failed detection lets the match through without force, as on the customer match', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -225, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 225 },
+    })
+    mockDetectDuplicate.mockRejectedValue(new Error('read failed'))
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    expect(res.status).toBe(200)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed detection refuses force: it needs the verifikat it names', async () => {
+    enqueueOpenRow()
+    mockDetectDuplicate.mockRejectedValue(new Error('read failed'))
+
+    const res = await POST(
+      makeBodyReq({ force: true, expected_journal_entry_id: CANDIDATE_ID }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+
+    expect(res.status).toBe(500)
+    expectNothingBooked()
   })
 })

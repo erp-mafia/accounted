@@ -244,6 +244,27 @@ describe('generateIncomeStatement', () => {
     expect(report.net_result).toBe(221000)
   })
 
+  it('excludes an omföring through 8990 like one through 8999 (årets resultat is 8990-8999)', async () => {
+    // Imported ledgers from some systems close the year's result through 8990
+    // (Resultat) instead of 8999. Read as a financial item, that debit zeroes
+    // the year: the resultaträkning reported 0 kr for those years.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 370000, closing_debit: 0 }),
+        makeRow({ account_number: '5010', account_name: 'Rent', account_class: 5, closing_debit: 149000, closing_credit: 0 }),
+        makeRow({ account_number: '8990', account_name: 'Resultat', account_class: 8, closing_debit: 221000, closing_credit: 0 }),
+      ],
+      totalDebit: 370000,
+      totalCredit: 370000,
+      isBalanced: true,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    expect(report.financial_sections).toEqual([])
+    expect(report.net_result).toBe(221000)
+  })
+
   it('still includes legitimate class 8 accounts (8310 interest, 8410 interest expense)', async () => {
     // Sanity check the 8999 exclusion is narrow: other class 8 accounts
     // (interest income, interest expense, tax) must still appear.

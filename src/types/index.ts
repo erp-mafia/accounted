@@ -7,6 +7,7 @@ export type EntityType =
   | 'aktiebolag'
   | 'ideell_forening'
   | 'ekonomisk_forening'
+  | 'bostadsrattsforening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
 // ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset
@@ -15,8 +16,17 @@ export type EntityType =
 // for a specific framework is resolved through lib/company/entity-type.ts.
 export type AccountingFramework = 'k2' | 'k3'
 
-// Company role for multi-tenant access
-export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
+// The country whose law a company's books follow (ISO 3166-1 alpha-2) and the
+// currency its ledger is kept in (ISO 4217). Pinned by CHECKs on companies
+// (migration 20261016006000) to the one country and currency the product
+// supports; a country pack widens the CHECK and these types together.
+export type CompanyJurisdiction = 'SE'
+export type LedgerCurrency = 'SEK'
+
+// Company role for multi-tenant access. 'invoicer' (shown as Fakturering)
+// reaches only customers, invoices, quotes, orders and articles
+// (lib/auth/invoicer).
+export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
 
 // Team (consulting firm grouping). 'personal' teams are the implicit
 // one-per-user grouping; 'byra' teams are ops-created accounting-firm
@@ -37,6 +47,8 @@ export interface Company {
   org_number: string | null
   entity_type: EntityType
   accounting_framework: AccountingFramework
+  jurisdiction: CompanyJurisdiction
+  ledger_currency: LedgerCurrency
   created_by: string
   team_id: string | null
   archived_at: string | null
@@ -47,18 +59,6 @@ export interface Company {
   // whether the company is a registered employer without an extra fetch.
   // Optional because it isn't a column on `companies`. #782
   pays_salaries?: boolean
-}
-
-// Company membership
-export interface CompanyMember {
-  id: string
-  company_id: string
-  user_id: string
-  role: CompanyRole
-  invited_by: string | null
-  joined_at: string
-  created_at: string
-  updated_at: string
 }
 
 export const COMPANY_MIGRATION_RESET_COUNT_KEYS = [
@@ -135,6 +135,7 @@ export type FiscalYearResetBlockerCode =
   | 'cross_year_reference'
   | 'retained_import_history'
   | 'unfinished_import'
+  | 'sie_import_in_place'
 
 export interface FiscalYearResetBlocker {
   code: FiscalYearResetBlockerCode
@@ -178,6 +179,73 @@ export interface FiscalYearResetRpcResult {
   period_name?: string
 }
 
+// Owner reopen of a year closed with a bokslut in Accounted (crm#1290;
+// migration 20261018120000, lib/core/bookkeeping/fiscal-year-reopen.ts).
+// form_not_supported is the app's own gate (a form without an årsredovisning);
+// every other code comes from fiscal_year_reopen_snapshot.
+export type FiscalYearReopenBlockerCode =
+  | 'not_closed_with_bokslut'
+  | 'closed_externally'
+  | 'annual_report_submitted'
+  | 'annual_report_signed'
+  | 'later_year_closed'
+  | 'next_year_locked'
+  | 'company_lock_date'
+  | 'registry_unavailable'
+  | 'annual_report_registered'
+  | 'form_not_supported'
+
+export interface FiscalYearReopenBlocker {
+  code: FiscalYearReopenBlockerCode
+  /** company_lock_date: the lock date. */
+  date?: string
+  /** next_year_locked: the next year's name. */
+  name?: string
+}
+
+/** A verifikat the reopen reverses by storno, in the order it does so. */
+export interface FiscalYearReopenEntry {
+  id: string
+  kind: 'result_appropriation' | 'opening_balance' | 'closing_entry' | 'currency_revaluation'
+  voucher_series: string | null
+  voucher_number: number | null
+  entry_date: string
+  fiscal_period_id: string
+}
+
+export interface FiscalYearReopenEligibility {
+  eligible: boolean
+  blockers: FiscalYearReopenBlocker[]
+  /** A reopen that stopped midway: the year is open, its bokslut not yet reversed. */
+  resume: boolean
+  period: {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+    closing_entry_id: string | null
+  }
+  next_period: { id: string; name: string } | null
+  entries: FiscalYearReopenEntry[]
+  annual_report: {
+    versions_to_supersede: number
+    pending_signatures: number
+    agm_date: string | null
+  }
+  registry: { fetched_at: string | null; reports: number | null }
+}
+
+export interface FiscalYearReopenRpcResult extends Partial<FiscalYearReopenEligibility> {
+  ok: boolean
+  code?: string
+  period_name?: string
+  resumed?: boolean
+  closing_entry_id?: string | null
+  next_period_id?: string | null
+  superseded_version_ids?: string[]
+  voided_signature_request_ids?: string[]
+}
+
 // Shape of user_preferences.ui_state. All fields optional: the bag grows
 // as UI surfaces add preferences (UI migration plan PR 2/3). Stored bags may
 // still carry retired keys (shell, nav_collapsed, nav_folds) from the old
@@ -197,6 +265,13 @@ export interface UserUiState {
   trial_expired_ack?: Record<string, string>
   // Transaktioner column visibility (lib/transactions/columns-v2).
   tx_columns?: { hidden?: string[] }
+  // Kom igång steps this user chose to skip, keyed per company
+  // (companyId -> step ids, lib/onboarding/checklist SKIPPABLE_SETUP_STEPS).
+  setup_skipped?: Record<string, string[]>
+  // One-time Discord invite card (components/community/DiscordInviteCard):
+  // ISO timestamp of when the user closed it or clicked through. Per user,
+  // not per company: it is one community.
+  discord_invite_dismissed_at?: string
 }
 
 export type AgentPanelMode = 'docked' | 'floating'
@@ -246,7 +321,17 @@ export type CustomerType =
   | 'non_eu_business'   // Non-EU company
 
 // Invoice status
-export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'partially_paid' | 'overdue' | 'cancelled' | 'credited'
+// 'written_off': a konstaterad kundförlust removed the claim from 1510
+// (lib/customer-loss). Entered and left only through record_invoice_write_off.
+export type InvoiceStatus =
+  | 'draft'
+  | 'sent'
+  | 'paid'
+  | 'partially_paid'
+  | 'overdue'
+  | 'cancelled'
+  | 'credited'
+  | 'written_off'
 
 // Invoice document type
 export type InvoiceDocumentType = 'invoice' | 'proforma' | 'delivery_note' | 'quote'
@@ -264,12 +349,18 @@ export type SupplierType = 'swedish_business' | 'eu_business' | 'non_eu_business
 // "Ångra kreditering". The row is preserved (BFL 7 kap) rather than hard-deleted.
 export type SupplierInvoiceStatus = 'registered' | 'approved' | 'paid' | 'partially_paid' | 'overdue' | 'disputed' | 'credited' | 'reversed'
 
+// What an EU supplier's reverse-charge invoice bought: goods (ruta 20) or
+// services (ruta 21). supplier_invoices.reverse_charge_kind; NULL = services.
+export const SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS = ['eu_goods', 'eu_services'] as const
+export type SupplierInvoiceReverseChargeKind = (typeof SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS)[number]
+
 // VAT treatment
 export type VatTreatment =
   | 'standard_25'       // 25% Swedish VAT
   | 'reduced_12'        // 12% reduced rate
   | 'reduced_6'         // 6% reduced rate
   | 'reverse_charge'    // EU reverse charge (0%)
+  | 'reverse_charge_domestic' // Domestic reverse charge, construction services (0%, ruta 41)
   | 'export'            // Non-EU export (0%)
   | 'exempt'            // VAT exempt
 
@@ -285,7 +376,14 @@ export type ReconciliationMethod = 'auto_exact' | 'auto_date_range' | 'auto_refe
 
 // Processing history (behandlingshistorik): event-driven audit trail per BFNAR 2013:2 kap 8
 
-export type ProcessingHistoryActorType = 'user' | 'system' | 'llm' | 'cron' | 'api_key'
+/**
+ * Who an event in processing_history names (the actor JSONB's `type`).
+ * 'service_account': a service account's key (lib/service-accounts), with the
+ * key's id and the account's name as the label, where a person's key records
+ * 'api_key'. Kept in step with heal_cash_account_twins, the one SQL function
+ * that checks the list (migration 20261016130000).
+ */
+export type ProcessingHistoryActorType = 'user' | 'system' | 'llm' | 'cron' | 'api_key' | 'service_account'
 
 export interface ProcessingHistoryActor {
   type: ProcessingHistoryActorType
@@ -313,12 +411,13 @@ export type BankConnectionStatus = 'pending' | 'pending_selection' | 'active' | 
 // Currency types
 /**
  * Currencies the app can book. Single source for every TS list: the Zod
- * schema, the form dropdowns, the MCP tool schemas and the Riksbanken series
- * map all derive from this tuple. Must match the seed of public.currencies
- * (supabase/migrations) and the SERIES_IDS map in lib/currency/riksbanken.ts;
+ * schema, the form dropdowns and the MCP tool schemas all derive from this
+ * tuple. Must match the seed of public.currencies (supabase/migrations), and
+ * every foreign member needs a rate source in RIKSBANKEN_CURRENCIES
+ * (lib/currency/riksbanken.ts), which is the wider set a rate exists for;
  * lib/currency/__tests__/currencies.test.ts pins both.
  */
-export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF'] as const
+export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'CAD'] as const
 export type Currency = (typeof CURRENCIES)[number]
 /** Currencies that need an exchange rate to reach SEK. */
 export const FOREIGN_CURRENCIES: readonly Currency[] = CURRENCIES.filter((c) => c !== 'SEK')
@@ -369,9 +468,9 @@ export interface InvoiceEmailTexts {
   en?: InvoiceEmailTextOverrides
 }
 
-// Editable reminder email texts per reminder level (Swedish only, matching
-// the reminder templates). Missing / whitespace-only fields fall back to the
-// defaults in lib/email/reminder-templates.ts (REMINDER_EMAIL_DEFAULT_TEXTS).
+// Editable reminder email texts per reminder level (Swedish only), stored in
+// company_settings.reminder_text_overrides. The sender that read them was
+// removed in Plan 2 step 18; the column and its settings schema remain.
 // Supports the fixed placeholder set {fakturanummer} {kundnamn} {förnamn}
 // {företag} {fakturadatum} {förfallodatum} {belopp} {dagar}. TEXT only:
 // reminder fee and interest math are unaffected (Lag 1981:739 caps the
@@ -483,6 +582,17 @@ export interface CompanySettings {
   swish: string | null
   iban: string | null
   bic: string | null
+  // Swedbank's own ids for pain.001 files (MIG 2.0): the SignerID goes in
+  // InitgPty, the Corporate Pay agreement id in Dbtr/Id. Read only when the
+  // company's bank resolves to Swedbank (lib/payments/swedbank.ts).
+  swedbank_signer_id?: string | null
+  swedbank_corporate_pay_id?: string | null
+  // Nordea's Signer ID for pain.001 files: InitgPty with SchmeNm CUST. Read
+  // only when the company's bank resolves to Nordea (lib/payments/nordea.ts).
+  nordea_signer_id?: string | null
+  // Nordea's CCM agreement id for pain.001 files: Dbtr with SchmeNm BANK.
+  // Read only when the company's bank resolves to Nordea.
+  nordea_agreement_id?: string | null
   // Foreign non-IBAN routing, only ever populated on the render-time copy
   // produced by companyWithInvoicePaymentAccount (never a DB column).
   bank_code?: string | null
@@ -492,10 +602,20 @@ export interface CompanySettings {
   invoice_payment_accounts?: Partial<Record<Currency, InvoicePaymentAccount>>
 
   // Accounting method
+  /** Capitalise finansiella leasingavtal (K3 20.5) instead of the 20.29 relief (default off). */
+  finance_lease_capitalisation?: boolean
   accounting_method: AccountingMethod
   // #967: when true (accrual only), registering supplier invoices / sending
   // customer invoices does NOT book them; booking is a separate explicit step.
   defer_invoice_booking?: boolean
+  /** Revalue open foreign-currency items at each month end, reversed the next day (default off). */
+  fx_revaluation_monthly?: boolean
+  /**
+   * One click on a bank row's suggestion books it without a review when the
+   * direct-booking policy allows it (default on). Off: every suggestion
+   * opens a review (lib/transactions/direct-booking.ts, accounted#130).
+   */
+  direct_booking_enabled?: boolean
 
   // Invoice settings
   invoice_prefix: string | null
@@ -552,10 +672,19 @@ export interface CompanySettings {
   // overrides it per invoice.
   invoice_qr_mode: InvoiceQrMode
   invoice_show_logo: boolean
+  // Print the article number column on the invoice PDF and send it as the
+  // seller's item identifier in the e-invoice (default false, crm#1084).
+  invoice_show_article_number?: boolean
   invoice_show_company_name: boolean
   invoice_company_name_position: 'header' | 'footer'
   invoice_late_fee_text: string | null
   invoice_credit_terms_text: string | null
+  // The English texts of the two above, printed on an invoice to an
+  // English-language customer; null or blank prints the Swedish text
+  // (lib/invoices/fine-print.ts, crm#1735). Optional: absent on a row read
+  // before migration 20261109183000.
+  invoice_late_fee_text_en?: string | null
+  invoice_credit_terms_text_en?: string | null
 
   // Opt-in for the invoice payment-link feature (default false): shows the
   // payment-link field in the invoice editor and enables automatic Stripe
@@ -586,6 +715,12 @@ export interface CompanySettings {
 
   // Automation
   send_invoice_reminders: boolean
+  /** When send_invoice_reminders last went on (trigger-maintained); null while off. */
+  reminders_enabled_at?: string | null
+  /** When automatic reminder sending went on (set by Accounted only); null: each batch waits for approval. */
+  reminders_automatic_at?: string | null
+  /** Who turned automatic reminder sending on. */
+  reminders_automatic_by?: string | null
   reminder_days_level_1: number
   reminder_days_level_2: number
   reminder_days_level_3: number
@@ -611,7 +746,7 @@ export interface CompanySettings {
   sector_slug: string | null
 
   // Dimensions (kostnadsställe/projekt): UI-visibility toggle only, never
-  // load-bearing for correctness. Free tier (founder decision 2026-07-02).
+  // load-bearing for correctness. Free tier (product decision 2026-07-02).
   dimensions_enabled: boolean
 
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
@@ -630,11 +765,19 @@ export interface CompanySettings {
   proforma_enabled: boolean
   recurring_invoices_enabled: boolean
   self_billing_enabled: boolean
+  // Self-billing on the purchase side (migration 20261022130000, crm#1367):
+  // the series our självfakturor are numbered in (prefix + at least three
+  // digits, assigned by the insert trigger) and the acceptance clause the
+  // document prints (null = the built-in text). Optional: narrow selects and
+  // rows read before the migration do not carry them.
+  self_billing_prefix?: string
+  next_self_billing_number?: number
+  self_billing_acceptance_text?: string | null
   // Per-company counter behind generate_sales_order_number (OR-<n>).
   next_sales_order_number?: number
 
   // Salary payments (migration 20260508120000 + 20260703190000).
-  // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
+  // preferred_payment_format defaults to 'pain001' - Bankgirot Lön is
   // retired by the banks during 2026.
   preferred_payment_format: 'bg_lb' | 'pain001'
   salary_pay_day: number
@@ -647,6 +790,10 @@ export interface CompanySettings {
   // the employer's own view always prints both (build-payslip-data).
   salary_payslip_show_employer_cost: boolean
   salary_payslip_show_breakdown: boolean
+  // Regionalt stöd (migration 20261026110000): employees work at a fast
+  // driftställe in a stödområde (lag 2001:1170). Snapshotted into each run's
+  // calculation_params at :calculate (lib/salary/regional-support.ts).
+  salary_regional_support: boolean
   // Avvikelseperiod (migration 20260918120000): the month a new salary run
   // reads absence and worked days from. 'previous_month' is the common
   // Swedish setup (innevarande månads lön, föregående månads avvikelser).
@@ -660,6 +807,14 @@ export interface CompanySettings {
   // column default is {} = every convention at its default = the historical
   // engine; the API stores the full object.
   salary_calculation_policy?: Partial<import('@/lib/salary/calculation-policy').SalaryCalculationPolicy>
+  // How the semesterlöneskuld is booked (migration 20261027213121): 'accrual'
+  // (the default, trued up at the semesterårsavslut) or 'remeasure' (every
+  // run books the difference to the computed liability). Changed only
+  // through POST /api/salary/vacation-liability/method, which books the
+  // catch-up first.
+  salary_vacation_liability_method?: import('@/lib/salary/vacation-liability-method').VacationLiabilityMethod
+  /** The ledger account the skattekonto runs on (lib/skatteverket/skattekonto-account.ts); null until chosen or derived. */
+  skattekonto_account?: string | null
 
   // Sandbox
   is_sandbox: boolean
@@ -725,7 +880,7 @@ export interface BankAccount {
 // Backed by the cash_accounts table; bank_connections.accounts_data remains
 // the source for PSD2 sync metadata + UI display until a follow-up migration
 // drops it 30 days after this PR.
-export type CashAccountSource = 'enable_banking' | 'manual' | 'sie_import'
+export type CashAccountSource = 'enable_banking' | 'open_payments' | 'manual' | 'sie_import'
 
 /**
  * What a customer pays to. Lives on cash_accounts (migration 20260904010000)
@@ -778,9 +933,37 @@ export interface CashAccount extends CashAccountPayeeFields {
   // account. null = follow company_settings.default_voucher_series_per_source_type.
   // See 20260902121420_cash_accounts_voucher_series.sql.
   voucher_series: string | null
+  // 'card' for a company card on a liability ledger (20261028090000). Every
+  // row the database returns carries it (NOT NULL DEFAULT 'bank'); optional
+  // here so rows built in code before the column existed still type, and read
+  // as 'bank' when absent (isCardCashAccount).
+  kind?: CashAccountKind
+  // Card rows only: who issued the card and the last four digits of the
+  // cards billed on the statement.
+  card_issuer?: CardIssuer | null
+  card_last4?: string[] | null
   created_at: string
   updated_at: string
 }
+
+/** A bank, till or PSP clearing account, or a company card (liability side). */
+export type CashAccountKind = 'bank' | 'card'
+
+/** The card issuers the add-card dialog offers ('other' for the rest). */
+export const CARD_ISSUERS = [
+  'eurocard',
+  'seb_kort',
+  'amex',
+  'handelsbanken',
+  'first_card',
+  'danske',
+  'swedbank',
+  'qred',
+  'mynt',
+  'pleo',
+  'other',
+] as const
+export type CardIssuer = (typeof CARD_ISSUERS)[number]
 
 /**
  * Which cash account an invoice in `currency` prints as payee when the
@@ -928,6 +1111,27 @@ export interface Transaction {
   counterparty_iban: string | null
   counterparty_account: string | null
 
+  // What the bank reported beyond the booking date (20261010090100,
+  // 20261011135800). Optional like the other late-added columns.
+  value_date?: string | null
+  end_to_end_id?: string | null
+  provider_transaction_id?: string | null
+  // The archived raw bank response this row arrived in; document_id is the receipt.
+  raw_document_id?: string | null
+
+  // What Open Payments' daily enrichment adds (migration 20261013190000):
+  // the counterparty's organisationsnummer (digits only), the amount and
+  // currency a foreign card purchase was made in (exchange_rate then holds
+  // the bank's rate on a SEK account), the account balance after the row,
+  // and whether the bank has enriched the row (enriched_at: when it last
+  // took an enriched version). Optional like the other late-added columns.
+  counterparty_org_number?: string | null
+  instructed_amount?: number | null
+  instructed_currency?: string | null
+  balance_after?: number | null
+  is_enriched?: boolean | null
+  enriched_at?: string | null
+
   // Notes
   notes: string | null
 
@@ -967,6 +1171,8 @@ export interface Customer {
   address_line2: string | null
   postal_code: string | null
   city: string | null
+  /** State or province of a US or Canadian address ('WA'); printed "City, ST ZIP" (lib/invoices/postal-address.ts). */
+  address_state?: string | null
   /** ISO 3166-1 alpha-2 ('SE', 'DE'). Rows from before 2026-09 that the backfill could not map may still hold a name. */
   country: string
 
@@ -983,8 +1189,31 @@ export interface Customer {
   // Payment
   default_payment_terms: number  // Days
 
+  /**
+   * Fakturareferens (crm#1200): copied into Er referens (your_reference) on a
+   * new invoice to this customer when the caller states none
+   * (lib/customers/invoice-reference.ts).
+   */
+  invoice_reference: string | null
+
+  /**
+   * Märkning (crm#1477): copied into invoices.invoice_marking (Peppol BT-13
+   * OrderReference) on a new invoice to this customer when the caller states
+   * none (lib/customers/invoice-marking.ts).
+   */
+  invoice_marking: string | null
+
   // Notes
   notes: string | null
+
+  /**
+   * "Skicka aldrig till inkasso": the daily collections batch never proposes
+   * this customer's invoices. Written only by PATCH
+   * /api/customers/[id]/collections-exclusion while collections is offered.
+   */
+  collections_excluded?: boolean
+  /** "Skicka aldrig påminnelser": the reminder sender skips this customer's invoices. */
+  reminders_excluded?: boolean
 
   created_at: string
   updated_at: string
@@ -1023,6 +1252,27 @@ export interface Supplier {
   default_expense_account: string | null
   default_payment_terms: number
   default_currency: string
+  /**
+   * The self-billing agreement with this supplier (ML 2023:200 17 kap 15 §
+   * p.1): the reference a self-billing invoice prints. Null = no agreement,
+   * so no self-billing invoice can be issued to it. Optional: narrow selects
+   * and rows read before 20261022130000 do not carry it.
+   */
+  self_billing_agreement_ref?: string | null
+
+  /**
+   * The supplier debits its invoices from the company account itself
+   * (autogiro, account debit): new invoices inherit it and stay out of
+   * to-pay lists and payments (crm#1463). Optional: narrow selects.
+   */
+  auto_debit?: boolean
+
+  /**
+   * Dimension bag {sie_dim_no: code} its new supplier invoices take when
+   * they name none (accounted#144). Optional: narrow selects and rows read
+   * before 20261031203517 do not carry it.
+   */
+  default_dimensions?: Record<string, string>
 
   notes: string | null
 
@@ -1045,6 +1295,17 @@ export interface SupplierPaymentBatchDebtor {
   bankgiro?: string | null
   /** Company town for Dbtr/PstlAdr; absent on pre-TownName-fix batches. */
   city?: string | null
+  /**
+   * Swedbank SignerID and Corporate Pay agreement id, present only on a
+   * Swedbank debtor's batch. Absent on batches created before 2026-10-11,
+   * which therefore regenerate in their original form.
+   */
+  swedbank_signer_id?: string | null
+  swedbank_corporate_pay_id?: string | null
+  /** Nordea's Signer ID, present only on a Nordea debtor's batch made since crm#1530. */
+  nordea_signer_id?: string | null
+  /** Nordea's CCM agreement id, present only on a Nordea debtor's batch made since 2026-11-02. */
+  nordea_agreement_id?: string | null
 }
 
 export interface SupplierPaymentBatch {
@@ -1243,7 +1504,20 @@ export interface SupplierInvoice {
   supplier_id: string
 
   arrival_number: number
-  supplier_invoice_number: string
+  /**
+   * The supplier's own number as printed on its invoice. NULL when the
+   * document carries none (a förenklad faktura, a receipt, an autogiro notice,
+   * or a provider import without one), never a stand-in and never a blank
+   * string (supplier_invoices_number_not_blank). arrival_number still
+   * identifies the invoice in the leverantörsreskontra.
+   */
+  supplier_invoice_number: string | null
+  /**
+   * Fortnox's own number for the invoice (löpnummer), kept when it was
+   * imported from Fortnox. Vouchers imported from Fortnox cite it, and the
+   * import recognises the invoice by it. NULL for every other invoice.
+   */
+  fortnox_number?: string | null
 
   invoice_date: string
   due_date: string
@@ -1274,8 +1548,27 @@ export interface SupplierInvoice {
 
   vat_treatment: VatTreatment
   reverse_charge: boolean
+  /**
+   * Under reverse charge from an EU supplier: goods (eu_goods, basis
+   * 4515-4517, ruta 20) or services (eu_services, 4535-4537, ruta 21). NULL
+   * books services, as every invoice did before 20261019160000. Optional:
+   * narrow selects do not carry it.
+   */
+  reverse_charge_kind?: SupplierInvoiceReverseChargeKind | null
 
   payment_reference: string | null
+  /**
+   * The payee the invoice document states (scan, Peppol or typed), validated.
+   * The supplier card holds the known default; a payment compares the two.
+   * Null when the document stated none. Optional: rows read before
+   * 20261010090000 and narrow selects do not carry them.
+   */
+  payee_bankgiro?: string | null
+  payee_plusgiro?: string | null
+  payee_iban?: string | null
+  payee_bic?: string | null
+  payee_clearing?: string | null
+  payee_account?: string | null
   paid_at: string | null
   paid_amount: number
   remaining_amount: number
@@ -1295,11 +1588,31 @@ export interface SupplierInvoice {
   paid_with_private_funds: boolean
 
   /**
+   * A self-billing invoice we issued in the supplier's name (crm#1367,
+   * ML 2023:200 17 kap 15 §). Its number is ours: self_billing_number is the
+   * position in the company's series and supplier_invoice_number the
+   * formatted number, both assigned on insert. The document is made by the
+   * app from self_billing_snapshot. Optional: narrow selects and rows read
+   * before 20261022130000 do not carry them.
+   */
+  is_self_billed?: boolean
+  self_billing_number?: number | null
+  self_billing_agreement_ref?: string | null
+  self_billing_snapshot?: Record<string, unknown> | null
+
+  /**
    * "Inlagd i banken" (#2220): the user entered this payment in the internet
    * bank by hand; money not yet gone. A mellanlage between attesterad and
    * betald, never a status. Cleared by a DB trigger when a payment lands.
    */
   bank_entered_at: string | null
+
+  /**
+   * "Dras automatiskt" (crm#1463): the supplier debits the invoice itself
+   * (autogiro, account debit) on the due date, so there is nothing to pay;
+   * settled when the debit is matched. Optional: narrow selects.
+   */
+  auto_debit?: boolean
 
   notes: string | null
 
@@ -1339,10 +1652,12 @@ export interface SupplierInvoiceItem {
   // rate drives the fiktiv-moms + basbelopp booking. See the booking engine.
   reverse_charge_rate: number | null
 
-  // Periodisering (förutbetald kostnad): when set, the registration entry
-  // debits accrual_balance_account (17xx) instead of account_number, and an
-  // accrual_schedules row dissolves the net amount monthly over the period.
-  // VAT is never deferred. Both dates set together or not at all.
+  // Periodisering: when set, the registration entry debits
+  // accrual_balance_account instead of account_number, and an
+  // accrual_schedules row dissolves the net amount monthly over the period:
+  // 17xx is a förutbetald kostnad, 29xx an upplupen kostnad (months before
+  // the invoice month, each booked on its last day). VAT is never deferred.
+  // Both dates set together or not at all.
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
@@ -1376,6 +1691,10 @@ export interface SupplierInvoicePayment {
   notes: string | null
 
   created_at: string
+
+  /** Set by GET /api/supplier-invoices/[id] on a row that is a plain link to
+   *  an existing verifikat, which "Koppla bort" can take back. */
+  can_unlink_voucher?: boolean
 }
 
 // Invoice Payment (partial payments)
@@ -1445,8 +1764,10 @@ export interface Invoice {
   // = the customer decides. delivery_country is where the GOODS were
   // transported (ISO alpha-2); under an export / reverse_charge header it
   // books the goods accounts 3105 / 3108 instead of the services ones
-  // 3305 / 3308. Optional in TS for pre-migration fixtures.
-  vat_treatment_override?: 'standard' | 'export' | 'reverse_charge' | null
+  // 3305 / 3308. reverse_charge_domestic (crm#1007, migration
+  // 20261005220322) is construction services, 3231 / ruta 41. Optional in TS
+  // for pre-migration fixtures.
+  vat_treatment_override?: import('@/lib/invoices/invoice-vat-override').InvoiceVatTreatmentOverride | null
   delivery_country?: string | null
 
   // Reference
@@ -1454,9 +1775,14 @@ export interface Invoice {
   our_reference: string | null
   // Fakturamärkning: buyer-required marking (cost center, project, PO label),
   // separate from your_reference (Er referens = contact person). Printed on
-  // the PDF and mapped to Peppol BT-10 BuyerReference when set. Optional in
+  // the PDF and mapped to Peppol BT-13 OrderReference. Optional in
   // TS for pre-migration fixtures.
   invoice_marking?: string | null
+  // Leveransadress (crm#1547, migration 20261031109700): where the goods go
+  // when not to the invoice address. Printed on the PDF, Peppol BG-13;
+  // informational (VAT follows delivery_country). Optional in TS for
+  // pre-migration rows.
+  delivery_address?: import('@/lib/invoices/delivery-address').InvoiceDeliveryAddress | null
 
   // Optional online payment link (pasted by the user, e.g. a Stripe Payment
   // Link). Rendered as a "Betala online" button in the invoice email and as a
@@ -1490,6 +1816,11 @@ export interface Invoice {
 
   // Credit note reference
   credited_invoice_id: string | null
+
+  // Autogiro: the payer number the invoice is debited on. Follows the
+  // customer's active mandate while a draft and freezes at issue (migration
+  // 20261025084700_autogiro.sql); null = paid by the customer, never debited.
+  autogiro_payer_number?: string | null
 
   // Document type (invoice, proforma, delivery_note, quote)
   document_type: InvoiceDocumentType
@@ -1560,7 +1891,12 @@ export interface Invoice {
   payments?: InvoicePayment[]
 }
 
-export type InvoiceDeliveryChannel = 'email' | 'manual'
+/**
+ * email: sent from Accounted. manual: marked sent, delivered elsewhere.
+ * import: the invoice's own PDF from the previous system (Fortnox), archived
+ * when the invoice was migrated; no recipients or message.
+ */
+export type InvoiceDeliveryChannel = 'email' | 'manual' | 'import'
 export type InvoiceDeliveryStatus = 'preparing' | 'pending' | 'sent' | 'failed' | 'marked_sent'
 
 /**
@@ -1631,7 +1967,7 @@ export interface InvoiceDelivery {
  * Skatteverket handles in "Rot och rut: företag"; gron_teknik is the separate
  * skattereduktion för grön teknik (e-tjänst "Grön teknik: företag"). The
  * rot_rut_* table, route and column names are kept for wire stability.
- * Runtime list, labels and rates: lib/invoices/rot-rut-rules.ts.
+ * Runtime list, labels and rates: lib/bookkeeping/rot-rut-rules.ts.
  */
 export type DeductionType = 'rot' | 'rut' | 'gron_teknik'
 
@@ -1660,7 +1996,7 @@ export interface InvoiceItem {
   unit_price: number
 
   // Percentage discount on the line (0-100). line_total and vat_amount are
-  // stored NET of this discount (lib/invoices/line-amounts.ts). Optional in
+  // stored NET of this discount (lib/bookkeeping/invoice-line-amounts.ts). Optional in
   // TS for pre-migration fixtures; treat undefined the same as 0.
   discount_percent?: number
 
@@ -1678,6 +2014,10 @@ export interface InvoiceItem {
   // booking in generatePerRateLines().
   article_id?: string | null
   revenue_account?: string | null
+  /** The article's number, frozen-copied at line-create time like revenue_account
+   *  (crm#1084). Printed when company_settings.invoice_show_article_number is on;
+   *  null on free-text rows and on lines written before the column existed. */
+  article_number?: string | null
 
   // Kundorder line this invoice line was created from. The order line's
   // invoiced quantity is DERIVED from these links (never stored), so an
@@ -1685,18 +2025,20 @@ export interface InvoiceItem {
   // every write path round-trips it.
   sales_order_item_id?: string | null
 
-  // Periodisering (förutbetald intäkt): when set, the revenue entry credits
-  // accrual_balance_account (29xx) instead of the line's revenue account, and
-  // an accrual_schedules row dissolves the net amount monthly over the
-  // period. Output VAT is never deferred. Both dates set together or not at
-  // all. Not combinable with ROT/RUT or text lines.
+  // Periodisering: when set, the revenue entry credits
+  // accrual_balance_account instead of the line's revenue account, and an
+  // accrual_schedules row dissolves the net amount monthly over the period:
+  // 29xx is a förutbetald intäkt, 17xx an upplupen intäkt (months before the
+  // invoice month, each booked on its last day). Output VAT is never
+  // deferred. Both dates set together or not at all. Not combinable with
+  // ROT/RUT or text lines.
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
 
   // Skattereduktion (ROT/RUT-avdrag, or grön teknik). When `deduction_type`
   // is set, the system computes `deduction_amount` from the rules in
-  // lib/invoices/rot-rut-rules.ts and posts the receivable to BAS 1513
+  // lib/bookkeeping/rot-rut-rules.ts and posts the receivable to BAS 1513
   // (Skatteverket). The whole flagged line is the base: ROT/RUT flag labour
   // lines only, grön teknik flags labour and material lines.
   //
@@ -1804,11 +2146,16 @@ export interface RecurringInvoiceScheduleItem {
   quantity: number
   unit: string
   unit_price: number
-  // null = inherit customer's default VAT rate at spawn time
+  // null = inherit customer's default VAT rate at spawn time (the linked
+  // article's rate when the customer may carry it)
   vat_rate: number | null
   // Per-item bag copied onto the generated invoice_items.dimensions; merges
   // over the schedule default on that item's revenue line.
   dimensions?: Record<string, string>
+  // Article the line was picked from; the spawn copies it (with the article's
+  // number and revenue account) onto the generated invoice line. Undefined
+  // until migration 20261101003800 has run.
+  article_id?: string | null
   created_at: string
 }
 
@@ -1827,12 +2174,15 @@ export interface CreateCustomerInput {
   address_line2?: string
   postal_code?: string
   city?: string
+  address_state?: string
   country?: string
   org_number?: string
   vat_number?: string
   personal_number?: string | null
   language?: 'sv' | 'en'
   default_payment_terms?: number
+  invoice_reference?: string | null
+  invoice_marking?: string | null
   notes?: string
 }
 
@@ -1858,6 +2208,12 @@ export interface CreateSupplierInput {
   default_expense_account?: string
   default_payment_terms?: number
   default_currency?: string
+  /** The self-billing agreement with the supplier (crm#1367); empty clears it. */
+  self_billing_agreement_ref?: string | null
+  /** The supplier debits its invoices itself (crm#1463). */
+  auto_debit?: boolean
+  /** Tags its new supplier invoices take when they name none (accounted#144); {} clears. */
+  default_dimensions?: Record<string, string>
   notes?: string
 }
 
@@ -1881,8 +2237,6 @@ export interface ArchiveEstimate {
   total_bytes: number
   document_bytes: number
   document_count: number
-  size_limit_bytes: number
-  within_limit: boolean
 }
 
 // VAT validation response
@@ -1897,9 +2251,11 @@ export interface VatValidationResult {
   unavailable?: boolean
 }
 
-// Exchange rate response
+// Exchange rate response. `currency` is any code Riksbanken has a series for
+// (RIKSBANKEN_CURRENCIES), which is wider than the bookable Currency set: a
+// bank row can arrive in a currency the app cannot invoice in.
 export interface ExchangeRate {
-  currency: Currency
+  currency: string
   rate: number
   date: string
 }
@@ -1931,6 +2287,8 @@ export type JournalEntrySourceType =
   | 'correction'
   | 'import'
   | 'system'
+  // A verifikat booked from a Skatteverket skattekonto row.
+  | 'tax_account'
   | 'inbox_item'
   | 'supplier_invoice_registered'
   | 'supplier_invoice_paid'
@@ -1951,6 +2309,25 @@ export type JournalEntrySourceType =
   // from 1513 back onto the customer (debit 1510 / credit 1513) and the
   // invoice reopens for that amount. lib/invoices/rot-rut-reclaim.ts.
   | 'rot_rut_reclaim'
+  // One point-of-sale business day booked as its daily takings voucher
+  // (gemensam verifikation, BFL 5 kap 6 §). lib/pos-sales/book-day.ts.
+  | 'pos_daily_sales'
+  // A collections provider's payout: the payout account against the clearing
+  // account the collected payments were booked to, plus the provider's
+  // deductions. lib/collections/settlements.ts.
+  | 'collection_settlement'
+  // Kundförlust: befarad reserve (6352/1519) and its release, konstaterad
+  // write-off (6351 + 26xx / 1510) and a recovery (3950 + 26xx).
+  // lib/customer-loss.
+  | 'customer_loss'
+  // Kvittning: a customer invoice settled against a supplier invoice of the
+  // same counterparty (Dr 244x / Cr 151x, VAT untouched).
+  // lib/invoices/counterparty-setoff.
+  | 'counterparty_setoff'
+  // A migrated invoice's household deduction moved from 1510 onto 1513
+  // (debit 1513 / credit 1510), the claim on Skatteverket an invoice issued
+  // here books on day one. lib/invoices/migrated-deduction-apply.ts.
+  | 'rot_rut_reclassification'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -2007,6 +2384,10 @@ export interface FiscalPeriod {
   // Optional: rows predate the column on some cached readers.
   closed_externally?: boolean
   locked_at: string | null
+  // The SIE import (sie_imports.id) whose run, or undo, holds this year until
+  // it is completed, undone or failed. The year cannot be locked or closed
+  // meanwhile (guard_sie_period_hold). Optional: not every reader selects it.
+  import_hold?: string | null
   retention_expires_at: string | null
   opening_balances_set: boolean
   closing_entry_id: string | null
@@ -2049,11 +2430,15 @@ export interface JournalEntry {
   commit_method: string | null
   // WHO relayed the commit; complements commit_method = HOW. Stamped at
   // commit time since migration 20260619120000. actor_type is NULL or one of
-  // 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
+  // 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat' |
+  // 'service_account'
   // (the DB CHECK is the authority); actor_label is a credential snapshot
   // (e.g. the API key name).
   committed_actor_type: string | null
   committed_actor_label: string | null
+  // The person who posted it (auth.uid(), or user_id for a trusted backend
+  // caller; migration 20260929220100). NULL on drafts and older entries.
+  committed_by?: string | null
   rubric_version: string | null
   source_voucher_series: string | null
   source_voucher_number: number | null
@@ -2097,19 +2482,46 @@ export interface JournalEntryLine {
 
 export type AccrualDirection = 'expense' | 'revenue'
 export type AccrualScheduleStatus = 'active' | 'completed' | 'cancelled'
+export type AccrualScheduleSourceKind = 'invoice' | 'manual'
 export type AccrualInstallmentStatus = 'pending' | 'posted' | 'cancelled'
+
+// What "Ändra periodisering" answers: the months not yet posted, now and
+// after the re-plan (replanRemainingInstallments).
+export interface AccrualReplanMonth {
+  period_month: string
+  amount: number
+  /** The day the month books on: its release date, never before the posting floor or the lock date. */
+  booking_date: string
+}
+
+export interface AccrualReplanResult {
+  accrual_schedule_id: string
+  period_start: string
+  period_end_before: string
+  period_end_after: string
+  release_day_before: number | null
+  release_day_after: number | null
+  /** Total minus the posted months: what the months not yet posted share. */
+  remaining_amount: number
+  before: AccrualReplanMonth[]
+  after: AccrualReplanMonth[]
+  /** Months booked right after the re-plan because their day has come (commit only). */
+  posted_now?: number
+}
 
 export interface AccrualSchedule {
   id: string
   user_id: string
   company_id: string
   direction: AccrualDirection
+  source_kind?: AccrualScheduleSourceKind
   supplier_invoice_id: string | null
   supplier_invoice_item_id: string | null
   invoice_id: string | null
   invoice_item_id: string | null
-  // Interim balance account (17xx for expense, 29xx for revenue) and the
-  // P&L account each installment dissolves to. Strings, like all accounts.
+  // Interim balance account (17xx förutbetald or 29xx upplupen for expense,
+  // 29xx förutbetald or 17xx upplupen for revenue) and the P&L account each
+  // installment dissolves to. Strings, like all accounts.
   balance_account: string
   target_account: string
   // Net SEK amount as booked (ex VAT). Always equals the sum of installments.
@@ -2120,6 +2532,11 @@ export interface AccrualSchedule {
   origin_journal_entry_id: string | null
   // Dissolution entries are never dated before this (= origin entry date).
   posting_floor_date: string
+  // Day of the month each deferral month dissolves on (1-31, clamped to the
+  // month's last day); null = the first of the month. Never set on an
+  // upplupen kostnad, which books on each month's last day. Optional in TS
+  // for pre-migration fixtures.
+  release_day?: number | null
   status: AccrualScheduleStatus
   description: string | null
   // Dimensions bag ({sie_dim_no: object_code}) copied from the origin line
@@ -2204,6 +2621,10 @@ export interface MappingResult {
   // the transaction sign (e.g. an incoming refund matching an expense-learned
   // template). The result is mirrored and review-gated, and must never be
   // learned back into the template (it would flip the learned accounts).
+  // Also set when a category is booked against its own direction (money out
+  // on an income category, money in on an expense category): the person chose
+  // it, so it is not review-gated, but it is a mirrored pair all the same and
+  // no rule or template learns from it.
   direction_mismatch?: boolean
   // Dimensions bag applied to the business (expense/revenue) lines of the
   // generated entry: a single-pair counterparty template's learned bag or an
@@ -2274,6 +2695,9 @@ export interface CategorizationTemplate {
   mode: 'proposed' | 'propose' | 'auto' | 'paused'
   corrections: number
   paused_at: string | null
+  // A person set the rule to ask for a review on every booking (migration
+  // 20261030131517): the row's one click and the Inkorg's open the review.
+  always_review?: boolean
   created_at: string
   updated_at: string
 }
@@ -2370,11 +2794,11 @@ export interface BalanceSheetSection {
 }
 
 /**
- * A non-latest fiscal year whose P&L (class 3-8) does not net to zero —
- * its result was never transferred to equity (omföring av årets resultat
- * saknas). Every later period that derives its opening balance from prior
- * class 1-2 lines inherits exactly this residual as a balance-sheet
- * differens.
+ * A non-latest fiscal year whose P&L (class 3-8) does not net to zero: its
+ * result was never booked into equity (omföring av årets resultat saknas).
+ * The next derived opening balance carries it on the form's closing account
+ * (prior_opening_balance_lines), so it no longer shows as a balance-sheet
+ * differens; the SIE import names these years.
  */
 export interface UntransferredResult {
   fiscal_period_id: string
@@ -2385,12 +2809,10 @@ export interface UntransferredResult {
 
 /**
  * Server-built explanation for an unbalanced balance report. The message is
- * Swedish (user-facing domain messages are Swedish) and names the exact
- * fiscal years whose results were never moved to equity.
+ * Swedish (user-facing domain messages are Swedish).
  */
 export interface BalanceImbalanceDiagnosis {
   differens: number
-  untransferred_results: UntransferredResult[]
   message: string
 }
 
@@ -2416,11 +2838,39 @@ export interface LatestVoucherPerSeries {
   last_number: number
 }
 
+/**
+ * The budget a report compares with (accounted#134). `applied` is false when
+ * the window cuts a month: a budget is kept per whole month, so the report
+ * then shows no budget figures rather than wrong ones.
+ */
+export interface ReportBudget {
+  budget_id: string
+  name: string
+  is_default: boolean
+  applied: boolean
+  /** 'YYYY-MM': the months the budget figures cover; null when not applied. */
+  from_month: string | null
+  to_month: string | null
+}
+
+/**
+ * Budget against actual for one row: budget in the report's sign, deviation
+ * = actual - budget (positive is a better result), deviation_percent =
+ * deviation / |budget| in percent, null without a budget.
+ */
+export interface BudgetComparison {
+  budget: number
+  deviation: number
+  deviation_percent: number | null
+}
+
 export interface ResultatrapportRow {
   account_number: string
   account_name: string
   current_period: number
   prior_period: number
+  /** Set when the report has an applied budget. */
+  budget?: BudgetComparison
 }
 
 export interface ResultatrapportGroup {
@@ -2429,6 +2879,7 @@ export interface ResultatrapportGroup {
   rows: ResultatrapportRow[]
   subtotal_current: number
   subtotal_prior: number
+  subtotal_budget?: BudgetComparison
 }
 
 export interface ResultatrapportReport {
@@ -2439,6 +2890,9 @@ export interface ResultatrapportReport {
   prior_period: { start: string; end: string } | null
   /** Omitted when the window holds no posted vouchers, or the report is dimension-filtered. */
   latest_vouchers?: LatestVoucherPerSeries[]
+  /** The budget asked for (budget_id); its figures sit on the rows when applied. */
+  budget?: ReportBudget
+  net_result_budget?: BudgetComparison
 }
 
 // Resultat per projekt/kostnadsställe: value-as-column P&L matrix over one
@@ -2455,6 +2909,9 @@ export interface DimensionPnlRow {
   account_name: string
   values: number[]
   total: number
+  /** With an applied budget: the budget per column and in total, report sign. */
+  budget_values?: number[]
+  budget_total?: number
 }
 
 export interface DimensionPnlGroup {
@@ -2463,6 +2920,8 @@ export interface DimensionPnlGroup {
   rows: DimensionPnlRow[]
   subtotals: number[]
   subtotal_total: number
+  budget_subtotals?: number[]
+  budget_subtotal_total?: number
 }
 
 export interface DimensionPnlReport {
@@ -2472,13 +2931,72 @@ export interface DimensionPnlReport {
   net_per_column: number[]
   net_total: number
   period: { start: string; end: string }
+  budget?: ReportBudget
+  budget_net_per_column?: number[]
+  budget_net_total?: number
+}
+
+// Resultat across two dimensions (accounted#133): dimension A's values as
+// rows, dimension B's as columns, one amount per cell for the measure (the
+// result, or the accounts of a range). `code: null` is the "(Utan
+// dimension)" row or column; the untagged x untagged cell is the remainder of
+// the resultatrapport, so the cells sum exactly to `total`.
+export interface DimensionCrossValue {
+  code: string | null
+  name: string | null
+}
+
+export interface DimensionCrossReport {
+  dim_a: { sie_dim_no: string; name: string }
+  dim_b: { sie_dim_no: string; name: string }
+  /** The accounts summed, inclusive; 3000-8999 is the whole result. */
+  accounts: { from: string; to: string }
+  rows: DimensionCrossValue[]
+  columns: DimensionCrossValue[]
+  /** cells[row][column], credit minus debit, as in the resultatrapport. */
+  cells: number[][]
+  row_totals: number[]
+  column_totals: number[]
+  /** The resultatrapport for the same window and accounts. */
+  total: number
+  period: { start: string; end: string }
+}
+
+/** One line behind a cell of the dimension cross report. */
+export interface DimensionCrossLine {
+  line_id: string
+  journal_entry_id: string
+  entry_date: string
+  voucher_series: string | null
+  voucher_number: number
+  description: string | null
+  line_description: string | null
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  dimensions: Record<string, unknown>
+}
+
+export interface DimensionCrossLinesPage {
+  lines: DimensionCrossLine[]
+  has_more: boolean
+  /** The cursor for the next page (the last line's), null on the last page. */
+  next: { after_date: string; after_voucher: number; after_line: string } | null
 }
 
 export interface BalansrapportRow {
   account_number: string
   account_name: string
+  /** Ingående balans: the balance on the fiscal year's first day (the year's IB). */
+  year_ib: number
+  /**
+   * Ingående saldo: the balance when the chosen range starts, the year's IB
+   * plus everything before the range. Equals year_ib for a range that starts
+   * on the year's first day.
+   */
   ib: number
   ub: number
+  /** ub - ib: the movement within the range. */
   period_change: number
 }
 
@@ -2497,6 +3015,7 @@ export interface BalansrapportSection {
   note?: string
   rows: BalansrapportRow[]
   sections: BalansrapportSection[]
+  subtotal_year_ib: number
   subtotal_ib: number
   subtotal_change: number
   subtotal_ub: number
@@ -2507,6 +3026,7 @@ export interface BalansrapportGroup {
   class_label: string
   /** Every account of the class, under its ÅRL heading. */
   sections: BalansrapportSection[]
+  subtotal_year_ib: number
   subtotal_ib: number
   subtotal_change: number
   subtotal_ub: number
@@ -2516,7 +3036,14 @@ export interface BalansrapportReport {
   groups: BalansrapportGroup[]
   total_assets_ub: number
   total_equity_liabilities_ub: number
+  /** The running-year result from the result accounts (0 after year-end close). */
   beraknat_resultat: number
+  /**
+   * total_assets_ub + total_equity_liabilities_ub - beraknat_resultat: 0 when
+   * the saldobalans balances, otherwise the opening balance's imbalance
+   * (usually an earlier year's result never moved to equity).
+   */
+  differens: number
   is_balanced: boolean
   period: { start: string; end: string }
   /** Present only when the underlying trial balance does not balance. */
@@ -2531,10 +3058,11 @@ export interface SIEExportOptions {
   org_number: string | null
   program_name?: string
   /**
-   * When true, omit year-end closing verifikat (source_type = 'year_end')
-   * from #VER and from #RES/#UB calculations. Use when handing the file
-   * to systems (e.g. eDeklarera) that do their own closing: including
-   * our closing entry would zero out the P&L accounts.
+   * When true, omit year-end closing verifikat (source_type = 'year_end',
+   * and a resultatavslut booked in a previous system or by hand: the
+   * 'exclude-all-year-end' set) from #VER and from #RES/#UB calculations.
+   * Use when handing the file to systems (e.g. eDeklarera) that do their
+   * own closing: including a closing entry would zero out the P&L accounts.
    */
   exclude_year_end_closing?: boolean
 }
@@ -2584,269 +3112,25 @@ export interface CreateJournalEntryLineInput {
 
 // ── Pending Operations ────────────────────────────────────────
 
-export type PendingOperationType =
-  | 'categorize_transaction'
-  // Arkiv: an agent's fact proposal, recorded on approval (lib/arkiv/facts/propose.ts)
-  | 'arkiv_propose_fact'
-  | 'create_customer'
-  | 'update_customer'
-  | 'update_company_settings'
-  | 'create_article'
-  | 'update_article'
-  // Kundorder (gnubok_create_sales_order / _transition_sales_order /
-  // _register_sales_order_delivery / _create_invoice_from_sales_order)
-  | 'create_sales_order'
-  | 'transition_sales_order'
-  | 'register_sales_order_delivery'
-  | 'create_invoice_from_sales_order'
-  // Kontoplan reference data (gnubok_create_account / gnubok_update_account)
-  | 'create_account'
-  | 'update_account'
-  | 'create_supplier'
-  | 'create_invoice'
-  | 'mark_invoice_paid'
-  | 'send_invoice'
-  | 'mark_invoice_sent'
-  | 'match_transaction_invoice'
-  // Stream 1 Phase 1: bookkeeping period operations
-  | 'close_period'
-  | 'lock_period'
-  | 'unlock_period'
-  | 'set_opening_balances'
-  | 'run_year_end'
-  | 'post_kontantmetod_cutoff'
-  | 'run_currency_revaluation'
-  // Stream 1 Phase 1: SIE import (export is read-only)
-  | 'import_sie'
-  // SIE undo: hard-deletes the import's journal entries and releases the
-  // (company_id, file_hash) slot. Recovery for botched imports.
-  | 'undo_sie_import'
-  // Stream 1 Phase 1: voucher gap explanations
-  | 'explain_voucher_gap'
-  // Stream 1 Phase 1: transaction reversal
-  | 'uncategorize_transaction'
-  // Document inbox: pin doc to bank transaction
-  | 'attach_document_to_transaction'
-  // Link a document directly to a journal entry (verifikation): for imported/
-  // manual vouchers that have no bank-transaction row.
-  | 'link_document_to_voucher'
-  // Bulk counterpart: N docs linked to N posted verifikationer in one staged
-  // op, addressed by voucher_series/voucher_number/fiscal_year instead of
-  // journal_entry_id UUIDs (resolved server-side).
-  | 'link_documents_to_vouchers'
-  // Manual transaction ingestion (uncategorized row, reversible by delete)
-  | 'create_transaction'
-  // Stream 1 Phase 1: supplier invoice lifecycle
-  | 'approve_supplier_invoice'
-  | 'credit_supplier_invoice'
-  // Phase 5: convert an OCR'd inbox item to a leverantörsfaktura + registration JE
-  | 'create_supplier_invoice_from_inbox'
-  // Stream 1 Phase 1: invoice operations beyond simple create/send
-  | 'credit_invoice'
-  | 'convert_invoice'
-  // Draft-only invoice removal: unnumbered drafts hard delete, numbered
-  // drafts are makulerade (number retained). Non-drafts are refused.
-  | 'delete_draft_invoice'
-  // Draft-only invoice edit (items full-replace); sent/booked stays immutable,
-  // correction is a kreditfaktura.
-  | 'update_invoice'
-  // Recurring invoice schedules (monthly templates; invoices spawn from the
-  // hourly cron, never at commit time). Update covers pause/resume via status.
-  | 'create_recurring_schedule'
-  | 'update_recurring_schedule'
-  // Phase 4: arbitrary-line bookkeeping primitives
-  | 'create_voucher'
-  | 'correct_entry'
-  // Pure makulering (storno) of a posted entry: agent-native API plan item 38
-  | 'reverse_entry'
-  // Notes-only annotation on a verifikat: the immutability trigger's carve-out
-  // (migration 20260608120000) makes this legal even on posted entries.
-  | 'set_voucher_note'
-  // Ignore / restore a bank transaction that is not an affärshändelse (PSD2
-  // ghost row, duplicate, never-executed transfer). Writes no verifikat, so a
-  // locked or closed period does not block it (issue #1661).
-  | 'ignore_transaction'
-  // Bokslut: planenlig avskrivning (one journal entry per asset)
-  | 'post_annual_depreciation'
-  // Payroll: salary run creation + AGI declaration
-  | 'create_salary_run'
-  | 'generate_agi'
-  // Körjournal: log a trip (pure travel documentation) + book the period's
-  // milersättning as one verifikat (7331 at schablon rate)
-  | 'log_mileage_trip'
-  | 'book_mileage_period'
-  // Mark invoice paid by linking an existing posted verifikat (no new JE)
-  | 'link_invoice_voucher'
-  // Supplier-side mirror: mark a leverantörsfaktura paid by linking an existing
-  // posted verifikat that debits 2440 (no new JE)
-  | 'link_supplier_invoice_voucher'
-  // PR #603/#607: allocate 1 bank tx across N customer or supplier invoices
-  | 'match_batch_allocate'
-  // PR #606/#610: bulk-book N bank txs into 1 combined verifikat
-  | 'bulk_book_transactions'
-  // Bulk-book N selected Underlag (Dokumentinkorgen) against their matched bank
-  // transactions: one verifikat per item, sharing a category + VAT treatment
-  | 'bulk_book_inbox_items'
-  // PR #614: link a single bank tx to an already-posted verifikat (no new JE)
-  | 'link_transaction_journal_entry'
-  // Account-keyed reconciliation (bank accounts + skattekonto): link outside
-  // rows to existing verifikat / clear such a link. No ledger writes.
-  | 'reconciliation_match'
-  | 'reconciliation_unmatch'
-  // Sign-off "avstämt t.o.m. <datum>" on one account (account_reconciliations row).
-  | 'reconciliation_signoff'
-  // Book the remainder of a bank selection as a fee/interest/rounding verifikat and link it.
-  | 'reconciliation_residual'
-  // Book synced skattekonto rows as posted verifikat (1630 + rule-matched
-  // counter account), same helper as the HTTP bokfor-batch route. The
-  // single-row op stores { transaction_id }; the batch op stores { ids }.
-  | 'book_skattekonto_row'
-  | 'book_skattekonto_rows'
-  // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
-  // (returns a signing link); the user's signature in the browser files it.
-  | 'submit_vat_declaration'
-  | 'submit_agi'
-  // Dimensions PR3: stage a new dimension value (kostnadsställe/projekt object
-  // code, SIE #OBJEKT): agents never silently mint reporting values.
-  | 'create_dimension_value'
-  // Dimension registry operations (src/lib/operations/dimensions.ts).
-  | 'create_dimension'
-  | 'update_dimension'
-  | 'delete_dimension'
-  // Account dimension rules (src/lib/operations/dimension-rules.ts).
-  | 'create_dimension_rule'
-  | 'update_dimension_rule'
-  | 'delete_dimension_rule'
-  // Operation registry, wave 4: Peppol, årsredovisning, IB, AP actions.
-  | 'send_invoice_peppol'
-  | 'register_peppol_participant'
-  | 'request_peppol_access'
-  | 'update_arsredovisning_narrative'
-  | 'update_arsredovisning_compliance'
-  | 'create_arsredovisning_version'
-  | 'add_arsredovisning_signature'
-  | 'set_opening_balances_manual'
-  | 'correct_opening_balances'
-  | 'split_opening_balances_per_project'
-  | 'delete_supplier_invoice'
-  | 'uncredit_supplier_invoice'
-  | 'update_supplier_invoice_item_account'
-  // Operation registry, wave 3: documents, transactions, rättelse, filing.
-  | 'delete_document'
-  | 'delete_inbox_item'
-  | 'detach_document_from_transaction'
-  | 'unmatch_inbox_item_transaction'
-  | 'undo_bank_import'
-  | 'correct_entry_metadata'
-  | 'correct_entry_lines_inline'
-  | 'redate_entry'
-  | 'mark_no_document_required'
-  | 'book_vat_settlement'
-  // Operation registry, wave 2: booking, payment files, utlägg, payroll.
-  | 'send_payslips'
-  | 'revert_salary_run'
-  | 'unapprove_salary_run'
-  | 'attach_salary_expense_claims'
-  | 'create_supplier_payment_batch'
-  | 'cancel_supplier_payment_batch'
-  | 'book_invoice'
-  | 'bulk_book_invoices'
-  | 'book_supplier_invoice'
-  | 'create_expense_claim'
-  | 'delete_expense_claim'
-  | 'record_expense_payout'
-  | 'match_expense_payout'
-  // Operation registry, wave 1: setup capabilities.
-  | 'create_cash_account'
-  | 'update_cash_account'
-  | 'set_primary_cash_account'
-  | 'set_invoice_payee_default'
-  | 'create_fiscal_period'
-  | 'update_fiscal_period'
-  | 'close_fiscal_period_external'
-  | 'reopen_fiscal_period_external'
-  | 'delete_account'
-  | 'activate_accounts'
-  | 'deactivate_accounts'
-  | 'update_company_tax_profile'
-  | 'update_bookkeeping_lock'
-  // Dimensions PR6: bulk retag of posted-line dimensions via the audited
-  // retag_line_dimensions RPC (gnubok_tag_journal_lines).
-  | 'retag_line_dimensions'
-  // Payroll gap-closure: payslip line edits + absence registration (1.7),
-  // employee master data (1.8; personnummer encrypted at staging), and
-  // cutover opening balances for mid-year migrations (2.4).
-  | 'update_payslip_line'
-  // Set THIS RUN's base salary for one employee (salary_run_employees.
-  // monthly_salary, draft only). The per-run column is what the engine reads;
-  // the employee master's fixed salary stays untouched (variable owner pay).
-  | 'set_run_salary'
-  // Draft-only salary-run header edit (payment_date / voucher_series /
-  // notes), same field set as the v1 PATCH; payment_date is the future
-  // booking entry date.
-  | 'update_salary_run'
-  | 'register_absence'
-  | 'create_employee'
-  | 'update_employee'
-  | 'set_employee_opening_balances'
-  // Payroll e2e parity with the v1 REST surface: book a calculated run
-  // (walks review → approved → paid → booked; the staged approval is the
-  // authorization act) and remove registered absence days. Employee
-  // archiving needs no own op: update_employee with is_active=false.
-  | 'book_salary_run'
-  | 'delete_absence'
-  // Semesterårsavslut: rolls vacation balances into the next year and may
-  // post a 2920/2940 drift-adjustment verifikation (Phase 3).
-  | 'vacation_year_close'
-  // Match an income bank row to the ROT/RUT begäran Skatteverket paid with it
-  // (one or several, #2239): one voucher debit 19xx / credit 1513 per begäran,
-  // the row linked, every begäran marked settled (gnubok_settle_rot_rut_payout).
-  | 'settle_rot_rut_payout'
-  // Link ROT/RUT begäran to a payout verifikat that already exists (booked by
-  // hand): no voucher, only the settlement pointer (gnubok_link_rot_rut_payout_voucher).
-  | 'link_rot_rut_payout_voucher'
-  // Anläggningsregister (gnubok_create_asset / gnubok_update_asset /
-  // gnubok_dispose_asset): the register rows are master data (no voucher),
-  // the disposal posts the avyttring voucher via disposeAsset().
-  | 'create_asset'
-  | 'update_asset'
-  | 'dispose_asset'
-  // Momsdeklaration filing record (gnubok_mark_vat_period_filed /
-  // gnubok_unmark_vat_period_filed, lib/operations/vat-filings.ts): record a
-  // declaration filed outside the Skatteverket connection, or undo that mark.
-  // Completes / reopens the period's moms deadline; no ledger impact.
-  | 'mark_vat_period_filed'
-  | 'unmark_vat_period_filed'
-  // Payroll over MCP, run structure (lib/operations/salary-run-structure.ts):
-  // who is on a draft run, its payslip lines, the paid mark, and the
-  // rättelsekörning of a booked run (storno + a new draft for the period).
-  | 'add_salary_run_employee'
-  | 'remove_salary_run_employee'
-  | 'add_payslip_line'
-  | 'delete_payslip_line'
-  | 'mark_salary_run_paid'
-  | 'correct_salary_run'
-  // Payroll over MCP, employee setup (lib/operations/salary-employee-setup.ts):
-  // worked hours for hourly staff, förmåner, recurring payslip lines, and the
-  // soft delete (is_active=false; the row stays for the salary history).
-  | 'set_worked_days'
-  | 'delete_worked_days'
-  | 'add_employee_benefit'
-  | 'update_employee_benefit'
-  | 'delete_employee_benefit'
-  | 'add_employee_recurring_line'
-  | 'update_employee_recurring_line'
-  | 'delete_employee_recurring_line'
-  | 'delete_employee'
-// 'failed_partial' (issue #842, DB CHECK widened in 20260722134114): terminal
-// state for ops whose executor posted an irreversible side-effect (voucher,
-// credit note) and then failed a later step. Not re-committable, not pending
-// work; result_data.posted_ids carries the ids of what WAS posted.
-export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected' | 'failed_partial'
+// The operation types are the keys of the risk-tier table, the one hand-kept
+// list (lib/pending-operations/risk-tiers.ts).
+import type { PendingOperationType } from '@/lib/pending-operations/risk-tiers'
+export type { PendingOperationType }
+
+export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected' | 'failed_partial' | 'unknown'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
-// 20260519090000_actor_type_agent_chat).
-export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
+// 20260519090000_actor_type_agent_chat). 'service_account' = a service
+// account's key (20261016120100). 'system' = a suggestion a detector staged
+// on its own (lib/suggestions, 20261016200200), labelled 'Accounted'.
+export type PendingOperationActorType =
+  | 'user'
+  | 'api_key'
+  | 'mcp_oauth'
+  | 'cron'
+  | 'agent_chat'
+  | 'service_account'
+  | 'system'
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
 export interface PendingOperationAgentMetadata {
@@ -2862,12 +3146,16 @@ export interface PendingOperationAgentMetadata {
   approved_by_user_id?: string
 }
 
+/** What a person said was wrong (lib/pending-operations/rejection-categories.ts). */
 export type PendingOperationRejectionCategory =
   | 'wrong_category'
   | 'wrong_amount'
   | 'duplicate'
   | 'wrong_period'
   | 'other'
+
+/** A rejection nobody made: expired unanswered, replaced or handled another way, or failed at approval. */
+export type PendingOperationSystemRejectionCategory = 'expired' | 'superseded' | 'failed'
 
 export interface PendingOperation {
   id: string
@@ -2887,11 +3175,19 @@ export interface PendingOperation {
   // Stream 2 Phase 3: agent provenance (populated by chat loop, NULL for user-staged)
   agent_metadata: PendingOperationAgentMetadata | null
   // Stream 2 Phase 4: structured rejection so the agent can learn from "no"
-  rejection_category: PendingOperationRejectionCategory | null
+  rejection_category: PendingOperationRejectionCategory | PendingOperationSystemRejectionCategory | null
   rejection_reason: string | null
   // Set by accounted_stage_across_companies: every operation staged in one
   // cross-company call shares the id. NULL for every other staging path.
   batch_id?: string | null
+  // Why the stager proposes it, as given when staging (migration
+  // 20261028210000). Optional: absent on a row read before the column exists.
+  agent_reason?: string | null
+  // The proposal's number in its company, assigned by the database at insert
+  // and never changed (migration 20261117192101). Absent on a row read before
+  // the column exists, null on a proposal decided before it: read it through
+  // operationNumberOf (lib/pending-operations/operation-number.ts).
+  operation_number?: number | null
   created_at: string
   resolved_at: string | null
   updated_at: string
@@ -2921,17 +3217,6 @@ export interface InitialSetupState {
 // Calendar & Deadline Types
 // ============================================================
 
-// Calendar view mode
-export type CalendarViewMode = 'month' | 'week' | 'day'
-
-// Payment calendar day (for invoice due date tracking)
-export interface PaymentCalendarDay {
-  date: string
-  invoices: Invoice[]
-  totalExpected: number
-  overdueCount: number
-}
-
 // Tax deadline types (Swedish Skatteverket)
 export type TaxDeadlineType =
   | 'moms_monthly'
@@ -2943,10 +3228,12 @@ export type TaxDeadlineType =
   | 'inkomstdeklaration_ef'
   | 'inkomstdeklaration_ab'
   | 'inkomstdeklaration_ekonomisk_forening'
+  | 'inkomstdeklaration_ideell_forening'
   | 'arsredovisning'
   | 'arsredovisning_ekonomisk_forening'
   | 'arsstamma'
   | 'foreningsstamma'
+  | 'forenklat_arsbokslut'
   | 'periodisk_sammanstallning'
   | 'kontrolluppgifter'
   | 'rot_rut_begaran'
@@ -3031,46 +3318,6 @@ export interface Deadline {
 }
 
 // ============================================================
-// Push Notification Types
-// ============================================================
-
-// Notification settings per user
-export interface NotificationSettings {
-  id: string
-  user_id: string
-  tax_deadlines_enabled: boolean
-  invoice_reminders_enabled: boolean
-  quiet_start: string // time format "HH:MM"
-  quiet_end: string   // time format "HH:MM"
-  email_enabled: boolean
-  push_enabled: boolean
-  period_locked_enabled: boolean
-  period_year_closed_enabled: boolean
-  invoice_sent_enabled: boolean
-  receipt_extracted_enabled: boolean
-  receipt_matched_enabled: boolean
-  missing_underlag_enabled: boolean
-  email_digest_enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
-// Notification type for logging
-export type NotificationType =
-  | 'tax_deadline'
-  | 'invoice_due'
-  | 'invoice_overdue'
-  | 'period_locked'
-  | 'period_year_closed'
-  | 'receipt_extracted'
-  | 'receipt_matched'
-  | 'invoice_sent'
-  | 'missing_underlag'
-  | 'skv_kvittens'
-  | 'skv_connection_expired'
-  | 'bookkeeping_digest'
-
-// ============================================================
 // Calendar Feed Types (ICS)
 // ============================================================
 
@@ -3099,7 +3346,12 @@ export interface CalendarFeed {
 export type InboxItemStatus = 'received' | 'processing' | 'error'
 export type InboxItemSource = 'email' | 'upload' | 'whatsapp' | 'mail_hunt' | 'peppol'
 
-export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
+/**
+ * active: the company's address. previous: an earlier address a rename kept,
+ * still receiving (rename_company_inbox). deprecated: retired, the webhook
+ * answers 410 (rotate_company_inbox). blocked: refused.
+ */
+export type CompanyInboxStatus = 'active' | 'previous' | 'deprecated' | 'blocked'
 
 export interface CompanyInbox {
   id: string
@@ -3112,11 +3364,11 @@ export interface CompanyInbox {
   deprecated_at: string | null
 }
 
-export type CompanyInboundDomainStatus = 'pending' | 'verified' | 'failed'
+export type CompanySendingDomainStatus = 'pending' | 'verified' | 'failed'
 
-// A DNS record the user must publish to verify their custom inbound domain
+// A DNS record the user must publish to verify their custom sending domain
 // (verbatim from the Resend domains API).
-export interface InboundDomainDnsRecord {
+export interface SendingDomainDnsRecord {
   record: string
   name: string
   value: string
@@ -3125,25 +3377,6 @@ export interface InboundDomainDnsRecord {
   status: string
   priority?: number
 }
-
-export interface CompanyInboundDomain {
-  id: string
-  company_id: string
-  domain: string
-  status: CompanyInboundDomainStatus
-  resend_domain_id: string | null
-  dns_records: InboundDomainDnsRecord[] | null
-  verified_at: string | null
-  last_checked_at: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type CompanySendingDomainStatus = 'pending' | 'verified' | 'failed'
-
-// A DNS record the user must publish to verify their custom sending domain
-// (verbatim from the Resend domains API; same shape as the inbound records).
-export type SendingDomainDnsRecord = InboundDomainDnsRecord
 
 // Opt-in per-company sender identity for invoice email. Only a row with
 // status = 'verified' AND enabled = true changes the From header; everything
@@ -3199,6 +3432,14 @@ export interface InvoiceInboxItem {
   // Audit chain (processing_history correlation)
   correlation_id: string | null
 
+  // Match on arrival (migration 20261017010000): the bank row the item looks
+  // already paid by, a proposal and never a link (lib/documents/inbox-bank-match.ts).
+  bank_match_transaction_id?: string | null
+  bank_match_basis?: 'rule_ocr_reference' | 'rule_counterparty' | 'rule_amount_date' | null
+  bank_match_evidence_level?: 'exakt' | 'stark' | 'trolig' | null
+  bank_match_checked_at?: string | null
+  bank_match_source_key?: string | null
+
   created_at: string
   updated_at: string
 
@@ -3208,15 +3449,31 @@ export interface InvoiceInboxItem {
   supplier_invoice?: SupplierInvoice
 }
 
+import type { IntakeSourceId } from '@/lib/intake/sources'
+
 // Chat-sourced context attached to an inbox item. `raw_answer` + timestamps
 // double as the Skatteverket representation documentation trail.
 export interface InboxChannelContext {
   /**
    * Which intake wrote this. 'mail_hunt' rows carry the mail_* fields below;
    * everything else on this type belongs to the WhatsApp branch and is absent
-   * on them.
+   * on them. Absent on a row whose only context is intake_source (an item
+   * Arkiv queued, an MCP upload).
    */
-  channel: 'whatsapp' | 'mail_hunt' | 'peppol'
+  channel?: 'whatsapp' | 'mail_hunt' | 'peppol' | 'partner_api'
+  /**
+   * The canonical door (lib/intake/sources.ts), stamped by a writer that knows
+   * it when the source column cannot say: Arkiv queueing a document that came
+   * in through another door, the MCP upload tools, a partner delivery
+   * (POST /api/v1/companies/{id}/inbox-items is source 'upload' with
+   * intake_source 'partner_api'). Readers resolve it with
+   * intakeSourceForInboxItem, which falls back to the legacy columns.
+   */
+  intake_source?: IntakeSourceId
+  /** Partner delivery: the name of the API key that delivered it. */
+  partner_key_label?: string | null
+  /** Partner delivery: the partner's own id for it (external_ref). */
+  external_ref?: string | null
   /** Set by lib/invoices/peppol-inbox-delivery.ts: provenance of a received e-invoice. */
   peppol_provider?: string | null
   /** The provider's id for the received document (Qvalia integrationId). */
@@ -3225,6 +3482,9 @@ export interface InboxChannelContext {
   peppol_sender_endpoint?: string | null
   /** Archived exact UBL XML, when the inbox document is a rendering (embedded PDF) instead. */
   peppol_xml_document_id?: string | null
+  /** Set by lib/stripe/billing-invoice-inbox.ts: Accounted's own paid subscription invoice, by Stripe's id and number. */
+  stripe_invoice_id?: string | null
+  stripe_invoice_number?: string | null
   /** Set by lib/receipt-hunt/ingest.ts: which mailbox the receipt came out of. */
   mail_mailbox?: string | null
   mail_provider?: 'gmail' | 'microsoft' | null
@@ -3531,7 +3791,28 @@ export interface VatDeclarationRutor {
  * momsdeklaration. `amount` is the net credit balance (credit minus debit),
  * rounded to öre: negative for a net debit such as a lämnad rabatt.
  */
+/** See VatDeclaration.kontantmetodCutoff. */
+export interface KontantmetodCutoffVatFacts {
+  /** Fiscal years ending inside the VAT period whose cut-off is not complete. */
+  incompleteYearEnds: Array<{ fiscal_period_id: string; period_end: string }>
+  /** Period ends of legacy cut-offs (with vändning) that have verifikat inside the VAT period. */
+  legacyCutoffPeriodEnds: string[]
+  /** True when the check could not run: never read as "complete". */
+  unavailable?: boolean
+}
+
 export interface VatRevenueAccountWithoutRuta {
+  account_number: string
+  account_name: string
+  amount: number
+}
+
+/**
+ * A moms account (BAS 2610-2649) whose period balance reaches no ruta on the
+ * momsdeklaration. `amount` is the balance on the account's own side, rounded
+ * to öre: credit for utgående moms (2610-2639), debit for ingående (2640-2649).
+ */
+export interface VatAccountWithoutRuta {
   account_number: string
   account_name: string
   amount: number
@@ -3594,6 +3875,28 @@ export interface VatDeclaration {
    * older deploy, and then the check stays silent rather than guessing.
    */
   revenueAccountsWithoutRuta?: VatRevenueAccountWithoutRuta[]
+  /**
+   * Moms accounts (BAS 2610-2649) with a balance in the period that the
+   * declaration puts in no ruta: not in the fixed BAS map and no momsruta of
+   * the company's own. Carried so a caller that reads the declaration over
+   * HTTP can hand `runVatDeclarationChecks` the input for
+   * VAT_ACCOUNT_WITHOUT_RUTA. Produced by `vatAccountsWithoutRuta()`
+   * (lib/reports/vat-declaration.ts), never by hand.
+   *
+   * Optional because it crosses a JSON boundary: absent on a response from an
+   * older deploy, and then the check stays silent rather than guessing.
+   */
+  vatAccountsWithoutRuta?: VatAccountWithoutRuta[]
+  /**
+   * The kontantmetoden year-end cut-off facts for this VAT period (#3440):
+   * fiscal years of a cash company ending inside it whose cut-off is not
+   * complete, and legacy cut-offs with vändning booked inside it. Feeds the
+   * KONTANTMETOD_CUTOFF_INCOMPLETE and LEGACY_KONTANTMETOD_VANDNING warnings.
+   * Produced by `fetchKontantmetodCutoffVatFacts()`
+   * (lib/vat/kontantmetod-cutoff-vat-facts.ts), only by the routes that serve
+   * the declaration for review; absent means "not checked", never "complete".
+   */
+  kontantmetodCutoff?: KontantmetodCutoffVatFacts
   // Supporting data
   invoiceCount: number
   transactionCount: number
@@ -3749,7 +4052,7 @@ export interface AuditLogEntry {
   table_name: string | null
   record_id: string | null
   actor_id: string | null
-  actor_type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat' | 'system' | null
+  actor_type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat' | 'system' | 'service_account' | null
   actor_label: string | null
   old_state: Record<string, unknown> | null
   new_state: Record<string, unknown> | null
@@ -3790,17 +4093,24 @@ export type YearEndBlockerCode =
   | 'PERIOD_LOCKED'
   | 'CLOSING_ENTRY_EXISTS'
   | 'DRAFT_ENTRIES'
+  | 'DRAFT_CHECK_FAILED'
   | 'UNEXPLAINED_VOUCHER_GAP'
   | 'SEQUENCE_COUNTER_BEHIND'
   | 'TRIAL_BALANCE_UNBALANCED'
   | 'CONTINUITY_MISMATCH'
   | 'NEXT_PERIOD_HAS_IB'
+  | 'NEXT_PERIOD_NOT_CALENDAR_YEAR'
+  | 'NEXT_PERIOD_OVERLAPS'
   | 'KONTANTMETOD_CUTOFF_REQUIRED'
   | 'KONTANTMETOD_CUTOFF_CHECK_FAILED'
   | 'UNBOOKED_TRANSACTIONS'
   | 'UNBOOKED_CHECK_FAILED'
   | 'PRIOR_RESULT_NOT_DISPOSED'
   | 'PRIOR_RESULT_OVER_DISPOSED'
+  | 'SIE_IMPORT_UNFINISHED'
+  | 'VOUCHER_GAP_CHECK_FAILED'
+  | 'COMPANY_LOCK_DATE'
+  | 'COMPANY_LOCK_DATE_CHECK_FAILED'
 
 export interface YearEndBlocker {
   code: YearEndBlockerCode
@@ -3924,6 +4234,9 @@ export interface YearEndResult {
 export type AssetCategory =
   | 'immaterial'
   | 'building'
+  /** Mark: never depreciated (unlimited useful life, K2 10.29, K3 17.4);
+   *  useful_life_months is 0. */
+  | 'land'
   | 'land_improvement'
   | 'machinery'
   | 'equipment'
@@ -3944,28 +4257,84 @@ export type AssetDisposalType = 'sale' | 'scrap' | 'business_transfer'
 export type AssetJamkningDirection = 'increase' | 'decrease' | 'none' | 'transferred'
 
 /**
- * K3 component (BFNAR 2012:1 ch 17.4: komponentavskrivning). When a
- * substantial asset (typically real estate) has significant components with
- * materially different useful lives, K3 reporting requires each component to
- * be depreciated on its own life rather than treating the asset as a single
- * unit. Components are stored as an array on `Asset.k3_components`; when
- * non-null, the depreciation engine routes through `computeComponentDepreciation`
- * and sums per-component linear depreciation (with the same pro-ration logic
- * as the asset-level linear method).
+ * K3 component as callers write it (BFNAR 2012:1 17.4: komponentavskrivning):
+ * the create and update input of a component, and the read-only projection
+ * on `Asset.k3_components`. The register itself is `AssetComponent`
+ * (public.asset_components); the projection lists its active rows with
+ * their `component_id`.
  *
- * Validation (enforced in `lib/bokslut/assets/k3-components.ts`):
- *   - sum(components.cost) === asset.acquisition_cost (±1 kr tolerance)
- *   - every component: cost > 0, useful_life_months > 0
- *   - salvage_value (if present) ≤ component cost
- *   - non-empty array when set to non-null
- *
- * Salvage_value defaults to 0 when omitted.
+ * Validation (lib/bokslut/assets/k3-components.ts): costs sum to the asset's
+ * acquisition cost, cost > 0, a positive whole number of months or null for
+ * a component that is not depreciated (mark, K3 17.13), salvage value between
+ * 0 and the cost, an opening amount with its date.
  */
 export interface K3Component {
+  /** Set on an existing component (update input, projection). */
+  component_id?: string
   name: string
   cost: number
-  useful_life_months: number
+  /** null: not depreciated (mark has an unlimited useful life, K3 17.13). */
+  useful_life_months: number | null
   salvage_value?: number
+  /** Defaults to the asset's acquisition date. */
+  acquisition_date?: string | null
+  /** K3 17.18: when the component can be used. Defaults to its acquisition date. */
+  depreciation_start_date?: string | null
+  /** Accumulated depreciation before the component's history in Accounted. */
+  opening_accumulated_depreciation?: number
+  opening_depreciation_date?: string | null
+}
+
+/**
+ * One row of public.asset_components: a component of a fixed asset with its
+ * own plan and history (K3 17.4-17.5A, 17.13, 17.18, 17.21A). NUMERIC
+ * columns arrive as strings from PostgREST.
+ */
+export interface AssetComponent {
+  id: string
+  user_id: string
+  company_id: string
+  asset_id: string
+  name: string
+  cost: number | string
+  useful_life_months: number | null
+  salvage_value: number | string
+  acquisition_date: string
+  depreciation_start_date: string | null
+  opening_accumulated_depreciation: number | string
+  opening_depreciation_date: string | null
+  replaces_component_id: string | null
+  derecognised_at: string | null
+  derecognition_journal_entry_id: string | null
+  derecognition_depreciation: number | string
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * One row of public.asset_value_adjustments: a posted nedskrivning or its
+ * reversal (ÅRL 4:5, K3 27), per component for a component asset. It counts
+ * while its voucher is posted; `journal_entry.status` is embedded by the
+ * asset reads so a storno ('reversed') takes it out. NUMERIC columns arrive
+ * as strings from PostgREST.
+ */
+export interface AssetValueAdjustment {
+  id: string
+  asset_id: string
+  component_id: string | null
+  kind: 'impairment' | 'impairment_reversal'
+  /** The balansdag the recoverable amount was assessed on. */
+  adjustment_date: string
+  fiscal_period_id: string
+  amount: number | string
+  recoverable_amount: number | string | null
+  reason: string
+  expense_account: string
+  accumulated_account: string
+  journal_entry_id: string
+  journal_entry?: { status: JournalEntryStatus } | null
+  created_at: string
 }
 
 export interface Asset {
@@ -3977,7 +4346,28 @@ export interface Asset {
   acquisition_date: string
   acquisition_cost: number
   salvage_value: number
+  /** 0 for land (category 'land'): not depreciated. */
   useful_life_months: number
+  /** K3 17.18: the day depreciation starts (the asset can be used). Null:
+   *  the acquisition date. Optional so rows read before the column existed
+   *  stay valid. */
+  depreciation_start_date?: string | null
+  /** IL 19 kap. 5 § / 20 kap. 5 §: tax depreciation in percent a year of a
+   *  building or markanläggning; null when no tax plan is stated. */
+  tax_depreciation_rate?: number | string | null
+  /** The day the tax plan starts; null: the acquisition date. */
+  tax_depreciation_from?: string | null
+  /** IL 19 kap. 5 a §: primäravdrag on a newly built hyreshus. */
+  tax_primary_allowance?: boolean
+  /** Set by the database when the tax plan is stated: the plan applies to
+   *  fiscal years starting on or after it, never to a year already closed
+   *  or locked, so a declared INK2 never moves. */
+  tax_plan_applies_from?: string | null
+  /** The company's own development capitalised under the K3
+   *  aktiveringsmodell (18.7), on 101x: what the fond för
+   *  utvecklingsutgifter follows (ÅRL 4 kap. 2 §). False for a purchased
+   *  intangible, wherever it sits. */
+  own_development?: boolean
   depreciation_method: DepreciationMethod
   bas_asset_account: string
   bas_accumulated_account: string
@@ -4016,11 +4406,19 @@ export interface Asset {
   jamkning_total_years?: number | null
   jamkning_original_deduction_percent?: number | null
   jamkning_new_deduction_percent?: number | null
-  /** K3 component depreciation (BFNAR 2012:1 ch.17.4). When non-null, the
-   *  depreciation engine sums per-component linear depreciation instead of
-   *  applying `depreciation_method` to the asset as a whole. Null for K2
-   *  companies (the API rejects writes for accounting_framework='k2'). */
+  /** Read-only projection of the active components (component_id, name,
+   *  cost, life, salvage), kept by a database trigger. Null for an asset
+   *  without components. Write components through the register
+   *  (asset_components), never this column. */
   k3_components: K3Component[] | null
+  /** The component register rows, embedded by listAssets/getAsset
+   *  (components:asset_components(*)), derecognised ones included. Absent
+   *  when a caller selected only the asset row. */
+  components?: AssetComponent[]
+  /** Posted nedskrivningar and reversals, embedded by listAssets/getAsset
+   *  (value_adjustments:asset_value_adjustments(...)). Absent when a caller
+   *  selected only the asset row. */
+  value_adjustments?: AssetValueAdjustment[]
   /** Ackumulerad avskrivning booked before the asset entered Accounted (a
    *  previous system), stated per `opening_depreciation_date`. Never posted
    *  by Accounted: the amount is already in the imported 12x9 balance. The
@@ -4030,6 +4428,14 @@ export interface Asset {
    *  the type so rows read before the column existed stay valid. */
   opening_accumulated_depreciation?: number | string | null
   opening_depreciation_date?: string | null
+  /** Building: the property designation and the latest taxeringsvärde
+   *  (Bolaget, lib/bokslut/assets/identification.ts). Optional on the type
+   *  so rows read before the columns existed stay valid. */
+  fastighetsbeteckning?: string | null
+  taxeringsvarde?: number | string | null
+  /** Vehicle: the registration number and the bilförmån it is used for. */
+  registration_number?: string | null
+  employee_benefit_id?: string | null
   notes: string | null
   created_at: string
   updated_at: string
@@ -4100,10 +4506,13 @@ export interface InvoiceReminder {
   user_id: string
   company_id: string
   reminder_level: 1 | 2 | 3
-  sent_at: string
+  /** Null until the provider accepted the reminder. */
+  sent_at: string | null
   email_to: string
   response_type: ReminderResponseType | null
   response_at: string | null
+  /** The customer's note with the answer (answer page), at most 1000 characters. */
+  response_note: string | null
   action_token: string
   action_token_used: boolean
   created_at: string
@@ -4114,6 +4523,20 @@ export interface InvoiceReminder {
   interest_days: number | null
   reminder_fee: number
   fee_journal_entry_id: string | null
+  // The sender's ledger (migration 20261026233000): reserved before the send,
+  // then sent or failed; the provider's id finds it again on a bounce.
+  status: 'reserved' | 'sent' | 'failed'
+  channel: 'email'
+  /** approved, automatic or manual; null on the old sender's rows. */
+  mode: 'approved' | 'automatic' | 'manual' | null
+  subject: string | null
+  provider: string | null
+  provider_message_id: string | null
+  provider_status: InvoiceDeliveryProviderStatus | null
+  provider_status_at: string | null
+  provider_status_detail: string | null
+  error_code: string | null
+  failed_at: string | null
 }
 
 // ============================================================
@@ -4154,6 +4577,79 @@ export interface RawTransaction {
   bank_transaction_code?: string | null
   /** ASPSP-proprietary transaction code from PSD2, verbatim. */
   proprietary_bank_transaction_code?: string | null
+  /** Value date as the bank reports it; `date` stays the booking date. */
+  value_date?: string | null
+  /** End-to-end id the paying side sent (settles a bank payment order). */
+  end_to_end_id?: string | null
+  /** The bank's or aggregator's own id for the row. Traceability only, never a dedupe key. */
+  provider_transaction_id?: string | null
+  /** The archived raw bank response (document_attachments) this row arrived in. */
+  raw_document_id?: string | null
+  /** The counterparty's organisationsnummer, digits only, when the bank's enrichment names it. */
+  counterparty_org_number?: string | null
+  /** The amount in the currency the payment was made in, when that differs from the account currency. */
+  instructed_amount?: number | null
+  /** The currency of instructed_amount. */
+  instructed_currency?: string | null
+  /**
+   * The bank's rate from instructed_currency into the account currency. Stored
+   * on a SEK account only (the row's own amount is already SEK); a
+   * foreign-currency account keeps the Riksbanken SEK rate ingest fetches,
+   * which is what transactions.exchange_rate means there.
+   */
+  exchange_rate?: number | null
+  /** The account balance after this row, when the bank reports it (never for a personal account). */
+  balance_after?: number | null
+  /** The bank's isEnriched flag: the row has been through its daily enrichment. Null when the bank sends none. */
+  is_enriched?: boolean | null
+  /**
+   * The Bankgirot split behind this row (Open Payments only): one part per
+   * payer of a deposit or payee of a payout, in the bank's order. Stored in
+   * bank_transaction_parts beside the row; never changes the row's own
+   * amount, date or text. Null or absent when the bank sent no split.
+   */
+  parts?: BankTransactionPartInput[] | null
+}
+
+/**
+ * One part of a Bankgirot split as the bank feed delivers it (the shape of
+ * @accounted/connect-contract's bankTransactionPartSchema).
+ */
+export interface BankTransactionPartInput {
+  /** Signed like the parent: a deposit's parts are positive. */
+  amount: number
+  currency: string
+  /** debtorName on a deposit, creditorName on a payout. */
+  counterparty_name: string | null
+  /** Digits only (10-digit organisationsnummer; a 12-digit form drops the 16 prefix). */
+  counterparty_org_number: string | null
+  /** Bankgiro, plusgiro, BBAN or IBAN, as the bank gives it. */
+  counterparty_account: string | null
+  /** The structured reference (OCR first), when the part carries one. */
+  reference: string | null
+  /** referredDocumentInformation[].number, deduped; [] when none. */
+  invoice_numbers: string[]
+  /** The unstructured remittance information, joined. */
+  message: string | null
+  /** The alias row's transactionId or entryReference at the bank. */
+  provider_part_id: string | null
+}
+
+/** Why ingest suggested an invoice for a part (bank_transaction_parts.suggestion_reason). */
+export type BankTransactionPartSuggestionReason = 'ocr_exact' | 'invoice_number' | 'amount_only'
+
+/** A stored part of a Bankgirot split (bank_transaction_parts). */
+export interface BankTransactionPart extends BankTransactionPartInput {
+  id: string
+  company_id: string
+  transaction_id: string
+  /** The bank's order, from 1. */
+  seq: number
+  suggested_invoice_id: string | null
+  suggested_supplier_invoice_id: string | null
+  suggestion_reason: BankTransactionPartSuggestionReason | null
+  created_at: string
+  updated_at: string
 }
 
 /** Internal bank-fetch context. Its token is revalidated within each database write. */
@@ -4165,6 +4661,10 @@ export interface BankIngestRoute {
   ledgerAccount: string
   currency: string
   token: string
+  /** The service that reaches the bank (bank_connections.aggregator); absent from routes resolved before 20261012120000. */
+  aggregator?: 'enable_banking' | 'open_payments'
+  /** The bank an Open Payments consent is bound to; null for Enable Banking. */
+  bic?: string | null
 }
 
 /** Options for the transaction ingestion pipeline */
@@ -4187,34 +4687,83 @@ export interface IngestOptions {
    * so "undo this import" can scope its bulk delete to exactly this batch.
    * Omitted by every other caller (PSD2 sync, MCP): those rows stay NULL. */
   bankFileImportId?: string
+  /**
+   * The feed states that every external_id in this batch is the source's own
+   * per-booking reference: the same booking always arrives under the same id
+   * (across re-fetches and sessions), and a different id is a different
+   * booking.
+   *
+   * With that statement the content bridge never lets a stored row of the
+   * SAME feed (same import_source, same bank connection) absorb an incoming
+   * row that carries another id: two identical fees on one day with two bank
+   * references are two movements. Everything the ids cannot speak to still
+   * dedups on content and count: a bank file followed by the feed, a switch
+   * to another provider, a booked hand-entered row, a stored row without an
+   * id.
+   *
+   * Never set it for ids derived from content or position (CSV row hashes,
+   * the buildStableExternalIds occurrence index): those can change for the
+   * same booking, and the bridge is what catches that. The rows must carry an
+   * import-feed import_source: it is the id namespace, so a new provider or a
+   * new id scheme takes a new label.
+   */
+  stableExternalIds?: boolean
+}
+
+/**
+ * Why the ingest pipeline did not insert a row.
+ * - `external_id_match`: the row's external_id is already stored (exact key).
+ * - `content_match_booked`: a stored BOOKED row stands for the same movement
+ *   by content (same date, amount, currency and account, and a bridging
+ *   description or a count-symmetric mirror).
+ * - `content_match_unbooked`: the same, against a stored UNBOOKED row from an
+ *   import feed.
+ */
+export type IngestSkipReason = 'external_id_match' | 'content_match_booked' | 'content_match_unbooked'
+
+/** One incoming row the pipeline skipped as already stored, and what it matched. */
+export interface IngestSkippedRow {
+  /** The external_id the caller sent for the row. */
+  external_id: string
+  reason: IngestSkipReason
+  /** external_id of the stored row that stands for it; null when that row has none. */
+  matched_external_id: string | null
+  /** id of the stored row; null when it is not known (an id stored by a concurrent writer). */
+  matched_transaction_id: string | null
 }
 
 /** Result of the transaction ingestion pipeline */
 export interface IngestResult {
   imported: number
+  /** Rows skipped as already stored: the length of `skipped`, the sum of `duplicates_by_reason`. */
   duplicates: number
+  /**
+   * `duplicates` split by reason, so a content match (a judgement call) is
+   * never mistaken for an exact external_id match.
+   */
+  duplicates_by_reason?: Record<IngestSkipReason, number>
+  /** Every skipped row, in input order, with the stored row it matched. */
+  skipped?: IngestSkippedRow[]
   reconciled: number
   auto_categorized: number
   auto_matched_invoices: number
   errors: number
   transaction_ids: string[]
+  /**
+   * Stored rows an Open Payments re-read updated with richer data (a
+   * reference, a payer, an organisationsnummer, the enriched flag) instead of
+   * only skipping them as duplicates. Optional: only that feed produces it.
+   */
+  enriched_updated?: number
+  /**
+   * Bank-feed rows set aside because their currency is not the bank account's
+   * (IngestOptions.bankRoute), counted per currency code. Not imported, not
+   * duplicates and not errors: the rest of the batch goes in. Omitted when
+   * every row matched.
+   */
+  other_currency?: Record<string, number>
   /** First insert error encountered, surfaced for debugging. Optional. */
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
-  /**
-   * SHADOW-MODE counter: rows that an enforcing same-feed scope-drift dedup rule
-   * WOULD have treated as re-imports (IBAN-drift re-imports the external_id
-   * check misses). These are still imported: the field only measures how often
-   * the rule would fire, so it can be validated on real data before enforcement.
-   */
-  shadow_scope_drift_candidates?: number
-  /**
-   * SHADOW-MODE counter: rows that an enforcing date-drift dedup rule WOULD have
-   * treated as re-imports: a twin with the same öre and an account-compatible,
-   * bridging (or cross-channel count-symmetric) match one day away, which the
-   * exact-date content bridge misses. Still imported; the field only measures
-   * how often the rule would fire, for validation before any enforcement.
-   */
-  shadow_date_drift_candidates?: number
 }
 
 // ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions) ──
@@ -4276,8 +4825,22 @@ export interface WebshopOrder {
   customer_email: string | null
   /** Best effort; must be user-confirmed before use in legal fields. */
   customer_orgnr: string | null
-  /** Billing country, ISO 3166-1 alpha-2; drives the export/EU 0%-sale hint. */
+  /**
+   * Order country, ISO 3166-1 alpha-2; drives the export/EU 0%-sale hint and
+   * the bulk-book rate-0 guard. Per platform: WooCommerce stores the BILLING
+   * country, Shopify the SHIPPING (destination) country, or the billing
+   * country for an order with nothing to ship (digital products, services),
+   * null for a local pickup or when the store withholds addresses.
+   */
   customer_country: string | null
+  /**
+   * Shopify: true when the store reported that no line of the order needs
+   * shipping (digital products, services), on the order row and its refund
+   * rows. The country rules then book a sale abroad as services
+   * (country-routing.ts). False when a line ships, when that is not known,
+   * and for every other platform.
+   */
+  ships_nothing: boolean
   payment_method: string | null
   payment_method_title: string | null
   gateway_reference: string | null
@@ -4303,6 +4866,28 @@ export type WebshopPaymentMethodPolicy =
   | { mode: 'book'; account: string }
   | { mode: 'invoice' }
 
+/**
+ * Where an order shipped outside Sweden books, per destination country in
+ * webshop_store_settings.country_account_rules (lib/webshop-orders/
+ * country-routing.ts). `country` is an ISO 3166-1 alpha-2 code, or 'EU' /
+ * 'NON_EU' for every other country in or outside the EU. `vat_rate` is a
+ * percentage; null covers every rate that carries VAT (a 0 % bucket needs its
+ * own rule). 'accounts' books the bucket's net and VAT on the given accounts;
+ * 'swedish' books it like a Swedish sale (EU sales taxed in Sweden, below the
+ * distance-selling threshold): output VAT on the Swedish account for the
+ * rate, and the net on `revenue_account` when set (a ruta 05 account with the
+ * rule's rate), else on the default Swedish sales account for the rate.
+ */
+export type WebshopCountryAccountRule =
+  | {
+      country: string
+      vat_rate: number | null
+      mode: 'accounts'
+      revenue_account: string
+      vat_account: string | null
+    }
+  | { country: string; vat_rate: number | null; mode: 'swedish'; revenue_account?: string | null }
+
 /** Row shape of public.webshop_store_settings. */
 export interface WebshopStoreSettings {
   id: string
@@ -4311,6 +4896,7 @@ export interface WebshopStoreSettings {
   platform: WebshopPlatform
   store_scope: string
   payment_method_account_map: Record<string, WebshopPaymentMethodPolicy>
+  country_account_rules: WebshopCountryAccountRule[]
   created_at: string
   updated_at: string
 }
@@ -4377,6 +4963,16 @@ export interface InvoiceExtractionResult {
     total: number | null
     // Öresavrundning line on Swedish receipts; negative when rounded down.
     roundingAmount?: number | null
+    // BT-113: what the document deducts from the total as settled before
+    // this payment (an applied account balance, a credit, a deposit, a gift
+    // card), so the amount due is total minus it. Never a card or bank
+    // payment of the document itself. Optional: older readings lack it.
+    prepaidAmount?: number | null
+    // On a document with a row per party (a capital call, a cost split
+    // between companies): the sum for all parties. total is then this
+    // company's own row, never this figure. Information only: never booked,
+    // never matched. Optional: older readings lack it.
+    documentTotal?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
   // Amounts visible on non-invoice documents (bankintyg, avtal, contracts)
@@ -4388,6 +4984,14 @@ export interface InvoiceExtractionResult {
   // Matching treats such a total as fallback-grade; cleared when a user edits
   // totals.total.
   totalSource?: 'prominent' | null
+  // Set by the reader (never the model) when the seller it read off an
+  // invoice or a credit note is the receiving company itself: the company's
+  // own sales invoice, mailed or uploaded to the inbox (crm#1830). The
+  // supplier block is emptied and documentKind is 'other' on such a reading,
+  // so nothing treats it as a purchase. Read through isOwnIssuedInvoice
+  // (lib/documents/inbox-kind.ts), which stops counting it once a person
+  // names a seller or types the document.
+  sellerIsOwnCompany?: boolean
   confidence: number
   suggestedTemplateId?: string
   // Set by the caller (not the model) when a long PDF was sliced before
@@ -4468,6 +5072,7 @@ export interface KPIPreferences {
 // ============================================================
 
 export type EmploymentType = 'employee' | 'company_owner' | 'board_member'
+export type PersonnelCategory = 'arbetare' | 'tjansteman'
 export type SalaryType = 'monthly' | 'hourly'
 export type FSkattStatus = 'a_skatt' | 'f_skatt' | 'fa_skatt' | 'not_verified'
 export type VacationRule = 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
@@ -4489,10 +5094,22 @@ export type SalaryLineItemType =
   | 'net_deduction_other'
   | 'oresavrundning'
   | 'correction' | 'other'
+  /** A row of words only, no money (lib/salary/text-rows.ts). */
+  | 'text'
 
 export type ShiftPremiumItemType =
   | 'overtime_50' | 'overtime_100'
   | 'ob_weekday_evening' | 'ob_weekend' | 'ob_night' | 'ob_holiday'
+
+/**
+ * How a premium hour is priced (migration 20261027213119):
+ *   percent_of_hourly  premium_percent of the hourly wage (hourly_divisor,
+ *                      when set, derives a monthly-paid employee's timlön
+ *                      as full-time månadslön / hourly_divisor);
+ *   monthly_divisor    månadslön / monthly_divisor, monthly-paid only;
+ *   sek_per_hour       fixed kronor per hour.
+ */
+export type ShiftPremiumAmountForm = 'percent_of_hourly' | 'monthly_divisor' | 'sek_per_hour'
 
 export interface ShiftPremiumRule {
   id: string
@@ -4506,7 +5123,19 @@ export interface ShiftPremiumRule {
   start_time: string
   /** 'HH:MM' or 'HH:MM:SS'. End values <= start mean the window wraps midnight. */
   end_time: string
-  premium_percent: number
+  amount_form: ShiftPremiumAmountForm
+  /** percent_of_hourly only (else null). */
+  premium_percent: number | null
+  /** monthly_divisor only (else null). */
+  monthly_divisor: number | null
+  /** sek_per_hour only (else null). */
+  sek_per_hour: number | null
+  /** percent_of_hourly only, optional. */
+  hourly_divisor: number | null
+  /** First date (inclusive). Null only on rules from before validity existed. */
+  valid_from: string | null
+  /** Last date (inclusive). Null = open-ended. */
+  valid_to: string | null
   item_type: ShiftPremiumItemType
   priority: number
   is_active: boolean
@@ -4524,6 +5153,9 @@ export interface Employee {
   personnummer: string
   personnummer_last4: string
   employment_type: EmploymentType
+  // Which BAS wage series the employee books on (employment_type 'employee'
+  // only): arbetare 70xx, tjänstemän 72xx. lib/salary/account-mapping.ts.
+  personnel_category: PersonnelCategory
   employment_start: string
   employment_end: string | null
   employment_degree: number
@@ -4536,6 +5168,10 @@ export interface Employee {
   jamkning_percentage: number | null
   jamkning_valid_from: string | null
   jamkning_valid_to: string | null
+  /** Förhöjt skatteavdrag (SFL 11 kap. 22 §), whole kronor per run. Exclusive with extra_tax_percentage. */
+  extra_tax_amount: number | null
+  /** Förhöjt skatteavdrag as a requested total percentage of taxable income. Exclusive with extra_tax_amount. */
+  extra_tax_percentage: number | null
   is_sidoinkomst: boolean
   f_skatt_status: FSkattStatus
   f_skatt_verified_at: string | null
@@ -4557,6 +5193,10 @@ export interface Employee {
   address_line1: string | null
   postal_code: string | null
   city: string | null
+  /** Fora uppmärkning (FOK code, e.g. FOK306834); null = not reported to Fora. */
+  fora_fok_id: string | null
+  /** The date fora_fok_id applies from; set together with it. */
+  fora_fok_start_date: string | null
   specification_number: number | null
   vaxa_stod_eligible: boolean
   vaxa_stod_start: string | null
@@ -4611,6 +5251,8 @@ export interface SalaryRun {
   agi_submitted_at: string | null
   payment_file_format: 'bg_lb' | 'pain001' | null
   payment_file_generated_at: string | null
+  /** Version of the run's pain.001 (its MsgId and EndToEndIds), raised only by a confirmed new version. */
+  payment_file_version?: number
   calculation_params: Record<string, unknown> | null
   approved_by: string | null
   approved_at: string | null
@@ -4646,6 +5288,8 @@ export interface SalaryRunEmployee {
   benefit_values: number
   taxable_income: number
   tax_withheld: number
+  /** The part of tax_withheld that is the employee's requested förhöjt skatteavdrag (0 when none). */
+  extra_tax_withheld: number
   tax_withheld_override: number | null
   net_deductions: number
   net_salary: number
@@ -4663,7 +5307,12 @@ export interface SalaryRunEmployee {
   sick_days: number
   vab_days: number
   parental_days: number
+  /** Days off on the payslip's vacation lines, as entered. */
   vacation_days_taken: number
+  /** Paid semesterdagar each of those days off used: 1.25 at four days a
+   *  week (vacation-net-days.ts). null on rows calculated before 2026-10-12
+   *  reads as 1. */
+  vacation_paid_days_per_day_off: number | null
   calculation_breakdown: Record<string, unknown> | null
   ytd_gross: number
   ytd_tax: number
@@ -4698,13 +5347,18 @@ export interface SalaryLineItem {
   /** Engångsskatt percentage (migration 20260919120200); null = taxed by the monthly table. */
   one_off_tax_percent?: number | null
   /** Engine provenance (migration 20260919120000): 'vacation_compensation' on the
-   *  semesterersättning row run-calculation derives; null on manual rows. */
-  calculation_source?: 'vacation_compensation' | null
+   *  semesterersättning row run-calculation derives, 'vacation_pay' on the
+   *  vacation rows it derives from vacation days taken (migration
+   *  20261023142500); null on manual rows. */
+  calculation_source?: 'vacation_compensation' | 'vacation_pay' | null
   /** Which vacation pool a vacation line draws from (migration 20260919130100);
    *  null = paid. Only on item_type 'vacation'. */
   vacation_category?: 'paid' | 'extra_paid' | 'saved' | 'unpaid' | 'advance' | null
   /** Origin year (YYYY) of the sparade dagar a 'saved' line consumes; null = oldest first. */
   vacation_saved_year?: string | null
+  /** The benefit a net_deduction_benefit_payment row pays for (employee_benefits
+   *  benefit_type, migration 20261028030447); null = the payslip's only benefit type. */
+  benefit_type?: 'bike' | 'car' | 'meals' | 'housing' | 'wellness' | 'other' | null
   created_at: string
   updated_at: string
 }
@@ -4721,6 +5375,8 @@ export interface SalaryLineItem {
  */
 export interface StoredStagedOperation {
   id: string
+  /** The proposal's number (PendingOperation.operation_number); absent before the column exists. */
+  operation_number?: number | null
   operation_type: string
   title?: string | null
   risk_level?: string | null

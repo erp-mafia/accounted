@@ -6,10 +6,11 @@
  * file hashing, stats calculation, date range extraction, and edge cases.
  */
 
-import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats } from '../parser'
+import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats, toRawTransaction, unreadRows } from '../parser'
 import type { ParsedBankTransaction, BankFileFormatId } from '../types'
-import { parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
+import { genericDecimalMark, parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
 import { parseCSVLine } from '../formats/nordea'
+import { CAMT053_PRETTY_WITH_REFS, CAMT053_V08_PREFIXED_MULTI_STMT, camt053ManyEntries } from '@/tests/fixtures/camt053'
 
 // ---------------------------------------------------------------------------
 // Test data: realistic CSV/XML content for each Swedish bank format
@@ -60,6 +61,24 @@ const SEB_TRANSAKTIONER_CSV =
   '2026-07-21;2026-07-21;SAN FRANCISC/26-07-20;Kortköp;;-89.44;433217.91\r\n' +
   '2026-07-18;2026-07-18;KUNDINBETALNING;Insättning;12500.00;;433307.35\r\n'
 
+// SEB "Transaktioner" export with ONE signed amount column (crm#1491):
+// "Transaktioner i tabellen" -> Csv. The header is the one the report quoted;
+// the rows are synthetic.
+const SEB_TRANSAKTIONER_COMBINED_CSV =
+  '\uFEFFBokförd;Valutadatum;Text;Typ;Insättningar/uttag;Bokfört saldo\r\n' +
+  '2026-10-20;2026-10-20;BRIDGEKLUBBEN AVGIFT;Annan;-450.00;12000.00\r\n' +
+  '2026-10-19;2026-10-18;BUTIKEN KORTKOP;Kortköp;-89.44;12450.00\r\n' +
+  '2026-10-18;2026-10-18;KUNDINBETALNING;Insättning;1500.00;12539.44\r\n'
+
+// SEB "Transaktioner" export writing three decimals (crm#1528). Synthetic
+// rows: a 1-3 digit integer part ("349.000") used to read as thousands.
+const SEB_TRANSAKTIONER_THREE_DECIMALS_CSV =
+  '\uFEFFBokförd;Valutadatum;Text;Typ;Insättningar/uttag;Bokfört saldo\r\n' +
+  '2026-10-21;2026-10-21;KORTKOP KAFE;Kortköp;-349.000;7724.690\r\n' +
+  '2026-10-20;2026-10-20;KUNDINBETALNING;Insättning;1422.190;8073.690\r\n' +
+  '2026-10-19;2026-10-19;OVERFORING;Annan;-5000.000;6651.500\r\n' +
+  '2026-10-18;2026-10-18;RANTA;Annan;0.500;11651.500\r\n'
+
 const SWEDBANK_CSV = [
   'Kontouppgifter',
   'Clearingnummer,Kontonummer,Datum,Text,Belopp,Saldo',
@@ -92,7 +111,7 @@ const HANDELSBANKEN_CSV_WITH_PREL = [
 // (and a blank line) before the actual column header.
 const HANDELSBANKEN_CSV_WITH_PREAMBLE = [
   'Kontonummer;6789 123 456 789',
-  'Kontohavare;Wiklund, Cristel',
+  'Kontohavare;Andersson, Anna',
   'Period;2024-01-01 - 2024-01-31',
   '',
   'Reskontradatum;Transaktionsdatum;Text;Belopp;Saldo',
@@ -387,15 +406,16 @@ describe('detectFileFormat', () => {
     expect(format!.id).toBe('camt053')
   })
 
-  it('does not detect camt.053 without .xml extension', () => {
-    // camt053 detection requires .xml extension
-    const format = detectFileFormat(CAMT053_XML, 'statement.csv')
-    // It should not match camt053 since extension is .csv
-    // But it could match something else if the content resembles a CSV header
-    // The important check is that it does NOT return camt053
-    if (format) {
-      expect(format.id).not.toBe('camt053')
-    }
+  it.each(['statement.txt', 'statement.csv', 'statement.053', 'statement'])(
+    'detects camt.053 by content whatever the extension: %s (crm#1160)',
+    (filename) => {
+      expect(detectFileFormat(CAMT053_XML, filename)?.id).toBe('camt053')
+    },
+  )
+
+  it('does not claim a CSV that mentions camt.053 in a description', () => {
+    const csv = 'Bokföringsdatum;Valutadatum;Verifikationsnummer;Text/mottagare;Belopp;Saldo\n2024-01-15;2024-01-15;123;camt.053 BkToCstmrStmt;-99,00;100,00'
+    expect(detectFileFormat(csv, 'export.csv')?.id).toBe('seb')
   })
 
   it('detects Länsförsäkringar CSV from header with "typ" keyword', () => {
@@ -919,6 +939,102 @@ describe('parseBankFile: SEB format', () => {
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].amount).toBe(-50)
     expect(result.stats.skipped_rows).toBe(1)
+  })
+})
+
+describe('SEB amounts with three decimals (crm#1528)', () => {
+  it('reads 349.000 as 349 kr: the file, not the cell, decides the decimal mark', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_THREE_DECIMALS_CSV, 'transaktioner.csv')
+
+    expect(result.format).toBe('seb')
+    expect(result.issues).toHaveLength(0)
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([
+      [-349, 7724.69],
+      [1422.19, 8073.69],
+      [-5000, 6651.5],
+      [0.5, 11651.5],
+    ])
+  })
+
+  it('reads the split Insättningar/Uttag columns at three decimals', () => {
+    const csv =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\n' +
+      '2026-10-21;2026-10-21;KORTKOP;Kortköp;;-349.000;651.000\n' +
+      '2026-10-20;2026-10-20;INSATTNING;Insättning;250.500;;1000.000'
+    const result = parseBankFile(csv, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([
+      [-349, 651],
+      [250.5, 1000],
+    ])
+  })
+
+  it('falls back to the Transaktioner layout\'s dot when no cell decides', () => {
+    // Every cell is a 1-3 digit integer part plus three digits: ambiguous one
+    // by one, so the layout's documented mark applies.
+    const csv =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar/uttag;Bokfört saldo\n' +
+      '2026-10-21;2026-10-21;KORTKOP;Kortköp;-349.000;651.000'
+    const result = parseBankFile(csv, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([[-349, 651]])
+  })
+
+  it('keeps the Kontoutdrag layout\'s comma decimals and space-grouped thousands', () => {
+    const csv =
+      'Bokföringsdag;Valutadag;Verifikationsnummer;Text;Belopp;Saldo\n' +
+      '2026-10-21;2026-10-21;1;KORTKOP;-349,00;12 345,67\n' +
+      '2026-10-20;2026-10-20;2;LON;25 000,00;12 694,67'
+    const result = parseBankFile(csv, 'kontoutdrag.csv', 'seb')
+
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([
+      [-349, 12345.67],
+      [25000, 12694.67],
+    ])
+  })
+})
+
+describe('SEB Transaktioner with one Insättningar/uttag column (crm#1491)', () => {
+  it('detects as SEB, not Länsförsäkringar', () => {
+    expect(detectFileFormat(SEB_TRANSAKTIONER_COMBINED_CSV, 'transaktioner.csv')?.id).toBe('seb')
+  })
+
+  it('reads Text as the description, the signed column as the amount and Bokfört saldo as the balance', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_COMBINED_CSV, 'transaktioner.csv')
+
+    expect(result.format).toBe('seb')
+    expect(result.issues).toHaveLength(0)
+    expect(result.transactions.map((t) => [t.date, t.description, t.amount, t.balance])).toEqual([
+      ['2026-10-20', 'BRIDGEKLUBBEN AVGIFT', -450, 12000],
+      ['2026-10-19', 'BUTIKEN KORTKOP', -89.44, 12450],
+      ['2026-10-18', 'KUNDINBETALNING', 1500, 12539.44],
+    ])
+    expect(result.stats.total_income).toBe(1500)
+    expect(result.stats.total_expenses).toBe(-539.44)
+  })
+
+  it('stores the balance and the SEB external id on the ingest row', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_COMBINED_CSV, 'transaktioner.csv')
+    const raw = toRawTransaction(result.transactions[0], 'seb', 0)
+
+    expect(raw.balance_after).toBe(12000)
+    expect(raw.description).toBe('BRIDGEKLUBBEN AVGIFT')
+    expect(raw.import_source).toBe('csv_seb')
+    expect(raw.external_id).toMatch(/^seb_[0-9a-f]{16}$/)
+  })
+
+  it('leaves balance_after null when the file has no balance column', () => {
+    const raw = toRawTransaction(
+      { date: '2026-10-20', description: 'X', amount: -1, currency: 'SEK', balance: null, reference: null, counterparty: null, raw_line: '' },
+      'seb',
+      0,
+    )
+    expect(raw.balance_after).toBeNull()
+  })
+
+  it('still detects Länsförsäkringar files as Länsförsäkringar', () => {
+    expect(detectFileFormat(LANSFORSAKRINGAR_CSV, 'lf.csv')?.id).toBe('lansforsakringar')
+    expect(detectFileFormat(LANSFORSAKRINGAR_CSV_NO_HEADER, 'lf.csv')?.id).toBe('lansforsakringar')
   })
 })
 
@@ -1495,7 +1611,7 @@ describe('parseBankFile: camt.053 XML format', () => {
     const result = parseBankFile(CAMT053_XML, 'statement.xml')
 
     const debit = result.transactions[0]
-    expect(debit.raw_line).toBe('REF001')
+    expect(debit.raw_line).toBe('2024-01-15_REF001')
   })
 
   it('extracts OCR reference from structured remittance info', () => {
@@ -1503,6 +1619,37 @@ describe('parseBankFile: camt.053 XML format', () => {
 
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].reference).toBe('OCR123456789')
+  })
+
+  it('reads the OCR from <CdtrRefInf> in a pretty-printed file, past <Refs>', () => {
+    const result = parseBankFile(CAMT053_PRETTY_WITH_REFS, 'statement.xml')
+
+    expect(result.transactions[0].reference).toBe('1001000000017')
+    expect(result.transactions[1].reference).toBeNull()
+  })
+
+  it('keeps the value date, bank id, end-to-end id, counterparty IBAN and transaction code', () => {
+    const [incoming, outgoing] = parseBankFile(CAMT053_PRETTY_WITH_REFS, 'statement.xml').transactions
+
+    expect(incoming).toMatchObject({
+      date: '2025-03-10',
+      value_date: '2025-03-11',
+      provider_transaction_id: 'ACSR-1',
+      end_to_end_id: 'E2E-INCOMING-1',
+      counterparty: 'Kund AB',
+      counterparty_iban: 'SE4550000000058398257466',
+      bank_transaction_code: 'PMNT-RCDT-DMCT',
+      // The external_id input: booking date plus both references.
+      raw_line: '2025-03-10_ACSR-1_NTRY-1',
+    })
+    expect(outgoing).toMatchObject({
+      counterparty: 'Leverantör AB',
+      // NOTPROVIDED is the ISO placeholder, not an id.
+      end_to_end_id: null,
+      counterparty_iban: null,
+      bank_transaction_code: null,
+      provider_transaction_id: 'ACSR-2',
+    })
   })
 
   it('uses unstructured remittance info as description', () => {
@@ -1529,7 +1676,119 @@ describe('parseBankFile: camt.053 XML format', () => {
     expect(result.format).toBe('camt053')
     expect(result.transactions).toHaveLength(0)
     expect(result.issues.length).toBeGreaterThan(0)
-    expect(result.issues[0].message).toContain('No <Ntry> elements')
+    expect(result.issues[0].message).toContain('Inga transaktioner (<Ntry>)')
+  })
+})
+
+describe('parseBankFile: camt.053 as other systems save it (crm#1160)', () => {
+  const parse = () => parseBankFile(CAMT053_V08_PREFIXED_MULTI_STMT, 'kontoutdrag-2026-01.txt')
+
+  it('detects a BOM-prefixed, ns2-prefixed camt.053.001.08 file saved as .txt', () => {
+    expect(detectFileFormat(CAMT053_V08_PREFIXED_MULTI_STMT, 'kontoutdrag-2026-01.txt')?.id).toBe('camt053')
+    expect(parse().format).toBe('camt053')
+  })
+
+  it('reads every booked entry across both statements and skips the pending one', () => {
+    const result = parse()
+    expect(result.transactions.map((t) => t.provider_transaction_id)).toEqual([
+      'ACSR-0001',
+      'ACSR-0002',
+      'ACSR-0004',
+      'ACSR-0005',
+    ])
+    expect(result.stats).toMatchObject({ total_rows: 5, parsed_rows: 4, skipped_rows: 1 })
+    expect(result.issues).toEqual([expect.objectContaining({ row: 3, severity: 'info' })])
+    expect(result.issues[0].message).toContain('PDNG')
+  })
+
+  it('reads the date part of a DtTm booking date and of a Dt with a zone offset', () => {
+    const [ocr, , card] = parse().transactions
+    expect(ocr.date).toBe('2026-01-02')
+    expect(ocr.value_date).toBe('2026-01-02')
+    expect(card.date).toBe('2026-01-05')
+  })
+
+  it('reads amounts, signs, currencies and payment details under the prefix', () => {
+    const [ocr, , card, eur] = parse().transactions
+    expect(ocr).toMatchObject({
+      amount: 1500,
+      currency: 'SEK',
+      description: 'Inbetalning faktura 2001',
+      reference: '2001000000013',
+      end_to_end_id: 'E2E-0001',
+      counterparty: 'Kund & Partner AB',
+      counterparty_iban: 'SE0000000000000000000002',
+      bank_transaction_code: 'PMNT-RCDT-DMCT',
+    })
+    expect(card).toMatchObject({ amount: -249.5, description: 'Kortköp Kontorsvaror', reference: null })
+    expect(eur).toMatchObject({
+      amount: -100,
+      currency: 'EUR',
+      description: 'Licens januari',
+      counterparty: 'Leverantör GmbH',
+      counterparty_iban: 'DE00000000000000000004',
+    })
+  })
+
+  it('keeps a deposit batch with several TxDtls as one row without one payer or OCR', () => {
+    const batch = parse().transactions[1]
+    expect(batch).toMatchObject({
+      date: '2026-01-03',
+      amount: 3000,
+      description: 'Samlingspost, 3 betalningar',
+      reference: null,
+      counterparty: null,
+      end_to_end_id: null,
+      counterparty_iban: null,
+    })
+    expect(parse().stats.total_income).toBe(4500)
+  })
+
+  it('dates a DtTm with an offset on the Swedish day it fell on, a local DtTm as written', () => {
+    const entry = (bookingDate: string) => `<?xml version="1.0"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt><Stmt>
+<Ntry><NtryRef>1</NtryRef><Amt Ccy="SEK">99.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><DtTm>${bookingDate}</DtTm></BookgDt></Ntry>
+</Stmt></BkToCstmrStmt></Document>`
+    const dateOf = (bookingDate: string) => parseBankFile(entry(bookingDate), 'statement.xml').transactions[0]?.date
+    // 00:01 on 1 September in Stockholm, written as UTC.
+    expect(dateOf('2026-08-31T22:01:00Z')).toBe('2026-09-01')
+    expect(dateOf('2026-09-01T00:01:00+02:00')).toBe('2026-09-01')
+    expect(dateOf('2026-09-01T00:01:00')).toBe('2026-09-01')
+    // Winter: 00:30 on 16 November in Stockholm.
+    expect(dateOf('2026-11-15T23:30:00Z')).toBe('2026-11-16')
+  })
+
+  it('gives each entry a stable external id from its bank reference', () => {
+    const [ocr] = parse().transactions
+    expect(generateExternalId(ocr, 'camt053', 0)).toBe('camt053_2026-01-02_ACSR-0001')
+  })
+
+  it('keeps per-statement entry numbers of two monthly files apart', () => {
+    const month = (date: string, amount: string) => `<?xml version="1.0"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt><Stmt>
+<Ntry><NtryRef>1</NtryRef><Amt Ccy="SEK">${amount}</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><Dt>${date}</Dt></BookgDt></Ntry>
+</Stmt></BkToCstmrStmt></Document>`
+    const [january] = parseBankFile(month('2026-01-31', '99.00'), 'jan.xml').transactions
+    const [february] = parseBankFile(month('2026-02-28', '99.00'), 'feb.xml').transactions
+    const ids = [january, february].map((tx) => generateExternalId(tx, 'camt053', 0))
+    expect(ids).toEqual(['camt053_2026-01-31_1', 'camt053_2026-02-28_1'])
+    // The same statement imported twice keeps its id, so a re-import dedups.
+    const [again] = parseBankFile(month('2026-01-31', '99.00'), 'jan-copy.xml').transactions
+    expect(generateExternalId(again, 'camt053', 0)).toBe(ids[0])
+  })
+
+  it('reads a long statement with many entries', () => {
+    const result = parseBankFile(camt053ManyEntries(194), 'statement.xml')
+    expect(result.transactions).toHaveLength(194)
+    expect(result.issues).toEqual([])
+    expect(result.transactions[1]).toMatchObject({ amount: -101.25, raw_line: '2026-01-02_REF-1' })
+    expect(result.date_from).toBe('2026-01-01')
+  })
+
+  it('strips a mojibake BOM left by a Latin-1 decode', () => {
+    const result = parseBankFile('ï»¿' + camt053ManyEntries(2), 'statement')
+    expect(result.format).toBe('camt053')
+    expect(result.transactions).toHaveLength(2)
   })
 })
 
@@ -1568,6 +1827,14 @@ describe('parseBankFile: explicit format override', () => {
     expect(result.transactions).toHaveLength(0)
     expect(result.issues).toHaveLength(1)
     expect(result.issues[0].message).toContain('Kunde inte identifiera bankformat')
+  })
+
+  it('names the supported formats, camt.053 included, when nothing matches (crm#1160)', () => {
+    const { message } = parseBankFile(UNKNOWN_CSV, 'unknown.csv').issues[0]
+    expect(message).toContain('Stödda format')
+    expect(message).toContain('SEB')
+    expect(message).toContain('ISO 20022 camt.053 (XML, oavsett filändelse)')
+    expect(message).not.toContain('CSV (manuell mappning)')
   })
 
   it('can force generic_csv format by explicit ID', () => {
@@ -2312,6 +2579,152 @@ describe('parseGenericCSV: column bounds checking', () => {
   })
 })
 
+// Every format reads a cell with parseSwedishAmount, given the file's decimal
+// mark: the file decides it, and the layout's or the mapping's mark applies
+// only when no cell can decide. parseFloat read to the first character it did
+// not know, so a cell lost its öre or its kronor without a word.
+describe('a file amount never loses kronor or öre silently', () => {
+  const swedbank = (...cells: string[]) => parseBankFile([
+    '* Transaktionsrapport Period 2026-01-01 - 2026-01-31',
+    'Radnr,Clnr,Kontonr,Produkt,Valuta,Bokfdag,Transdag,Valutadag,Referens,Text,Belopp,Saldo',
+    ...cells.map((cell, i) => `${i + 1},8327,1234567,Konto,SEK,2026-01-05,2026-01-05,2026-01-05,Ref,Text,"${cell}","${cell}"`),
+  ].join('\n'), 'swedbank.csv', 'swedbank')
+
+  it.each([
+    ['-1 234.56', -1234.56],
+    ['1,234.56', 1234.56],
+    ['\u22121500.00', -1500],
+    ['349.000', 349],
+    ['1422.190', 1422.19],
+    ['100.00', 100],
+  ])('Swedbank reads %s under its documented dot', (cell, amount) => {
+    const [row] = swedbank(cell).transactions
+    expect(row.amount).toBe(amount)
+    expect(row.balance).toBe(amount)
+  })
+
+  it('Swedbank goes by the file when its cells prove a comma', () => {
+    expect(swedbank('-1 234,56', '-1.234,56').transactions.map((t) => t.amount)).toEqual([-1234.56, -1234.56])
+  })
+
+  const generic = (decimal: ',' | '.', ...cells: string[]) => parseGenericCSV(
+    ['Datum;Text;Belopp;Saldo', ...cells.map((cell) => `2026-01-05;Text;${cell};${cell}`)].join('\n'),
+    { date: 0, description: 1, amount: 2, balance: 3, delimiter: ';', decimal_separator: decimal, skip_rows: 1, date_format: 'YYYY-MM-DD' } as never,
+  )
+
+  it.each([
+    [',', '-1 234,56', -1234.56],
+    [',', '-1.234,56', -1234.56],
+    [',', '1.234.567,89', 1234567.89],
+    ['.', '1,234.56', 1234.56],
+    ['.', '\u2212139.00', -139],
+    ['.', '349.000', 349],
+    [',', '349.000', 349000],
+    [',', '\u2014250,50', -250.5],
+    [',', '1 500,50 kr', 1500.5],
+  ] as const)('generic CSV with a %s mapping reads %s', (decimal, cell, amount) => {
+    const { transactions, issues } = generic(decimal, cell)
+    expect(transactions[0]?.amount).toBe(amount)
+    expect(transactions[0]?.balance).toBe(amount)
+    expect(issues).toEqual([])
+  })
+
+  // "349.000" is 349 kr or 349 000 kr. Nothing in such a file says which, and a
+  // wrong guess moves every amount a thousand times: nobody's default decides.
+  describe('an amount two decimal marks read differently', () => {
+    const undecided = ['Datum,Text,Belopp', '2026-01-02,Kaffe,-45.000', '2026-01-03,Lunch,-129.000', '2026-01-04,Swish,250.000'].join('\n')
+
+    it('refuses the file where nobody can choose: no row is read, and the cell is named', () => {
+      const { transactions, issues } = parseBankFile(undecided, 'fil.csv', 'generic_csv')
+      expect(transactions).toEqual([])
+      expect(issues).toHaveLength(1)
+      expect(issues[0]).toMatchObject({ row: 2, severity: 'error' })
+      expect(issues[0].message).toContain('-45.000')
+      expect(issues[0].message).toContain('-45')
+      expect(issues[0].message).toContain('-45000')
+      expect(issues[0].message).toContain('Inget importerades')
+    })
+
+    it('reads under the mark a person chose', () => {
+      const mapping = { date: 0, description: 1, amount: 2, delimiter: ',', skip_rows: 1, date_format: 'YYYY-MM-DD' }
+      expect(parseGenericCSV(undecided, { ...mapping, decimal_separator: '.' }).transactions.map((t) => t.amount)).toEqual([-45, -129, 250])
+      expect(parseGenericCSV(undecided, { ...mapping, decimal_separator: ',' }).transactions.map((t) => t.amount)).toEqual([-45000, -129000, 250000])
+    })
+
+    it('needs no answer when one cell of the file settles the mark, in the amounts or in the balance', () => {
+      const withAmount = `${undecided}\n2026-01-05,Hyra,-1500.50`
+      expect(parseBankFile(withAmount, 'fil.csv', 'generic_csv').transactions.map((t) => t.amount)).toEqual([-45, -129, 250, -1500.5])
+
+      const mapping = { date: 0, description: 1, amount: 2, balance: 3, delimiter: ',', decimal_separator: null, skip_rows: 1, date_format: 'YYYY-MM-DD' }
+      const withBalance = 'Datum,Text,Belopp,Saldo\n2026-01-02,Kaffe,-45.000,1000.50\n'
+      expect(parseGenericCSV(withBalance, mapping).transactions.map((t) => t.amount)).toEqual([-45])
+    })
+
+    it('needs no answer when no cell can be read two ways', () => {
+      const plain = 'Datum,Text,Belopp\n2026-01-02,Hyra,-1500\n2026-01-03,Swish,250\n'
+      expect(parseBankFile(plain, 'fil.csv', 'generic_csv').transactions.map((t) => t.amount)).toEqual([-1500, 250])
+    })
+
+    it('is any cell the two marks read as two amounts, whatever its sign or unit', () => {
+      const mapping = { amount: 0, delimiter: ';', decimal_separator: null, skip_rows: 0 }
+      for (const cell of ['349.000', '-45.000', '1.234', '1,234', '\u2212349.000', '349.000 kr']) {
+        expect(genericDecimalMark(cell, mapping).undecided, cell).toEqual({ row: 1, cell })
+      }
+    })
+
+    it('is no cell both marks read alike: 0.000 is no kronor either way', () => {
+      const mapping = { amount: 0, delimiter: ';', decimal_separator: null, skip_rows: 0 }
+      for (const cell of ['349', '1 234', '0.000', '0,000', '100,00 SEK']) {
+        expect(genericDecimalMark(cell, mapping).undecided, cell).toBeNull()
+      }
+    })
+
+    it('holds for a comma grouping too', () => {
+      const comma = 'Datum;Text;Belopp\n2026-01-02;Kaffe;1,234\n'
+      const mapping = { date: 0, description: 1, amount: 2, delimiter: ';', decimal_separator: null, skip_rows: 1, date_format: 'YYYY-MM-DD' }
+      expect(parseGenericCSV(comma, mapping).issues[0]?.severity).toBe('error')
+    })
+
+    it('tells the wizard what the import will read, over the whole file', () => {
+      const mapping = { amount: 2, delimiter: ',', decimal_separator: null, skip_rows: 1 }
+      expect(genericDecimalMark(undecided, mapping)).toEqual({ mark: null, undecided: { row: 2, cell: '-45.000' } })
+      expect(genericDecimalMark(undecided, { ...mapping, decimal_separator: '.' })).toEqual({ mark: '.', undecided: null })
+      const late = `Datum,Text,Belopp\n${Array.from({ length: 40 }, () => '2026-01-02,Kaffe,-349.000').join('\n')}\n2026-01-03,Hyra,-1422.190`
+      expect(genericDecimalMark(late, mapping)).toEqual({ mark: '.', undecided: null })
+    })
+  })
+
+  it('generic CSV goes by the file when its cells prove the other mark, and says so at three rows', () => {
+    const { transactions, issues } = generic(',', '12.50', '13.50', '14.50')
+    expect(transactions.map((t) => t.amount)).toEqual([12.5, 13.5, 14.5])
+    expect(issues[0]?.message).toContain('Decimalavgränsare')
+  })
+
+  it('generic CSV skips, loudly, a cell that is not one amount rather than read a part of it', () => {
+    const { transactions, issues, stats } = generic(',', '100,00-', '100,00 EUR', '200,00')
+    expect(transactions.map((t) => t.amount)).toEqual([200])
+    expect(stats.skipped_rows).toBe(2)
+    expect(issues.map((issue) => issue.message).join(' ')).toContain('100,00 EUR')
+  })
+
+  it('camt.053 reads its decimal dot through the same parser and rounds to the öre', () => {
+    const xml = CAMT053_PRETTY_WITH_REFS.replace(/(<Amt[^>]*>)[^<]+(<\/Amt>)/, '$11234.565$2')
+    const [row] = parseBankFile(xml, 'statement.xml').transactions
+    expect(Math.abs(row.amount)).toBe(1234.57)
+  })
+})
+
+describe('unreadRows', () => {
+  it('names the rows a parser could not read, and no row left out on purpose', () => {
+    const generic = parseGenericCSV('Datum;Text;Belopp\n2024-01-15;Hyra;-1500,00\n2024-01-16;Swish;100,00 SEK\n',
+      { date: 0, description: 1, amount: 2, delimiter: ';', decimal_separator: ',', skip_rows: 1, date_format: 'YYYY-MM-DD' })
+    expect(unreadRows(generic)).toEqual([{ row: 3, message: 'Invalid amount: 100,00 SEK', severity: 'warning' }])
+    const pending = { ...generic, issues: [{ row: 2, message: 'Post 2 är inte bokförd (PDNG) och hoppas över.', severity: 'info' as const }, { row: 0, message: 'Decimalavgränsare', severity: 'warning' as const }] }
+    expect(unreadRows(pending)).toEqual([])
+    expect(unreadRows(parseBankFile(NORDEA_CSV_WITH_RESERVED, 'nordea.csv'))).toEqual([])
+  })
+})
+
 describe('normalizeMinusSign', () => {
   it('replaces U+2212 (minus sign) with ASCII hyphen', () => {
     expect(normalizeMinusSign('\u2212139,00')).toBe('-139,00')
@@ -2378,10 +2791,10 @@ const WISE_HEADER =
 
 const WISE_CSV = [
   WISE_HEADER,
-  'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Bluedot Impact Ltd",2500.0,USD,"Aligned Intelligence AB",2500.0,USD,1,Facilitation,,,"Money added",',
-  'TRANSFER-2214309703,COMPLETED,IN,"2026-06-26 20:53:33","2026-06-26 20:54:14",2.20,SEK,,,"Aligned Intelligence AB",200.0,SEK,"Aligned Intelligence AB",200.0,SEK,1.0,,,"Peter Alexander Reinthal","Money added",',
-  'PLAN_ORDER-28688820,COMPLETED,OUT,"2026-06-24 06:13:45","2026-06-24 06:41:51",,,,,,520.00,SEK,TransferWise,520.00,SEK,1.00000000,28688820,,"Peter Alexander Reinthal",General,',
-  'TRANSFER-2208605608,COMPLETED,IN,"2026-06-24 06:13:45","2026-06-24 06:41:50",0.00,SEK,,,"Aligned Intelligence AB",520.0,SEK,"Aligned Intelligence AB",520.0,SEK,1.0,invoice-28688820,,"Peter Alexander Reinthal","Money added",',
+  'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Example Payer Ltd",2500.0,USD,"Exempelbolaget AB",2500.0,USD,1,Facilitation,,,"Money added",',
+  'TRANSFER-2214309703,COMPLETED,IN,"2026-06-26 20:53:33","2026-06-26 20:54:14",2.20,SEK,,,"Exempelbolaget AB",200.0,SEK,"Exempelbolaget AB",200.0,SEK,1.0,,,"Erik Exempel","Money added",',
+  'PLAN_ORDER-28688820,COMPLETED,OUT,"2026-06-24 06:13:45","2026-06-24 06:41:51",,,,,,520.00,SEK,TransferWise,520.00,SEK,1.00000000,28688820,,"Erik Exempel",General,',
+  'TRANSFER-2208605608,COMPLETED,IN,"2026-06-24 06:13:45","2026-06-24 06:41:50",0.00,SEK,,,"Exempelbolaget AB",520.0,SEK,"Exempelbolaget AB",520.0,SEK,1.0,invoice-28688820,,"Erik Exempel","Money added",',
 ].join('\n')
 
 describe('Wise format', () => {
@@ -2430,7 +2843,7 @@ describe('Wise format', () => {
     const withCancelled = [
       WISE_HEADER,
       'TRANSFER-9,CANCELLED,IN,"2026-06-01 10:00:00","2026-06-01 10:00:00",,,,,"X",100.0,SEK,"Y",100.0,SEK,1,,,,General,',
-      'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Bluedot Impact Ltd",2500.0,USD,"Aligned Intelligence AB",2500.0,USD,1,Facilitation,,,"Money added",',
+      'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Example Payer Ltd",2500.0,USD,"Exempelbolaget AB",2500.0,USD,1,Facilitation,,,"Money added",',
     ].join('\n')
     const result = parseBankFile(withCancelled, 'wise.csv')
     expect(result.transactions).toHaveLength(1)

@@ -63,6 +63,24 @@ describe('commitPendingOperation: capability gate', () => {
     expect(mockHasCapability).toHaveBeenCalledWith(supabase, 'company-1', 'email_send')
   })
 
+  // A sandbox holds the trial like any company, so the capability says yes. The
+  // session and v1 send routes run guardSandbox; an approval came through here
+  // with a verifikat posted and an email to a real address.
+  it.each(['send_invoice', 'send_payslips', 'submit_vat_declaration'] as const)(
+    'blocks %s for a sandbox company though its trial holds the capability: 403, op left pending',
+    async (operation_type) => {
+      mockHasCapability.mockResolvedValue(true)
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { is_sandbox: true }, error: null }) // the only read: the claim must never run
+
+      const op = makePendingOp({ operation_type, params: { invoice_id: 'inv-1' } })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(result).toMatchObject({ status: 'failed', http_status: 403, code: 'sandbox_blocked', operation_status: 'pending' })
+      expect(findCalls('pending_operations', 'update')).toEqual([])
+    },
+  )
+
   it('blocks submit_vat_declaration when skatteverket is not entitled', async () => {
     mockHasCapability.mockResolvedValue(false)
     const { supabase } = createQueuedMockSupabase()

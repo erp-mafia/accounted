@@ -1,6 +1,6 @@
 /**
  * The Agenter page (/skills) is hidden in production while it is being
- * finished (founder, 2026-09-24). The agents themselves keep working over
+ * finished (2026-09-24). The agents themselves keep working over
  * MCP (list_skills, load_skill, get_task); only the page and its links are
  * gated.
  *

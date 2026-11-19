@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { hasStoredPages } from '@/lib/documents/locked-period'
 import { createLogger } from '@/lib/logger'
@@ -26,8 +25,8 @@ export async function ensureDocumentRead(supabase: SupabaseClient, companyId: st
   if (!doc.pages_read_at && (await hasStoredPages(supabase, doc.id))) return { status: 'skipped', reason: 'already_read' }
   // History is read by the history reader even when a question fetches it; a live document keeps the extraction tier.
   const tier = readLaneFor(doc) === 'live' ? undefined : historyReaderTier()
-  const out = await readAndStoreDocument(supabase, doc, { allowModel: isArkivEnabled(doc.company_id), maxModelPages: null, tier })
-  if (out.status === 'read' && !doc.doc_type && doc.company_id && isArkivEnabled(doc.company_id)) {
+  const out = await readAndStoreDocument(supabase, doc, { allowModel: !!doc.company_id, maxModelPages: null, tier })
+  if (out.status === 'read' && !doc.doc_type && doc.company_id) {
     try {
       await enqueueDocumentJob(supabase, doc.company_id, doc.id, 'classify')
     } catch (err) {

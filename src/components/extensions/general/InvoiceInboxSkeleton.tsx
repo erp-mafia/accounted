@@ -1,4 +1,4 @@
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 
 // Single source of truth for the Dokumentinkorg loading silhouette, rendered
 // by both the route-level loading.tsx and the workspace's own client-fetch
@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 // replaced the old filter-pill row with a single full-width dropdown).
 export default function InvoiceInboxSkeleton() {
   return (
-    <div className="h-[calc(100vh-1px)] md:h-full">
+    <LateReveal className="h-[calc(100vh-1px)] md:h-full">
       <div className="h-full flex flex-col overflow-hidden">
         <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5">
           <div className="flex items-center gap-2 min-w-0">
@@ -43,6 +43,6 @@ export default function InvoiceInboxSkeleton() {
           <aside className="border-l overflow-hidden hidden xl:block" />
         </div>
       </div>
-    </div>
+    </LateReveal>
   )
 }

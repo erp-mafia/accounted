@@ -1,13 +1,27 @@
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { requireCompanyId } from '@/lib/company/context'
+import type { ActiveCompanyFacts } from '@/lib/company/active-company'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
+import {
+  companyAdminRequiredResponse,
+  isCompanyAdmin,
+  requireWritePermission,
+} from '@/lib/auth/require-write'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { createLogger } from '@/lib/logger'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { traceIdFromRequest } from '@/lib/observability/trace-context'
+import { runRequestInTrace } from '@/lib/observability/trace-context-node'
 import type { ApiRouteDefinition } from '@/lib/extensions/types'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { startPackageForKey } from '@/lib/modules/package-doors'
+import { packageStartRefusal } from '@/lib/modules/package-gate'
+import { readCompletionLog, shouldWriteCompletionLog } from '@/lib/extensions/completion-log'
+import { sessionShadow } from '@/lib/permissions/shadow'
 
 const dispatcherLog = createLogger('extension-dispatcher')
 
@@ -64,14 +78,9 @@ async function decorateResponse(response: Response, requestId: string): Promise<
   return response
 }
 
-ensureInitialized()
-
 // Heavy extension routes (SIE import, entity migration) hold one request
 // open for the whole job. 800 s is the Pro-plan ceiling with Fluid compute
-// (the default is 300). The migration budgets itself against
-// MIGRATE_RUN_BUDGET_MS in extensions/general/arcim-migration/index.ts so it
-// hands back its result before this fires: a Björn Lundén company with 9 415
-// customer invoices was killed at 300 s on every attempt (2026-09-07).
+// (the default is 300).
 export const maxDuration = 800
 
 /**
@@ -133,10 +142,23 @@ function matchPath(
  * - Matches method + path pattern to registered apiRoutes
  * - Extracts path params and appends them as URL search params
  * - Builds an ExtensionContext and passes it to the handler
+ * - Runs all of it in the request's trace scope (lib/observability/trace-context.ts):
+ *   the trace of a valid `traceparent` header, else a new one, named on the
+ *   response in X-Trace-Id unless the handler named its own (the MCP
+ *   dispatch reads a trace per JSON-RPC message)
  */
 async function handleRequest(
   request: Request,
-  { params }: { params: Promise<{ path: string[] }> }
+  context: { params: Promise<{ path: string[] }> }
+): Promise<Response> {
+  const traceId = traceIdFromRequest(request)
+  return runRequestInTrace(traceId, () => dispatchRequest(request, context, traceId))
+}
+
+async function dispatchRequest(
+  request: Request,
+  { params }: { params: Promise<{ path: string[] }> },
+  traceId: string,
 ): Promise<Response> {
   const requestId = generateRequestId()
   const start = Date.now()
@@ -153,10 +175,10 @@ async function handleRequest(
   const routePath = '/' + rest.join('/')
   const method = request.method as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
 
-  const log = dispatcherLog.child({ requestId, extensionId, routePath, method })
+  const log = dispatcherLog.child({ requestId, traceId, extensionId, routePath, method })
 
   // Look up extension
-  const extension = extensionRegistry.get(extensionId)
+  const extension = await extensionRegistry.get(extensionId)
   if (!extension || !extension.apiRoutes || extension.apiRoutes.length === 0) {
     log.warn('extension not found')
     return decorateResponse(
@@ -201,24 +223,11 @@ async function handleRequest(
       requestId,
     )
   }
-
-  // Config sanity check: these flags are orthogonal and the combination is
-  // nonsensical. `skipAuth` already implies no company resolution, so adding
-  // `skipCompanyContext: true` is at best redundant, and if a maintainer
-  // intended "auth required, no company" but also wrote `skipAuth: true`,
-  // the auth requirement would be silently dropped (skipAuth fires first
-  // below). Fail loudly instead of masking the mistake.
-  if (matchedRoute.skipAuth && matchedRoute.skipCompanyContext) {
-    log.error('route misconfigured: skipAuth + skipCompanyContext are mutually exclusive', undefined)
-    return decorateResponse(
-      NextResponse.json({ error: 'Route misconfigured' }, { status: 500 }),
-      requestId,
-    )
-  }
+  const route = matchedRoute
 
   // For skipAuth routes (e.g. OAuth callbacks from external providers),
   // skip user auth, toggle check, and AI consent: dispatch immediately
-  if (matchedRoute.skipAuth) {
+  if (route.skipAuth) {
     let handlerRequest = request
     if (Object.keys(extractedParams).length > 0) {
       const url = new URL(request.url)
@@ -234,8 +243,17 @@ async function handleRequest(
         duplex: 'half',
       })
     }
-    const response = await matchedRoute.handler(handlerRequest)
-    log.info('extension call completed', { durationMs: Date.now() - start, status: response.status })
+    const response = await route.handler(handlerRequest)
+    // The handler may name the call (the MCP endpoint: method, tool, key) or
+    // mark it as protocol chatter that needs no line (lib/extensions/completion-log.ts).
+    const note = readCompletionLog(handlerRequest)
+    if (shouldWriteCompletionLog(note, response.status)) {
+      log.info('extension call completed', {
+        durationMs: Date.now() - start,
+        status: response.status,
+        ...note?.fields,
+      })
+    }
     return decorateResponse(response, requestId)
   }
 
@@ -271,8 +289,8 @@ async function handleRequest(
   // Routes that are authenticated but run before a company exists (TIC
   // /lookup during onboarding, for example) opt out of company resolution.
   // Dispatch without a context: handlers that opt in must not rely on ctx.
-  if (matchedRoute.skipCompanyContext) {
-    const response = await matchedRoute.handler(handlerRequest)
+  if (route.skipCompanyContext) {
+    const response = await route.handler(handlerRequest)
     log.info('extension call completed', {
       durationMs: Date.now() - start,
       status: response.status,
@@ -281,7 +299,57 @@ async function handleRequest(
     return decorateResponse(response, requestId)
   }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+  // The resolver also reports the caller's role, so the gates below need no
+  // company_members read of their own.
+  const resolved: ActiveCompanyFacts = {}
+  const companyId = await requireCompanyId(supabase, user.id, resolved)
+
+  // The permission shadow (lib/permissions/shadow.ts): decide() beside the
+  // role gates below, told what they did. It reads nothing and changes nothing.
+  const recordShadow = sessionShadow({
+    door: `ext:${extensionId}${route.path}`,
+    method,
+    pathname: new URL(request.url).pathname,
+    companyId,
+    userId: user.id,
+    role: resolved.role,
+  })
+
+  // The invoicing-only role reaches no extension route: INVOICER_ROUTES
+  // lists none, and a handler may read through a service client that RLS
+  // does not narrow (lib/auth/invoicer-role.ts).
+  if (isInvoicerRole(resolved.role)) {
+    log.warn('extension call blocked: invoicer role', { userId: user.id })
+    recordShadow({ outcome: 'deny', code: 'INVOICER_ROUTE_NOT_ALLOWED', by: 'gate' })
+    return decorateResponse(
+      errorResponseFromCode('FORBIDDEN', log, {
+        requestId,
+        messageSv: 'Rollen Fakturering når bara kunder, fakturor, offerter, order och artiklar.',
+        messageEn: 'The Invoicing role reaches only customers, invoices, quotes, orders and articles.',
+        details: { code: 'INVOICER_ROUTE_NOT_ALLOWED' },
+      }),
+      requestId,
+    )
+  }
+
+  // Role gates the route declares, checked as withRouteContext checks them,
+  // so a handler never repeats them: requireAdmin asks the database's own
+  // owner/admin predicate, requireWrite refuses viewers. A write method
+  // refuses viewers by default: only a route that declares viewerMay
+  // (lib/extensions/types.ts) lets one through.
+  if (route.requireAdmin) {
+    if (!(await isCompanyAdmin(supabase, companyId))) {
+      recordShadow({ outcome: 'deny', code: 'ADMIN_REQUIRED', by: 'gate' })
+      return decorateResponse(companyAdminRequiredResponse(log, requestId), requestId)
+    }
+  } else if (route.requireWrite || (route.method !== 'GET' && route.viewerMay !== true)) {
+    const writeCheck = await requireWritePermission(supabase, user.id, { companyId, role: resolved.role })
+    if (!writeCheck.ok) {
+      log.warn('extension call blocked: write permission denied', { userId: user.id })
+      recordShadow({ outcome: 'deny', code: 'WRITE_REQUIRED', by: 'gate' })
+      return decorateResponse(writeCheck.response, requestId)
+    }
+  }
 
   // Paywall: this dispatcher is the single chokepoint for the whole enabled-
   // extension API surface (same reasoning as the MFA gate above), so an
@@ -300,9 +368,36 @@ async function handleRequest(
     }
   }
 
-  // Build context and dispatch
-  const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId)
-  const response = await matchedRoute.handler(handlerRequest, ctx)
+  // A route that starts new work in a package (a new webshop, till, bank or
+  // mail connection; lib/modules/package-doors.ts) refuses while the company
+  // has that package switched off or winding down, as withRouteContext does.
+  const startPackage = startPackageForKey(`${method} /api/extensions/ext/${extensionId}${route.path}`)
+  if (startPackage) {
+    const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+    if (refusal) {
+      log.info('extension call blocked: package off', { packageId: refusal.packageId })
+      return decorateResponse(
+        errorResponseFromCode(refusal.code, log, {
+          requestId,
+          messageSv: refusal.messageSv,
+          messageEn: refusal.messageEn,
+          details: refusal.details,
+        }),
+        requestId,
+      )
+    }
+  }
+
+  // Build context and dispatch. The second cookie-session door besides
+  // withRouteContext: commits an extension makes (inbox booking, supplier
+  // invoices) record the signed-in user as their actor, as there, and so do
+  // the audit rows of its service-role writes.
+  const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId, Boolean(user.is_anonymous))
+  const response = await runWithActor({ type: 'user', userId: user.id }, () => route.handler(handlerRequest, ctx))
+  // A 403 from the handler is a check of its own after the gates passed.
+  recordShadow(
+    response?.status === 403 ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' } : { outcome: 'allow' },
+  )
   log.info('extension call completed', {
     durationMs: Date.now() - start,
     status: response.status,

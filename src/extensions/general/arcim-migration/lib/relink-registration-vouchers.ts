@@ -40,6 +40,7 @@ import {
   type RegistrationLinkResult,
 } from '@/lib/invoices/link-migrated-registration-vouchers'
 import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
+import { listedMatchNumber, storedMatchNumber } from './supplier-invoice-identity'
 
 export interface RelinkRegistrationVouchersOptions {
   supabase: SupabaseClient
@@ -74,6 +75,7 @@ interface UnlinkedSalesRow {
 interface UnlinkedSupplierRow {
   id: string
   supplier_invoice_number: string | null
+  fortnox_number: string | null
   invoice_date: string
   total_sek: number | null
   currency: string | null
@@ -138,7 +140,7 @@ export async function relinkRegistrationVouchers(
     fetchAllRows<UnlinkedSupplierRow>(({ from, to }) =>
       supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, total_sek, currency, is_credit_note')
+        .select('id, supplier_invoice_number, fortnox_number, invoice_date, total_sek, currency, is_credit_note')
         .eq('company_id', companyId)
         .is('registration_journal_entry_id', null)
         .order('id', { ascending: true })
@@ -147,12 +149,13 @@ export async function relinkRegistrationVouchers(
   ])
 
   const salesByKey = uniqueByKey(unlinkedSales, (row) => joinKey(row.invoice_number, row.invoice_date))
+  // A Fortnox supplier invoice matches by its löpnummer, never the supplier's number.
   const supplierByKey = uniqueByKey(unlinkedSupplier, (row) =>
-    joinKey(row.supplier_invoice_number, row.invoice_date),
+    joinKey(storedMatchNumber(provider, row), row.invoice_date),
   )
   const providerSalesUnique = uniqueByKey(providerSales, (dto) => joinKey(dto.invoiceNumber, dto.issueDate))
   const providerSupplierUnique = uniqueByKey(providerSupplier, (dto) =>
-    joinKey(dto.invoiceNumber, dto.issueDate),
+    joinKey(listedMatchNumber(provider, dto), dto.issueDate),
   )
 
   const inputs: MigratedInvoiceLinkInput[] = []

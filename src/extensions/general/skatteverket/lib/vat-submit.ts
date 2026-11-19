@@ -12,10 +12,15 @@
  *
  * The momsuppgift is recomputed here via buildMomsuppgift (recompute-at-
  * commit): the figures filed always equal what the preview showed for the
- * same ledger state.
+ * same ledger state. The completeness verdict (vatFilingVerdict, the web
+ * UI's "Kontroll av underlaget" gate) runs on those figures before any call
+ * to Skatteverket, on both callers: a blocked declaration stops at stage
+ * `completeness` with nothing sent.
  *
  * SkatteverketAuthError propagates to the caller: the route maps it through
- * handleSkvError, the commit service through mapServiceError.
+ * handleSkvError, the commit service through mapServiceError. Any other
+ * refused call is read by readVatRefusal (lib/vat-refusal.ts): `error` is
+ * what Skatteverket answered as a sentence, `skv` the same answer in fields.
  *
  * Audit: the transport writes one row per call under the labels
  * 'declaration/validate', 'declaration/draft' and 'declaration/lock'. The
@@ -24,10 +29,13 @@
  * signature at Skatteverket after the lock, not a call we make.
  */
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
+import { toCompletenessFindings, type VatCompletenessFinding, vatFilingVerdict } from '@/lib/reports/vat-close-check'
 import type { VatPeriodType } from '@/types'
 import { skvRequest } from './api-client'
 import { buildMomsuppgift } from './declaration-prep'
+import { readVatRefusal, type VatRefusalDetails } from './vat-refusal'
 import type { SkatteverketKontroll, SkatteverketKontrollResultat, SkatteverketUtkastResponse } from '../types'
 
 export interface VatSubmitChainParams {
@@ -49,18 +57,42 @@ export type VatSubmitChainResult =
   | {
       ok: false
       /**
-       * Where the chain stopped. `validation` failures happen before any
-       * write at Skatteverket; `draft` failures leave nothing worth keeping
-       * (utkast overwrites, so retrying the whole chain is safe); `lock`
-       * failures leave a saved draft in Eget utrymme (`draftSaved: true`),
-       * so the retry only needs the lock step.
+       * Where the chain stopped. `completeness` is our own gate refusing
+       * before any call to Skatteverket (`completenessChecks` names the
+       * findings); `validation` failures happen before any write at
+       * Skatteverket; `draft` failures leave nothing worth keeping (utkast
+       * overwrites, so retrying the whole chain is safe); `lock` failures
+       * leave a saved draft in Eget utrymme (`draftSaved: true`), so the
+       * retry only needs the lock step.
        */
-      stage: 'validation' | 'draft' | 'lock'
+      stage: 'completeness' | 'validation' | 'draft' | 'lock'
       httpStatus: number
       error: string
       kontrollresultat: SkatteverketKontrollResultat | null
       draftSaved: boolean
+      completenessChecks?: VatCompletenessFinding[]
+      /**
+       * Skatteverket's own answer when it refused the call (readVatRefusal):
+       * its status, kod and messages in fields, beside the sentence in
+       * `error`. Absent when the chain stopped for a reason of our own.
+       */
+      skv?: VatRefusalDetails
     }
+
+/**
+ * The failure every filing path answers when vatFilingVerdict blocks: the
+ * registry's VAT_DECLARATION_INCOMPLETE sentence, with the findings attached.
+ */
+export function vatDeclarationIncompleteFailure(
+  checks: Parameters<typeof toCompletenessFindings>[0],
+): Extract<VatSubmitChainResult, { ok: false }> {
+  return {
+    ok: false, stage: 'completeness', httpStatus: 422,
+    error: getErrorEntry('VAT_DECLARATION_INCOMPLETE')!.message_sv,
+    kontrollresultat: null, draftSaved: false,
+    completenessChecks: toCompletenessFindings(checks),
+  }
+}
 
 export async function submitVatDeclarationChain(
   ctx: ExtensionContext,
@@ -71,8 +103,23 @@ export async function submitVatDeclarationChain(
   // Validate and release the read lease before any external write. The filed
   // payload is this complete snapshot; a late response cannot turn a successful
   // submission into an apparent failure merely because the read lease expired.
-  const { redovisare, redovisningsperiod, momsuppgift } =
-    await withSIEPeriodRead(supabase,companyId,'vat_submission',() => buildMomsuppgift(supabase,companyId,params))
+  // The completeness verdict reads inside the same lease, so it judges the
+  // same ledger state the figures describe.
+  const { redovisare, redovisningsperiod, momsuppgift, verdict } =
+    await withSIEPeriodRead(supabase, companyId, 'vat_submission', async () => {
+      const prep = await buildMomsuppgift(supabase, companyId, params)
+      return {
+        ...prep,
+        verdict: await vatFilingVerdict(supabase, companyId, prep.declaration, {
+          fiscalPeriodId: params.fiscalPeriodId,
+        }),
+      }
+    })
+
+  // The web UI's "Kontroll av underlaget" gate, on the server: an incomplete
+  // declaration (an ERROR finding, e.g. fiktiv moms without its basbelopp, the
+  // FK004 shape Skatteverket rejects) is never sent, by any caller.
+  if (verdict.blocked) return vatDeclarationIncompleteFailure(verdict.checks)
 
   // 0. Optional kontrollera pre-step: SKV validates the arithmetic without
   //    saving anything. ERROR-level findings abort the chain here, before
@@ -84,10 +131,10 @@ export async function submitVatDeclarationChain(
       momsuppgift,
     )
     if (!kontrollera.ok) {
-      const text = await kontrollera.text().catch(() => '')
+      const refusal = await readVatRefusal(kontrollera, 'validate')
       return {
-        ok: false, stage: 'validation', httpStatus: kontrollera.status,
-        error: `Skatteverket svarade med ${kontrollera.status}: ${text}`,
+        ok: false, stage: 'validation', httpStatus: refusal.status,
+        error: refusal.message, skv: refusal.details,
         kontrollresultat: null, draftSaved: false,
       }
     }
@@ -111,10 +158,10 @@ export async function submitVatDeclarationChain(
     momsuppgift,
   )
   if (!utkast.ok) {
-    const text = await utkast.text().catch(() => '')
+    const refusal = await readVatRefusal(utkast, 'draft')
     return {
-      ok: false, stage: 'draft', httpStatus: utkast.status,
-      error: `Skatteverket svarade med ${utkast.status}: ${text}`,
+      ok: false, stage: 'draft', httpStatus: refusal.status,
+      error: refusal.message, skv: refusal.details,
       kontrollresultat: null, draftSaved: false,
     }
   }
@@ -137,10 +184,12 @@ export async function submitVatDeclarationChain(
     { endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod },
   )
   if (!las.ok) {
-    const text = await las.text().catch(() => '')
+    // The saved draft's own ERROR findings are named with the refusal when
+    // the lock's answer carries none of its own.
+    const refusal = await readVatRefusal(las, 'lock', { kontrollresultat: utkastData.kontrollResultat })
     return {
-      ok: false, stage: 'lock', httpStatus: las.status,
-      error: `Skatteverket svarade med ${las.status}: ${text}`,
+      ok: false, stage: 'lock', httpStatus: refusal.status,
+      error: `Utkastet är sparat hos Skatteverket. ${refusal.message}`, skv: refusal.details,
       kontrollresultat: utkastData.kontrollResultat ?? null, draftSaved: true,
     }
   }

@@ -270,7 +270,14 @@ describe('guardDuplicatePaymentVoucher', () => {
       transactionCurrency: 'EUR',
       transactionAmountSek: 11500,
       transactionExchangeRate: 11.5,
+      cashAccountId: null,
     })
+  })
+
+  it('scopes the detector to the row\'s own cash account', async () => {
+    mockDetectCandidate.mockResolvedValue(null)
+    await guardDuplicatePaymentVoucher(supabase, 'company-1', { ...tx, cash_account_id: 'ca-stripe' }, {})
+    expect(mockDetectCandidate).toHaveBeenCalledWith(supabase, expect.objectContaining({ cashAccountId: 'ca-stripe' }))
   })
 
   it('fails open without force, but refuses an override it cannot re-verify', async () => {

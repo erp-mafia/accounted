@@ -3,7 +3,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { todayIsoUtc } from '@/lib/dates/iso'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseAccountKey, type ReconciliationSignoff, type ReconciliationStatus } from './schemas'
 import { getAccountStatus } from './service'
 import { getLatestSignoff, getSignoffById, insertSignoff, stampReopen } from './signoff-store'
@@ -13,8 +13,9 @@ const log = createLogger('reconciliation/signoff')
 /**
  * Sign-off ("Markera som avstämd t.o.m. <datum>") and reopen on one
  * reconcilable account. The policy layer over signoff-store.ts: a sign-off
- * is refused unless the engine says the account is reconciled through that
- * date, or the signer explicitly overrides with a note. Writes nothing to
+ * is refused unless the engine explains every difference through that date
+ * (unexplained_difference 0, open rows listed on the bridge allowed), or the
+ * signer explicitly overrides with a note. Writes nothing to
  * the ledger; the row is the attestation the overview, the Hem row and an
  * auditor read.
  *
@@ -78,8 +79,15 @@ export interface SignoffPreview {
   through_date: string
   external_balance: number | null
   ledger_balance: number | null
+  /** What the sign-off judges: 0 means every difference is explained, open rows included. */
   unexplained_difference: number | null
+  /**
+   * The engine's verdict for the same window, the very field the account
+   * status carries: explained AND nothing left open (crm#1183: the preview
+   * said true while the status said false). A sign-off does not need it.
+   */
   is_reconciled: boolean
+  /** Signed despite an unexplained difference or an unknown outside balance (force + note). */
   forced: boolean
   /** The active sign-off this one supersedes in the rail, when any (earlier through_date). */
   previous_through_date: string | null
@@ -138,7 +146,7 @@ export async function signOffAccount(
 ): Promise<SignoffResult | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? todayIsoUtc()
+  const today = options.today ?? todayIsoStockholm()
   const throughDate = input.through_date
   if (!ISO_DATE_RE.test(throughDate) || Number.isNaN(Date.parse(throughDate))) {
     throw new ReconciliationSignoffError('Ogiltigt datum. Ange ÅÅÅÅ-MM-DD.', 'INVALID_DATE')
@@ -193,9 +201,13 @@ export async function signOffAccount(
     status.is_reconciled = difference != null && Math.abs(difference) < 0.005
   }
 
+  // The sign-off's rule is the explained difference (decision 2026-08-23):
+  // open rows that the bridge lists are the specification an attestation may
+  // carry. Whether nothing is left open is the status's is_reconciled, which
+  // the preview reports unchanged rather than a second meaning of the word.
   const unexplained = status.unexplained_difference
-  const reconciled = unexplained != null && Math.abs(unexplained) < 0.005
-  if (!reconciled && !force) {
+  const explained = unexplained != null && Math.abs(unexplained) < 0.005
+  if (!explained && !force) {
     if (unexplained == null) {
       throw new ReconciliationSignoffError(
         'Saldot utanför bokföringen är okänt, så kontot kan inte stämmas av. Hämta det först, eller signera med en notering.',
@@ -223,8 +235,8 @@ export async function signOffAccount(
     external_balance: status.external_balance,
     ledger_balance: status.ledger_balance,
     unexplained_difference: unexplained,
-    is_reconciled: reconciled,
-    forced: !reconciled,
+    is_reconciled: status.is_reconciled,
+    forced: !explained,
     previous_through_date: latest?.through_date ?? null,
   }
   if (options.dryRun) return { dry_run: true, would_sign: preview }

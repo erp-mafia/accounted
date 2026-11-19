@@ -33,33 +33,18 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/vat/filing-record-store', () => store)
 
+const changes = vi.hoisted(() => ({ listVatFilingsWithChanges: vi.fn() }))
+vi.mock('@/lib/vat/filed-period-changes', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/vat/filed-period-changes')>()),
+  listVatFilingsWithChanges: changes.listVatFilingsWithChanges,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET, POST, DELETE } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const DEADLINE_ID = '11111111-1111-4111-8111-111111111111'
@@ -123,12 +108,13 @@ describe('v1 VAT filing records', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         idempotency_keys: { data: null },
-      }),
+      }).supabase,
     )
     store.listVatFilings.mockResolvedValue([RECORD])
+    changes.listVatFilingsWithChanges.mockResolvedValue([{ ...RECORD, changed_after_filing: null }])
     store.markVatPeriodFiled.mockResolvedValue({ ok: true, record: RECORD, created: false, changed: true })
     store.unmarkVatPeriodFiled.mockResolvedValue({ ok: true, deadline_id: DEADLINE_ID })
   })
@@ -146,13 +132,13 @@ describe('v1 VAT filing records', () => {
     const res = await GET(req(BASE), params())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data).toEqual([RECORD])
-    expect(store.listVatFilings).toHaveBeenCalledWith(expect.anything(), COMPANY_ID)
+    expect(body.data).toEqual([{ ...RECORD, changed_after_filing: null }])
+    expect(changes.listVatFilingsWithChanges).toHaveBeenCalledWith(expect.anything(), COMPANY_ID)
   })
 
   it('404 for a company the key holder is not a member of', async () => {
     authOk(['reports:read'])
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ company_members: { data: null } }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: { data: null } }).supabase)
     const res = await GET(req(BASE), params())
     expect(res.status).toBe(404)
   })

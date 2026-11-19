@@ -2,8 +2,8 @@
  * Tests for detectExplainingVoucherSets, the batch form of the set detector
  * that the reconciliation view runs (#2293).
  *
- * The contract: one ledger scan over the union of the rows' windows, one
- * link-anchor lookup, and per row exactly the single detector's verdict
+ * The contract: one read of the unexplained legs over the union of the rows'
+ * windows, and per row exactly the single detector's verdict
  * (exact öre sum of unlinked legs in the row's direction on the account,
  * within ±7 days, at most four vouchers); a voucher explains at most one row
  * per call; anything that cannot be judged fails open (no proposal).
@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { detectExplainingVoucherSets } from '../duplicate-payment-detection'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 type Leg = {
   account_number: string
@@ -55,27 +55,30 @@ function leg(opts: {
   }
 }
 
-/** entries page, lines page, then the four link lookups (empty unless given). */
-function enqueueScan(
-  legs: Leg[],
-  links: { transactions?: unknown[]; junction?: unknown[]; invoicePayments?: unknown[] } = {},
-) {
-  const entries = [...new Map(legs.map((l) => [l.journal_entry.id, l.journal_entry])).values()]
-  enqueue({ data: entries })
-  if (entries.length === 0) return
+/**
+ * The answer of get_unexplained_bank_legs: the legs of the window's posted
+ * verifikat on the account that nothing explains yet. The read's own rules
+ * (scaffolding, the payment and bank-row anchors, the rows being explained)
+ * are tested against Postgres in tests/pg/bank-reconciliation-facts.pg.test.ts;
+ * here `explained` names the verifikat it leaves out.
+ */
+function enqueueScan(legs: Leg[], explained: string[] = []) {
   enqueue({
-    data: legs.map((l, i) => ({
-      id: `line-${i}`,
-      journal_entry_id: l.journal_entry.id,
-      account_number: l.account_number,
-      debit_amount: l.debit_amount,
-      credit_amount: l.credit_amount,
-    })),
+    data: legs
+      .filter((l) => !explained.includes(l.journal_entry.id))
+      .map((l) => ({
+        journal_entry_id: l.journal_entry.id,
+        entry_date: l.journal_entry.entry_date,
+        description: l.journal_entry.description,
+        voucher_series: l.journal_entry.voucher_series,
+        voucher_number: l.journal_entry.voucher_number,
+        status: l.journal_entry.status,
+        source_type: l.journal_entry.source_type,
+        account_number: l.account_number,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+      })),
   })
-  enqueue({ data: links.invoicePayments ?? [] })
-  enqueue({ data: [] })
-  enqueue({ data: links.transactions ?? [] })
-  enqueue({ data: links.junction ?? [] })
 }
 
 const COMPANY = 'company-1'
@@ -111,12 +114,17 @@ describe('detectExplainingVoucherSets', () => {
     expect(set!.same_date).toBe(true)
     expect(set!.total).toBe(88250)
     expect(sets.has('tx-other')).toBe(false)
-    // One entries query, one lines query, four anchor lookups: never per row.
-    expect(supabase.from).toHaveBeenCalledTimes(6)
-    // The scan covers the union of the rows' ±7-day windows and the account.
-    expect(findCalls('journal_entries', 'gte')).toEqual([['entry_date', '2026-07-23']])
-    expect(findCalls('journal_entries', 'lte')).toEqual([['entry_date', '2026-08-07']])
-    expect(findCalls('journal_entry_lines', 'eq')).toEqual([['account_number', '1930']])
+    // One read for the whole batch, never per row: the union of the rows'
+    // ±7-day windows on the account, the rows themselves named.
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledWith('get_unexplained_bank_legs', {
+      p_company_id: COMPANY,
+      p_account_number: '1930',
+      p_low: '2026-07-23',
+      p_high: '2026-08-07',
+      p_own_transaction_ids: ['tx-bg', 'tx-other'],
+    })
   })
 
   it('returns nothing when no set of vouchers sums exactly to a row', async () => {
@@ -181,26 +189,23 @@ describe('detectExplainingVoucherSets', () => {
     expect(sets.get('tx-a')!.vouchers.map((v) => v.journal_entry_id)).toEqual(['A1'])
   })
 
-  it('drops vouchers a bank transaction already explains, but never the rows being explained', async () => {
+  it('searches only what the read leaves unexplained, naming the rows being explained', async () => {
     enqueueScan(
       [
         leg({ id: 'A57', date: '2026-07-31', debit: 62500 }),
         leg({ id: 'A58', date: '2026-07-31', debit: 25750 }),
         leg({ id: 'A59', date: '2026-07-31', debit: 25750 }),
       ],
-      {
-        // A58 is settled by another row; A59 is "linked" only from a row in
-        // this batch (a stale pointer the batch is explaining), which does not count.
-        transactions: [
-          { id: 'tx-elsewhere', journal_entry_id: 'A58' },
-          { id: 'tx-bg', journal_entry_id: 'A59' },
-        ],
-      },
+      // A58 is settled by another row; A59 is "linked" only from a row in
+      // this batch (a stale pointer the batch is explaining), which the read
+      // does not count because the row is named.
+      ['A58'],
     )
 
     const sets = await run([row('tx-bg', '2026-07-31', 88250)])
 
     expect(sets.get('tx-bg')!.vouchers.map((v) => v.journal_entry_id).sort()).toEqual(['A57', 'A59'])
+    expect(supabase.rpc.mock.calls[0][1]).toMatchObject({ p_own_transaction_ids: ['tx-bg'] })
   })
 
   it('never sums storno, correction or opening-balance entries', async () => {
@@ -213,8 +218,6 @@ describe('detectExplainingVoucherSets', () => {
     const sets = await run([row('tx', '2026-07-31', 1000)])
 
     expect(sets.size).toBe(0)
-    // Scaffolding never reaches the anchor lookups either.
-    expect(supabase.from).toHaveBeenCalledTimes(2)
   })
 
   it('skips rows that cannot be stated in SEK or carry no amount, without scanning for them', async () => {
@@ -229,34 +232,19 @@ describe('detectExplainingVoucherSets', () => {
     })
 
     expect(sets.size).toBe(0)
-    expect(supabase.from).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('fails open (nothing) when a link lookup resolves with an error', async () => {
-    const legs = [leg({ id: 'A1', date: '2026-07-31', debit: 1000 })]
-    const entries = legs.map((l) => l.journal_entry)
-    enqueue({ data: entries })
-    enqueue({
-      data: legs.map((l, i) => ({
-        id: `line-${i}`,
-        journal_entry_id: l.journal_entry.id,
-        account_number: l.account_number,
-        debit_amount: l.debit_amount,
-        credit_amount: l.credit_amount,
-      })),
-    })
-    enqueue({ data: [] })
-    enqueue({ data: [] })
+  it('fails open (nothing) when the read resolves with an error', async () => {
     enqueue({ data: null, error: { message: 'boom' } })
-    enqueue({ data: [] })
 
     const sets = await run([row('tx', '2026-07-31', 1000)])
 
     expect(sets.size).toBe(0)
   })
 
-  it('fails open (nothing) when the ledger scan throws', async () => {
-    supabase.from.mockImplementationOnce(() => {
+  it('fails open (nothing) when the read throws', async () => {
+    supabase.rpc.mockImplementationOnce(() => {
       throw new Error('db down')
     })
 

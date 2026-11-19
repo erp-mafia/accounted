@@ -5,14 +5,15 @@
  * dashboard routes under /api/reports.
  *
  * Every function here READS. The generators are the dashboard's own
- * (lib/reports/ink2, ne-bilaga, periodisk-sammanstallning, vat-declaration,
+ * (lib/reports/ink2, ne-bilaga, ink3, periodisk-sammanstallning, vat-declaration,
  * kassaflodesanalys, bokslutsbilagor, behandlingshistorik, dimension-pnl);
  * nothing here recomputes a figure. What this layer adds is what the machine
  * doors need and a thrown Error cannot give: a 404 for a period that is not
  * the company's, a stable code for the wrong legal form, and the refusals
  * the dashboard answers before it builds a file.
  */
-import JSZip from 'jszip'
+import { readCompanyOrgNumber } from '@/lib/company/org-number'
+import { FilingIdentityError, orgNumberKey } from '@/lib/invariants/org-number'
 import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import {
   generateSRUSubmission as generateInk2SruSubmission,
@@ -23,8 +24,12 @@ import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 import {
   generateNESRUSubmission,
   getZipFilename as getNeZipFilename,
+  NESruBlockedError,
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
+import { generateInk3Underlag } from '@/lib/reports/ink3/ink3-engine'
+import { Ink3PeriodNotSupportedError } from '@/lib/reports/ink3/field-table'
+import type { Ink3Underlag } from '@/lib/reports/ink3/types'
 import { encodeISO88591 } from '@/lib/reports/sru-encoding'
 import {
   generatePeriodiskSammanstallning,
@@ -35,7 +40,7 @@ import {
 import { buildPeriodiskSammanstallningCsv, PsCsvBuildError } from '@/lib/reports/periodisk-sammanstallning-csv'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import { buildESkdFile } from '@/lib/reports/vat-eskd-file'
-import { generateKassaflodesanalys, type KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
+import { generateKassaflodesanalysWithStatement, type KassaflodesanalysFullReport } from '@/lib/reports/kassaflodesanalys'
 import { generateBokslutsbilagor } from '@/lib/reports/bokslutsbilagor'
 import {
   generateBehandlingshistorik,
@@ -45,11 +50,17 @@ import {
 } from '@/lib/reports/behandlingshistorik'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import { generateDimensionPnl } from '@/lib/reports/dimension-pnl'
+import {
+  DimensionCrossNotReadyError,
+  dimensionCrossAxesError,
+  fetchDimensionCrossLines,
+  generateDimensionCross,
+} from '@/lib/reports/dimension-cross'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { filesIncomeReturn, resolveCompanyEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import type { DimensionPnlReport, MomsPeriod, VatPeriodType } from '@/types'
+import type { DimensionCrossLinesPage, DimensionCrossReport, DimensionPnlReport, VatPeriodType } from '@/types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -112,6 +123,7 @@ export async function companyUsesPersonnummer(ctx: OperationContext): Promise<bo
 }
 
 function declarationFailure(ctx: OperationContext, err: unknown, report: string): Failure {
+  if (err instanceof FilingIdentityError) return { ok: false, code: err.code }
   ctx.log.error(`${report} declaration generation failed`, err as Error)
   return {
     ok: false,
@@ -126,6 +138,7 @@ function declarationFailure(ctx: OperationContext, err: unknown, report: string)
  * mojibakes å/ä/ö and is rejected at upload).
  */
 export async function buildSruZip(submission: { infoSru: string; blanketterSru: string }): Promise<Uint8Array> {
+  const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
   zip.file('INFO.SRU', encodeISO88591(submission.infoSru))
   zip.file('BLANKETTER.SRU', encodeISO88591(submission.blanketterSru))
@@ -193,7 +206,40 @@ export async function getNeSruFile(ctx: OperationContext, periodId: string): Pro
       data: { filename: getNeZipFilename(declaration.data), contentType: 'application/zip', bytes },
     }
   } catch (err) {
+    if (err instanceof NESruBlockedError) {
+      return { ok: false, code: 'TAX_DECL_NE_SRU_BLOCKED', details: { reason: getUserErrorMessage(err) } }
+    }
     return declarationFailure(ctx, err, 'ne-bilaga sru')
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// INK3 underlag (ideell förening)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * The INK3 underlag the dashboard shows. No file: the user types the figures
+ * into Skatteverket's e-tjänst (product decision on #47, path (a)).
+ */
+export async function getInk3Underlag(
+  ctx: OperationContext,
+  periodId: string,
+): Promise<OperationOutcome<Ink3Underlag>> {
+  const period = await loadReportPeriod(ctx, periodId)
+  if (!period.ok) return period
+  try {
+    if (filesIncomeReturn(await companyEntityType(ctx)) !== 'INK3') return { ok: false, code: 'TAX_DECL_INK3_WRONG_LEGAL_FORM' }
+    return { ok: true, data: await generateInk3Underlag(ctx.supabase, ctx.companyId, periodId) }
+  } catch (err) {
+    if (err instanceof Ink3PeriodNotSupportedError) {
+      return {
+        ok: false,
+        code: 'TAX_DECL_INK3_PERIOD_NOT_SUPPORTED',
+        messageSv: err.message,
+        details: { beskattningsperiod: err.beskattningsperiod, supported: err.supported },
+      }
+    }
+    return declarationFailure(ctx, err, 'ink3')
   }
 }
 
@@ -210,8 +256,8 @@ export interface PsPeriodInput {
 type ReconciledPs = Awaited<ReturnType<typeof reconcilePsAgainstVatDeclaration>>
 
 /**
- * The report plus the best-effort reconciliation against the momsdeklaration
- * when the periods coincide, exactly what GET /api/reports/periodisk-sammanstallning answers.
+ * The report reconciled against the momsdeklaration rutor for the same
+ * dates, exactly what GET /api/reports/periodisk-sammanstallning answers.
  */
 export async function getPeriodiskSammanstallning(
   ctx: OperationContext,
@@ -221,13 +267,7 @@ export async function getPeriodiskSammanstallning(
     const report = await generatePeriodiskSammanstallning(
       ctx.supabase, ctx.companyId, input.period_type, input.year, input.period,
     )
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('moms_period')
-      .eq('company_id', ctx.companyId)
-      .single()
-    const momsPeriod = (settings?.moms_period ?? null) as MomsPeriod | null
-    return { ok: true, data: await reconcilePsAgainstVatDeclaration(ctx.supabase, ctx.companyId, report, momsPeriod) }
+    return { ok: true, data: await reconcilePsAgainstVatDeclaration(ctx.supabase, ctx.companyId, report) }
   } catch (err) {
     ctx.log.error('periodisk sammanställning calculation failed', err as Error, { ...input })
     return {
@@ -315,17 +355,17 @@ export async function getVatEskdFile(
   ctx: OperationContext,
   input: VatPeriodInput,
 ): Promise<OperationOutcome<ReportFile>> {
-  const { data: companyRow } = await ctx.supabase
+  const { data: settingsRow } = await ctx.supabase
     .from('company_settings')
-    .select('org_number')
+    .select('company_id')
     .eq('company_id', ctx.companyId)
     .single()
-  if (!companyRow) return { ok: false, code: 'VAT_ESKD_SETTINGS_MISSING' }
+  if (!settingsRow) return { ok: false, code: 'VAT_ESKD_SETTINGS_MISSING' }
 
-  // 12-digit century-prefixed values are fine: the builder strips the prefix
-  // (settings rows predating org-number normalization hold them).
-  const orgDigits = (companyRow.org_number ?? '').replace(/\D/g, '')
-  if (orgDigits.length !== 10 && orgDigits.length !== 12) return { ok: false, code: 'VAT_ESKD_ORG_NUMBER_INVALID' }
+  // The same reading the builder writes the header with, so this door refuses
+  // exactly what the builder would throw on.
+  const orgNumber = await readCompanyOrgNumber(ctx.supabase, ctx.companyId)
+  if (!orgNumber || !orgNumberKey(orgNumber)) return { ok: false, code: 'VAT_ESKD_ORG_NUMBER_INVALID' }
 
   if (input.fiscal_period_id) {
     const period = await loadReportPeriod(ctx, input.fiscal_period_id)
@@ -338,7 +378,7 @@ export async function getVatEskdFile(
       { fiscalPeriodId: input.fiscal_period_id },
     )
     const xml = buildESkdFile(declaration.rutor, {
-      orgNumber: companyRow.org_number,
+      orgNumber,
       periodEnd: declaration.period.end,
     })
     return {
@@ -366,11 +406,14 @@ export async function getVatEskdFile(
 export async function getKassaflodesanalys(
   ctx: OperationContext,
   periodId: string,
-): Promise<OperationOutcome<KassaflodesanalysReport>> {
+): Promise<OperationOutcome<KassaflodesanalysFullReport>> {
   const period = await loadReportPeriod(ctx, periodId)
   if (!period.ok) return period
   try {
-    return { ok: true, data: await generateKassaflodesanalys(ctx.supabase, ctx.companyId, periodId) }
+    return {
+      ok: true,
+      data: await generateKassaflodesanalysWithStatement(ctx.supabase, ctx.companyId, periodId, { includePreviousYear: true }),
+    }
   } catch (err) {
     // The tax bridge refuses a year whose tax postings it cannot split: a
     // stable code the caller can act on, not a server fault.
@@ -495,5 +538,110 @@ export async function getDimensionPnl(
       code: 'REPORT_GENERATION_FAILED',
       details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Resultat across two dimensions (accounted#133)
+// ─────────────────────────────────────────────────────────────────
+
+export interface DimensionCrossInput {
+  period_id: string
+  /** The row dimension and the column dimension, SIE numbers as strings. */
+  dim_a: string
+  dim_b: string
+  /** The measure's accounts inside 3000-8999, both or neither; default the whole result. */
+  account_from?: string
+  account_to?: string
+  from_date?: string
+  to_date?: string
+}
+
+/** The period, its window and the axes, checked as the dashboard routes check them. */
+async function dimensionCrossScope(ctx: OperationContext, input: DimensionCrossInput) {
+  const invalid = dimensionCrossAxesError({
+    dimA: input.dim_a,
+    dimB: input.dim_b,
+    accountFrom: input.account_from,
+    accountTo: input.account_to,
+  })
+  if (invalid) return { ok: false as const, failure: { ok: false as const, code: 'VALIDATION_ERROR', messageSv: invalid } }
+  const period = await loadReportPeriod(ctx, input.period_id)
+  if (!period.ok) return { ok: false as const, failure: period }
+  const range = new URLSearchParams()
+  if (input.from_date) range.set('from_date', input.from_date)
+  if (input.to_date) range.set('to_date', input.to_date)
+  const parsed = parseReportDateRange(range, period.period)
+  if (!parsed.ok) return { ok: false as const, failure: { ok: false as const, code: 'VALIDATION_ERROR', messageSv: parsed.error } }
+  return {
+    ok: true as const,
+    options: {
+      dimA: input.dim_a,
+      dimB: input.dim_b,
+      accountFrom: input.account_from,
+      accountTo: input.account_to,
+      fromDate: parsed.range.fromDate,
+      toDate: parsed.range.toDate,
+    },
+  }
+}
+
+function dimensionCrossFailed(ctx: OperationContext, err: unknown, input: object): Failure {
+  if (err instanceof DimensionCrossNotReadyError) return { ok: false, code: 'REPORT_NOT_READY' }
+  ctx.log.error('dimension cross generation failed', err as Error, { ...input })
+  return {
+    ok: false,
+    code: 'REPORT_GENERATION_FAILED',
+    details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
+  }
+}
+
+export async function getDimensionCross(
+  ctx: OperationContext,
+  input: DimensionCrossInput,
+): Promise<OperationOutcome<DimensionCrossReport>> {
+  const scope = await dimensionCrossScope(ctx, input)
+  if (!scope.ok) return scope.failure
+  try {
+    return { ok: true, data: await generateDimensionCross(ctx.supabase, ctx.companyId, input.period_id, scope.options) }
+  } catch (err) {
+    return dimensionCrossFailed(ctx, err, input)
+  }
+}
+
+export interface DimensionCrossLinesInput extends DimensionCrossInput {
+  /** The cell: a value of dim_a and of dim_b; omitted is the "(Utan dimension)" row or column. */
+  code_a?: string
+  code_b?: string
+  after_date?: string
+  after_voucher?: number
+  after_line?: string
+  limit?: number
+}
+
+export async function getDimensionCrossLines(
+  ctx: OperationContext,
+  input: DimensionCrossLinesInput,
+): Promise<OperationOutcome<DimensionCrossLinesPage>> {
+  const scope = await dimensionCrossScope(ctx, input)
+  if (!scope.ok) return scope.failure
+  const cursor = [input.after_date, input.after_voucher, input.after_line]
+  if (cursor.some((v) => v !== undefined) && cursor.some((v) => v === undefined)) {
+    return { ok: false, code: 'VALIDATION_ERROR', messageSv: 'after_date, after_voucher och after_line anges tillsammans.' }
+  }
+  try {
+    const data = await fetchDimensionCrossLines(ctx.supabase, ctx.companyId, input.period_id, {
+      ...scope.options,
+      codeA: input.code_a ?? null,
+      codeB: input.code_b ?? null,
+      after:
+        input.after_date !== undefined && input.after_voucher !== undefined && input.after_line !== undefined
+          ? { date: input.after_date, voucher_number: input.after_voucher, line_id: input.after_line }
+          : undefined,
+      limit: input.limit,
+    })
+    return { ok: true, data }
+  } catch (err) {
+    return dimensionCrossFailed(ctx, err, input)
   }
 }

@@ -27,6 +27,6 @@
     "dataPattern": "manual",
     "hasOwnData": false,
     "description": "Migrera bokföring från Fortnox, Visma, Bokio, Björn Lundén eller Briox",
-    "longDescription": "Flytta all bokföringsdata från ditt gamla system till gnubok. Importerar kontoplan, verifikationer, kunder, leverantörer och öppna fakturor automatiskt via säker API-integration direkt med leverantören."
+    "longDescription": "Flytta all bokföringsdata från ditt gamla system till Accounted. Importerar kontoplan, verifikationer, kunder, leverantörer och öppna fakturor automatiskt via säker API-integration direkt med leverantören."
   }
 }

@@ -5,7 +5,8 @@
  * Before it the v1 copy dropped is_active and skipped the date rule the
  * other two enforced.
  */
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { createLogger } from '@/lib/logger'
 import { createDimensionValue } from '../registry-service'
@@ -161,5 +162,53 @@ describe('createDimensionValue', () => {
     const outcome = await createDimensionValue(ctx, 'dim-6', { code: 'P001', name: 'Villa Almgren' })
 
     expect(outcome).toMatchObject({ ok: false, code: 'UNKNOWN_ERROR', error: dbError })
+  })
+})
+
+describe('createDimensionValue events (accounted#193)', () => {
+  beforeEach(() => {
+    eventBus.clear()
+  })
+
+  it('announces the new value with its dimension: dimension_value.created', async () => {
+    const created = vi.fn()
+    eventBus.on('dimension_value.created', created)
+    const { ctx, enqueue } = setup()
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false } })
+    enqueue({ data: CREATED })
+
+    await createDimensionValue(ctx, 'dim-6', { code: 'P001', name: 'Villa Almgren' })
+
+    expect(created).toHaveBeenCalledTimes(1)
+    expect(created.mock.calls[0][0]).toEqual({
+      dimensionValue: {
+        id: 'val-1',
+        dimension_id: 'dim-6',
+        sie_dim_no: 6,
+        dimension_name: 'Projekt',
+        code: 'P001',
+        name: 'Villa Almgren',
+        is_active: true,
+        start_date: null,
+        end_date: null,
+      },
+      previousName: null,
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+  })
+
+  it('announces nothing for a dry run or a refused code', async () => {
+    const created = vi.fn()
+    eventBus.on('dimension_value.created', created)
+    const dry = setup()
+    dry.enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false } })
+    await createDimensionValue(dry.ctx, 'dim-6', { code: 'P001', name: 'X' }, { dryRun: true })
+    const duplicate = setup()
+    duplicate.enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false } })
+    duplicate.enqueue({ error: { code: '23505', message: 'duplicate key value' } })
+    await createDimensionValue(duplicate.ctx, 'dim-6', { code: 'P001', name: 'X' })
+
+    expect(created).not.toHaveBeenCalled()
   })
 })

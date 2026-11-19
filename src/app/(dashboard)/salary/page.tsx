@@ -3,43 +3,34 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { HandCoins, Plus, Users } from 'lucide-react'
+import { BanknotesIcon, PlusIcon, UsersIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { nextRunPeriod, type RunPeriod } from '@/lib/salary/next-run-period'
-import type { EmployeeMasked, SalaryRun } from '@/types'
+import { useCompanySettings, useEmployees } from '@/lib/reference-data/hooks'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
+import { agiReportingPeriod, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
+import {
+  defaultRunPaymentDate,
+  formatRunPeriod,
+  runPeriodChoices,
+  type RunPeriod,
+  type RunPeriodChoice,
+} from '@/lib/salary/next-run-period'
+import type { SalaryRun } from '@/types'
+import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 
-const STATUS_LABEL_KEYS: Record<string, string> = {
-  draft: 'status_draft',
-  review: 'status_review',
-  approved: 'status_approved',
-  paid: 'status_paid',
-  booked: 'status_booked',
-  corrected: 'status_corrected',
-}
-
-// In-flight states all wear the quiet beige chip (concept scene 22's Utkast
-// look): the payout-date note beside the chip carries the urgency, not an
-// ochre border. Booked renders as muted text, corrected as the outline
-// exception.
-// paid and booked are the normal outcome, so they render as muted text
-// (MUTED_STATUSES) and never reach the chip.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'warning' | 'destructive' | 'outline'> = {
-  draft: 'secondary',
-  review: 'secondary',
-  approved: 'secondary',
-  corrected: 'outline',
-}
-const MUTED_STATUSES = new Set(['paid', 'booked'])
+/** Runs the landing lists before the "Visa alla" line: a year of months. */
+const RUNS_SHOWN = 12
 
 /**
  * Löner landing (concept scene 22): header + the lönekörningar dry-table,
@@ -49,36 +40,45 @@ const MUTED_STATUSES = new Set(['paid', 'booked'])
  */
 export default function SalaryPage() {
   const [runs, setRuns] = useState<SalaryRun[]>([])
-  const [employees, setEmployees] = useState<EmployeeMasked[]>([])
-  const [loading, setLoading] = useState(true)
-  const [starting, setStarting] = useState(false)
-  // The pay month a click on "Starta lönekörning" creates. Known only once
+  const [runsLoading, setRunsLoading] = useState(true)
+  // The run list could not be read: the page says so in place of the list
+  // instead of drawing the first-run start card over runs it never saw.
+  const [runsFailed, setRunsFailed] = useState(false)
+  // The list loads every run; past RUNS_SHOWN the rest wait behind one line.
+  const [showAllRuns, setShowAllRuns] = useState(false)
+  // The active roster from the session cache: the start card counts it.
+  const { employees, isLoading: employeesLoading, error: employeesError } = useEmployees()
+  const loading = runsLoading || employeesLoading
+  // The month being created (formatRunPeriod), 'default' when the server
+  // picks it; null when nothing is being started.
+  const [startingKey, setStartingKey] = useState<string | null>(null)
+  // The months "Starta lönekörning" offers: the default month (one click on
+  // the button face) and the recent months behind its caret. Known only once
   // the run list has loaded; null means "let the server decide" and the
   // button keeps its plain label rather than naming a month it cannot know.
-  const [nextPeriod, setNextPeriod] = useState<RunPeriod | null>(null)
+  const [choices, setChoices] = useState<RunPeriodChoice[] | null>(null)
   const { canWrite } = useCanWrite()
+  const { settings } = useCompanySettings()
   const { toast } = useToast()
   const router = useRouter()
+  const locale = useLocale() as ErrorLocale
   const t = useTranslations('salary')
   const tStart = useTranslations('start_cards')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
 
   const load = useCallback(async () => {
-    const [runsRes, empRes] = await Promise.all([
-      fetch('/api/salary/runs').catch(() => null),
-      fetch('/api/salary/employees').catch(() => null),
-    ])
+    const runsRes = await fetch('/api/salary/runs').catch(() => null)
     if (runsRes?.ok) {
       const { data } = await runsRes.json()
       setRuns(data || [])
-      setNextPeriod(nextRunPeriod(data || [], new Date()))
+      setChoices(runPeriodChoices(data || [], new Date()))
+      setRunsFailed(false)
     } else {
-      setNextPeriod(null)
+      setChoices(null)
+      setRunsFailed(true)
     }
-    if (empRes?.ok) {
-      const { data } = await empRes.json()
-      setEmployees(data || [])
-    }
-    setLoading(false)
+    setRunsLoading(false)
   }, [])
 
   useEffect(() => {
@@ -87,55 +87,104 @@ export default function SalaryPage() {
 
   // One-click run creation: the API seeds all active employees, calculates,
   // and resolves pay-date/series defaults from settings. The period is the one
-  // the button names, sent explicitly so the click creates exactly that month
-  // (a run someone else started meanwhile answers 409 and is opened instead).
-  async function startRun() {
-    setStarting(true)
+  // the button or its menu names, sent explicitly so the click creates exactly
+  // that month; null lets the server pick. A month that has a run by now
+  // (someone else started it meanwhile) answers 409 and is opened instead.
+  async function startRun(period: RunPeriod | null) {
+    setStartingKey(period ? formatRunPeriod(period) : 'default')
     try {
       const res = await fetch('/api/salary/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(nextPeriod ?? {}),
+        body: JSON.stringify(
+          period ? { period_year: period.period_year, period_month: period.period_month } : {},
+        ),
       })
       const json = await res.json().catch(() => null)
       if (res.status === 201 && json?.data?.id) {
         router.push(`/salary/runs/${json.data.id}`)
         return
       }
+      // The route names the month in Swedish (SALARY_RUN_DUPLICATE_PERIOD),
+      // so the refusal reads the same here as in every other surface.
+      const message = getErrorMessage(json, { context: 'salary', statusCode: res.status, locale })
       const existingId = json?.error?.details?.existingId
       if (res.status === 409 && existingId) {
-        toast({ title: t('run_exists_opening') })
+        toast({ title: message, description: t('run_exists_opening') })
         router.push(`/salary/runs/${existingId}`)
         return
       }
       toast({
         title: t('start_run_failed'),
-        description: getErrorMessage(json, { context: 'salary', statusCode: res.status }),
+        description: message,
         variant: 'destructive',
       })
     } finally {
-      setStarting(false)
+      setStartingKey(null)
     }
   }
 
-  const periodOf = (r: RunPeriod) => `${r.period_year}-${String(r.period_month).padStart(2, '0')}`
-  // Same YYYY-MM the new run gets in the table below and in its own title.
-  const startRunLabel = nextPeriod ? t('start_run_for_period', { period: periodOf(nextPeriod) }) : t('start_run')
+  const defaultChoice = choices?.find((choice) => choice.isDefault) ?? null
+  // Each month says what the route will write before the click: the payment
+  // date (the pay day setting in that month, the same rule the route uses)
+  // and the AGI month it falls in, since the declaration follows the payout
+  // month. Without a settings row the date is left out rather than guessed.
+  const startOptions: SplitButtonOption[] = (choices ?? []).map((choice) => {
+    const key = formatRunPeriod(choice)
+    const paymentDate = settings ? defaultRunPaymentDate(choice, settings.salary_pay_day) : null
+    const agiPeriod = paymentDate
+      ? agiReportingPeriod({
+          payment_date: paymentDate,
+          period_year: choice.period_year,
+          period_month: choice.period_month,
+        })
+      : null
+    return {
+      key,
+      // Same YYYY-MM the new run gets in the table below and in its own title.
+      label: t('start_run_for_period', { period: key }),
+      icon: PlusIcon,
+      description: choice.hasRun
+        ? t('start_run_choice_exists')
+        : paymentDate && agiPeriod
+          ? t('start_run_choice_payout', {
+              date: formatDate(paymentDate),
+              agi_period: formatAgiPeriodDashed(agiPeriod),
+            })
+          : undefined,
+      disabled: choice.hasRun || (startingKey !== null && startingKey !== key),
+      disabledTitle: choice.hasRun ? t('start_run_choice_exists') : undefined,
+      busy: startingKey === key,
+      onSelect: () => startRun(choice),
+    }
+  })
+
+  // First time: no run and nobody to pay. The start card below leads with
+  // adding an employee, and the top bar does not offer a run that would be
+  // created empty. A roster that could not be read is not "nobody".
+  const firstTime = !loading && !runsFailed && !employeesError && runs.length === 0 && employees.length === 0
 
   const header = (
-    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-      <div className="flex items-center gap-4">
+    <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title">{tNav('v2_salary_runs')}</h1>
+      <PageHeaderActions className="flex items-center gap-4">
         <Link href="/salary/employees" className={QUIET_LINK_CLASS}>
           {t('employees')}
         </Link>
-        {canWrite && (
-          <Button size="sm" onClick={startRun} disabled={loading} loading={starting}>
-            {!starting && <Plus className="mr-2 h-4 w-4" />}
-            {startRunLabel}
-          </Button>
-        )}
-      </div>
+        {canWrite &&
+          !firstTime &&
+          (choices ? (
+            <SplitButton
+              options={startOptions}
+              initialModeKey={defaultChoice ? formatRunPeriod(defaultChoice) : undefined}
+            />
+          ) : (
+            <Button size="toolbar" onClick={() => startRun(null)} disabled={loading} loading={startingKey !== null}>
+              {startingKey === null && <PlusIcon className="h-4 w-4" />}
+              {t('start_run')}
+            </Button>
+          ))}
+      </PageHeaderActions>
     </div>
   )
 
@@ -143,11 +192,31 @@ export default function SalaryPage() {
     return (
       <div className="space-y-8">
         {header}
-        <div className="space-y-3">
+        <LateReveal>
           {[1, 2, 3].map(i => (
-            <Skeleton key={i} className="h-10 rounded-lg" />
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-28" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-20" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      </div>
+    )
+  }
+
+  if (runsFailed && runs.length === 0) {
+    return (
+      <div className="space-y-8">
+        {header}
+        <LoadError
+          title={t('runs_load_failed')}
+          onRetry={() => {
+            setRunsLoading(true)
+            void load()
+          }}
+        />
       </div>
     )
   }
@@ -156,7 +225,7 @@ export default function SalaryPage() {
     <div className="space-y-8">
       {header}
 
-      {runs.length === 0 && employees.length === 0 ? (
+      {firstTime || (runs.length === 0 && employees.length === 0) ? (
         canWrite ? (
           <div className="animate-fade-in">
             <StartCard
@@ -169,7 +238,7 @@ export default function SalaryPage() {
             />
           </div>
         ) : (
-          <EmptyState icon={Users} title={t('onboarding_title')} description={t('onboarding_description')} />
+          <EmptyState icon={UsersIcon} title={t('onboarding_title')} description={t('onboarding_description')} />
         )
       ) : (
         <div>
@@ -182,14 +251,14 @@ export default function SalaryPage() {
                   eyebrow={tStart('salary_eyebrow_next')}
                   title={tStart('salary_title')}
                   body={tStart('salary_body_ready', { count: employees.length })}
-                  primary={{ label: tStart('salary_primary_run'), onClick: startRun }}
+                  primary={{ label: tStart('salary_primary_run'), onClick: () => startRun(defaultChoice) }}
                 />
               </div>
             ) : (
-              <EmptyState icon={HandCoins} title={t('empty_runs_title')} description={t('empty_runs_description')} />
+              <EmptyState icon={BanknotesIcon} title={t('empty_runs_title')} description={t('empty_runs_description')} />
             )
           ) : (
-            <div className="overflow-x-auto">
+            <div className="-mx-2 overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
@@ -201,12 +270,17 @@ export default function SalaryPage() {
                   </tr>
                 </thead>
                 <tbody className="stagger-enter">
-                  {runs.slice(0, 12).map(run => {
+                  {(showAllRuns ? runs : runs.slice(0, RUNS_SHOWN)).map(run => {
                     // PostgREST count embed: employee_count is [{ count: n }].
                     const employeeCount = (
                       run as SalaryRun & { employee_count?: { count: number }[] }
                     ).employee_count?.[0]?.count
                     const inFlight = run.status !== 'booked' && run.status !== 'corrected'
+                    // The same status as the run header and the payslip page
+                    // (lib/salary/run-status-display.ts): in-flight states wear
+                    // the beige chip, paid and booked are muted text.
+                    const statusDisplay = salaryRunStatusDisplay(run.status)
+                    const statusLabel = statusDisplay ? t(statusDisplay.labelKey) : run.status
                     return (
                       <tr
                         key={run.id}
@@ -219,26 +293,22 @@ export default function SalaryPage() {
                             className="hover:underline"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            {periodOf(run)}
+                            {formatRunPeriod(run)}
                           </Link>
                         </td>
                         {/* overflow-hidden: see #2003, nothing in this cell
                             truncates so it must clip. */}
-                        <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden whitespace-nowrap')}>
+                        <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden whitespace-nowrap date-figures')}>
                           <span className="inline-flex items-center gap-2">
-                            {run.status === 'booked' ? (
-                              <span className="text-muted-foreground">{t('status_booked')}</span>
-                            ) : MUTED_STATUSES.has(run.status) ? (
-                              <span className="text-muted-foreground">
-                                {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
-                              </span>
+                            {statusDisplay && statusDisplay.chip === null ? (
+                              <span className="text-muted-foreground">{statusLabel}</span>
                             ) : (
-                              <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'} className="font-normal">
-                                {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
+                              <Badge variant={statusDisplay?.chip ?? 'secondary'} className="font-normal">
+                                {statusLabel}
                               </Badge>
                             )}
                             {inFlight && (
-                              <span className="text-[11px] text-muted-foreground tabular-nums">
+                              <span className="text-xs text-muted-foreground tabular-nums">
                                 {t('run_payout_note', { date: formatDate(run.payment_date) })}
                               </span>
                             )}
@@ -248,16 +318,25 @@ export default function SalaryPage() {
                           {employeeCount ?? ''}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                          {formatCurrency(run.total_gross)}
+                          {formatRowAmount(run.total_gross)}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                          {formatCurrency(run.total_net)}
+                          {formatRowAmount(run.total_net)}
                         </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
+              {!showAllRuns && runs.length > RUNS_SHOWN && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllRuns(true)}
+                  className="px-4 py-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                >
+                  {t('show_all_runs', { count: runs.length })}
+                </button>
+              )}
             </div>
           )}
         </div>

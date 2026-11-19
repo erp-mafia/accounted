@@ -87,9 +87,32 @@ describe('callback authentication and redirects', () => {
   })
   it('rejects an unknown state without consulting the user or exchanging the code', async () => {
     pending = null
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { response } = await complete()
     expect(decodeURIComponent(response.headers.get('location') ?? '')).toContain('Starta bankkopplingen på nytt')
     expect(mocks.getUser).not.toHaveBeenCalled(); expect(mocks.createSession).not.toHaveBeenCalled()
+    // An old tab or a callback that already ran: the person's outcome, not ours.
+    expect(warn).toHaveBeenCalledWith('[enable-banking] No pending connection for oauth_state', expect.anything())
+    expect(err).not.toHaveBeenCalled()
+  })
+  it('keeps a failed state lookup at error level', async () => {
+    mocks.from.mockImplementation(() => chain(null, { message: 'boom', code: '57014', details: null }))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { response } = await complete()
+    expect(response.headers.get('location')).toContain('bank_error=')
+    expect(err).toHaveBeenCalledWith('[enable-banking] No pending connection for oauth_state', expect.anything())
+  })
+  it('logs a named PT409 finalize refusal at warn and any other finalize failure at error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.finalize.mockRejectedValueOnce(Object.assign(new Error('BANK_CALLBACK_MIRROR_CLAIMED'), { code: 'PT409' }))
+    await complete()
+    expect(warn).toHaveBeenCalledWith('[enable-banking] Callback error', expect.objectContaining({ message: 'BANK_CALLBACK_MIRROR_CLAIMED' }))
+    expect(err).not.toHaveBeenCalledWith('[enable-banking] Callback error', expect.anything())
+    mocks.finalize.mockRejectedValueOnce(Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }))
+    await complete()
+    expect(err).toHaveBeenCalledWith('[enable-banking] Callback error', expect.objectContaining({ message: 'canceling statement due to statement timeout' }))
   })
   it('refuses a different initiator without changing the row', async () => {
     mocks.getUser.mockResolvedValue({ data: { user: { id: 'other-user' } } })
@@ -144,6 +167,8 @@ describe('one callback transaction', () => {
       mirrors: [{ uid: 'a', ledger_account: '1930' }, { uid: 'b', ledger_account: '1931' }] })
     for (const c of chains) { expect(c.update).not.toHaveBeenCalled(); expect(c.delete).not.toHaveBeenCalled() }
     for (const call of mocks.resolve.mock.calls) expect(call[3].prepareOnly).toBe(true)
+    // Each account is placed knowing the whole consent: the seeded row goes to the one its details name (crm#1498).
+    for (const call of mocks.resolve.mock.calls) expect(call[3].consent.map((a: { uid: string }) => a.uid)).toEqual(['a', 'b'])
     expect(mocks.balance).not.toHaveBeenCalled()
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted' }))
   })
@@ -368,6 +393,18 @@ describe('bank denial', () => {
     expect(status === 'pending' ? cleanup.delete : cleanup.update).toHaveBeenCalled()
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_denied' }))
     expect(mocks.createSession).not.toHaveBeenCalled()
+  })
+  it.each([
+    ['access_denied', 'Invalid credentials', 'invalid_credentials'],
+    ['server_error', '', 'provider_error'],
+    ['access_denied', 'Cancelled by user', 'cancelled'],
+  ])('logs the bank answer %s %s at warn level with its reason, never error', async (error, description, reason) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await complete({ error, state: 'valid-state', ...(description ? { error_description: description } : {}) })
+    expect(err).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('[enable-banking] Bank authorization denied', expect.objectContaining({ reason }))
+    expect(warn).toHaveBeenCalledWith('[enable-banking] Authorization denied details', expect.objectContaining({ reason }))
   })
   it('keeps an established connection expired when the bank reports session expiry', async () => {
     pending!.status = 'expired'

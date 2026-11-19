@@ -9,8 +9,8 @@
  * and soliditet), which this product does not book.
  *
  * The engine therefore books NO 8940/2240 entry on obeskattade reserver.
- * A dispositions step that did exactly that was removed 2026-08-05 (founder
- * decision, see DECISIONS.md): it double-counted the tax portion in juridisk
+ * A dispositions step that did exactly that was removed 2026-08-05: it
+ * double-counted the tax portion in juridisk
  * person (result charged twice, 2240 overstated on top of gross 21xx).
  *
  * What remains here is the analytical rate, used for presentation-side

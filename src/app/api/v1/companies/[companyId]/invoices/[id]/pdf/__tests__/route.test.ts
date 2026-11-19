@@ -45,33 +45,10 @@ vi.mock('@/lib/invoices/pdf-template', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { contentDispositionFilename } from '@/lib/api/content-disposition'
 import { GET as pdf } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -128,11 +105,11 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
   it('returns a PDF for a sent invoice with a descriptive filename', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: SENT_INVOICE, error: null },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -150,14 +127,14 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
   it('uses an identifiable descriptive filename for drafts', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: {
           data: { ...SENT_INVOICE, status: 'draft', invoice_number: null },
           error: null,
         },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -172,7 +149,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
   it('identifies credit notes in the filename and embeds the original number', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           {
@@ -186,7 +163,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
           { data: { invoice_number: '2026-0042' }, error: null }, // original lookup
         ],
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -204,10 +181,10 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
   it('returns 404 NOT_FOUND for unknown invoice id', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -223,11 +200,11 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
   it('returns 500 INVOICE_PDF_RENDER_FAILED when the renderer throws', async () => {
     mockRender.mockRejectedValueOnce(new Error('font load failed'))
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: SENT_INVOICE, error: null },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -242,14 +219,14 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
   it('returns 409 INVOICE_CUSTOMER_MISSING instead of rendering when the customer was deleted (crm#263)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: {
           data: { ...SENT_INVOICE, status: 'draft', invoice_number: null, customer_id: null, customer: null },
           error: null,
         },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -265,11 +242,11 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
   it('returns 400 when a foreign payment account is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...SENT_INVOICE, currency: 'EUR' }, error: null },
         company_settings: { data: { ...COMPANY_SETTINGS, invoice_payment_accounts: {} }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -285,9 +262,9 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
   it('returns 400 VALIDATION_ERROR for non-UUID id', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await pdf(
@@ -307,7 +284,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
       scopes: ['transactions:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await pdf(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/pdf`),

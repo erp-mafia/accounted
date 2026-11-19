@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { FullArchiveDialog } from '@/components/import/FullArchiveDialog'
+import { createClient } from '@/lib/supabase/client'
 import {
   SettingsGroup,
   SettingsRow,
@@ -39,6 +40,21 @@ export function CompanyMigrationArchiveRow({ companyId }: { companyId: string })
 
     const loadEstimate = async (attempt: number) => {
       try {
+        // Only a company a migration reset created has a retained source, and
+        // nearly every company is not one. Ask the table first: the archive
+        // route can only refuse the others, once per settings visit.
+        const { data: reset, error: resetError } = await createClient()
+          .from('company_migration_resets')
+          .select('replacement_company_id')
+          .eq('replacement_company_id', companyId)
+          .maybeSingle()
+        if (cancelled) return
+        if (resetError) {
+          scheduleRetry(attempt)
+          return
+        }
+        if (!reset) return
+
         const response = await fetch(
           `/api/company/${companyId}/migration-reset/archive?estimate=1`,
           { signal: controller.signal },

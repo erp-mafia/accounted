@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 const mockFetchExchangeRate = vi.fn()
@@ -148,6 +148,46 @@ describe('resolveSupplierInvoiceExchangeRate', () => {
 
     expect(result).toEqual({ ok: false, currency: 'EUR', invoiceDate: '2026-03-02' })
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  describe('when Riksbanken has just refused a request', () => {
+    // The real module, behind the mocked fetchExchangeRate: it holds the
+    // cool-off the resolver asks about.
+    const riksbanken = () =>
+      vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
+
+    beforeEach(async () => {
+      const actual = await riksbanken()
+      actual.resetExchangeRateStateForTests()
+      const fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('Network error'))
+      await actual.fetchExchangeRate('EUR', new Date('2026-03-02'))
+      fetchSpy.mockRestore()
+    })
+
+    afterEach(async () => {
+      ;(await riksbanken()).resetExchangeRateStateForTests()
+    })
+
+    it('marks a failed fetch temporary, so a staged invoice is handed back and not consumed', async () => {
+      mockFetchExchangeRate.mockResolvedValue(null)
+
+      const result = await resolveSupplierInvoiceExchangeRate(supabase, {
+        currency: 'EUR',
+        invoiceDate: '2026-03-02',
+      })
+
+      expect(result).toEqual({ ok: false, currency: 'EUR', invoiceDate: '2026-03-02', temporary: true })
+    })
+
+    it('does not mark a refused supplied rate temporary: waiting will not fix it', async () => {
+      const result = await resolveSupplierInvoiceExchangeRate(supabase, {
+        currency: 'EUR',
+        invoiceDate: '2026-03-02',
+        suppliedRate: 100000,
+      })
+
+      expect(result).toEqual({ ok: false, currency: 'EUR', invoiceDate: '2026-03-02' })
+    })
   })
 
   it('still trusts a large supplied rate just below the plausibility bound', async () => {

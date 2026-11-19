@@ -14,7 +14,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { hasLegalForm, stripTrailingWhenAndWho } from './ledger-key'
 import { hasCountryWord } from './name-extract'
-import { getRegister, type LedgerStats, type PartyRole, type RegisterPeriod, type RegisterRow } from './register'
+import { getRegister, periodStart, type LedgerStats, type PartyRole, type RegisterPeriod, type RegisterRow } from './register'
 import type { SuggestionReason } from './suggest'
 import { matchSeedText } from './resolver/directory'
 import { isScbConfigured } from './scb/config'
@@ -294,13 +294,6 @@ export function composeCounterparts(input: {
       unnamedTransactions: unnamed,
     },
   }
-}
-
-function periodStart(period: RegisterPeriod): string | null {
-  if (period === 'all') return null
-  const d = new Date()
-  d.setMonth(d.getMonth() - 12)
-  return d.toISOString().slice(0, 10)
 }
 
 export async function getCounterpartList(

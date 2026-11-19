@@ -59,6 +59,52 @@ describe('loadTaxAdjustmentSnapshot', () => {
     })
   })
 
+  it('adds non-deductible representation (6072) to 4.3c and tax-free interest (8314) to 4.5c (crm#1681)', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValueOnce({
+      rows: [
+        { account_number: '6992', closing_debit: 7_035, closing_credit: 0 },
+        { account_number: '8423', closing_debit: 980, closing_credit: 0 },
+        { account_number: '6072', closing_debit: 1_209.82, closing_credit: 0 },
+        { account_number: '8314', closing_debit: 0, closing_credit: 82 },
+      ],
+      totalDebit: 9_224.82,
+      totalCredit: 82,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+
+    expect(snapshot.nonDeductibleExpenses).toBe(9_224.82)
+    expect(snapshot.nonTaxableIncome).toBe(82)
+    expect(snapshot.items.find((item) => item.accountNumber === '6072')).toMatchObject({
+      adjustmentType: 'non_deductible_expense',
+      amount: 1_209.82,
+      included: true,
+    })
+    expect(snapshot.items.find((item) => item.accountNumber === '8314')).toMatchObject({
+      adjustmentType: 'non_taxable_income',
+      amount: 82,
+      included: true,
+    })
+  })
+
+  it('leaves tax-free allowances (73xx) alone: tax-free for the employee, deductible for the company', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValueOnce({
+      rows: [
+        { account_number: '7321', closing_debit: 1_500, closing_credit: 0 },
+        { account_number: '7331', closing_debit: 2_500, closing_credit: 0 },
+      ],
+      totalDebit: 4_000,
+      totalCredit: 0,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+
+    expect(snapshot.nonDeductibleExpenses).toBe(0)
+    expect(snapshot.items.some((item) => item.accountNumber === '7321' || item.accountNumber === '7331')).toBe(false)
+  })
+
   it('fails loudly instead of dropping form-specific accounts when the company row cannot be resolved', async () => {
     // Without a form the snapshot would silently fall back to the base
     // accounts and omit 3901 for an ekonomisk förening; the lookup error
@@ -171,5 +217,87 @@ describe('loadTaxAdjustmentSnapshot: ekonomisk förening membership fees', () =>
     const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'ekonomisk_forening')
     expect(snapshot.items.find((item) => item.accountNumber === '3901')?.amount).toBe(0)
     expect(snapshot.nonTaxableIncome).toBe(0)
+  })
+})
+
+describe('loadTaxAdjustmentSnapshot: dividends on shares in an aktiebolag (crm#1726)', () => {
+  const dividendBalances = () =>
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        { account_number: '8210', closing_debit: 0, closing_credit: 50_000 },
+        { account_number: '8012', closing_debit: 0, closing_credit: 20_000 },
+      ],
+      totalDebit: 0,
+      totalCredit: 70_000,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+  it('offers each dividend account unticked: the user confirms the shares are näringsbetingade', async () => {
+    dividendBalances()
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+
+    expect(snapshot.items.find((item) => item.accountNumber === '8210')).toMatchObject({
+      source: 'detected',
+      adjustmentType: 'non_taxable_income',
+      amount: 50_000,
+      included: false,
+    })
+    expect(snapshot.items.find((item) => item.accountNumber === '8012')).toMatchObject({
+      amount: 20_000,
+      included: false,
+    })
+    // Unconfirmed, the dividend stays in the tax base.
+    expect(snapshot.nonTaxableIncome).toBe(0)
+  })
+
+  it('takes a confirmed dividend out of the tax base', async () => {
+    dividendBalances()
+    const snapshot = await loadTaxAdjustmentSnapshot(
+      makeClient([
+        {
+          source_key: 'account:8210',
+          adjustment_type: 'non_taxable_income',
+          source: 'detected',
+          description: 'Utdelningar på andelar i andra företag',
+          account_number: '8210',
+          amount: 50_000,
+          included: true,
+        },
+      ]),
+      'company-1',
+      'period-1',
+      'aktiebolag',
+    )
+
+    expect(snapshot.items.find((item) => item.accountNumber === '8210')?.included).toBe(true)
+    expect(snapshot.nonTaxableIncome).toBe(50_000)
+  })
+
+  it('does not count a dividend twice when it was already typed in as a manual figure', async () => {
+    dividendBalances()
+    const snapshot = await loadTaxAdjustmentSnapshot(
+      makeClient([
+        {
+          source_key: 'manual:non_taxable_income',
+          adjustment_type: 'non_taxable_income',
+          source: 'manual',
+          description: 'Ej skattepliktiga intäkter',
+          account_number: null,
+          amount: 50_000,
+          included: true,
+        },
+      ]),
+      'company-1',
+      'period-1',
+      'aktiebolag',
+    )
+
+    expect(snapshot.nonTaxableIncome).toBe(50_000)
+  })
+
+  it('is offered to an aktiebolag only', async () => {
+    dividendBalances()
+    const forening = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'ekonomisk_forening')
+    expect(forening.items.find((item) => item.accountNumber === '8210')).toBeUndefined()
   })
 })

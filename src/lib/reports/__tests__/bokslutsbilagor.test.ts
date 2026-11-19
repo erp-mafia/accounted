@@ -103,7 +103,7 @@ describe('generateBokslutsbilagor', () => {
   it('builds one bilaga per account from the snapshot, the sign-offs, the specification and the files', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD }) // fiscal period
-    enqueue({ data: { name: 'Väla Redovisning AB', org_number: '5592383508' } }) // company
+    enqueue({ data: { name: 'Exempel Redovisning AB', org_number: '5577889909' } }) // company
     enqueue({ data: [signoffRow({})] }) // sign-offs on the balansdag
 
     const report = await generateBokslutsbilagor(supabase as never, COMPANY, 'fy-2026', {
@@ -112,7 +112,7 @@ describe('generateBokslutsbilagor', () => {
       resolveUserLabels: async (ids) => new Map(ids.map((id) => [id, `${id}@example.se`])),
     })
     expect(report).not.toBeNull()
-    expect(report!.company).toEqual({ name: 'Väla Redovisning AB', org_number: '5592383508' })
+    expect(report!.company).toEqual({ name: 'Exempel Redovisning AB', org_number: '5577889909' })
     expect(report!.accounts.map((a) => a.account_number)).toEqual(['1930', '1510', '2350'])
 
     const [bank, ar, loan] = report!.accounts
@@ -130,8 +130,37 @@ describe('generateBokslutsbilagor', () => {
     expect(report!.summary).toEqual({ accounts: 3, signed_on_balansdag: 1, signed_other_date: 1, unsigned: 1, attachments: 1 })
     expect(report!.checklist.items[0]).toMatchObject({ key: 'inventory_valued', state: 'done', done_by_label: 'u1@example.se' })
     expect(report!.app_version).toBe('1.2.3')
-    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, 'u1', 'fy-2026', {})
-    expect(listAccountsMock).toHaveBeenCalledWith(supabase, COMPANY, { today: '2026-12-31', windowFrom: '2026-01-01', windowTo: '2026-12-31' })
+    // The checklist gets the pärm's own account list instead of reading it again.
+    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, 'u1', 'fy-2026', { accounts: expect.any(Promise) })
+    expect(await checklistMock.mock.calls[0][4].accounts).toBe(await listAccountsMock.mock.results[0].value)
+    expect(listAccountsMock).toHaveBeenCalledWith(supabase, COMPANY, {
+      today: '2026-12-31',
+      windowFrom: '2026-01-01',
+      windowTo: '2026-12-31',
+      balanceSheet: expect.any(Promise),
+    })
+  })
+
+  it('reads the reconciliation for the year: each read once, with the balansdag and the provider accounts', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD })
+    enqueue({ data: { name: 'X', org_number: null } })
+    enqueue({ data: [] })
+    await generateBokslutsbilagor(supabase as never, COMPANY, 'fy-2026', { userId: 'u1' })
+
+    expect(listAccountsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, {
+      today: '2026-12-31',
+      windowFrom: '2026-01-01',
+      windowTo: '2026-12-31',
+      balanceSheet: expect.any(Promise),
+    })
+    // The list's manual accounts are computed on the pärm's own snapshot.
+    expect(await listAccountsMock.mock.calls[0][2].balanceSheet).toBe(await snapshotMock.mock.results[0].value)
+    expect(snapshotMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, '2026-12-31')
+    expect(latestSignoffsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY)
+    expect(attachmentsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, '2026-01-01', '2026-12-31', { includeRemoved: true })
+    // Only the manual accounts with a system specification: 1510, not the bank's 1930 or the loan.
+    expect(specMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, await snapshotMock.mock.results[0].value, new Set(['1510']))
   })
 
   it('skips the readiness-derived checklist items without a user, and returns null for a foreign period', async () => {
@@ -140,7 +169,7 @@ describe('generateBokslutsbilagor', () => {
     enqueue({ data: { name: 'X', org_number: null } })
     enqueue({ data: [] })
     await generateBokslutsbilagor(supabase as never, COMPANY, 'fy-2026')
-    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, '', 'fy-2026', { readiness: null })
+    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, '', 'fy-2026', { readiness: null, accounts: expect.any(Promise) })
 
     enqueue({ data: null })
     enqueue({ data: null })

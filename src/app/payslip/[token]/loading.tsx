@@ -1,20 +1,20 @@
 import { Skeleton } from '@/components/ui/skeleton'
+import { StandalonePage } from '@/components/standalone/StandalonePage'
 
+/** The payslip link while it loads: the sender row, the heading, the amount, the rows and the primary. */
 export default function PayslipLoading() {
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-background px-5" aria-busy="true">
-      <div className="w-full max-w-2xl space-y-6 rounded-lg border bg-card p-6">
-        <div className="space-y-2">
-          <Skeleton className="h-8 w-56" />
-          <Skeleton className="h-4 w-40" />
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-20 w-full" />
-        </div>
-        <Skeleton className="h-48 w-full" />
+    <StandalonePage width="link" brand={false} busy>
+      <Skeleton className="h-7 w-48" />
+      <Skeleton className="mt-9 h-7 w-64" />
+      <Skeleton className="mt-2 h-7 w-32" />
+      <div className="mt-5 space-y-3">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-full" />
       </div>
-    </main>
+      <Skeleton className="mt-5 h-11 w-full" />
+    </StandalonePage>
   )
 }

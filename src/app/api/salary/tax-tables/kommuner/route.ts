@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchKommunTaxRates } from '@/lib/salary/tax-tables'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * GET /api/salary/tax-tables/kommuner?year=2026
@@ -30,7 +31,7 @@ export const GET = withRouteContext('salary.tax_tables.kommuner', async (request
   const year =
     Number.isFinite(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100
       ? parsedYear
-      : new Date().getFullYear()
+      : stockholmYearMonth().year
 
   let kommuner = cache.get(year)
   if (!kommuner) {

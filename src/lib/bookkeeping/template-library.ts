@@ -1,8 +1,22 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import { isReverseChargeVatAccount } from '@/lib/bookkeeping/vat-entries'
-import { roundOre } from '@/lib/money'
+import {
+  isReverseChargeBasisLeg,
+  isReverseChargeVatAccount,
+  RC_BASIS_OFFSET_ACCOUNT,
+} from '@/lib/bookkeeping/vat-entries'
+import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
+import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
+import { formatAmountInput, roundOre } from '@/lib/money'
+import { grossVat, netVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
+import {
+  resolveSkattekontoAccount,
+  templateSkattekontoAccount,
+  templateTouchesSkattekonto,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
 
 /**
  * Prefix for library template ids when they are mapped into the
@@ -10,6 +24,41 @@ import { roundOre } from '@/lib/money'
  */
 export const LIBRARY_TEMPLATE_PREFIX = 'library:'
 export function isLibraryTemplateId(id: string): boolean { return id.startsWith(LIBRARY_TEMPLATE_PREFIX) }
+
+/** Whether a library template's lines name the skattekonto (1630). */
+export function libraryLinesTouchSkattekonto(lines: ReadonlyArray<BookingTemplateLibraryLine> | null | undefined): boolean {
+  return templateTouchesSkattekonto((lines ?? []).map((l) => l.account))
+}
+
+/**
+ * A system library template (a pack: "Insättning skattekonto", "Momsbetalning
+ * via skattekonto", F-skatt, AGI) names the skattekonto as 1630; for a
+ * company that runs its skattekonto on 2012 it books 2012 (PH 175). Applied
+ * where a company reads or books a system template; a company's own template
+ * keeps the accounts its author wrote.
+ */
+export function libraryLinesForSkattekonto(
+  lines: BookingTemplateLibraryLine[],
+  skattekontoAccount: SkattekontoLedgerAccount | undefined,
+): BookingTemplateLibraryLine[] {
+  if (!skattekontoAccount || !libraryLinesTouchSkattekonto(lines)) return lines
+  return lines.map((l) => ({ ...l, account: templateSkattekontoAccount(l.account, skattekontoAccount) }))
+}
+
+/**
+ * libraryLinesForSkattekonto with this company's skattekonto account, read
+ * (resolveSkattekontoAccount, which throws when it cannot be read) only when
+ * the lines name the skattekonto; any other lines come back as they are.
+ */
+export async function libraryLinesForCompanySkattekonto(
+  supabase: SupabaseClient,
+  companyId: string,
+  lines: BookingTemplateLibraryLine[],
+): Promise<BookingTemplateLibraryLine[]> {
+  return libraryLinesTouchSkattekonto(lines)
+    ? libraryLinesForSkattekonto(lines, await resolveSkattekontoAccount(supabase, companyId))
+    : lines
+}
 
 /**
  * Convert a template's line pattern + total amount into form lines
@@ -42,20 +91,20 @@ export function applyTemplate(
     if (line.type === 'vat' && line.vat_rate) {
       amount = isReverseChargeVatAccount(line.account)
         ? // Self-assessed VAT on top of the base (the total)
-          roundOre(totalAmount * line.vat_rate)
+          netVat(totalAmount, line.vat_rate)
         : // VAT extracted from the total inclusive amount
-          roundOre(totalAmount * line.vat_rate / (1 + line.vat_rate))
+          grossVat(totalAmount, line.vat_rate)
     } else if (line.type === 'settlement') {
-      amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
+      amount = roundOre(totalAmount * (line.ratio ?? 1))
     } else {
       // Business lines: use ratio (default 1.0)
-      amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
+      amount = roundOre(totalAmount * (line.ratio ?? 1))
     }
 
     result.push({
       account_number: line.account,
-      debit_amount: line.side === 'debit' ? amount.toFixed(2) : '',
-      credit_amount: line.side === 'credit' ? amount.toFixed(2) : '',
+      debit_amount: line.side === 'debit' ? formatAmountInput(amount, '.') : '',
+      credit_amount: line.side === 'credit' ? formatAmountInput(amount, '.') : '',
       line_description: line.label,
     })
   }
@@ -74,19 +123,6 @@ export function getTemplateScope(template: {
   if (template.is_system) return 'system'
   if (template.team_id) return 'team'
   return 'company'
-}
-
-export const SCOPE_LABELS: Record<ReturnType<typeof getTemplateScope>, string> = {
-  system: 'Standard',
-  team: 'Team',
-  company: 'Företag',
-}
-
-function vatRateToTreatment(rate: number): VatTreatment | null {
-  if (rate === 0.25) return 'standard_25'
-  if (rate === 0.12) return 'reduced_12'
-  if (rate === 0.06) return 'reduced_6'
-  return null
 }
 
 /**
@@ -125,7 +161,7 @@ export function convertLibraryToBookingTemplate(
     const inputVat = vat.find((v) => v.side === 'debit' && v.vat_rate)
       ?? vat.find((v) => v.vat_rate)
     if (inputVat?.vat_rate) {
-      const treatment = vatRateToTreatment(inputVat.vat_rate)
+      const treatment = treatmentForRate(inputVat.vat_rate)
       if (treatment) {
         vatTreatment = treatment
         vatRate = inputVat.vat_rate
@@ -176,6 +212,28 @@ export interface BookingRowInput {
   credit_amount: string
 }
 
+/**
+ * The legs of a reverse-charge basis pair booked beside the user's own cost
+ * line (45xx D / 4598 K, as a momskod generates it, crm#1096). The pair nets
+ * to zero and is no part of the payment: never the total, the settlement leg
+ * or one of the shares the cost is split by. Only beside the 4598 offset:
+ * without it a 45xx line is the cost line itself.
+ */
+export function reverseChargeBasisPairLegs(accounts: readonly string[]): (account: string) => boolean {
+  const hasOffset = accounts.includes(RC_BASIS_OFFSET_ACCOUNT)
+  return (account) => hasOffset && isReverseChargeBasisLeg(account)
+}
+
+/**
+ * The cost/revenue lines whose ratios split a template's total, as the
+ * template editor shows and checks them: the business lines without a
+ * basis pair's legs.
+ */
+export function templateShareLines(lines: BookingTemplateLibraryLine[]): BookingTemplateLibraryLine[] {
+  const isBasisPairLeg = reverseChargeBasisPairLegs(lines.map((l) => l.account))
+  return lines.filter((l) => l.type === 'business' && !isBasisPairLeg(l.account))
+}
+
 /** Standard Swedish VAT rates a template line can carry (matches the rate
  *  selector in the template editor). 0 = no/foreign VAT. */
 const STANDARD_VAT_RATES = [0.25, 0.12, 0.06, 0] as const
@@ -197,25 +255,69 @@ function snapVatRate(vatAmount: number, total: number, isReverseCharge: boolean)
 }
 
 /**
+ * The rate of a fiktiv-moms leg read from the basis it was self-assessed on:
+ * a reverse-charge basis line (a 45xx/44xx pair leg, or a cost line on 4531
+ * and its siblings) whose amount at the account's own rate is the leg's
+ * amount, to the öre. A split verifikat books the fiktiv moms on one cost
+ * line's share, which the whole total misreads (150 on a 600 share of 1000
+ * snapped to 12 %). Null without such a line: the caller snaps against the
+ * total.
+ */
+function fiktivRateFromBasis(
+  vatAmount: number,
+  rows: ReadonlyArray<{ account: string; amount: number }>,
+): number | null {
+  for (const row of rows) {
+    const rate = rcBasisAccountRate(row.account)
+    if (rate !== null && Math.abs(Math.round(netVat(row.amount, rate) * 100) - Math.round(vatAmount * 100)) <= 1) {
+      return rate
+    }
+  }
+  return null
+}
+
+/**
+ * Account number to name for the labels of a template derived from a booking:
+ * the company's own chart first, the BAS catalogue for a standard account the
+ * company has not activated yet. A company's own account (one that is not in
+ * BAS) is only in its chart; read from the catalogue alone its line was
+ * labelled with the bare number (crm#1821).
+ */
+export function templateAccountNames(
+  chart: ReadonlyArray<{ account_number: string; account_name: string }>,
+  catalog: ReadonlyArray<{ account_number: string; account_name: string }>,
+): Record<string, string> {
+  const names: Record<string, string> = {}
+  for (const a of catalog) names[a.account_number] = a.account_name
+  for (const a of chart) {
+    if (a.account_name?.trim()) names[a.account_number] = a.account_name
+  }
+  return names
+}
+
+/**
  * Derive amount-parameterised template lines from a concrete, balanced set of
- * booking rows — the inverse of {@link applyTemplate}, used by "Spara som mall".
+ * booking rows - the inverse of {@link applyTemplate}, used by "Spara som mall".
  *
  * A booking stores literal debit/credit amounts; a template stores ratios of a
  * total plus VAT rates. The mapping:
  *   - total = the larger of Σdebit / Σcredit (equal when the entry balances),
- *     excluding fiktiv-moms legs (reverse charge/import): they net to zero and
- *     are no part of the payment, so counting them would inflate the total and
- *     shrink every derived business ratio
- *   - a 26xx line → a VAT line, its rate snapped to the nearest standard rate
- *   - the single non-VAT line closest to the total → the settlement leg (the
- *     bank / counter account), ratio 1
+ *     excluding fiktiv-moms legs (reverse charge/import) and a 45xx/4598 basis
+ *     pair: they net to zero and are no part of the payment, so counting them
+ *     would inflate the total and shrink every derived business ratio
+ *   - a 26xx line → a VAT line, its rate snapped to the nearest standard rate;
+ *     a fiktiv-moms leg takes the rate of the basis line it was self-assessed
+ *     on when the booking has one (fiktivRateFromBasis), else the total's
+ *   - the non-VAT line closest to the total → the settlement leg (the bank /
+ *     counter account), ratio 1; on a tie the bank or cash line (BAS 19xx)
  *   - every other non-VAT line → a business (cost/revenue) line, ratio = amount/total
  *
- * Which non-VAT leg is tagged settlement vs business is only cosmetic — a
- * template books its literal accounts regardless of the tag (see the
- * "blind to business/settlement tagging" regression). The classification is a
- * best-effort starting point that the user reviews and can re-tag in the editor
- * before saving.
+ * Which non-VAT leg is tagged settlement vs business does not change the
+ * accounts: a template books its literal accounts regardless of the tag (see
+ * the "blind to business/settlement tagging" regression), and on a bank
+ * transaction only its bank line moves to the transaction's ledger
+ * (templateBankLeg). The classification is a best-effort starting point that
+ * the user reviews and can re-tag in the editor before saving.
  *
  * Rows without a 4-digit account or with no amount are dropped. Returns [] when
  * fewer than two usable lines remain or the total is non-positive.
@@ -236,7 +338,11 @@ export function deriveTemplateLinesFromBooking(
 
   if (parsed.length < 2) return []
 
-  const countsTowardTotal = (r: { account: string }) => !isReverseChargeVatAccount(r.account)
+  // A basis pair nets to zero as well: counted, it doubled the total and
+  // halved every ratio (crm#1096).
+  const isBasisPairLeg = reverseChargeBasisPairLegs(parsed.map((r) => r.account))
+  const countsTowardTotal = (r: { account: string }) =>
+    !isReverseChargeVatAccount(r.account) && !isBasisPairLeg(r.account)
   const sumDebit = parsed.reduce((s, r) => (r.side === 'debit' && countsTowardTotal(r) ? s + r.amount : s), 0)
   const sumCredit = parsed.reduce((s, r) => (r.side === 'credit' && countsTowardTotal(r) ? s + r.amount : s), 0)
   const total = roundOre(Math.max(sumDebit, sumCredit))
@@ -245,21 +351,27 @@ export function deriveTemplateLinesFromBooking(
   const isVat = (account: string) => account.startsWith('26')
 
   // Pick the settlement leg among the non-VAT lines: the one closest to the
-  // total (the bank / counter account). Equal distances prefer a credit leg,
-  // then the later row.
+  // total, which it takes in full (ratio 1). Equal distances prefer a bank or
+  // cash line (BAS 19xx), where the money moved, then a credit leg, then the
+  // later row. Without the bank preference 1930 D / 1580 K at one amount
+  // tagged the receivable "Betalning" (crm#1321).
   let settlementIndex = -1
   let bestDistance = Infinity
   let bestIsCredit = false
+  let bestIsCash = false
   parsed.forEach((row, index) => {
-    if (isVat(row.account)) return
+    if (isVat(row.account) || isBasisPairLeg(row.account)) return
     const distance = Math.abs(row.amount - total)
+    const isCash = isCashLedger(row.account)
+    const isCredit = row.side === 'credit'
     const closer = distance < bestDistance - 0.005
-    const tiePreferCredit =
-      Math.abs(distance - bestDistance) <= 0.005 && (row.side === 'credit' || !bestIsCredit)
-    if (settlementIndex === -1 || closer || tiePreferCredit) {
+    const tie = Math.abs(distance - bestDistance) <= 0.005
+    const tieWins = tie && (isCash !== bestIsCash ? isCash : isCredit || !bestIsCredit)
+    if (settlementIndex === -1 || closer || tieWins) {
       settlementIndex = index
       bestDistance = distance
-      bestIsCredit = row.side === 'credit'
+      bestIsCredit = isCredit
+      bestIsCash = isCash
     }
   })
 
@@ -267,12 +379,14 @@ export function deriveTemplateLinesFromBooking(
 
   return parsed.map((row, index) => {
     if (isVat(row.account)) {
+      const isFiktiv = isReverseChargeVatAccount(row.account)
       return {
         account: row.account,
         label: label(row.account),
         side: row.side,
         type: 'vat',
-        vat_rate: snapVatRate(row.amount, total, isReverseChargeVatAccount(row.account)),
+        vat_rate: (isFiktiv ? fiktivRateFromBasis(row.amount, parsed) : null)
+          ?? snapVatRate(row.amount, total, isFiktiv),
       }
     }
     if (index === settlementIndex) {

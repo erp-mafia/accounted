@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { bankLedgerName, holderAdoptableBy, overflowLedgerSlots } from '../ledger-slots'
+import {
+  bankLedgerName,
+  holderAdoptableBy,
+  overflowLedgerSlots,
+  paymentDetailsPointAt,
+  seededRowBelongsToAnother,
+} from '../ledger-slots'
 
 describe('overflowLedgerSlots', () => {
   it('skips the currency defaults and the taken slots', () => {
@@ -45,5 +51,63 @@ describe('holderAdoptableBy', () => {
   it('an account without an IBAN cannot take over a row that has one', () => {
     expect(holderAdoptableBy({ iban: IBAN, currency: 'SEK', live: false }, { iban: null, currency: 'SEK' })).toBe(false)
     expect(holderAdoptableBy({ iban: IBAN, currency: 'SEK', live: false }, { currency: 'SEK' })).toBe(false)
+  })
+})
+
+// Two accounts of one SEB consent (fictitious numbers): an empty second
+// account listed first, then the company's own account.
+const SECOND = { iban: 'SE0150000000055011112222', bban: '55011112222', currency: 'SEK' }
+const OWN = { iban: 'SE0250000000055013334444', bban: '55013334444', currency: 'SEK' }
+
+describe('paymentDetailsPointAt', () => {
+  it('finds the account from clearing plus account number', () => {
+    expect(paymentDetailsPointAt({ clearing_number: '5501', account_number: '3334444' }, OWN)).toBe(true)
+    expect(paymentDetailsPointAt({ clearing_number: '5501', account_number: '3334444' }, SECOND)).toBe(false)
+  })
+
+  it('takes the clearing number out of the account field once, and tolerates a digit or two missing', () => {
+    expect(paymentDetailsPointAt({ clearing_number: '5501', account_number: '5501 33344' }, OWN)).toBe(true)
+    expect(paymentDetailsPointAt({ clearing_number: '5501', account_number: '5501 33344' }, SECOND)).toBe(false)
+  })
+
+  it('matches the account number alone when the IBAN carries no clearing number', () => {
+    const handelsbanken = { iban: 'SE0360000000000123456789', currency: 'SEK' }
+    expect(paymentDetailsPointAt({ clearing_number: '6123', account_number: '123 456 789' }, handelsbanken)).toBe(true)
+  })
+
+  it('ignores details too short to tell accounts apart', () => {
+    expect(paymentDetailsPointAt({ clearing_number: null, account_number: '4444' }, OWN)).toBe(false)
+    expect(paymentDetailsPointAt({ clearing_number: '5501', account_number: null }, OWN)).toBe(false)
+    expect(paymentDetailsPointAt({}, OWN)).toBe(false)
+  })
+})
+
+describe('seededRowBelongsToAnother', () => {
+  const seeded = { iban: null, currency: 'SEK', clearing_number: '5501', account_number: '3334444' }
+
+  it('leaves the seeded row to the account its details name (crm#1498)', () => {
+    expect(seededRowBelongsToAnother(seeded, SECOND, [SECOND, OWN])).toBe(true)
+    expect(seededRowBelongsToAnother(seeded, OWN, [SECOND, OWN])).toBe(false)
+  })
+
+  it('matches the asking account by BBAN when the bank gives no IBAN', () => {
+    const own = { bban: OWN.bban, currency: 'SEK' }
+    expect(seededRowBelongsToAnother(seeded, own, [{ bban: SECOND.bban, currency: 'SEK' }, own])).toBe(false)
+  })
+
+  it('keeps the first-come rule when no account, or more than one, matches', () => {
+    const none = { ...seeded, account_number: '9999999' }
+    expect(seededRowBelongsToAnother(none, SECOND, [SECOND, OWN])).toBe(false)
+    const twin = { iban: 'SE0450000000099013334444', currency: 'SEK' }
+    expect(seededRowBelongsToAnother(seeded, SECOND, [SECOND, OWN, twin])).toBe(false)
+    expect(seededRowBelongsToAnother({ iban: null, currency: 'SEK' }, SECOND, [SECOND, OWN])).toBe(false)
+  })
+
+  it('only counts accounts in the seeded row\'s currency', () => {
+    expect(seededRowBelongsToAnother(seeded, SECOND, [SECOND, { ...OWN, currency: 'EUR' }])).toBe(false)
+  })
+
+  it('never applies to a row with an IBAN of its own (the IBAN rule decides)', () => {
+    expect(seededRowBelongsToAnother({ ...seeded, iban: OWN.iban }, SECOND, [SECOND, OWN])).toBe(false)
   })
 })

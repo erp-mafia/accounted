@@ -16,6 +16,14 @@ import { POST as APPROVE } from '../[id]/approve/route'
 import { POST as APPROVE_ITEM } from '../../items/[slug]/approve/route'
 
 const { supabase } = createQueuedMockSupabase()
+// The reviewer's session, as the MFA gate (CASA 3.3.1) reads it: the level
+// from the verified token claims, bankid_linked from a fresh getUser().
+const session = { aal: 'aal2', bankidLinked: false }
+const getClaims = vi.fn(async () => ({ data: { claims: { sub: 'reviewer', aal: session.aal, aud: 'authenticated' } }, error: null }))
+Object.assign(supabase.auth, {
+  getClaims,
+  getUser: vi.fn(async () => ({ data: { user: { id: 'reviewer', app_metadata: session.bankidLinked ? { bankid_linked: true } : {} } }, error: null })),
+})
 const id = '00000000-0000-4000-8000-000000000001'
 const params = { params: Promise.resolve({ id }) }
 const staticParams = { params: Promise.resolve({}) }
@@ -26,6 +34,8 @@ const post = (body: unknown) => new Request('http://localhost/api/community/subm
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.COMMUNITY_REVIEWER_USER_IDS = 'reviewer'
+  session.aal = 'aal2'
+  session.bankidLinked = false
   vi.mocked(requireAuth).mockResolvedValue({ user: { id: 'reviewer' }, supabase, error: null } as never)
   vi.mocked(loadSubmissionsForReview).mockResolvedValue([])
   vi.mocked(sendBackSubmission).mockResolvedValue(true)
@@ -81,5 +91,30 @@ describe('community review routes', () => {
     expect(approvePendingItem).toHaveBeenCalledWith({}, 'fran-github', 'a'.repeat(64))
     vi.mocked(approvePendingItem).mockResolvedValue(false)
     expect((await APPROVE_ITEM(itemPost({ sha: 'a'.repeat(64) }), slugParams)).status).toBe(409)
+  })
+
+  it('refuse a reviewer whose session has no MFA, on every review route (CASA 3.3.1)', async () => {
+    session.aal = 'aal1'
+    const list = await GET(new Request('http://localhost/api/community/submissions'), staticParams)
+    expect(list.status).toBe(403)
+    expect((await list.json()).error.code).toBe('REVIEWER_MFA_REQUIRED')
+    expect((await POST(post({ reason: 'Ta bort telefonnumret' }), params)).status).toBe(403)
+    expect((await APPROVE(new Request('http://localhost/x', { method: 'POST' }), params)).status).toBe(403)
+    expect((await APPROVE_ITEM(itemPost({ sha: 'a'.repeat(64) }), slugParams)).status).toBe(403)
+    expect(loadSubmissionsForReview).not.toHaveBeenCalled()
+    expect(approveSubmission).not.toHaveBeenCalled()
+    expect(approvePendingItem).not.toHaveBeenCalled()
+    expect(sendBackSubmission).not.toHaveBeenCalled()
+  })
+
+  it('let a BankID-linked reviewer through at AAL1 (BankID is two-factor)', async () => {
+    session.aal = 'aal1'
+    session.bankidLinked = true
+    expect((await GET(new Request('http://localhost/api/community/submissions'), staticParams)).status).toBe(200)
+  })
+
+  it('fail closed when the session level cannot be verified', async () => {
+    getClaims.mockRejectedValueOnce(new Error('jwks down'))
+    expect((await GET(new Request('http://localhost/api/community/submissions'), staticParams)).status).toBe(403)
   })
 })

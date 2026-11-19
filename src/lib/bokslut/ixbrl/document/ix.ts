@@ -10,7 +10,8 @@
  *   - collects ix:hidden facts (vallistor per TA §2.15/§3.9.3).
  *
  * Naming follows TA §2.16: contexts period0/period1/…, balans0/balans1/…,
- * units SEK / procent / antal-anstallda.
+ * units SEK / procent and the entry point's unit for medelantal anställda
+ * (antal-anstallda under K2, antal-personer under K3).
  */
 
 import type { TaxonomyEntryPoint } from '../taxonomy/entry-points'
@@ -32,7 +33,6 @@ interface ContextDef {
 const UNIT_MEASURES: Record<string, string> = {
   SEK: 'iso4217:SEK',
   procent: 'xbrli:pure',
-  'antal-anstallda': 'se-k2-type:AntalAnstallda',
 }
 
 export interface MoneyOptions {
@@ -154,14 +154,15 @@ export class FactWriter {
   antalAnstallda(name: string, contextRef: string, value: number): string {
     const concept = mustGetConcept(this.registry, name)
     this.resolveContext(contextRef, concept, name)
-    this.usedUnits.add('antal-anstallda')
+    const unit = this.entryPoint.units.antalAnstallda
+    this.usedUnits.add(unit.id)
     const isWhole = Number.isInteger(value)
     return el(
       'ix:nonFraction',
       {
         contextRef,
         name: this.qname(concept, name),
-        unitRef: 'antal-anstallda',
+        unitRef: unit.id,
         decimals: isWhole ? '0' : '1',
         scale: '0',
         format: 'ixt:numspacecomma',
@@ -172,13 +173,23 @@ export class FactWriter {
 
   // ---- non-numeric facts --------------------------------------------------
 
-  /** Plain-text fact; content is escaped. */
+  /**
+   * Plain-text fact; content is escaped. A concept whose schema type is an
+   * enumeration only accepts its listed values (Bolagsverket rejects anything
+   * else as a schema error), so any other value fails generation here.
+   */
   textPlain(
     name: string,
     contextRef: string,
     content: string,
     opts: { id?: string; tupleRef?: string; order?: string; continuedAt?: string } = {},
   ): string {
+    const allowed = mustGetConcept(this.registry, name).enumeration
+    if (allowed && !allowed.includes(content)) {
+      throw new Error(
+        `Fact ${name}: "${content}" is not an allowed value (${allowed.map((value) => `"${value}"`).join(', ')})`,
+      )
+    }
     return this.nonNumeric(name, contextRef, escapeText(content), opts)
   }
 
@@ -189,6 +200,9 @@ export class FactWriter {
     innerXhtml: string,
     opts: { id?: string; continuedAt?: string } = {},
   ): string {
+    if (mustGetConcept(this.registry, name).enumeration) {
+      throw new Error(`Fact ${name}: enumerated concept, emit it with textPlain() so its value is checked`)
+    }
     return this.nonNumeric(name, contextRef, innerXhtml, opts)
   }
 
@@ -249,9 +263,21 @@ export class FactWriter {
     this.hiddenFacts.push(this.date(name, contextRef, isoDate))
   }
 
-  /** Hidden boolean fact (e.g. ArsredovisningEjTaggadInformation, TA §2.22). */
-  hiddenBoolean(name: string, contextRef: string, value: boolean): void {
-    this.hiddenFacts.push(this.nonNumeric(name, contextRef, value ? 'true' : 'false', {}))
+  /**
+   * Hidden boolean fact (e.g. ArsredovisningEjTaggadInformation, TA §2.22),
+   * or a boolean tuple member (huvudansvarig revisor) via `tupleRef`/`order`.
+   */
+  hiddenBoolean(
+    name: string,
+    contextRef: string,
+    value: boolean,
+    opts: { tupleRef?: string; order?: string } = {},
+  ): void {
+    const concept = mustGetConcept(this.registry, name)
+    if (concept.dataType !== 'xbrli:booleanItemType') {
+      throw new Error(`Fact ${name}: hiddenBoolean() used on ${concept.dataType}`)
+    }
+    this.hiddenFacts.push(this.nonNumeric(name, contextRef, value ? 'true' : 'false', opts))
   }
 
   /** Hidden tuple + members (avskrivningsprincip notes etc.). */
@@ -333,9 +359,13 @@ export class FactWriter {
     }
 
     const unitXml: string[] = []
+    const measures: Record<string, string> = {
+      ...UNIT_MEASURES,
+      [this.entryPoint.units.antalAnstallda.id]: this.entryPoint.units.antalAnstallda.measure,
+    }
     for (const unitId of [...this.usedUnits].sort()) {
       unitXml.push(
-        el('xbrli:unit', { id: unitId }, el('xbrli:measure', {}, UNIT_MEASURES[unitId])),
+        el('xbrli:unit', { id: unitId }, el('xbrli:measure', {}, measures[unitId])),
       )
     }
 

@@ -272,6 +272,154 @@ describe('upsertWebshopOrders', () => {
     expect(update).not.toHaveProperty('line_items')
   })
 
+  describe('rows synced on the UTC day before the syncs read the Swedish day (#58)', () => {
+    // 2026-10-31T23:30Z is 00:30 on 1 November in Stockholm: the earlier sync
+    // stored 2026-10-31, the sync now reads 2026-11-01 from the same order.
+    const swedishDay = { order_date: '2026-11-01', paid_date: '2026-11-01' }
+    const utcDay = { order_date: '2026-10-31', paid_date: '2026-10-31' }
+
+    it('does not flag a booked row as changed in the store, and inserts no second row', async () => {
+      mock.enqueueMany([
+        { data: [existingRow({ journal_entry_id: 'je-1', ...utcDay })] },
+        { data: [] },
+      ])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert(swedishDay)])
+
+      expect(result).toMatchObject({ inserted: 0, updated: 0, unchanged: 1, frozenFlagged: 0 })
+      expect(mock.findCall('webshop_orders', 'update')).toBeUndefined()
+      expect(mock.findCall('webshop_orders', 'insert')).toBeUndefined()
+    })
+
+    it('still flags a booked row whose date really moved', async () => {
+      mock.enqueueMany([
+        { data: [existingRow({ journal_entry_id: 'je-1', order_date: '2026-10-30', paid_date: '2026-10-30' })] },
+        { data: [] },
+        { data: null }, // safe-field update
+      ])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert(swedishDay)])
+
+      expect(result.frozenFlagged).toBe(1)
+      const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+      expect(update.remote_changed_after_freeze).toBe(true)
+      expect(update).not.toHaveProperty('order_date')
+    })
+
+    it('moves an unbooked row onto the Swedish day in place', async () => {
+      mock.enqueueMany([
+        { data: [existingRow(utcDay)] },
+        { data: [] },
+        { data: null }, // full refresh
+      ])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert(swedishDay)])
+
+      expect(result).toMatchObject({ inserted: 0, updated: 1 })
+      const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+      expect(update).toMatchObject(swedishDay)
+      expect(mock.findCall('webshop_orders', 'insert')).toBeUndefined()
+    })
+  })
+
+  describe('ships_nothing (#88)', () => {
+    it('stores it on insert, false when the platform does not send it', async () => {
+      mock.enqueueMany([
+        { data: [] },
+        { data: [] },
+        {
+          data: [
+            { id: 'new-1', external_id: 'a' },
+            { id: 'new-2', external_id: 'b' },
+          ],
+        },
+      ])
+
+      await upsertWebshopOrders(supabase(), COMPANY, USER, [
+        makeUpsert({ external_id: 'a', ships_nothing: true }),
+        makeUpsert({ external_id: 'b' }),
+      ])
+
+      const payloads = mock.findCall('webshop_orders', 'insert')![0] as Record<string, unknown>[]
+      expect(payloads.map((p) => p.ships_nothing)).toEqual([true, false])
+    })
+
+    it('updates an unbooked row whose reading changed and nothing else', async () => {
+      mock.enqueueMany([{ data: [existingRow({ ships_nothing: false })] }, { data: [] }, { data: null }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert({ ships_nothing: true })])
+
+      expect(result).toMatchObject({ updated: 1, unchanged: 0 })
+      const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+      expect(update.ships_nothing).toBe(true)
+    })
+
+    it('counts a row synced before the column as unchanged when nothing ships', async () => {
+      mock.enqueueMany([{ data: [existingRow()] }, { data: [] }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert({ ships_nothing: false })])
+
+      expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+    })
+
+    it('leaves a booked row alone', async () => {
+      mock.enqueueMany([{ data: [existingRow({ journal_entry_id: 'je-1', ships_nothing: false })] }, { data: [] }])
+
+      const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [makeUpsert({ ships_nothing: true })])
+
+      expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+      expect(mock.findCall('webshop_orders', 'update')).toBeUndefined()
+    })
+  })
+
+  it('fills in the country on a booked row that has none (crm#1032)', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ journal_entry_id: 'je-1', customer_country: null })] },
+      { data: [] },
+      { data: null }, // safe-field update
+    ])
+
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [
+      makeUpsert({ customer_country: 'DK' }),
+    ])
+
+    expect(result).toMatchObject({ updated: 1, unchanged: 0, frozenFlagged: 0 })
+    const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(update.customer_country).toBe('DK')
+    expect(update).not.toHaveProperty('remote_changed_after_freeze')
+    expect(update).not.toHaveProperty('total')
+  })
+
+  it('never changes the country a booked row already has', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ journal_entry_id: 'je-1', customer_country: 'DK' })] },
+      { data: [] },
+    ])
+
+    const result = await upsertWebshopOrders(supabase(), COMPANY, USER, [
+      makeUpsert({ customer_country: 'DE' }),
+    ])
+
+    expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+    expect(mock.findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('never clears the country of a booked row when the store withholds it', async () => {
+    mock.enqueueMany([
+      { data: [existingRow({ invoice_id: 'inv-1', customer_country: 'NO' })] },
+      { data: [] },
+      { data: null }, // safe-field update
+    ])
+
+    await upsertWebshopOrders(supabase(), COMPANY, USER, [
+      makeUpsert({ customer_country: null, status: 'completed' }),
+    ])
+
+    const update = mock.findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(update.status).toBe('completed')
+    expect(update).not.toHaveProperty('customer_country')
+  })
+
   it('leaves total_sek null when the exchange rate cannot resolve', async () => {
     mock.enqueueMany([
       { data: [] },

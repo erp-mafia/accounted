@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { OpeningBalanceExecuteSchema } from '@/lib/api/schemas'
 import { setOpeningBalances } from '@/lib/import/opening-balance/service'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { withRouteContext } from '@/lib/api/with-route-context'
-
-ensureInitialized()
 
 /**
  * POST /api/import/opening-balance/execute

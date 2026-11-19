@@ -1,10 +1,9 @@
 'use client'
 
-import { useState, useEffect, useId } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser, signOutAndNavigate } from '@/lib/auth/session-client'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,7 +17,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { RetentionNotice } from '@/components/ui/retention-notice'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { SupportLink } from '@/components/ui/support-link'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -31,12 +30,12 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
+import { ACCOUNT_DELETION_HASH } from '@/lib/company/no-company-routes'
 
 export function AccountDangerZone() {
   const t = useTranslations('settings_account_danger')
   const tRetention = useTranslations('retention_notice')
   const errorLocale = useLocale() as ErrorLocale
-  const router = useRouter()
   const [email, setEmail] = useState<string | null>(null)
   // null = the blocker list is not known: still loading, or the read failed
   // (loadError). "Cannot read the blockers" must mean "cannot permit
@@ -52,14 +51,29 @@ export function AccountDangerZone() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const errorId = useId()
+  const zoneRef = useRef<HTMLDivElement>(null)
+  const scrolledToZone = useRef(false)
+
+  // Deep link (ACCOUNT_DELETION_HREF, from the last-company delete and the
+  // onboarding escape hatch): bring the action into view once the blocker
+  // list has settled, so the user who came here to delete the account sees
+  // the button straight away. After the fetch on purpose: the panel's
+  // scroll reset on navigation (MainContainer) has run by then. Once per
+  // mount; the hash stays, so a shell remount after router.refresh() scrolls
+  // again instead of being reset to the top.
+  useEffect(() => {
+    if (scrolledToZone.current || (blockers === null && !loadError)) return
+    if (window.location.hash !== `#${ACCOUNT_DELETION_HASH}`) return
+    scrolledToZone.current = true
+    zoneRef.current?.scrollIntoView({ block: 'center' })
+  }, [blockers, loadError])
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
       setLoadError(null)
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (!cancelled) setEmail(user?.email ?? null)
 
       try {
@@ -130,9 +144,7 @@ export function AccountDangerZone() {
           setReloadKey((k) => k + 1)
         }
         setError(
-          typeof body?.error === 'string' && body.error
-            ? body.error
-            : t('delete_failed_blockers'),
+          getUserErrorMessage(body, { locale: errorLocale, fallback: t('delete_failed_blockers') }),
         )
         setIsDeleting(false)
         setShowDialog(false)
@@ -141,10 +153,13 @@ export function AccountDangerZone() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
-        throw new Error(body.error || t('delete_failed_default'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('delete_failed_default') }))
       }
 
-      router.push('/login')
+      // The account's sessions are already gone server-side; this removes the
+      // dead session cookie and everything the browser kept for the account
+      // (storage, token, analytics identity) before leaving.
+      await signOutAndNavigate('/login', { scope: 'local' })
     } catch (err) {
       setError(err instanceof Error ? getUserErrorMessage(err) : t('delete_failed_default'))
       setIsDeleting(false)
@@ -155,6 +170,8 @@ export function AccountDangerZone() {
 
   return (
     <>
+      {/* Scroll target of the deep link: marks the top of the zone. */}
+      <div ref={zoneRef} id={ACCOUNT_DELETION_HASH} />
       <SettingsDangerZone label={t('heading')}>
         {/* Owned companies block deletion: functional state, kept visible as
             rows (only the first row carries the label and the why-help). */}
@@ -167,7 +184,7 @@ export function AccountDangerZone() {
             >
               <span className="text-sm">{b.name}</span>
               <SettingsRowEnd>
-                <Button variant="outline" size="sm" asChild>
+                <Button variant="outline" asChild>
                   <Link href="/settings/company">{t('blockers_manage')}</Link>
                 </Button>
               </SettingsRowEnd>
@@ -211,9 +228,9 @@ export function AccountDangerZone() {
             )}
           </div>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" asChild>
               <Link href="/reports?type=sie">
-                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {t('export_sie')}
               </Link>
             </Button>
@@ -236,7 +253,7 @@ export function AccountDangerZone() {
         <p className="px-1 pt-3">
           <SettingsRowNote>
             {t('support_question')}{' '}
-            <SupportLink variant="inline" subject={t('support_subject')} />
+            <SupportLink variant="inline" subject={t('support_subject')} assistant={false} />
           </SettingsRowNote>
         </p>
       </SettingsDangerZone>

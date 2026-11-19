@@ -4,7 +4,7 @@
  * Implements EmailService using the Resend API.
  */
 
-import { Resend } from 'resend'
+import { getResendClient } from '@/lib/email/resend-client'
 import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
 import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/email/service'
@@ -41,7 +41,7 @@ const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
  * Otherwise the platform default: "<fromName> <RESEND_FROM_EMAIL>" or
  * "<App> <RESEND_FROM_EMAIL>". A fromName WITHOUT an explicit address (a
  * brand or company riding the platform address) shows the name ALONE
- * (founder call 2026-08-05: no "via <platform>" in the display name; the
+ * (product call 2026-08-05: no "via <platform>" in the display name; the
  * platform stays visible in the actual From address until a sender domain
  * is verified).
  *
@@ -86,33 +86,40 @@ function optionalAddressList(addresses: string | string[] | undefined): string[]
   return list.length > 0 ? list : undefined
 }
 
-let resendClient: Resend | null = null
-
-function getResendClient(): Resend {
-  if (!resendClient) {
-    if (!process.env.RESEND_API_KEY) {
-      throw new Error('RESEND_API_KEY is not configured')
-    }
-    resendClient = new Resend(process.env.RESEND_API_KEY)
-  }
-  return resendClient
-}
-
 function isResendConfigured(): boolean {
   return !!process.env.RESEND_API_KEY && !!process.env.RESEND_FROM_EMAIL && process.env.RESEND_FROM_EMAIL !== 'noreply@localhost'
 }
 
+/**
+ * Whether Resend refused the request, so nothing went out: a 4xx answer.
+ * Not 409, an idempotency conflict (the first request with this key may
+ * still be sending, or was taken with another body), and not a missing
+ * status: the SDK reports a request that got no answer at all ("Unable to
+ * fetch data") with statusCode null, and Resend may have taken the mail. A
+ * 5xx can come after Resend accepted it too. Exported for unit tests.
+ */
+export function isDefiniteRejection(error: { statusCode?: number | null }): boolean {
+  const status = error.statusCode
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 409
+}
+
+/** The idempotency key of the retry as the platform sender: a different request, so a key of its own. */
+export function platformSenderIdempotencyKey(key: string): string {
+  return `${key}:platform-sender`
+}
+
 export class ResendEmailService implements EmailService {
   async sendEmail(options: SendEmailOptions): Promise<SendEmailResult> {
-    const { to, cc, bcc, subject, html, text, replyTo, fromName, fromAddress, attachments } = options
+    const { to, cc, bcc, subject, html, text, replyTo, fromName, fromAddress, attachments, idempotencyKey } = options
 
     if (!this.isConfigured()) {
-      return { success: false, error: 'Email service is not configured' }
+      return { success: false, error: 'Email service is not configured', outcomeUnknown: false }
     }
 
     const from = buildFromHeader({ fromName, from: options.from, fromAddress })
     const platformFrom = buildFromHeader({ fromName })
 
+    let attempted = false
     try {
       const resend = getResendClient()
       const payload = {
@@ -131,25 +138,37 @@ export class ResendEmailService implements EmailService {
           contentType: att.contentType,
         })),
       }
-      let response = await resend.emails.send({ from, ...payload })
+      const send = (sender: string, key: string | undefined) =>
+        key ? resend.emails.send({ from: sender, ...payload }, { idempotencyKey: key }) : resend.emails.send({ from: sender, ...payload })
+      attempted = true
+      let response = await send(from, idempotencyKey)
 
       // A company's own sending domain can stop being accepted after the
       // fact (DKIM removed, Resend flipped the domain to failed before the
-      // webhook or a manual re-check caught up). Resend rejected the send,
-      // so nothing went out: retry once as the platform sender rather than
-      // letting every invoice for that company fail. The row is corrected by
-      // the next verification check; this only keeps mail flowing.
-      if (response.error && from !== platformFrom) {
+      // webhook or a manual re-check caught up). When Resend refused the
+      // send, nothing went out: retry once as the platform sender rather
+      // than letting every invoice for that company fail. The row is
+      // corrected by the next verification check; this only keeps mail
+      // flowing. Never on an answer that may hide a sent mail (no status, a
+      // server error, an idempotency conflict): the retry could deliver it
+      // twice. Nor on a rate or quota limit, which is not about the sender.
+      if (response.error && from !== platformFrom && isDefiniteRejection(response.error) && response.error.statusCode !== 429) {
         log.warn('Resend rejected the company sender, retrying as the platform sender', {
           from,
           error: response.error.message,
+          statusCode: response.error.statusCode,
         })
-        response = await resend.emails.send({ from: platformFrom, ...payload })
+        response = await send(platformFrom, idempotencyKey ? platformSenderIdempotencyKey(idempotencyKey) : undefined)
       }
 
       if (response.error) {
         log.error('Resend error:', response.error)
-        return { success: false, provider: 'resend', error: response.error.message }
+        return {
+          success: false,
+          provider: 'resend',
+          error: response.error.message,
+          outcomeUnknown: !isDefiniteRejection(response.error),
+        }
       }
 
       return { success: true, provider: 'resend', messageId: response.data?.id }
@@ -159,6 +178,8 @@ export class ResendEmailService implements EmailService {
         success: false,
         provider: 'resend',
         error: error instanceof Error ? error.message : 'Unknown error',
+        // Thrown while a request was out: it may have been taken.
+        outcomeUnknown: attempted,
       }
     }
   }

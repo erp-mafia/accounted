@@ -1,4 +1,4 @@
-import { supplierInvoiceDisplayFigures } from './display-figures'
+import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
 import type { SupplierInvoice, SupplierInvoiceStatus } from '@/types'
 
 // Mirrors lib/invoices/invoice-list-sort.ts: pure comparators over the values

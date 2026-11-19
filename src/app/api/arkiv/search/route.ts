@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { captureArkivEvent } from '@/lib/arkiv/events'
 import { documentTitle } from '@/lib/arkiv/documents/title'
 import { isSearchKind, searchRecords, SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_QUERY_MAX, SEARCH_QUERY_MIN, type SearchItem, type SearchKind } from '@/lib/arkiv/search'
@@ -49,7 +49,6 @@ const inlineHref = (documentId: string, page: number | null) => `/api/documents/
 export const cleanPassage = (text: string): string => text.replace(/[#*_`]+/g, '').replace(/\s+/g, ' ').trim()
 
 export const GET = withRouteContext('arkiv.search', async (request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
   const { q, limit } = parsed.data

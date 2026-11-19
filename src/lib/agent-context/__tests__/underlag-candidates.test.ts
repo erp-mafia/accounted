@@ -80,6 +80,24 @@ describe('scoreUnderlagCandidates', () => {
     expect(out[0].channelContext?.representation?.purpose).toBe('kundmöte')
   })
 
+  it('never offers a purchase for money that came in, nor a refund for money that went out (crm#1779)', () => {
+    const purchase = { ...extraction({ supplier: 'Espresso House', date: '2026-05-12', total: 184 }), documentKind: 'receipt' as const }
+    const refund = { ...extraction({ supplier: 'Espresso House', date: '2026-05-12', total: -184 }), documentKind: 'receipt' as const }
+    const items = [
+      { id: 'purchase', document_id: 'doc-p', extracted_data: purchase, channel_context: null },
+      { id: 'refund', document_id: 'doc-r', extracted_data: refund, channel_context: null },
+    ]
+    expect(scoreUnderlagCandidates(tx, items).map((c) => c.inbox_item_id)).toEqual(['purchase'])
+    expect(scoreUnderlagCandidates({ ...tx, amount: 184 }, items).map((c) => c.inbox_item_id)).toEqual(['refund'])
+  })
+
+  it('offers a nameless invoice either way: the reading leaves the company itself out as seller', () => {
+    // The company's own invoice, read as an invoice with no seller, paid by its customer.
+    const ownInvoice = { ...extraction({ supplier: null, date: '2026-05-12', total: 184 }), documentKind: 'supplier_invoice' as const }
+    const out = scoreUnderlagCandidates({ ...tx, amount: 184 }, [{ id: 'own', document_id: 'doc-o', extracted_data: ownInvoice, channel_context: null }])
+    expect(out.map((c) => c.inbox_item_id)).toEqual(['own'])
+  })
+
   it('rejects a same-amount receipt from a different month', () => {
     const out = scoreUnderlagCandidates(tx, [
       {
@@ -145,7 +163,7 @@ describe('scoreUnderlagCandidates', () => {
   })
 
   it('proposes a non-invoice document via its prominent amounts', () => {
-    // The Robotministeriet case: an SEB account agreement (documentKind
+    // A reported case: a bank account agreement (documentKind
     // "other") has no "Att betala" total, only "Anslutnings-/Engångspris
     // 2 500". The bank charges AVGIFT -2500 the same day. Before the
     // prominentAmounts fallback this document was structurally unmatchable.
@@ -310,5 +328,52 @@ describe('scoreUnderlagCandidates', () => {
         },
       ]),
     ).toEqual([])
+  })
+})
+
+// crm#1962: one seller's monthly charge moves by a few kronor, so the other
+// month's document is near the row's sum and can sit nearer the row's date.
+describe('scoreUnderlagCandidates: the row\'s own sum against a near one', () => {
+  const fee = {
+    id: 'tx-fee',
+    date: '2026-10-19',
+    description: 'EXEMPELBANKEN AVGIFT',
+    merchant_name: 'Exempelbanken',
+    amount: -182,
+    currency: 'SEK',
+    amount_sek: null,
+    exchange_rate: null,
+  }
+  const invoice = (id: string, date: string, total: number) => ({
+    id,
+    document_id: `doc-${id}`,
+    extracted_data: extraction({ supplier: 'Exempelbanken AB', date, total }),
+    channel_context: null,
+  })
+
+  it.each([
+    ['the near sum dated nearer the row', '2026-10-12', '2026-10-19'],
+    ['the exact sum dated nearer the row', '2026-10-19', '2026-10-12'],
+  ])('offers only the exact sum when %s', (_case, exactDate, nearDate) => {
+    for (const items of [
+      [invoice('exact', exactDate, 182), invoice('near', nearDate, 185)],
+      [invoice('near', nearDate, 185), invoice('exact', exactDate, 182)],
+    ]) {
+      const out = scoreUnderlagCandidates(fee, items)
+      expect(out.map((c) => c.inbox_item_id)).toEqual(['exact'])
+      expect(out[0].amountAgrees).toBe(true)
+    }
+  })
+
+  it('still scores the near sum above the exact one on name and date: the ranking alone would pick it', () => {
+    const [near] = scoreUnderlagCandidates(fee, [invoice('near', '2026-10-19', 185)])
+    const [exact] = scoreUnderlagCandidates(fee, [invoice('exact', '2026-10-12', 182)])
+    expect(near.confidence).toBeGreaterThan(exact.confidence)
+  })
+
+  it('keeps a near sum as a candidate when no document has the row\'s sum', () => {
+    const out = scoreUnderlagCandidates(fee, [invoice('near', '2026-10-19', 185)])
+    expect(out.map((c) => c.inbox_item_id)).toEqual(['near'])
+    expect(out[0].amountAgrees).toBe(false)
   })
 })

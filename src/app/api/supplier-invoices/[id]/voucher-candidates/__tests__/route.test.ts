@@ -34,9 +34,9 @@ const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 const BANK_CREDIT = { side: 'bank_credit', accountPrefix: '19', entrySide: 'credit' }
 
-function get() {
+function get(query = '') {
   return GET(
-    createMockRequest(`/api/supplier-invoices/${VALID_UUID}/voucher-candidates`),
+    createMockRequest(`/api/supplier-invoices/${VALID_UUID}/voucher-candidates${query}`),
     createMockRouteParams({ id: VALID_UUID }),
   )
 }
@@ -77,8 +77,32 @@ describe('GET /api/supplier-invoices/[id]/voucher-candidates', () => {
     expect(body.data.candidates).toHaveLength(1)
     expect(mockResolveSide).toHaveBeenCalledTimes(1)
     expect(mockResolveSide).toHaveBeenCalledWith(mockSupabase, 'company-1', VALID_UUID)
-    // The matcher gets the resolved side instead of looking it up again.
-    expect(mockFind.mock.calls[0][3]).toEqual({ settlementSide: BANK_CREDIT })
+    // The matcher gets the resolved side instead of looking it up again, and
+    // is asked for vouchers that pay several debts too: a person picks here.
+    expect(mockFind.mock.calls[0][3]).toEqual({ settlementSide: BANK_CREDIT, includeShared: true })
+  })
+
+  it('looks up a verifikat named by its number, at any date (crm#1434)', async () => {
+    enqueue({ data: { id: VALID_UUID, status: 'registered', currency: 'SEK' } })
+    mockFind.mockResolvedValue([])
+    const { status } = await parseJsonResponse(await get('?voucher=B-12'))
+    expect(status).toBe(200)
+    expect(mockFind.mock.calls[0][3]).toEqual({
+      settlementSide: BANK_CREDIT,
+      includeShared: true,
+      voucher: { series: 'B', number: 12 },
+    })
+  })
+
+  it('answers a search text that names no voucher number with no candidates, without searching', async () => {
+    enqueue({ data: { id: VALID_UUID, status: 'registered', currency: 'SEK' } })
+    const { status, body } = await parseJsonResponse<{ data: { candidates: unknown[]; settlement_side: string } }>(
+      await get('?voucher=hyra'),
+    )
+    expect(status).toBe(200)
+    expect(body.data.candidates).toEqual([])
+    expect(body.data.settlement_side).toBe('bank_credit')
+    expect(mockFind).not.toHaveBeenCalled()
   })
 
   it('answers a settled invoice with no candidates and never runs the matcher', async () => {

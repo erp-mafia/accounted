@@ -1,11 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { normalizeVatNumber, isValidSwedishVatNumber, deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import {
+  normalizeVatNumber,
+  isValidSwedishVatNumber,
+  deriveSwedishVatNumber,
+  vatRegisteredWithoutOrgNumber,
+} from '@/lib/vat/vat-number'
 import { regenerateTaxDeadlinesForUser, toDeadlineSettings } from '@/lib/tax/deadline-generator'
 import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import type { EntityType } from '@/types'
+import { checkPeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
+import { fiscalYearLockedToCalendar } from '@/lib/company/entity-type'
+import { isSaneDateString } from '@/lib/invariants/iso-date'
+import { signupProfileColumns } from '@/lib/modules/signup-profile'
+import { createLogger } from '@/lib/logger'
 import { registeredOfficeFromRegistry } from './registered-office'
+
+const log = createLogger('company.create')
 
 /**
  * The one company-creation sequence, shared by the web wizard (Server
@@ -36,6 +48,14 @@ export interface CreateCompanyInput {
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
   ticLookup?: CompanyLookupResult | null
+  /**
+   * Whether the profile derived from the legal form also becomes the
+   * company's profile (companies.profile_id). The derived profile is always
+   * recorded as a suggestion; only public signup with PROFILES_APPLY_ON_SIGNUP
+   * on applies it (lib/modules/signup-profile.ts). Default false: the company
+   * keeps Standard (allt på).
+   */
+  applyDerivedProfile?: boolean
 }
 
 /**
@@ -48,12 +68,14 @@ export type CreateCompanyResult =
 
 export const COMPANY_CREATION_ERRORS = {
   org_number_invalid: 'org_number_invalid',
+  period_invalid: 'period_invalid',
   create_failed: 'Kunde inte skapa företag. Försök igen.',
   org_number_save_failed: 'Kunde inte spara organisationsnummer. Försök igen.',
   chart_failed: 'Kunde inte skapa kontoplan. Försök igen.',
   settings_failed: 'Kunde inte spara inställningar. Försök igen.',
   period_failed: 'Kunde inte skapa räkenskapsår. Försök igen.',
   deadlines_failed: 'Kunde inte skapa skattedeadlines. Försök igen.',
+  vat_needs_org_number: 'Ett momsregistrerat företag behöver organisationsnummer.',
 } as const
 
 export async function createCompanyCore(
@@ -82,6 +104,28 @@ export async function createCompanyCore(
   const cleanedOrgNumber = normalizeOrgNumber(rawOrgNumber)
   if (rawOrgNumber && rawOrgNumber.trim() && !cleanedOrgNumber) {
     return { error: COMPANY_CREATION_ERRORS.org_number_invalid }
+  }
+  // Every door checks this before it writes anything: the API and MCP schema
+  // say so field by field, but the web journey sends its settings as they are.
+  if (vatRegisteredWithoutOrgNumber(input.settings.vat_registered as boolean | null | undefined, rawOrgNumber)) {
+    return { error: COMPANY_CREATION_ERRORS.vat_needs_org_number }
+  }
+
+  // The dates of the räkenskapsår come from the caller as well: the web
+  // journey works them out in the browser, a first year's from what the
+  // person picked. They are real dates in the shape BFL 3 kap. allows
+  // (checkPeriodDuration, the one rule every door reads), or nothing is
+  // written; the fiscal_periods trigger stays the floor under it.
+  const { startDate, endDate } = input.fiscalPeriod
+  if (
+    !isSaneDateString(startDate) ||
+    !isSaneDateString(endDate) ||
+    checkPeriodDuration(startDate, endDate, {
+      isFirstPeriod: input.settings.is_first_fiscal_year === true,
+      calendarYearOnly: fiscalYearLockedToCalendar(input.entityType),
+    })
+  ) {
+    return { error: COMPANY_CREATION_ERRORS.period_invalid }
   }
 
   // Säte comes from the register (SCB Säteskommun), never from the postal
@@ -245,6 +289,30 @@ export async function createCompanyCore(
   } catch (deadlineError) {
     await rollback('tax deadline generation failed', deadlineError)
     return { error: COMPANY_CREATION_ERRORS.deadlines_failed }
+  }
+
+  // 6. The profile derived from the legal form (Profiles and Suggestions):
+  // recorded as a suggestion, and the company's profile only when the caller
+  // applies it. Best-effort and last: the company is complete without it,
+  // and a failed write leaves Standard (every package on), which hides
+  // nothing.
+  const profileColumns = signupProfileColumns(input.entityType, input.applyDerivedProfile === true)
+  if (profileColumns) {
+    try {
+      const { error: profileError } = await supabase
+        .from('companies')
+        .update({
+          suggested_profile_id: profileColumns.suggested_profile_id,
+          suggested_profile_version: profileColumns.suggested_profile_version,
+          // NULL, Standard, unless the caller applies the derived profile.
+          profile_id: profileColumns.profile_id ?? null,
+          profile_version: profileColumns.profile_version ?? null,
+        })
+        .eq('id', newCompanyId)
+      if (profileError) log.warn('profile suggestion not recorded', { error: String((profileError as { message?: string }).message ?? profileError) })
+    } catch (profileErr) {
+      log.warn('profile suggestion not recorded', { error: profileErr instanceof Error ? profileErr.message : String(profileErr) })
+    }
   }
 
   const savedOffice = settingsToSave.registered_office

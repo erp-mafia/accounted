@@ -11,6 +11,7 @@ import {
   type PanelRequestOptions,
   type PanelRequestResult,
 } from '@/lib/browser/panel-request'
+import { feedSyncOutcome, type FeedSyncOutcome } from '@/lib/feed-sync/sync-outcome'
 
 /**
  * Deadline for the quick calls (status, toggle, disconnect). Connect probes
@@ -53,50 +54,27 @@ export interface ShopifySyncPayload {
     errors?: number
     revoked?: boolean
     deadlineReached?: boolean
+    shippingCountryWithheld?: boolean
   } | null
 }
 
-type SyncCounts = {
-  fetched: number
-  imported: number
-}
-
-export type ShopifySyncOutcome =
-  /** The store rejected the credentials; the connection was flipped to revoked. */
-  | { reason: 'revoked' }
-  /** The window genuinely held nothing. A real answer, not a silent success. */
-  | { reason: 'empty' }
-  /**
-   * The time budget ran out with orders still unfetched. Reported before the
-   * count-based outcomes so a truncated run never reads as a complete one;
-   * the cursor persisted, so pressing sync again continues where it stopped.
-   * Carries the error count too: a truncated run can also have failed rows,
-   * and dropping that number would repeat the silent-partial mistake.
-   */
-  | { reason: 'partial'; values: SyncCounts & { errors: number } }
-  /** Rows landed, and some rows did not. Both halves get said. */
-  | { reason: 'errors'; values: SyncCounts & { errors: number } }
-  /** Rows landed. */
-  | { reason: 'feed'; values: SyncCounts }
-  /** 2xx whose body could not be read: the sync ran, the counts are unknown. */
-  | { reason: 'unknown' }
+/** The shared ladder (lib/feed-sync/sync-outcome), with this connector's counts. */
+export type ShopifySyncOutcome = FeedSyncOutcome
 
 /** Turn the sync route's success body into the single sentence the user gets. */
 export function syncSummary(payload: ShopifySyncPayload | null): ShopifySyncOutcome {
+  return feedSyncOutcome(payload, { importedField: 'inserted' })
+}
+
+/**
+ * Whether the run's orders came without a destination country because the
+ * store withholds shipping addresses from the app (the panel then names the
+ * Shopify permission to grant). Null when the run cannot tell (no orders
+ * listed, revoked, unreadable body): the panel keeps what it showed.
+ */
+export function shippingCountryWithheld(payload: ShopifySyncPayload | null): boolean | null {
   const summary = payload?.transactions
-  if (!summary) return { reason: 'unknown' }
-  if (summary.revoked === true) return { reason: 'revoked' }
-  if (typeof summary.fetched !== 'number') return { reason: 'unknown' }
-
-  const fetched = summary.fetched
-  // "imported" in the user-facing sentence = new rows this run (inserts).
-  const imported = typeof summary.inserted === 'number' ? summary.inserted : 0
-  const errors = typeof summary.errors === 'number' ? summary.errors : 0
-
-  if (summary.deadlineReached === true) {
-    return { reason: 'partial', values: { fetched, imported, errors } }
-  }
-  if (fetched === 0) return { reason: 'empty' }
-  if (errors > 0) return { reason: 'errors', values: { fetched, imported, errors } }
-  return { reason: 'feed', values: { fetched, imported } }
+  if (!summary || summary.revoked === true) return null
+  if (summary.shippingCountryWithheld === true) return true
+  return typeof summary.fetched === 'number' && summary.fetched > 0 ? false : null
 }

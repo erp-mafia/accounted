@@ -1,6 +1,6 @@
 'use client'
 
-import { ShieldAlert } from 'lucide-react'
+import { ShieldExclamationIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,7 +36,7 @@ export function SessionTimeoutModal({
       >
         <DialogHeader>
           <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-attn">
-            <ShieldAlert className="h-5 w-5" aria-hidden="true" />
+            <ShieldExclamationIcon className="h-5 w-5" aria-hidden="true" />
           </div>
           <DialogTitle>{t('warning_title')}</DialogTitle>
           <DialogDescription>

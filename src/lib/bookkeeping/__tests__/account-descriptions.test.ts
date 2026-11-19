@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getAccountDescription, ACCOUNT_DESCRIPTIONS } from '../account-descriptions'
+import { accountNameForRow, getAccountDescription, ACCOUNT_DESCRIPTIONS } from '../account-descriptions'
 
 describe('account-descriptions', () => {
   describe('getAccountDescription', () => {
@@ -20,6 +20,31 @@ describe('account-descriptions', () => {
       // 1580 to 1686. 1580 must stay undefined so a company's own account
       // name is what renders.
       expect(getAccountDescription('1580')).toBeUndefined()
+    })
+  })
+
+  describe('accountNameForRow', () => {
+    const chart = [
+      { account_number: '4011', account_name: 'Inköp reservdelar' },
+      { account_number: '1510', account_name: 'Kundfordringar, egna' },
+    ]
+
+    it('names a row after an account the company added itself', () => {
+      // 4011 is in no reference chart entry: without the company's chart the row had no text.
+      expect(getAccountDescription('4011')).toBeUndefined()
+      expect(accountNameForRow('4011', chart)).toBe('Inköp reservdelar')
+    })
+
+    it('takes the company\'s own name before the reference chart\'s', () => {
+      expect(accountNameForRow('1510', chart)).toBe('Kundfordringar, egna')
+    })
+
+    it('falls back to the reference chart, and to nothing for an account neither knows', () => {
+      expect(accountNameForRow('1510', [])).toBe('Kundfordringar')
+      expect(accountNameForRow('1510')).toBe('Kundfordringar')
+      expect(accountNameForRow('9999', chart)).toBe('')
+      expect(accountNameForRow('15', chart)).toBe('')
+      expect(accountNameForRow('', chart)).toBe('')
     })
   })
 

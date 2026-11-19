@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
+
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn(() => ({ tag: 'service' })) }))
 vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 
@@ -38,8 +41,12 @@ describe('document read handler', () => {
     expect(enqueueDocumentJob).toHaveBeenCalledTimes(2)
   })
 
-  it('never fails the upload when queueing fails', async () => {
+  it('never fails the upload when queueing fails, and the failure reaches the bus as an error', async () => {
     ;(enqueueDocumentJob as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('database unavailable'))
     await expect(upload('co-1')).resolves.toBeUndefined()
+    expect(logMock.error).toHaveBeenCalledWith('handler failed', expect.any(Error), expect.objectContaining({
+      eventType: 'document.uploaded',
+      handler: 'enqueueDocumentRead',
+    }))
   })
 })

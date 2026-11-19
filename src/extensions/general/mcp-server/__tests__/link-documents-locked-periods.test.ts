@@ -14,6 +14,7 @@ import { createTableMockSupabase } from '@/tests/helpers'
 import { tools, isStagingTool } from '../server'
 import { toToolError } from '../tool-result'
 import { projectToolReferences } from '../tool-namespace'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const linkDocuments = tools.find((t) => t.name === 'gnubok_link_documents_to_vouchers')!
 const listVerifikat = tools.find((t) => t.name === 'gnubok_list_verifikat_without_documents')!
@@ -66,7 +67,7 @@ function setup(rows: Array<{ n: number; year: number }>, periods: Array<ReturnTy
         fiscal_period_id: `fp-${r.year}`,
       })),
     },
-    pending_operations: { data: { id: 'op-1' } },
+    pending_operations: [{ data: [] }, { data: { id: 'op-1' } }], // no waiting link proposal; then the insert
   })
   const links = rows.map((r) => ({
     document_id: uuid(100 + r.n),
@@ -102,7 +103,7 @@ describe('gnubok_link_documents_to_vouchers: rows in locked or closed periods', 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')![0] as Inserted
     expect(inserted.params.links.map((l) => l.journal_entry_id)).toEqual([uuid(201), uuid(202)])
-    expect(inserted.title).toBe('Koppla 2 bilagor till verifikat (1 i låst period)')
+    expect(inserted.title).toBe('Koppla 2 av 3 bilagor till verifikat A1-A2 (1 i låst period)')
     expect(result.preview).toMatchObject({
       total: 3,
       matched_count: 2,
@@ -136,7 +137,8 @@ describe('gnubok_link_documents_to_vouchers: rows in locked or closed periods', 
     const { error } = toToolError(err)
     expect(error.code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
     expect(error.retryable).toBe(false)
-    expect(error.message_sv).toBe('Det går inte att bifoga underlag till verifikationer i en låst eller stängd period.')
+    // The one Swedish answer every document door gives this refusal.
+    expect(error.message_sv).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
     expect(error.message_en).toMatch(/^No links staged: 3 of 3 rows target verifikat in a locked or closed fiscal period/)
     expect(error.message_en).toContain(
       'fiscal_year 2022 (fiscal_period_id fp-2022, 1 row) is marked closed in the previous system: reopen it with gnubok_reopen_fiscal_period_external.',
@@ -150,7 +152,7 @@ describe('gnubok_link_documents_to_vouchers: rows in locked or closed periods', 
     expect(error.remediation?.args).toBeUndefined()
   })
 
-  it('names gnubok_unlock_period for a locked year, and no way back for a year closed by a year-end run', async () => {
+  it('names gnubok_unlock_period for a locked year, and the owner\'s reopen in the app for a year closed by a year-end run', async () => {
     const { supabase, links } = setup(
       [{ n: 1, year: 2025 }, { n: 2, year: 2022 }],
       [period(2025, LOCKED), period(2022, YEAR_END_CLOSED)],
@@ -163,9 +165,11 @@ describe('gnubok_link_documents_to_vouchers: rows in locked or closed periods', 
       'fiscal_year 2025 (fiscal_period_id fp-2025, 1 row) is locked: unlock it with gnubok_unlock_period.',
     )
     expect(error.message_en).toContain(
-      'fiscal_year 2022 (fiscal_period_id fp-2022, 1 row) was closed by a year-end run here and cannot be reopened.',
+      'fiscal_year 2022 (fiscal_period_id fp-2022, 1 row) was closed by a year-end run here: only the company owner can reopen it, in the app (Inställningar → Bokföring → Räkenskapsår), while its årsredovisning is not signed, adopted or filed.',
     )
+    expect(error.message_en).not.toContain('cannot be reopened')
     expect(error.remediation).toMatchObject({ tool: 'gnubok_unlock_period', args: { fiscal_period_id: 'fp-2025' } })
+    expect(error.remediation?.description).toContain('there is no API or MCP door')
   })
 
   it('keeps the other misses in the refusal when nothing is left to stage', async () => {
@@ -187,7 +191,7 @@ describe('gnubok_link_documents_to_vouchers: rows in locked or closed periods', 
 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')![0] as Inserted
-    expect(inserted.title).toBe('Koppla 2 bilagor till verifikat')
+    expect(inserted.title).toBe('Koppla 2 bilagor till verifikat A1-A2')
     expect(inserted.params.links).toEqual([
       { document_id: uuid(101), journal_entry_id: uuid(201), journal_entry_line_id: null },
       { document_id: uuid(102), journal_entry_id: uuid(202), journal_entry_line_id: null },

@@ -35,7 +35,6 @@ ENV NEXT_PUBLIC_SUPABASE_URL=__NEXT_PUBLIC_SUPABASE_URL__
 ENV NEXT_PUBLIC_SUPABASE_WS_URL=__NEXT_PUBLIC_SUPABASE_WS_URL__
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=__NEXT_PUBLIC_SUPABASE_ANON_KEY__
 ENV NEXT_PUBLIC_APP_URL=__NEXT_PUBLIC_APP_URL__
-ENV NEXT_PUBLIC_VAPID_PUBLIC_KEY=__NEXT_PUBLIC_VAPID_PUBLIC_KEY__
 ENV NEXT_PUBLIC_SELF_HOSTED=__NEXT_PUBLIC_SELF_HOSTED__
 ENV NEXT_PUBLIC_REQUIRE_MFA=__NEXT_PUBLIC_REQUIRE_MFA__
 ENV NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS=__NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS__
@@ -51,17 +50,20 @@ ENV NEXT_PUBLIC_BRANDING_APP_NAME=__NEXT_PUBLIC_BRANDING_APP_NAME__
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# `next build` type-checks the whole production project (tsconfig.build.json)
-# after compiling, and that step now needs more heap than Node gives itself by
-# default. V8 caps its default old-space at about 4 GB on 64-bit whatever the
-# machine has, so a self-hosted build fails with "Ineffective mark-compacts
-# near heap limit" on a 32 GB host exactly as it would on a 4 GB one: more RAM
-# does not raise the ceiling, only this does. Measured on the current tree:
-# the check completes at 5120 MiB and dies at the default.
-#
-# Only the builder stage sets this. The runner is a separate FROM and its
-# runtime heap stays whatever the deployment chooses.
-ENV NODE_OPTIONS=--max-old-space-size=6144
+# The image build compiles and does not type-check. `next build` would run a
+# type check of the whole production project after compiling, and that check
+# no longer fits in an 8 GiB heap: the build died there with "Ineffective
+# mark-compacts near heap limit". CI type-checks every change before it reaches
+# main (`npm run check:types`), so the check here repeated that work on a tree
+# that had already passed it. A local build needs less memory without it.
+ENV SKIP_BUILD_TYPECHECK=1
+
+# Compiling still wants more heap than Node gives itself by default (V8 caps
+# its default old-space at about 4 GB on 64-bit, whatever the machine has).
+# Same ceiling as CI's build job. Only the builder stage sets it: the runner
+# is a separate FROM and its runtime heap stays whatever the deployment
+# chooses.
+ENV NODE_OPTIONS=--max-old-space-size=8192
 
 RUN npm run build
 
@@ -112,6 +114,16 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/server.js ./server.js
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/package.json ./package.json
+# The booking-template packs (packs/*.yaml) are read off disk at runtime,
+# relative to the working directory (lib/packs/load.ts), by the nightly
+# booking-template sync and the MCP booking-packs resource. The lines above
+# copy only the standalone server, so the catalogue ships on its own.
+COPY --from=builder --chown=nextjs:nodejs /app/packs ./packs
+# The support assistant's page texts are written by the build (package.json
+# prebuild, scripts/generate-support-page-texts.ts) and read off disk at
+# runtime, relative to the working directory
+# (src/lib/agent/support/page-texts.ts). Same reason as the packs above.
+COPY --from=builder --chown=nextjs:nodejs /app/src/lib/agent/support/_generated ./src/lib/agent/support/_generated
 
 # Baked-in templates for runtime population of the writable mounts.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone/.next /opt/gnubok-template/.next

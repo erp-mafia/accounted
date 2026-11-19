@@ -10,11 +10,15 @@ import {
 import { validateQuery } from '@/lib/api/validate'
 import { EventsQuerySchema } from '@/lib/api/schemas'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { minimisePayload } from '@/lib/webhooks/handler'
+import { PAYROLL_EVENT_PREFIXES, isPayrollEvent } from '@/lib/webhooks/public-events'
+import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { createLogger } from '@/lib/logger'
+import { roleAllowsScope } from '@/lib/auth/invoicer-role'
 
 const log = createLogger('api/events')
 
@@ -83,15 +87,20 @@ export async function GET(request: Request) {
   // events whenever the user's active_company_id happened to point elsewhere.
   let keyCompanyId: string | null = null
   let keyMode: ApiKeyMode = 'live'
+  // Payroll events (salary_run.*, agi.*) need payroll:read on an API key, the
+  // same gate webhook registration applies: the pull feed must never hand out
+  // what the push surface withholds. A session user reads them as in the app.
+  let canReadPayroll = true
 
   const token = extractBearerToken(request)
   if (token?.startsWith('gnubok_sk_')) {
     const authResult = await validateApiKey(token)
     if ('error' in authResult) {
-      // validateApiKey only ever returns 401 (bad/unknown/refresh token) or
-      // 429 (rate limit): map both onto the canonical envelope, same as v1.
+      // validateApiKey returns 401 (bad/unknown/refresh token), 429 (rate
+      // limit) or a coded refusal (a paused agent, a suspended service
+      // account): map them onto the canonical envelope, same as v1.
       return errorResponseFromCode(
-        authResult.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED',
+        authResult.code ?? (authResult.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED'),
         log,
         { reason: authResult.error },
       )
@@ -106,6 +115,7 @@ export async function GET(request: Request) {
 
     userId = authResult.userId
     keyCompanyId = authResult.companyId
+    canReadPayroll = hasScope(authResult.scopes, 'payroll:read')
     // Guard 3: test keys. A test key is simulation-only for WRITES (the v1
     // wrapper forces dry-run and blocks non-simulatable mutations with
     // TEST_KEY_WRITE_BLOCKED). This endpoint has no write path at all, so the
@@ -142,26 +152,19 @@ export async function GET(request: Request) {
   // company_id on the api_keys row is a snapshot taken when the key was minted.
   // Offboarding a user from a company does not revoke their keys, and the
   // service-role client above bypasses RLS, so without this the key keeps
-  // draining the event log of a company its owner no longer belongs to. Both
-  // sibling call sites already re-check (with-api-v1.ts :349-370 and
-  // mcp-server/company-routing.ts :90-102); this closes the third.
-  //
-  // archived_at IS NULL follows company-routing: an archived company is a
-  // deactivated tenant and should stop feeding automation platforms.
+  // draining the event log of a company its owner no longer belongs to.
+  // readLiveMembership is the read the v1 gate and MCP routing make: an
+  // archived company is a deactivated tenant and stops feeding automation
+  // platforms.
   //
   // The session path is deliberately excluded: it runs on the request-scoped
   // client where RLS (user_company_ids()) already enforces the same rule.
   if (keyCompanyId !== null) {
-    const { data: membership, error: membershipError } = await supabase
-      .from('company_members')
-      .select('company_id, companies!inner(archived_at)')
-      .eq('user_id', userId)
-      .eq('company_id', companyId)
-      .is('companies.archived_at', null)
-      .maybeSingle()
-
-    if (membershipError) {
-      log.error('failed to resolve company membership', membershipError)
+    let membership: LiveMembership | null
+    try {
+      membership = await readLiveMembership(supabase, userId, companyId)
+    } catch (membershipError) {
+      log.error('failed to resolve company membership', membershipError as Error)
       return errorResponseFromCode('INTERNAL_ERROR', log, {
         details: { reason: getUserErrorMessage(membershipError) },
       })
@@ -172,12 +175,50 @@ export async function GET(request: Request) {
       // exists to a caller who is no longer allowed to see it.
       return errorResponseFromCode('NOT_FOUND', log, { details: { companyId } })
     }
+
+    // Multi-user seat gate, as with-api-v1.ts and MCP apply it: a non-owner
+    // membership in a frozen company (multi_user lapsed past its grace) gets
+    // no events either. Owners pass without a read; no read while the gate
+    // is off.
+    const { role } = membership
+    // The invoicing-only role (lib/auth/invoicer-role.ts) reaches customers,
+    // invoices and articles; the event log spans the whole company.
+    if (!roleAllowsScope(role, REQUIRED_SCOPE)) {
+      log.warn('invoicer membership refused the event log', { companyId })
+      return errorResponseFromCode('FORBIDDEN', log, {
+        reason: 'role_scope_limited',
+        details: { code: 'ROLE_SCOPE_LIMITED', companyId, required_scope: REQUIRED_SCOPE },
+      })
+    }
+    if (!(await isMembershipActive(supabase, companyId, role))) {
+      log.warn('multi-user seat gate refused frozen membership', { companyId })
+      return errorResponseFromCode('FORBIDDEN', log, {
+        reason: 'multi_user_frozen',
+        details: {
+          companyId,
+          capability: 'multi_user',
+          message: 'Company is paused for this account: multiple users require a paid plan. Ask the company owner to upgrade.',
+        },
+      })
+    }
   }
 
   // Validate query params
   const result = validateQuery(request, EventsQuerySchema)
   if (!result.success) return result.response
   const { after, types, limit } = result.data
+
+  // Asking for a payroll type by name without the scope is refused rather
+  // than answered with an empty page the caller would poll forever.
+  const deniedPayrollTypes = canReadPayroll ? [] : (types ?? []).filter(isPayrollEvent)
+  if (deniedPayrollTypes.length > 0) {
+    return errorResponseFromCode('INSUFFICIENT_SCOPE', log, {
+      details: {
+        required_scope: 'payroll:read',
+        reason: `Reading ${deniedPayrollTypes.join(', ')} requires payroll:read in addition to ${REQUIRED_SCOPE}.`,
+      },
+    })
+  }
 
   // Build query
   let query = supabase
@@ -193,6 +234,12 @@ export async function GET(request: Request) {
 
   if (types && types.length > 0) {
     query = query.in('event_type', types)
+  }
+
+  if (!canReadPayroll) {
+    for (const prefix of PAYROLL_EVENT_PREFIXES) {
+      query = query.not('event_type', 'like', `${prefix}%`)
+    }
   }
 
   const { data, error } = await query

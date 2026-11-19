@@ -8,6 +8,7 @@ import {
   type ConnectorSyncReport,
 } from '../contract'
 import { getConnectorConfig, type ConnectorConfig } from './config'
+import { connectorHeaders } from './connector-fetch'
 
 const log = createLogger('connector-sync')
 
@@ -108,11 +109,7 @@ export async function syncConnectorEntitlements(
   try {
     response = await fetchImpl(`${config.baseUrl}${CONNECTOR_ENTITLEMENTS_PATH}`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.key}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
+      headers: connectorHeaders({ key: config.key, json: true }),
       body: JSON.stringify(report),
     })
   } catch (err) {
@@ -123,8 +120,8 @@ export async function syncConnectorEntitlements(
 
   if (response.status === 401 || response.status === 403) {
     // Delete the grant cache ONLY on a genuine connector rejection, proven by
-    // the hosted route's own JSON body code (with-connector-auth always sends
-    // one). A bare-status 401/403 also comes from layers where the app never
+    // the service's own JSON body code (its key check always sends one). A
+    // bare-status 401/403 also comes from layers where the app never
     // ran: a Vercel WAF challenge page, edge deployment protection, an egress
     // proxy at the self-host. Trusting the status alone let any of those wipe
     // a paying instance's 72h offline grace within the hour: the same failure

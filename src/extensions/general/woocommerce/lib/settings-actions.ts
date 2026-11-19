@@ -11,6 +11,7 @@ import {
   type PanelRequestOptions,
   type PanelRequestResult,
 } from '@/lib/browser/panel-request'
+import { feedSyncOutcome, type FeedSyncOutcome } from '@/lib/feed-sync/sync-outcome'
 
 /**
  * Deadline for the quick calls (status, toggle, disconnect). Connect and
@@ -56,56 +57,10 @@ export interface WooSyncPayload {
   } | null
 }
 
-type SyncCounts = {
-  fetched: number
-  imported: number
-  /**
-   * Orders skipped because the store wrote no usable currency code. Said in
-   * its own sentence (syncing again does not help), zero when there were none.
-   */
-  unknownCurrency: number
-}
-
-export type WooSyncSummary =
-  /** The store rejected the credentials; the connection was flipped to revoked. */
-  | { reason: 'revoked' }
-  /** The window genuinely held nothing. A real answer, not a silent success. */
-  | { reason: 'empty' }
-  /**
-   * The time budget ran out with orders still unfetched. Reported before the
-   * count-based outcomes so a truncated run never reads as a complete one;
-   * the cursor persisted, so pressing sync again continues where it stopped.
-   * Carries the error count too: a truncated run can also have failed rows,
-   * and dropping that number would repeat the silent-partial mistake.
-   */
-  | { reason: 'partial'; values: SyncCounts & { errors: number } }
-  /** Rows landed, and some rows did not. Both halves get said. */
-  | { reason: 'errors'; values: SyncCounts & { errors: number } }
-  /** Rows landed. */
-  | { reason: 'feed'; values: SyncCounts }
-  /** 2xx whose body could not be read: the sync ran, the counts are unknown. */
-  | { reason: 'unknown' }
+/** The shared ladder (lib/feed-sync/sync-outcome), with this connector's counts. */
+export type WooSyncSummary = FeedSyncOutcome
 
 /** Turn the sync route's success body into the single sentence the user gets. */
 export function syncSummary(payload: WooSyncPayload | null): WooSyncSummary {
-  const summary = payload?.transactions
-  if (!summary) return { reason: 'unknown' }
-  if (summary.revoked === true) return { reason: 'revoked' }
-  if (typeof summary.fetched !== 'number') return { reason: 'unknown' }
-
-  const fetched = summary.fetched
-  // "imported" in the user-facing sentence = new rows this run (inserts).
-  const imported = typeof summary.inserted === 'number' ? summary.inserted : 0
-  const errors = typeof summary.errors === 'number' ? summary.errors : 0
-  const unknownCurrency =
-    typeof summary.unknownCurrency === 'number' ? summary.unknownCurrency : 0
-
-  if (summary.deadlineReached === true) {
-    return { reason: 'partial', values: { fetched, imported, unknownCurrency, errors } }
-  }
-  if (fetched === 0) return { reason: 'empty' }
-  if (errors > 0) {
-    return { reason: 'errors', values: { fetched, imported, unknownCurrency, errors } }
-  }
-  return { reason: 'feed', values: { fetched, imported, unknownCurrency } }
+  return feedSyncOutcome(payload, { importedField: 'inserted', extraCounts: ['unknownCurrency'] })
 }

@@ -3,9 +3,11 @@ import {
   createMockRequest,
   parseJsonResponse,
   createQueuedMockSupabase,
+  makePayingCashAccount,
+  payingAccountReads,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCall } =
+const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCall, findCalls } =
   createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -140,7 +142,7 @@ describe('POST /api/supplier-invoices/payment-batches/preview', () => {
     const response = await previewBatch(
       createMockRequest('/api/supplier-invoices/payment-batches/preview', {
         method: 'POST',
-        body: { format: 'bg_lb', ids: [UUID_A] },
+        body: { ids: ['not-a-uuid'] },
       }),
     )
     expect(response.status).toBe(400)
@@ -199,8 +201,11 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     enqueueMany([
       { data: companyRow },
       { data: settingsRow },
+      ...payingAccountReads(),
       { data: [invoiceRow()] },
       { data: [] },
+      { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
     ])
     const response = await createBatch(
@@ -222,6 +227,7 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     enqueueMany([
       { data: companyRow },
       { data: settingsRow },
+      ...payingAccountReads(),
       { data: [invoiceRow({ status: 'paid' })] },
       { data: [] },
     ])
@@ -244,6 +250,7 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     enqueueMany([
       { data: companyRow },
       { data: settingsRow },
+      ...payingAccountReads(),
       { data: [invoiceRow()] },
       { data: [{ supplier_invoice_id: UUID_A, batch: { id: BATCH_ID, status: 'created' } }] },
     ])
@@ -259,8 +266,17 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     expect(body.error.code).toBe('SI_BATCH_DUPLICATE_INVOICE')
   })
 
-  it('maps missing debtor details to SI_BATCH_DEBTOR_INCOMPLETE', async () => {
-    enqueueMany([{ data: companyRow }, { data: { ...settingsRow, iban: null } }])
+  it('maps missing debtor details to SI_BATCH_DEBTOR_INCOMPLETE, naming the paying account (crm#1483)', async () => {
+    // The primary has no IBAN and the company has another account, so the
+    // settings IBAN (what invoices print) is not borrowed.
+    enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      ...payingAccountReads([
+        makePayingCashAccount({ name: 'Företagskonto' }),
+        makePayingCashAccount({ id: 'ca-1931', name: 'Sparkonto', ledger_account: '1931', is_primary: false, payee_iban: settingsRow.iban }),
+      ]),
+    ])
     const response = await createBatch(
       createMockRequest('/api/supplier-invoices/payment-batches', {
         method: 'POST',
@@ -268,12 +284,16 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
       }),
     )
     const { status, body } = await parseJsonResponse<{
-      error: { code: string; details: { missing: string } }
+      error: { code: string; message: string; details: { missing: string; account: Record<string, unknown> } }
     }>(response)
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_BATCH_DEBTOR_INCOMPLETE')
     expect(body.error.details.missing).toBe('iban')
+    expect(body.error.details.account).toEqual({ cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: null })
+    expect(body.error.message).toBe(
+      'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+    )
   })
 })
 
@@ -321,6 +341,26 @@ describe('GET /api/supplier-invoices/payment-batches', () => {
       }),
     )
     expect(response.status).toBe(400)
+  })
+
+  it('reports the total and pages over a total order, so the list can offer older files', async () => {
+    enqueueMany([{ data: [batchRow()], count: 57 }, { data: [] }])
+    const response = await listBatches(
+      createMockRequest('/api/supplier-invoices/payment-batches', {
+        searchParams: { status: 'all', limit: '50', offset: '50' },
+      }),
+      { params: Promise.resolve({}) },
+    )
+    const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(response)
+
+    expect(status).toBe(200)
+    expect(body.count).toBe(57)
+    expect(findCalls('supplier_payment_batches', 'select')).toEqual([['*', { count: 'exact' }]])
+    expect(findCalls('supplier_payment_batches', 'order')).toEqual([
+      ['created_at', { ascending: false }],
+      ['id', { ascending: false }],
+    ])
+    expect(findCalls('supplier_payment_batches', 'range')).toEqual([[50, 99]])
   })
 })
 
@@ -403,7 +443,7 @@ describe('GET /api/supplier-invoices/payment-batches/[id]/file', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/xml; charset=utf-8')
     expect(response.headers.get('Content-Disposition')).toBe(
-      'attachment; filename="betalfil_20260810_b1111111.xml"',
+      `attachment; filename="betalfil_20260810_b1111111.xml"; filename*=UTF-8''betalfil_20260810_b1111111.xml`,
     )
     const xml = await response.text()
     expect(xml).toContain('<MsgId>ACCOUNTED-5566778899-BB1111111</MsgId>')
@@ -412,6 +452,34 @@ describe('GET /api/supplier-invoices/payment-batches/[id]/file', () => {
     const stamp = findCall('supplier_payment_batches', 'update')?.[0] as Record<string, unknown>
     expect(stamp.download_count).toBe(1)
     expect(stamp.file_generated_at).toBeTruthy()
+  })
+
+  it('serves a Svea Bank batch as the LB file in ISO 8859-1 bytes (crm#1424)', async () => {
+    enqueueMany([
+      {
+        data: batchRow({
+          format: 'bg_lb',
+          debtor_snapshot: { name: 'Testbolaget AB', org_number: '556677-8899', iban: 'SE4496600000000012345678', bic: 'SVEASESS', bankgiro: '9912346' },
+        }),
+      },
+      { data: [itemRow({ payee_name: 'Åkeri Öst AB' })] },
+      { data: null },
+    ])
+    const response = await downloadFile(
+      createMockRequest(`/api/supplier-invoices/payment-batches/${BATCH_ID}/file`),
+      params(BATCH_ID),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Type')).toBe('text/plain; charset=iso-8859-1')
+    expect(response.headers.get('Content-Disposition')).toContain('filename="betalfil_20260810_b1111111.txt"')
+    const bytes = Buffer.from(await response.arrayBuffer())
+    const records = bytes.toString('latin1').split('\r\n').filter((line) => line)
+    expect(records.map((line) => line.slice(0, 2))).toEqual(['11', '14', '29'])
+    for (const line of records) expect(line).toHaveLength(80)
+    // Å as the single ISO 8859-1 byte 0xC5, not UTF-8's two.
+    expect(bytes.includes(0xc5)).toBe(true)
+    expect(bytes.includes(Buffer.from('Å', 'utf8'))).toBe(false)
   })
 })
 

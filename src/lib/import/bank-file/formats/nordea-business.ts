@@ -23,11 +23,8 @@
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
+import { parseSwedishAmount } from '@/lib/money'
 
-function parseCommaDecimal(value: string): number {
-  const cleaned = value.replace(/\s/g, '').replace(',', '.')
-  return parseFloat(cleaned)
-}
 
 export const nordeaBusinessFormat: BankFileFormat = {
   id: 'nordea_business',
@@ -64,6 +61,9 @@ export const nordeaBusinessFormat: BankFileFormat = {
     const headers = firstLine.split(';').map(h => h.replace(/"/g, '').trim())
     const hasSeparateDatum = headers.some(h => h === 'datum')
     if (hasSeparateDatum && headers.some(h => h === 'typ')) return false
+    // ...and its exports with a transaction date beside the booking date
+    // (crm#1236); no Nordea Företag layout has a Transaktionsdag column.
+    if (headers.some(h => /^transaktionsda(g|tum)$/.test(h))) return false
 
     // Accept any of these Nordea Business patterns:
     return (
@@ -152,7 +152,7 @@ export const nordeaBusinessFormat: BankFileFormat = {
         continue
       }
 
-      const amount = parseCommaDecimal(amountStr)
+      const amount = parseSwedishAmount(amountStr) ?? NaN
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
         skippedRows++
@@ -197,7 +197,7 @@ export const nordeaBusinessFormat: BankFileFormat = {
         counterparty = (amount > 0 ? sender : receiver) || null
       }
 
-      const balance = balanceIdx >= 0 && fields[balanceIdx] ? parseCommaDecimal(fields[balanceIdx]) : null
+      const balance = balanceIdx >= 0 && fields[balanceIdx] ? (parseSwedishAmount(fields[balanceIdx]) ?? NaN) : null
       const currency = currencyIdx >= 0 && fields[currencyIdx] ? fields[currencyIdx].trim() : 'SEK'
 
       transactions.push({

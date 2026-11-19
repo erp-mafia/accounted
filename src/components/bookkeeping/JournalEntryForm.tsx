@@ -1,5 +1,6 @@
 'use client'
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
@@ -9,21 +10,31 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogConsequence, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
+import {
+  BackspaceIcon,
+  BookmarkIcon,
+  CalendarIcon,
+  ChatBubbleLeftIcon,
+  ExclamationTriangleIcon,
+  HashtagIcon,
+  LockClosedIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
+import { LineVatCodeBadge, LineVatCodeMenu } from '@/components/bookkeeping/LineVatCodeMenu'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
-import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
+import { deriveTemplateLinesFromBooking, templateAccountNames } from '@/lib/bookkeeping/template-library'
 import { sourceTypeForTemplateCategory } from '@/lib/bookkeeping/template-source-type'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
@@ -33,6 +44,8 @@ import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccount
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import DuplicateBookingDialog, { type DuplicateMatchTransaction } from '@/components/transactions/DuplicateBookingDialog'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   useSubmitWithAccountActivation,
@@ -46,15 +59,28 @@ import {
 } from '@/lib/documents/link-documents'
 import { cn, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
-import { roundOre } from '@/lib/money'
+import { roundOre, formatAmountInput } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
+import { balancingProposalSide } from '@/lib/bookkeeping/kontering-amount-entry'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { bookedEntryOf, type BookedEntry } from '@/lib/bookkeeping/booking-answer'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
+import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
+import {
+  foldGeneratedVatLines,
+  groupVoucherLinesWithVatCodes,
+  vatCodeAfterAccountChange,
+  vatCodeConflictAccounts,
+  vatCodeRuleForAccount,
+  type VoucherLineVatCode,
+} from '@/lib/bookkeeping/voucher-line-vat-code'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { CURRENCIES, type CreateJournalEntryLineInput, type FiscalPeriod, type JournalEntrySourceType, type Currency, type BookingTemplateLibrary, type BookingTemplateCategory } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const CURRENCY_OPTIONS: { value: Currency; label: string }[] = CURRENCIES.map((c) => ({ value: c, label: c }))
 
@@ -71,11 +97,18 @@ export interface FormLine {
   tax_code?: string | null
   /** SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}. */
   dimensions?: Record<string, string>
+  /** The momskod chosen for the line (crm#1096): a reverse-charge purchase whose
+   *  fiktiv-moms and basis lines are generated under it, null when switched
+   *  off, unset when the line follows its account (lib/bookkeeping/voucher-
+   *  line-vat-code.ts). Never sent: the generated lines are what the
+   *  declaration reads. */
+  vat_code?: VoucherLineVatCode | null
 }
 
 interface Props {
   onCreated?: () => void
-  onEntryCreated?: (entryId: string) => void
+  /** Called with the new entry's id and what the booking door answered about it. */
+  onEntryCreated?: (entryId: string, booked: BookedEntry) => void
   initialLines?: FormLine[]
   initialDate?: string
   initialDescription?: string
@@ -119,6 +152,9 @@ interface Props {
   /** Fired after the duplicate guard's match action links the transaction to
    *  the existing voucher (no new entry was created). */
   onDuplicateMatched?: (journalEntryId: string) => void
+  /** Fired on mount and whenever the form gains or loses unsaved input, so a
+   *  host dialog can let Escape close it only while nothing would be lost. */
+  onHasContentChange?: (hasContent: boolean) => void
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
@@ -146,6 +182,7 @@ export default function JournalEntryForm({
   seriesPicker,
   cashAccountId,
   onDuplicateMatched,
+  onHasContentChange,
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -164,7 +201,7 @@ export default function JournalEntryForm({
   const { periods } = useFiscalPeriods()
   const { settings: companySettings } = useCompanySettings()
   const [selectedPeriod, setSelectedPeriod] = useState('')
-  const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().split('T')[0])
+  const [entryDate, setEntryDate] = useState(initialDate ?? todayIsoStockholm())
   const [description, setDescription] = useState(initialDescription ?? '')
   const [notes, setNotes] = useState(initialNotes ?? '')
   const [showNotes, setShowNotes] = useState(false)
@@ -178,7 +215,7 @@ export default function JournalEntryForm({
   // `lines` are the ONE source of truth: this state only drives the header
   // comboboxes; setHeaderDimension writes the default through to the rows.
   const [headerDims, setHeaderDims] = useState<Record<string, string>>({})
-  // Which row's dimension popover is open (desktop table), and its container
+  // Which row's dimension popover is open, and its container
   // for the outside-click close.
   const [dimPopoverRow, setDimPopoverRow] = useState<number | null>(null)
   const dimPopoverRef = useRef<HTMLDivElement | null>(null)
@@ -225,6 +262,12 @@ export default function JournalEntryForm({
   // that retry, never on a normal submit or to the manual journal-entry endpoint.
   const [duplicateCandidate, setDuplicateCandidate] = useState<BookedDuplicateCandidate | null>(null)
   const forceDuplicateRef = useRef<{ force: true; expected_duplicate_journal_entry_id: string } | null>(null)
+  // Booking-time voucher warnings (VOUCHER_NEEDS_CONFIRMATION): shown in a
+  // dialog; "Bokför ändå" resends with the codes in acknowledged_warnings,
+  // and with the duplicate override of the attempt that met them, if any.
+  const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
+  const acknowledgedWarningsRef = useRef<{ acknowledged_warnings: string[] } | null>(null)
+  const warningsForceRef = useRef<{ force: true; expected_duplicate_journal_entry_id: string } | null>(null)
   const [showReview, setShowReview] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const saveAsDraftRef = useRef(false)
@@ -234,7 +277,19 @@ export default function JournalEntryForm({
   // enabled so the attempt can happen; the handlers gate on validity.
   const [showValidationHints, setShowValidationHints] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
-  const { accounts } = useAccounts()
+  const { accounts, isLoading: accountsLoading, error: accountsError } = useAccounts()
+  // Chart row per account number: what a line's momskod may be follows the
+  // account's own momskod (crm#1096). Until the chart is known no line takes
+  // one, so a momskod never books against a guessed account rule.
+  const accountByNumber = useMemo(
+    () => new Map(accounts.map((a) => [a.account_number, a])),
+    [accounts],
+  )
+  const chartReady = !accountsLoading && !(accountsError && accounts.length === 0)
+  const vatRowOf = useMemo(
+    () => (chartReady ? (accountNumber: string) => accountByNumber.get(accountNumber) : null),
+    [chartReady, accountByNumber],
+  )
   // Full BAS catalogue (static reference data, fetched once per session). Lets
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing rail.
@@ -262,15 +317,10 @@ export default function JournalEntryForm({
   const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string>('')
   // Per-row refs to the account/debit/credit inputs so the keyboard flow can
-  // advance focus with Enter: konto → debet → kredit → nästa rads konto. Two
-  // layouts render simultaneously (mobile cards + desktop table); we focus
-  // whichever one is actually visible.
-  const desktopAccountRefs = useRef<(HTMLInputElement | null)[]>([])
-  const mobileAccountRefs = useRef<(HTMLInputElement | null)[]>([])
-  const desktopDebitRefs = useRef<(HTMLInputElement | null)[]>([])
-  const mobileDebitRefs = useRef<(HTMLInputElement | null)[]>([])
-  const desktopCreditRefs = useRef<(HTMLInputElement | null)[]>([])
-  const mobileCreditRefs = useRef<(HTMLInputElement | null)[]>([])
+  // advance focus with Enter: konto → debet → kredit → nästa rads konto.
+  const accountRefs = useRef<(HTMLInputElement | null)[]>([])
+  const debitRefs = useRef<(HTMLInputElement | null)[]>([])
+  const creditRefs = useRef<(HTMLInputElement | null)[]>([])
   // Confirm button in the inline (bare) review, focused on open so Enter posts.
   const bareConfirmRef = useRef<HTMLButtonElement>(null)
 
@@ -282,6 +332,9 @@ export default function JournalEntryForm({
     lines.some(l => l.account_number !== '' || l.debit_amount !== '' || l.credit_amount !== '') ||
     uploadedFiles.length > 0
   useUnsavedChanges(hasContent)
+  useEffect(() => {
+    onHasContentChange?.(hasContent)
+  }, [hasContent, onHasContentChange])
 
   // Resolve + set the default voucher series for a source type from the cached
   // company config: prefer the per-source-type mapping, fall back to the legacy
@@ -619,15 +672,37 @@ export default function JournalEntryForm({
     }
   }, [dimPopoverRow])
 
-  const updateLine = (index: number, field: keyof FormLine, value: string) => {
+  const updateLine = (
+    index: number,
+    field: keyof FormLine,
+    value: string,
+    // An account created a moment ago: not in `accounts` as this closure sees it.
+    createdAccount?: { account_number: string; account_name?: string },
+  ) => {
+    // An amount needs nothing but the row itself, so it is written on the
+    // latest rows: two amount writes in one tick (a minus figure moved to the
+    // other side as the next field proposes its own) both land. A figure on
+    // one side clears the other.
+    if (field === 'debit_amount' || field === 'credit_amount') {
+      const other = field === 'debit_amount' ? 'credit_amount' : 'debit_amount'
+      setLines((current) =>
+        current.map((line, i) =>
+          i === index ? { ...line, [field]: value, ...(value ? { [other]: '' } : {}) } : line,
+        ),
+      )
+      return
+    }
+
     const updated = [...lines]
     updated[index] = { ...updated[index], [field]: value }
 
-    // If entering debit, clear credit and vice versa
-    if (field === 'debit_amount' && value) {
-      updated[index].credit_amount = ''
-    } else if (field === 'credit_amount' && value) {
-      updated[index].debit_amount = ''
+    // A new account decides the momskod again (crm#1096), except that a code
+    // chosen on an ordinary cost account survives a correction to another one.
+    if (field === 'account_number' && value !== lines[index]?.account_number) {
+      updated[index].vat_code = vatCodeAfterAccountChange(
+        lines[index]?.vat_code,
+        vatCodeRuleForAccount(value, accountByNumber.get(value)),
+      )
     }
 
     // Auto-fill line description from account name when selecting an account.
@@ -639,8 +714,9 @@ export default function JournalEntryForm({
       // the chosen account isn't in the active chart yet.
       const account =
         accounts.find((a) => a.account_number === value) ??
-        catalog.find((a) => a.account_number === value)
-      if (account) {
+        catalog.find((a) => a.account_number === value) ??
+        (createdAccount?.account_number === value ? createdAccount : undefined)
+      if (account?.account_name) {
         updated[index].line_description = account.account_name
         // Fortnox-style: seed the verifikationstext from the first row's account
         // when the user hasn't typed one yet. Non-destructive: never overwrites.
@@ -651,6 +727,10 @@ export default function JournalEntryForm({
     }
 
     setLines(updated)
+  }
+
+  const updateLineVatCode = (index: number, code: VoucherLineVatCode | null | undefined) => {
+    setLines((ls) => ls.map((l, i) => (i === index ? { ...l, vat_code: code } : l)))
   }
 
   // Outstanding imbalance from every line except `excludeIndex`.
@@ -673,16 +753,18 @@ export default function JournalEntryForm({
     const diff = computeBalancingDiff(index)
     const fill = side === 'debit' ? diff : -diff
     if (fill <= 0) return
-    updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
+    updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', formatAmountInput(fill, '.'))
   }
 
   // Tabbing (or clicking) into an untouched amount proposes the outstanding
   // difference, so the closing row of a moms-split voucher fills itself. The
   // proposal is pre-selected: typing replaces it, which keeps a multi-row split
   // exactly as fast as before. Guards: the row must already have an account (so
-  // you can tab through the trailing blank row), both amounts must still be
-  // empty (never overwrite a typed figure), and the difference must belong on
-  // this side.
+  // you can tab through the trailing blank row) and both amounts must still be
+  // empty (never overwrite a typed figure). A difference that belongs in
+  // kredit is proposed there while focus stays in debet, where it lands after
+  // an account is chosen: the figure shows in its own column, a debit typed
+  // instead clears it, and Tab or Enter moves onto it.
   const handleAmountFocus =
     (index: number, side: 'debit' | 'credit') =>
     (e: React.FocusEvent<HTMLInputElement>) => {
@@ -691,44 +773,29 @@ export default function JournalEntryForm({
       if (!line || !line.account_number) return
       if (line.debit_amount || line.credit_amount) return
       const diff = computeBalancingDiff(index)
-      const fill = side === 'debit' ? diff : -diff
-      if (fill <= 0) return
-      updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
+      const focused = side === 'debit' ? 'debit_amount' : 'credit_amount'
+      const proposeIn = balancingProposalSide(focused, diff)
+      if (!proposeIn) return
+      updateLine(index, proposeIn, formatAmountInput(Math.abs(diff), '.'))
       // Select after the controlled re-render has written the value.
-      requestAnimationFrame(() => target.select())
+      if (proposeIn === focused) requestAnimationFrame(() => target.select())
     }
 
   // Move focus to a row's input. Deferred a frame so it runs after any
-  // re-render (e.g. the auto-appended trailing row). offsetParent is null for
-  // display:none elements, so this picks whichever layout is currently visible.
+  // re-render (e.g. the auto-appended trailing row).
   const focusRowInput = useCallback(
-    (
-      desktop: React.RefObject<(HTMLInputElement | null)[]>,
-      mobile: React.RefObject<(HTMLInputElement | null)[]>,
-      index: number
-    ) => {
+    (refs: React.RefObject<(HTMLInputElement | null)[]>, index: number) => {
       requestAnimationFrame(() => {
-        const d = desktop.current?.[index]
-        const m = mobile.current?.[index]
-        const target = d && d.offsetParent !== null ? d : m && m.offsetParent !== null ? m : (d ?? m)
+        const target = refs.current?.[index]
         target?.focus()
         target?.select?.()
       })
     },
     []
   )
-  const focusAccount = useCallback(
-    (index: number) => focusRowInput(desktopAccountRefs, mobileAccountRefs, index),
-    [focusRowInput]
-  )
-  const focusDebit = useCallback(
-    (index: number) => focusRowInput(desktopDebitRefs, mobileDebitRefs, index),
-    [focusRowInput]
-  )
-  const focusCredit = useCallback(
-    (index: number) => focusRowInput(desktopCreditRefs, mobileCreditRefs, index),
-    [focusRowInput]
-  )
+  const focusAccount = useCallback((index: number) => focusRowInput(accountRefs, index), [focusRowInput])
+  const focusDebit = useCallback((index: number) => focusRowInput(debitRefs, index), [focusRowInput])
+  const focusCredit = useCallback((index: number) => focusRowInput(creditRefs, index), [focusRowInput])
 
   // Keep exactly one trailing blank row so the user never has to click "Lägg
   // till rad": once the last row is started (account or amount), append a fresh
@@ -770,24 +837,59 @@ export default function JournalEntryForm({
     // Row counts as incomplete if exactly one of (account, amount) is present.
     return hasAccount !== hasAmount
   }).length
-  const totalDebit = submittableLines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
-  const totalCredit = submittableLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-  const isBalanced =
-    Math.round((totalDebit - totalCredit) * 100) === 0
-    && totalDebit > 0
-    && submittableLines.length >= 2
-    && incompleteLineCount === 0
+  const { totalDebit, totalCredit, balanced } = lineBalance(submittableLines)
+  const isBalanced = balanced && submittableLines.length >= 2 && incompleteLineCount === 0
 
-  // Account number → BAS name, so derived template lines get meaningful labels.
+  // Each line with the lines its momskod generates (crm#1096). Derived on every
+  // render, never stored, so they follow the line's amount, account and code.
+  // They net to zero, so balance and the FX base above stay on the typed lines;
+  // bookedLines is the verifikat that is shown, saved as mall and posted.
+  const lineGroups = useMemo(
+    () => groupVoucherLinesWithVatCodes(lines, vatRowOf),
+    [lines, vatRowOf],
+  )
+  const bookedLines = useMemo<FormLine[]>(
+    () => lineGroups.flatMap((group) => [group.line, ...group.generated]),
+    [lineGroups],
+  )
+  const generatedTotals = lineGroups.reduce(
+    (sum, group) => {
+      for (const l of group.generated) {
+        sum.debit += parseFloat(l.debit_amount) || 0
+        sum.credit += parseFloat(l.credit_amount) || 0
+      }
+      return sum
+    },
+    { debit: 0, credit: 0 },
+  )
+  const bookedTotalDebit = roundOre(totalDebit + generatedTotals.debit)
+  const bookedTotalCredit = roundOre(totalCredit + generatedTotals.credit)
+  const vatCodeConflicts = vatCodeConflictAccounts(lineGroups)
+  const hasVatCodeConflict = vatCodeConflicts.length > 0
+
+  // A saved draft or a Kopiera copy of a verifikat this form posted carries
+  // what a momskod generated as ordinary lines, directly under their line:
+  // fold them back into that line's momskod once the chart is known, so they
+  // follow the line again. Lines from bank and inbox proposals are placed
+  // elsewhere and stay as typed. A draft being edited keeps its saved shape.
+  const vatFoldPendingRef = useRef(initialLines !== undefined)
+  useEffect(() => {
+    if (!vatFoldPendingRef.current || !vatRowOf) return
+    vatFoldPendingRef.current = false
+    setLines((prev) => foldGeneratedVatLines(prev, vatRowOf, { stored: !!editEntryId }))
+  }, [vatRowOf, editEntryId])
+
+  // Account number → name, so derived template lines get meaningful labels:
+  // the company's chart, then BAS for a standard account not activated yet.
   const accountNameMap = useMemo(
-    () => Object.fromEntries(catalog.map((a) => [a.account_number, a.account_name])),
-    [catalog],
+    () => templateAccountNames(accounts, catalog),
+    [accounts, catalog],
   )
   // Template lines derived from the current kontering. Fewer than two usable
   // lines (a 4-digit account + an amount) disables "Spara som mall".
   const derivedTemplateLines = useMemo(
-    () => deriveTemplateLinesFromBooking(lines, accountNameMap),
-    [lines, accountNameMap],
+    () => deriveTemplateLinesFromBooking(bookedLines, accountNameMap),
+    [bookedLines, accountNameMap],
   )
 
   const rate = parseFloat(exchangeRate) || 0
@@ -800,7 +902,7 @@ export default function JournalEntryForm({
     : 0
   // The expected SEK equivalent based on foreign amount × rate
   const computedSekAmount = isForeign && rate > 0 && computedForeignAmount > 0
-    ? Math.round(computedForeignAmount * rate * 100) / 100
+    ? sekOfForeign(computedForeignAmount, rate)
     : 0
 
   // Month/period safety signals surfaced at the review step (not as a blocking
@@ -882,17 +984,22 @@ export default function JournalEntryForm({
   // Only the number is required: the dialog also reaches here after
   // reactivating an existing account, where the rest of the row is whatever
   // the company already had stored and is picked up by fetchAccounts.
-  const handleAccountCreated = async (account: { account_number: string }) => {
+  //
+  // The create path also reports the new account's name. The refreshed chart
+  // is not visible in this closure, so the name is handed to updateLine: a
+  // new own account fills the line description like a BAS account does
+  // (crm#1821).
+  const handleAccountCreated = async (account: { account_number: string; account_name?: string }) => {
     await invalidateReferenceData('ref:accounts')
     if (creatingAccountForLine != null) {
-      updateLine(creatingAccountForLine, 'account_number', account.account_number)
+      updateLine(creatingAccountForLine, 'account_number', account.account_number, account)
     }
     setCreatingAccountForLine(null)
     setCreateAccountPrefill('')
   }
 
   const handleReview = () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch || hasVatCodeConflict) {
       setShowValidationHints(true)
       return
     }
@@ -929,13 +1036,10 @@ export default function JournalEntryForm({
     else focusCredit(action.row)
   }
 
-  // Which konteringsrad's account input (desktop or mobile) an element is,
-  // or -1. The account combobox takes no onKeyDown, so the form-level handler
-  // recognises it by its ref.
-  const accountRowOf = (el: EventTarget) => {
-    const d = desktopAccountRefs.current.indexOf(el as HTMLInputElement)
-    return d !== -1 ? d : mobileAccountRefs.current.indexOf(el as HTMLInputElement)
-  }
+  // Which konteringsrad's account input an element is, or -1. The account
+  // combobox takes no onKeyDown, so the form-level handler recognises it by
+  // its ref.
+  const accountRowOf = (el: EventTarget) => accountRefs.current.indexOf(el as HTMLInputElement)
 
   // Form-level Enter. Inside the konteringsrader Enter moves forward and only
   // an empty row's empty account field opens the review; any other control
@@ -992,7 +1096,8 @@ export default function JournalEntryForm({
   // Inner submit: builds payload, POSTs, throws a structured error on failure
   // (so the activation hook can intercept ACCOUNTS_NOT_IN_CHART).
   const postJournalEntry = useCallback(async () => {
-    const submittableLines = lines.filter(
+    // bookedLines: the typed lines plus what their momskoder generate.
+    const submittableLines = bookedLines.filter(
       (l) => l.account_number && (l.debit_amount || l.credit_amount)
     )
 
@@ -1092,14 +1197,18 @@ export default function JournalEntryForm({
         // handleBookAnyway). Stripped by schemas that don't declare it, so a
         // stray value never reaches the manual journal-entry endpoint.
         ...(forceDuplicateRef.current ?? {}),
+        // Set only when resending past the booking-time voucher warnings
+        // (handleConfirmWarnings). Same strip-safety as the force fields.
+        ...(acknowledgedWarningsRef.current ?? {}),
         // Fields only the caller's endpoint knows about. Same safety as above:
         // a schema that does not declare a key strips it, so this cannot leak
         // into the manual journal-entry route.
         ...(extraBody ?? {}),
       }),
     })
-    return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
+    // Each door answers its own shape (lib/bookkeeping/booking-answer.ts).
+    return bookedEntryOf(await throwOnStructuredError(res))
+  }, [bookedLines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
@@ -1146,10 +1255,10 @@ export default function JournalEntryForm({
     setIsSubmitting(true)
     saveAsDraftRef.current = false
     try {
-      const result = await runSubmit()
+      const booked = await runSubmit()
 
-      const journalEntryId = result.data?.id ?? result.journal_entry_id
-      const voucher = formatVoucher(result.data ?? {})
+      const journalEntryId = booked.id ?? undefined
+      const voucher = formatVoucher(booked)
       const linkFailures = await linkUploadedDocuments(journalEntryId)
 
       if (linkFailures.length > 0) {
@@ -1190,18 +1299,23 @@ export default function JournalEntryForm({
       setForeignAmount('')
       onCreated?.()
       if (journalEntryId) {
-        onEntryCreated?.(journalEntryId)
+        onEntryCreated?.(journalEntryId, booked)
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
         // User dismissed the activation dialog: no toast needed
       } else {
         const anyErr = err as {
-          body?: { error?: { code?: string; details?: { candidate?: BookedDuplicateCandidate } } }
+          body?: { error?: { code?: string; details?: { candidate?: BookedDuplicateCandidate; warnings?: VoucherWarning[] } } }
           status?: number
         }
         const candidate = anyErr.body?.error?.details?.candidate
-        if (anyErr.body?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
+        const warnings = anyErr.body?.error?.details?.warnings
+        if (anyErr.body?.error?.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(warnings)) {
+          // Keep the duplicate override of this attempt for the resend.
+          warningsForceRef.current = forceDuplicateRef.current
+          setVoucherWarnings(warnings)
+        } else if (anyErr.body?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
           // Soft duplicate guard fired: don't dead-end on a toast that merely
           // says "book anyway". Open the dialog so the user can review the
           // existing verifikat or confirm. handleBookAnyway re-submits with
@@ -1241,8 +1355,26 @@ export default function JournalEntryForm({
     }
   }
 
+  // Resend past the booking-time voucher warnings the person just read: the
+  // server checks again and refuses anything new, so this confirms exactly
+  // what the dialog showed.
+  const handleConfirmWarnings = async () => {
+    const warnings = voucherWarnings
+    if (!warnings) return
+    acknowledgedWarningsRef.current = { acknowledged_warnings: warnings.map((w) => w.code) }
+    forceDuplicateRef.current = warningsForceRef.current
+    setVoucherWarnings(null)
+    try {
+      await handleConfirm()
+    } finally {
+      acknowledgedWarningsRef.current = null
+      forceDuplicateRef.current = null
+      warningsForceRef.current = null
+    }
+  }
+
   const handleSaveDraft = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch || hasVatCodeConflict) {
       setShowValidationHints(true)
       return
     }
@@ -1250,9 +1382,9 @@ export default function JournalEntryForm({
     setIsSavingDraft(true)
     saveAsDraftRef.current = true
     try {
-      const result = await runSubmit()
+      const booked = await runSubmit()
 
-      const journalEntryId = result.data?.id ?? result.journal_entry_id
+      const journalEntryId = booked.id ?? undefined
       const linkFailures = await linkUploadedDocuments(journalEntryId)
 
       if (linkFailures.length > 0) {
@@ -1289,7 +1421,7 @@ export default function JournalEntryForm({
       setForeignAmount('')
       onCreated?.()
       if (journalEntryId) {
-        onEntryCreated?.(journalEntryId)
+        onEntryCreated?.(journalEntryId, booked)
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
@@ -1312,7 +1444,7 @@ export default function JournalEntryForm({
   // editEntryId URL) and keep it a draft. No field reset: the host dialog
   // closes on success via onUpdated.
   const handleSaveEdit = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch || hasVatCodeConflict) {
       setShowValidationHints(true)
       return
     }
@@ -1341,6 +1473,17 @@ export default function JournalEntryForm({
     }
   }
 
+  // What the primary will make, on the action row's left (Stil v3 footer
+  // anatomy); said only once the next number is known, never guessed.
+  const createsLine =
+    nextVoucherNumber != null ? (
+      <DialogConsequence>
+        {t('consequence_creates_voucher', {
+          voucher: formatVoucher({ voucher_series: voucherSeries, voucher_number: nextVoucherNumber }),
+        })}
+      </DialogConsequence>
+    ) : null
+
   // Inline review for the modal (bare): swap the form body to a read-only
   // summary instead of stacking a second dialog over the form dialog. The
   // no-underlag caveat folds in here so there's a single confirm step.
@@ -1364,7 +1507,7 @@ export default function JournalEntryForm({
         >
           ← {t('review_back')}
         </button>
-        <span className="font-display text-lg">
+        <span className="text-[15px] font-medium text-strong">
           {nextVoucherNumber != null
             ? t('review_title_with_voucher', { voucher: formatVoucher({ voucher_series: voucherSeries, voucher_number: nextVoucherNumber }) })
             : t('review_title')}
@@ -1379,7 +1522,7 @@ export default function JournalEntryForm({
       )}
       {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
       {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
-        <AttnLine>{t('no_doc_body')}</AttnLine>
+        <AttnLine>{t('no_doc_attn')}</AttnLine>
       )}
 
       <JournalEntryReviewContent
@@ -1388,16 +1531,15 @@ export default function JournalEntryForm({
         description={description}
         notes={notes || undefined}
         voucherSeries={voucherSeries}
-        lines={lines}
-        totalDebit={totalDebit}
-        totalCredit={totalCredit}
+        lines={bookedLines}
         attachmentCount={uploadedFiles.filter((f) => f.status === 'uploaded').length}
         showBalanceBadge
         hideDate={false}
       />
 
-      <div className="flex justify-end gap-2 pt-2 border-t">
-        <Button variant="outline" onClick={() => setShowReview(false)} disabled={isSubmitting}>
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t-hairline pt-3">
+        {createsLine}
+        <Button variant="ghost" onClick={() => setShowReview(false)} disabled={isSubmitting}>
           {t('review_back')}
         </Button>
         <Button ref={bareConfirmRef} onClick={handleConfirm} loading={isSubmitting}>
@@ -1419,7 +1561,7 @@ export default function JournalEntryForm({
       {/* Verifikat metadata: compact bar on top (Fortnox-style). Date, series
           and period are pre-filled; the period derives from the date. The
           konteringsrader below are the focus. */}
-      <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+      <div className="rounded-lg p-3 space-y-3 bg-control shadow-raised">
         <div className="grid gap-3 grid-cols-1 sm:grid-cols-[1fr_2fr_auto]">
           {!(embedded && initialDate) && (
             <div>
@@ -1482,7 +1624,7 @@ export default function JournalEntryForm({
           {selectedPeriodObj && (
             <span className="text-muted-foreground">
               {t('fiscal_year')}:{' '}
-              <span className="text-foreground">{selectedPeriodObj.name}</span>
+              <span className="text-foreground">{fiscalYearShortName(selectedPeriodObj.name)}</span>
               {nextVoucherNumber != null && (
                 <span className="ml-2 font-mono text-foreground">
                   {voucherSeries}{nextVoucherNumber}
@@ -1509,14 +1651,13 @@ export default function JournalEntryForm({
               </SelectContent>
             </Select>
           </div>
+          {/* A real control, not muted text: users missed the quiet
+              "+ Intern anteckning" link (accounted#183). */}
           {!embedded && !showNotes && !notes && (
-            <button
-              type="button"
-              onClick={() => setShowNotes(true)}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-            >
-              + {t('internal_note')}
-            </button>
+            <Button type="button" variant="outline" onClick={() => setShowNotes(true)}>
+              <ChatBubbleLeftIcon className="h-4 w-4" />
+              {t('add_internal_note')}
+            </Button>
           )}
           {dimensionsEnabled && !showDims && (
             <button
@@ -1546,7 +1687,7 @@ export default function JournalEntryForm({
                   min="0"
                 />
                 {isFetchingRate && (
-                  <Loader2 className="absolute right-2 top-1.5 h-4 w-4 animate-spin text-muted-foreground" />
+                  <SpinnerIcon className="absolute right-2 top-1.5 h-4 w-4 animate-spin text-muted-foreground" />
                 )}
               </div>
             </div>
@@ -1556,7 +1697,7 @@ export default function JournalEntryForm({
               </Label>
               <Input
                 type="number"
-                value={foreignAmount || (computedForeignAmount > 0 && !parsedForeignInput ? computedForeignAmount.toFixed(2) : '')}
+                value={foreignAmount || (computedForeignAmount > 0 && !parsedForeignInput ? formatAmountInput(computedForeignAmount, '.') : '')}
                 onChange={(e) => setForeignAmount(e.target.value)}
                 placeholder="0,00"
                 className="mt-1 h-8"
@@ -1585,6 +1726,7 @@ export default function JournalEntryForm({
               className="mt-1 resize-none"
               rows={2}
               maxLength={2000}
+              autoFocus={showNotes}
             />
           </div>
         )}
@@ -1602,8 +1744,8 @@ export default function JournalEntryForm({
         )}
 
         {periodMismatch === 'no_period' && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+          <div className="flex items-start gap-3 rounded-lg p-3 bg-control shadow-raised">
+            <ExclamationTriangleIcon className="h-5 w-5 text-attn mt-0.5 shrink-0" />
             <div className="flex-1 text-sm text-attn">
               <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
               <p className="mt-0.5">
@@ -1619,21 +1761,19 @@ export default function JournalEntryForm({
             {preFyClampTarget ? (
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => setEntryDate(preFyClampTarget.period_start)}
                 className="shrink-0"
               >
-                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                <CalendarIcon className="h-3.5 w-3.5" />
                 {t('pre_fy_book_on_first_day', { date: preFyClampTarget.period_start })}
               </Button>
             ) : (
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => setShowCreatePeriod(true)}
                 className="shrink-0"
               >
-                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                <CalendarIcon className="h-3.5 w-3.5" />
                 {t('create_period')}
               </Button>
             )}
@@ -1641,362 +1781,177 @@ export default function JournalEntryForm({
         )}
       </div>
 
-      {/* Entry lines: mobile cards */}
-      <div className="sm:hidden space-y-3">
-        {lines.map((line, index) => (
-          <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
-            <div className="flex items-start gap-2">
-              <div className="flex-1">
-                <AccountCombobox
-                  value={line.account_number}
-                  accounts={accounts}
-                  catalog={catalog}
-                  notActivatedLabel={t('account_not_activated')}
-                  onChange={(num) => updateLine(index, 'account_number', num)}
-                  onCommit={() => focusDebit(index)}
-                  onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
-                  inputRef={(el) => { mobileAccountRefs.current[index] = el }}
-                />
-              </div>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => removeLine(index)}
-                disabled={lines.length <= 2}
-                className="shrink-0 -mr-1 -mt-1"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <Input
-              value={line.line_description}
-              onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-              onKeyDown={handleLineDescKeyDown(index)}
-              placeholder={t('line_description_placeholder')}
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{t('col_debit')}</Label>
-                <Input
-                  ref={(el) => { mobileDebitRefs.current[index] = el }}
-                  type="number"
-                  value={line.debit_amount}
-                  onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                  onKeyDown={handleAmountKeyDown(index, 'debit')}
-                  onFocus={handleAmountFocus(index, 'debit')}
-                  onDoubleClick={() => handleFillBalance(index, 'debit')}
-                  title={t('fill_balance_tooltip')}
-                  placeholder="0,00"
-                  className="text-right"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{t('col_credit')}</Label>
-                <Input
-                  ref={(el) => { mobileCreditRefs.current[index] = el }}
-                  type="number"
-                  value={line.credit_amount}
-                  onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                  onKeyDown={handleAmountKeyDown(index, 'credit')}
-                  onFocus={handleAmountFocus(index, 'credit')}
-                  onDoubleClick={() => handleFillBalance(index, 'credit')}
-                  title={t('fill_balance_tooltip')}
-                  placeholder="0,00"
-                  className="text-right"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                />
-              </div>
-            </div>
-            {dimensionsEnabled && (
-              <LineDimensionFields
-                dimensions={line.dimensions}
-                onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
-              />
-            )}
-            {/^\d{4}$/.test(line.account_number) && (
-              <div className="flex justify-end text-xs text-muted-foreground tabular-nums pt-0.5">
-                {accountBalances[line.account_number] === null || accountBalances[line.account_number] === undefined ? (
-                  <Skeleton className="h-3 w-20" />
-                ) : (
-                  (() => {
-                    const bal = accountBalances[line.account_number] as number
-                    const delta = draftDeltas[line.account_number]
-                    if (!delta) {
-                      return (
-                        <span>
-                          {t('saldo_label')} {formatCurrency(bal)}
-                        </span>
-                      )
-                    }
-                    const after = roundOre(bal + delta)
-                    return (
-                      <span>
-                        {t('saldo_label')} {formatCurrency(bal)}{' '}
-                        <span className="text-foreground">→ {formatCurrency(after)}</span>
-                      </span>
-                    )
-                  })()
+      {/* Konteringsrader: one editor on every width. */}
+      <KonteringLinesEditor
+        lines={lines}
+        accounts={accounts}
+        catalog={catalog}
+        notActivatedLabel={t('account_not_activated')}
+        onAccountChange={(index, num) => updateLine(index, 'account_number', num)}
+        onAccountCommit={focusDebit}
+        accountInputRef={(index, el) => { accountRefs.current[index] = el }}
+        onCreateAccount={handleOpenCreateAccount}
+        onAdd={addLine}
+        onRemove={removeLine}
+        onAmountChange={(index, field, value) => updateLine(index, field, value)}
+        amountInputRef={(index, field, el) => {
+          const refs = field === 'debit_amount' ? debitRefs : creditRefs
+          refs.current[index] = el
+        }}
+        amountInputProps={(index, field) => {
+          const side = field === 'debit_amount' ? 'debit' : 'credit'
+          return {
+            onKeyDown: handleAmountKeyDown(index, side),
+            onFocus: handleAmountFocus(index, side),
+            onDoubleClick: () => handleFillBalance(index, side),
+            title: t('fill_balance_tooltip'),
+          }
+        }}
+        onDescriptionChange={(index, value) => updateLine(index, 'line_description', value)}
+        onDescriptionKeyDown={handleLineDescKeyDown}
+        renderDescriptionExtra={(index) => {
+          const line = lines[index]
+          const vatGroup = lineGroups[index]
+          return (
+            <>
+              {vatGroup?.code && vatGroup.rule.mode !== 'none' && (
+                <LineVatCodeBadge rule={vatGroup.rule} code={vatGroup.code} />
+              )}
+              {line.dimensions &&
+                Object.keys(line.dimensions).length > 0 &&
+                (line.account_number || line.debit_amount || line.credit_amount) && (
+                  <Badge data-ph-mask="" variant="outline" className="font-mono text-xs font-normal">
+                    {compactDims(line.dimensions)}
+                  </Badge>
                 )}
-              </div>
-            )}
-          </div>
-        ))}
-
-        {/* Mobile totals */}
-        <div className="flex justify-between items-center px-1 pt-2 font-semibold text-sm">
-          <span>{t('sum')}</span>
-          <div className="flex gap-4">
-            <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              {t('sum_d', { amount: totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
-            </span>
-            <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              {t('sum_k', { amount: totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={addLine}
-            className="flex-1"
-          >
-            <Plus className="h-3 w-3 mr-1" />
-            {t('add_line')}
-          </Button>
-          <TemplateApplyButton
-            onApply={handleTemplateApply}
-            entityType={company?.entity_type}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowSaveTemplate(true)}
-            disabled={derivedTemplateLines.length < 2}
-            title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
-          >
-            <BookmarkPlus className="h-3 w-3 mr-1" />
-            {t('save_as_template')}
-          </Button>
-        </div>
-      </div>
-
-      {/* Entry lines: desktop table */}
-      <div className="hidden sm:block">
-        <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-            <tr className="border-b text-left">
-              <th className="py-2 w-28">{t('col_account')}</th>
-              <th className="py-2 px-1">{t('col_description')}</th>
-              <th className="py-2 w-32 px-1 text-right">{t('col_debit')}</th>
-              <th className="py-2 w-32 px-1 text-right">{t('col_credit')}</th>
-              <th className="py-2 w-28 px-1 text-right">{t('col_saldo')}</th>
-              <th className="py-2 w-10"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((line, index) => (
-              <tr key={index} className="border-b">
-                <td className="py-1.5">
-                  <AccountCombobox
-                    value={line.account_number}
-                    accounts={accounts}
-                    catalog={catalog}
-                    notActivatedLabel={t('account_not_activated')}
-                    onChange={(num) => updateLine(index, 'account_number', num)}
-                    onCommit={() => focusDebit(index)}
-                    onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
-                    inputRef={(el) => { desktopAccountRefs.current[index] = el }}
-                    className="h-8"
-                  />
-                </td>
-                <td className="py-1.5 px-1">
-                  <Input
-                    value={line.line_description}
-                    onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-                    onKeyDown={handleLineDescKeyDown(index)}
-                    placeholder={t('line_description_placeholder')}
-                    className="h-8"
-                  />
-                  {line.dimensions &&
-                    Object.keys(line.dimensions).length > 0 &&
-                    (line.account_number || line.debit_amount || line.credit_amount) && (
-                      <Badge data-ph-mask="" variant="outline" className="mt-1 font-mono text-[11px] font-normal">
-                        {compactDims(line.dimensions)}
-                      </Badge>
-                    )}
-                </td>
-                <td className="py-1.5 px-1">
-                  <Input
-                    ref={(el) => { desktopDebitRefs.current[index] = el }}
-                    type="number"
-                    value={line.debit_amount}
-                    onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    onKeyDown={handleAmountKeyDown(index, 'debit')}
-                    onFocus={handleAmountFocus(index, 'debit')}
-                    onDoubleClick={() => handleFillBalance(index, 'debit')}
-                    title={t('fill_balance_tooltip')}
-                    placeholder="0,00"
-                    className="text-right h-8"
-                    inputMode="decimal"
-                    min="0"
-                    step="0.01"
-                  />
-                </td>
-                <td className="py-1.5 px-1">
-                  <Input
-                    ref={(el) => { desktopCreditRefs.current[index] = el }}
-                    type="number"
-                    value={line.credit_amount}
-                    onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    onKeyDown={handleAmountKeyDown(index, 'credit')}
-                    onFocus={handleAmountFocus(index, 'credit')}
-                    onDoubleClick={() => handleFillBalance(index, 'credit')}
-                    title={t('fill_balance_tooltip')}
-                    placeholder="0,00"
-                    className="text-right h-8"
-                    inputMode="decimal"
-                    min="0"
-                    step="0.01"
-                  />
-                </td>
-                <td className="py-1.5 px-1 text-right tabular-nums text-muted-foreground">
-                  {(() => {
-                    if (!/^\d{4}$/.test(line.account_number)) return null
-                    const bal = accountBalances[line.account_number]
-                    if (bal === null || bal === undefined) {
-                      return <Skeleton className="h-4 w-20 ml-auto" />
+            </>
+          )
+        }}
+        extraColumn={{
+          label: t('col_saldo'),
+          render: (index) => {
+            const accountNumber = lines[index].account_number
+            if (!/^\d{4}$/.test(accountNumber)) return null
+            const bal = accountBalances[accountNumber]
+            if (bal === null || bal === undefined) {
+              return <Skeleton className="ml-auto h-4 w-20" />
+            }
+            const delta = draftDeltas[accountNumber]
+            if (!delta) return formatCurrency(bal)
+            const after = roundOre(bal + delta)
+            return (
+              <span className="inline-flex flex-col items-end leading-tight">
+                <span className="text-xs">{formatCurrency(bal)}</span>
+                <span className="text-foreground">→ {formatCurrency(after)}</span>
+              </span>
+            )
+          },
+        }}
+        renderRowActions={(index) => {
+          const line = lines[index]
+          const vatGroup = lineGroups[index]
+          return (
+            <>
+              {dimensionsEnabled && (
+                <div
+                  className="relative"
+                  ref={dimPopoverRow === index ? dimPopoverRef : undefined}
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
+                    className={
+                      line.dimensions && Object.keys(line.dimensions).length > 0
+                        ? 'text-foreground'
+                        : 'text-muted-foreground'
                     }
-                    const delta = draftDeltas[line.account_number]
-                    if (!delta) return formatCurrency(bal)
-                    const after = roundOre(bal + delta)
-                    return (
-                      <span className="inline-flex flex-col items-end leading-tight">
-                        <span className="text-[11px]">{formatCurrency(bal)}</span>
-                        <span className="text-foreground">→ {formatCurrency(after)}</span>
-                      </span>
-                    )
-                  })()}
-                </td>
-                <td className="py-1.5">
-                  <div className="flex items-center justify-end">
-                    {dimensionsEnabled && (
-                      <div
-                        className="relative"
-                        ref={dimPopoverRow === index ? dimPopoverRef : undefined}
-                      >
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
-                          className={
-                            line.dimensions && Object.keys(line.dimensions).length > 0
-                              ? 'text-foreground'
-                              : 'text-muted-foreground'
-                          }
-                          aria-label={t('row_dimensions_aria')}
-                          aria-expanded={dimPopoverRow === index}
-                          title={t('row_dimensions_aria')}
-                        >
-                          <Tags className="h-3.5 w-3.5" />
-                        </Button>
-                        {dimPopoverRow === index && (
-                          <div
-                            className={cn(
-                              'absolute right-0 top-full z-50 mt-1 w-64 p-3',
-                              POPOVER_SURFACE_CLASS,
-                              POPOVER_ENTER_CLASS,
-                            )}
-                            onKeyDown={(e) => {
-                              // The comboboxes preventDefault their own Escape
-                              // (closing their dropdown): only an unhandled
-                              // Escape closes the popover.
-                              if (e.key === 'Escape' && !e.defaultPrevented) {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                setDimPopoverRow(null)
-                              }
-                            }}
-                          >
-                            <LineDimensionFields
-                              stacked
-                              dimensions={line.dimensions}
-                              onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
-                              inputClassName="h-8"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => removeLine(index)}
-                      disabled={lines.length <= 2}
+                    aria-label={t('row_dimensions_aria')}
+                    aria-expanded={dimPopoverRow === index}
+                    title={t('row_dimensions_aria')}
+                  >
+                    <HashtagIcon className="h-3.5 w-3.5" />
+                  </Button>
+                  {dimPopoverRow === index && (
+                    <div
+                      className={cn(
+                        'absolute right-0 top-full z-50 mt-1 w-64 p-3',
+                        POPOVER_SURFACE_CLASS,
+                        POPOVER_ENTER_CLASS,
+                      )}
+                      onKeyDown={(e) => {
+                        // The comboboxes preventDefault their own Escape
+                        // (closing their dropdown): only an unhandled
+                        // Escape closes the popover.
+                        if (e.key === 'Escape' && !e.defaultPrevented) {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setDimPopoverRow(null)
+                        }
+                      }}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="font-semibold">
-              <td colSpan={2} className="py-2 px-1">
-                {t('sum')}
-              </td>
-              <td
-                className={`py-2 px-1 text-right ${
-                  isBalanced ? 'text-success' : 'text-destructive'
-                }`}
-              >
-                {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-              </td>
-              <td
-                className={`py-2 px-1 text-right ${
-                  isBalanced ? 'text-success' : 'text-destructive'
-                }`}
-              >
-                {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-              </td>
-              <td></td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
-
-        <div className="flex gap-2 mt-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={addLine}
-          >
-            <Plus className="h-3 w-3 mr-1" />
-            {t('add_line')}
-          </Button>
-          <TemplateApplyButton
-            onApply={handleTemplateApply}
-            entityType={company?.entity_type}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowSaveTemplate(true)}
-            disabled={derivedTemplateLines.length < 2}
-            title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
-          >
-            <BookmarkPlus className="h-3 w-3 mr-1" />
-            {t('save_as_template')}
-          </Button>
-        </div>
-      </div>
+                      <LineDimensionFields
+                        stacked
+                        dimensions={line.dimensions}
+                        onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
+                        inputClassName="h-8"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+              {vatGroup && vatGroup.rule.mode !== 'none' && (
+                <LineVatCodeMenu
+                  rule={vatGroup.rule}
+                  code={vatGroup.code}
+                  onChange={(code) => updateLineVatCode(index, code)}
+                />
+              )}
+            </>
+          )
+        }}
+        readOnlyLines={(index) => {
+          // What the line's momskod generates: read-only, follows the line.
+          const vatGroup = lineGroups[index]
+          if (!vatGroup || vatGroup.generated.length === 0) return undefined
+          return {
+            title: t('vat_code_generated_title', { account: lines[index].account_number }),
+            lines: vatGroup.generated,
+          }
+        }}
+        totals={{
+          label: t('sum'),
+          debit: bookedTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+          credit: bookedTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+          amountClassName: isBalanced ? 'text-success' : 'text-destructive',
+        }}
+        toolbar={
+          <>
+            <TemplateApplyButton
+              onApply={handleTemplateApply}
+              entityType={company?.entity_type}
+            />
+            <Button
+              variant="outline"
+              onClick={() => setShowSaveTemplate(true)}
+              disabled={derivedTemplateLines.length < 2}
+              title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
+            >
+              <BookmarkIcon className="h-3 w-3" />
+              {t('save_as_template')}
+            </Button>
+          </>
+        }
+        labels={{
+          account: t('col_account'),
+          description: t('col_description'),
+          descriptionPlaceholder: t('line_description_placeholder'),
+          debit: t('col_debit'),
+          credit: t('col_credit'),
+          addRow: t('add_line'),
+          removeRow: t('remove_line'),
+        }}
+      />
 
       {/* Document attachments: hidden when editing a draft; underlag is
           managed from the verifikat detail page (JournalEntryAttachments). */}
@@ -2016,8 +1971,12 @@ export default function JournalEntryForm({
         </p>
       )}
 
-      <div className="flex flex-col items-end gap-1">
-        <div className="flex gap-2">
+      <div className="flex flex-col items-end gap-1 border-t-hairline pt-3">
+        {/* flex-wrap: Rensa + Spara som utkast + Granska & skapa need ~380px,
+            wider than the dialog on a phone, and the items-end column pushed
+            the overflow off the left edge where it cannot be scrolled to. */}
+        <div className="flex w-full flex-wrap items-center justify-end gap-2">
+          {!editEntryId && createsLine}
           {editEntryId ? (
             <Button
               onClick={handleSaveEdit}
@@ -2025,7 +1984,7 @@ export default function JournalEntryForm({
               loading={canWrite && isSavingDraft}
               title={!canWrite ? t('read_only_tooltip') : undefined}
             >
-              {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4" />}
               {t('save_edit')}
             </Button>
           ) : (
@@ -2037,7 +1996,7 @@ export default function JournalEntryForm({
                   disabled={!hasContent || isSubmitting || isSavingDraft}
                   title={t('clear_all_tooltip')}
                 >
-                  <Eraser className="mr-2 h-4 w-4" />
+                  <BackspaceIcon className="h-4 w-4" />
                   {t('clear_all')}
                 </Button>
               )}
@@ -2053,7 +2012,7 @@ export default function JournalEntryForm({
                   loading={canWrite && isSavingDraft}
                   title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
                 >
-                  {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                  {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                   {t('save_draft')}
                 </Button>
               )}
@@ -2062,13 +2021,13 @@ export default function JournalEntryForm({
                 disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
               >
-                {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                 {t('review_and_create')}
               </Button>
             </>
           )}
         </div>
-        {showValidationHints && (!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
+        {showValidationHints && (!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2) || hasVatCodeConflict) && (
           <div className="text-xs text-destructive space-y-0.5 text-right">
             {!description && <p>{t('validation_description')}</p>}
             {!selectedPeriod && <p>{t('validation_period')}</p>}
@@ -2082,6 +2041,9 @@ export default function JournalEntryForm({
             {submittableLines.length < 2 && incompleteLineCount === 0 && (
               <p>{t('validation_min_lines')}</p>
             )}
+            {hasVatCodeConflict && (
+              <p>{t('validation_vat_code_conflict', { accounts: vatCodeConflicts.join(', ') })}</p>
+            )}
           </div>
         )}
       </div>
@@ -2093,7 +2055,7 @@ export default function JournalEntryForm({
           the mall later. The shared TemplateForm re-seeds from the derived lines
           each time the dialog opens (Radix unmounts its content when closed). */}
       <Dialog open={showSaveTemplate} onOpenChange={setShowSaveTemplate}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{t('save_template_dialog_title')}</DialogTitle>
             <DialogDescription>{t('save_template_dialog_description')}</DialogDescription>
@@ -2184,9 +2146,7 @@ export default function JournalEntryForm({
           description={description}
           notes={notes || undefined}
           voucherSeries={!embedded ? voucherSeries : undefined}
-          lines={lines}
-          totalDebit={totalDebit}
-          totalCredit={totalCredit}
+          lines={bookedLines}
           attachmentCount={uploadedFiles.filter((f) => f.status === 'uploaded').length}
           showBalanceBadge={!embedded}
           hideDate={!!embedded}
@@ -2222,7 +2182,7 @@ export default function JournalEntryForm({
 
       {/* Clear-all confirmation */}
       <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('clear_all_confirm_title')}</DialogTitle>
             <DialogDescription>{t('clear_all_confirm_body')}</DialogDescription>
@@ -2238,12 +2198,22 @@ export default function JournalEntryForm({
                 setShowClearConfirm(false)
               }}
             >
-              <Eraser className="mr-2 h-4 w-4" />
+              <BackspaceIcon className="h-4 w-4" />
               {t('clear_all_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <VoucherWarningsDialog
+        warnings={voucherWarnings}
+        processing={isSubmitting}
+        onCancel={() => {
+          setVoucherWarnings(null)
+          warningsForceRef.current = null
+        }}
+        onConfirm={handleConfirmWarnings}
+      />
 
       <DuplicateBookingDialog
         candidate={duplicateCandidate}

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ChevronRight, Clock, Lock } from 'lucide-react'
+import { ChevronRightIcon, ClockIcon, LockClosedIcon } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 
 /**
@@ -11,7 +11,10 @@ import { useCompany } from '@/contexts/CompanyContext'
  * not a settings page, so trial state stays quietly visible in the chrome
  * instead of only inside Inställningar -> Abonnemang.
  *
- *   trial               -> the countdown pill ("Provperiod: N dagar kvar").
+ *   trial               -> the countdown pill ("Provperiod: N dagar kvar")
+ *                          with a second line saying the trial ends in the
+ *                          free plan and nothing is charged automatically
+ *                          (crm#1502: trial users could not tell).
  *   trial_expired /
  *   lapsed_subscription -> a muted pill linking to /settings/billing. This is
  *                          the navigation affordance a lapsed user could not
@@ -65,7 +68,11 @@ export function SubscriptionTouchpoint({
           : 'trial_expired_cta',
       )
     : tNav('trial_days_left', { days: trialDaysLeft ?? 0 })
-  const Icon = lapsed ? Lock : Clock
+  // A running trial ends in the free plan: no card is on file and no
+  // subscription exists until the owner starts one in checkout, so the pill
+  // says so where trial users look.
+  const sublabel = showCountdown && !lapsed ? tNav('trial_then_free') : null
+  const Icon = lapsed ? LockClosedIcon : ClockIcon
 
   if (variant === 'mobile') {
     return (
@@ -75,8 +82,11 @@ export function SubscriptionTouchpoint({
         className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground transition-colors active:bg-muted/60"
       >
         <Icon className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
-        <span className="text-sm flex-1">{label}</span>
-        <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
+        <span className="flex-1">
+          <span className="block text-sm">{label}</span>
+          {sublabel && <span className="block text-xs text-muted-foreground">{sublabel}</span>}
+        </span>
+        <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
       </Link>
     )
   }
@@ -85,11 +95,14 @@ export function SubscriptionTouchpoint({
     <div className="flex-shrink-0 px-3 pb-2">
       <Link
         href="/settings/billing"
-        className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+        className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150 bg-control shadow-raised"
       >
         <Icon className="h-3.5 w-3.5 shrink-0" />
-        <span className="flex-1 truncate">{label}</span>
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{label}</span>
+          {sublabel && <span className="block truncate text-xs opacity-80">{sublabel}</span>}
+        </span>
+        <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 opacity-50" />
       </Link>
     </div>
   )

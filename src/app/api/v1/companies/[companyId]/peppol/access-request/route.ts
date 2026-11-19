@@ -5,10 +5,7 @@
  *
  * Contract, docs and rules live in src/lib/operations/peppol.ts.
  */
-import { ensureInitialized } from '@/lib/init'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { peppolRequestAccess } from '@/lib/operations/peppol'
-
-ensureInitialized()
 
 export const POST = v1OperationHandler(peppolRequestAccess)

@@ -9,7 +9,11 @@
  * route when INVOICE_PDF_COLUMNS predated ROT/RUT and nothing pinned it.
  */
 import { describe, expect, it } from 'vitest'
-import { INVOICE_FULL_COLUMNS, INVOICE_PDF_COLUMNS } from '@/lib/api/v1/invoice-columns'
+import {
+  INVOICE_FULL_COLUMNS,
+  INVOICE_ITEM_FULL_COLUMNS,
+  INVOICE_PDF_COLUMNS,
+} from '@/lib/api/v1/invoice-columns'
 
 /** Columns getAmountToPay + the Swish QR/totals path read off the invoice. */
 const AMOUNT_TO_PAY_COLUMNS = ['total', 'currency', 'ore_rounding', 'deduction_total', 'credited_invoice_id']
@@ -44,8 +48,45 @@ describe('v1 invoice projections feed the render amount path', () => {
     expect(parse(INVOICE_FULL_COLUMNS)).toContain(column)
   })
 
+  // The v1 send renders the PDF and the e-invoice from these rows: without
+  // it the article number column would be blank on this surface only.
+  it('INVOICE_ITEM_FULL_COLUMNS carries article_number (crm#1084)', () => {
+    expect(parse(INVOICE_ITEM_FULL_COLUMNS)).toContain('article_number')
+  })
+
+  // A received self-billed sale has invoice_number null by design: the
+  // customer's number is its only identifier on the API (crm#1367).
+  it.each(['external_invoice_number', 'is_self_billed'])('INVOICE_FULL_COLUMNS carries %s (crm#1367)', (column) => {
+    expect(parse(INVOICE_FULL_COLUMNS)).toContain(column)
+  })
+
   it('never selects the encrypted personnummer blob', () => {
     expect(INVOICE_FULL_COLUMNS).not.toContain('deduction_personnummer_encrypted')
     expect(INVOICE_PDF_COLUMNS).not.toContain('deduction_personnummer_encrypted')
+  })
+
+  // v1 :send books from INVOICE_ITEM_FULL_COLUMNS (markInvoiceSentAndBook):
+  // every item column the booking builders read must be in it, or the line
+  // books as if the field were empty. Without accrual_* a periodised line
+  // books immediate revenue on 30xx instead of 29xx with a schedule.
+  it.each([
+    'line_type',
+    'quantity',
+    'unit_price',
+    'discount_percent',
+    'line_total',
+    'vat_rate',
+    'vat_amount',
+    'revenue_account',
+    'article_id',
+    'deduction_type',
+    'deduction_amount',
+    'work_type',
+    'dimensions',
+    'accrual_period_start',
+    'accrual_period_end',
+    'accrual_balance_account',
+  ])('INVOICE_ITEM_FULL_COLUMNS carries %s (v1 send books from it)', (column) => {
+    expect(parse(INVOICE_ITEM_FULL_COLUMNS)).toContain(column)
   })
 })

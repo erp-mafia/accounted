@@ -15,9 +15,12 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 
 const UncategorizeResponse = z.object({
   success: z.boolean(),
@@ -115,8 +118,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
+    // Through the posting port (step 2e): while POSTING_EVENTS is on, the
+    // storno records ledger.storno of the bank line, which the caller asked
+    // for (user_created; client_asserted on an API key), dated the day.
     try {
-      await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, transaction.journal_entry_id)
+      await postingPort.reverseJournalEntry({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        entryId: transaction.journal_entry_id,
+        event: () => bankLineStornoBusinessEvent(txId, todayIsoStockholm(), linkBasisColumns('user_created')),
+        role: 'reversal',
+      })
     } catch (err) {
       ctx.log.error('transactions.uncategorize: reversal failed', err as Error)
       if (isBookkeepingError(err)) {

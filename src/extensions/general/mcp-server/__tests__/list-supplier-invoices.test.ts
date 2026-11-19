@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
+import { readAttestHold } from '@/lib/supplier-invoices/attest-hold'
+
+// What the attest policy holds back from payment: nothing unless a test says so.
+vi.mock('@/lib/supplier-invoices/attest-hold', () => ({ readAttestHold: vi.fn(async () => () => false) }))
+
+beforeEach(() => {
+  vi.mocked(readAttestHold).mockClear()
+  vi.mocked(readAttestHold).mockImplementation(async () => () => false)
+})
 
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_list_supplier_invoices')!
 
@@ -117,7 +126,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     enqueue({
       data: [
         { id: 'sup-1', name: 'Star*Mart' },
-        { id: 'sup-2', name: 'Starke Martinsson AB' },
+        { id: 'sup-2', name: 'Stark & Son AB' },
         { id: 'sup-3', name: '100%_AB' },
       ],
     })
@@ -177,7 +186,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
   it('combines status, supplier_id, supplier_name and date range', async () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ id: SUPPLIER_UUID, name: 'Office Depot AB' }] }) // suppliers fetch
-    enqueue({ data: [invoiceRow()], count: 1 }) // invoice list
+    enqueue({ data: [invoiceRow()], count: 1 }) // the to_pay candidates
 
     const result = (await tool().execute(
       {
@@ -194,7 +203,7 @@ describe('gnubok_list_supplier_invoices: filters', () => {
 
     expect(result.count).toBe(1)
     const inCalls = findCalls('supplier_invoices', 'in')
-    expect(inCalls).toContainEqual(['status', ['approved', 'overdue']])
+    expect(inCalls).toContainEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
     expect(inCalls).toContainEqual(['supplier_id', [SUPPLIER_UUID]])
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['supplier_id', SUPPLIER_UUID])
     expect(findCall('supplier_invoices', 'gte')).toEqual(['invoice_date', '2026-01-01'])
@@ -203,6 +212,102 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     const orderCalls = findCalls('supplier_invoices', 'order')
     expect(orderCalls).toContainEqual(['due_date', { ascending: true }])
     expect(orderCalls).toContainEqual(['id', { ascending: true }])
+  })
+
+  // to_pay is the Att betala tab (lib/supplier-invoices/to-pay.ts): an
+  // unattested invoice is to pay unless the attest policy holds it, and what
+  // the bank has or has nothing left is not. total_count counts what to_pay
+  // means, not the statuses read.
+  it('to_pay is the Att betala tab: unattested included, what the policy holds or nothing is left on left out', async () => {
+    vi.mocked(readAttestHold).mockImplementation(async () => (invoice) => (invoice as { id?: string }).id === 'si-held')
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ id: 'si-unattested', status: 'registered', approved_at: null }),
+        invoiceRow({ id: 'si-held', status: 'registered', approved_at: null }),
+        invoiceRow({ id: 'si-nothing-left', status: 'partially_paid', remaining_amount: 0 }),
+        invoiceRow({ id: 'si-credit', status: 'approved', is_credit_note: true }),
+        invoiceRow({ id: 'si-approved', status: 'approved', approved_at: '2026-04-01T08:00:00Z' }),
+      ],
+      count: 5,
+    })
+
+    const result = (await tool().execute({ status: 'to_pay', limit: 1 }, COMPANY, USER, supabase as never)) as ListResult
+
+    expect(result.invoices.map((invoice) => invoice.id)).toEqual(['si-unattested'])
+    expect(result.total_count).toBe(2)
+    expect(result.has_more).toBe(true)
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
+    // One the supplier debits itself has nothing to pay (crm#1463).
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['auto_debit', false])
+  })
+
+  // For #207: an attested invoice the nightly flip stored as overdue is
+  // still attested, and a part-paid invoice past its due date is overdue.
+  it('status=approved reads the attest mark and returns an attested invoice stored as overdue', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ status: 'overdue', approved_at: '2026-03-20T09:00:00Z' })], count: 1 })
+    const result = (await tool().execute({ status: 'approved' }, COMPANY, USER, supabase as never)) as ListResult
+    expect(result.invoices[0]).toMatchObject({ status: 'overdue', approved_at: '2026-03-20T09:00:00Z' })
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', ['registered', 'approved', 'overdue']])
+    expect(findCall('supplier_invoices', 'or')).toEqual(['status.eq.approved,approved_at.not.is.null'])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'approved'])
+    expect(findCalls('company_settings', 'select')).toHaveLength(0)
+  })
+
+  it('status=overdue is computed, so a part-paid invoice past its due date is returned', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ status: 'partially_paid', remaining_amount: 850 })], count: 1 })
+    const result = (await tool().execute({ status: 'overdue' }, COMPANY, USER, supabase as never)) as ListResult
+    expect(result.invoices[0]).toMatchObject({ status: 'partially_paid', remaining_amount: 850 })
+    expect(findCalls('supplier_invoices', 'in')).toContainEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
+    expect(findCall('supplier_invoices', 'gt')).toEqual(['remaining_amount', 0.005])
+    expect(findCall('supplier_invoices', 'lt')).toEqual(['due_date', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)])
+    expect(findCalls('supplier_invoices', 'eq')).not.toContainEqual(['status', 'overdue'])
+  })
+
+  it('fails a to_pay call when the attest policy cannot be read: "not held" would call a held invoice payable', async () => {
+    // A PostgREST error object, as the policy read throws it: the tool wraps it.
+    vi.mocked(readAttestHold).mockRejectedValue({ message: 'statement timeout', code: '57014' })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ id: 'si-held', status: 'registered', approved_at: null })] })
+
+    await expect(tool().execute({ status: 'to_pay' }, COMPANY, USER, supabase as never)).rejects.toMatchObject({
+      message: expect.stringMatching(/^Database error: statement timeout/),
+      code: '57014',
+    })
+    expect(readAttestHold).toHaveBeenCalledWith(supabase, COMPANY, { strict: true })
+  })
+
+  it('reads the rate for to_pay alone, never the registrant, and returns neither', async () => {
+    const toPayMock = createQueuedMockSupabase()
+    toPayMock.enqueue({ data: [invoiceRow({ status: 'registered', approved_at: null, user_id: 'registrant-1', exchange_rate: null })] })
+    const toPay = (await tool().execute({ status: 'to_pay' }, COMPANY, USER, toPayMock.supabase as never)) as ListResult
+    const [toPayColumns, toPayOptions] = toPayMock.findCall('supplier_invoices', 'select') as [string, unknown]
+    expect(toPayColumns).not.toMatch(/\buser_id\b/)
+    expect(toPayColumns).toMatch(/\bexchange_rate\b/)
+    // to_pay counts what it keeps, not what the database matched.
+    expect(toPayOptions).toBeUndefined()
+    expect(toPay.invoices[0]).not.toHaveProperty('user_id')
+    expect(toPay.invoices[0]).not.toHaveProperty('exchange_rate')
+
+    const approvedMock = createQueuedMockSupabase()
+    approvedMock.enqueue({ data: [invoiceRow()], count: 1 })
+    await tool().execute({ status: 'approved' }, COMPANY, USER, approvedMock.supabase as never)
+    const [columns, options] = approvedMock.findCall('supplier_invoices', 'select') as [string, unknown]
+    expect(columns).not.toMatch(/\buser_id\b/)
+    expect(columns).not.toMatch(/\bexchange_rate\b/)
+    expect(options).toEqual({ count: 'exact' })
+  })
+
+  it('reads the attest policy only for to_pay', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ status: 'registered' })], count: 1 })
+    await tool().execute({ status: 'registered' }, COMPANY, USER, supabase as never)
+    expect(readAttestHold).not.toHaveBeenCalled()
+    expect(findCalls('company_settings', 'select')).toHaveLength(0)
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['status', 'registered'])
   })
 
   it('rejects a malformed date', async () => {
@@ -269,5 +374,99 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     expect(findCalls('supplier_invoices', 'gte')).toHaveLength(0)
     expect(findCalls('supplier_invoices', 'lte')).toHaveLength(0)
     expect(findCalls('supplier_invoices', 'in')).toHaveLength(0)
+  })
+})
+
+// crm#1229: "attested, paid by hand at the bank, money not landed" and
+// "attested, nothing paid" looked identical in this listing, and so did an
+// attested overdue invoice and an unattested one.
+describe('gnubok_list_supplier_invoices: attest and "I banken" marks', () => {
+  it('projects approved_at and bank_entered_at and returns them on each invoice', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ status: 'overdue', approved_at: '2026-04-01T08:00:00Z', bank_entered_at: '2026-04-08T09:00:00Z' }),
+        invoiceRow({ id: 'si-2', status: 'overdue', approved_at: null, bank_entered_at: null }),
+      ],
+      count: 2,
+    })
+
+    const result = (await tool().execute({ status: 'to_pay' }, COMPANY, USER, supabase as never)) as ListResult
+
+    const [columns] = findCall('supplier_invoices', 'select') as [string]
+    expect(columns).toMatch(/\bapproved_at\b/)
+    expect(columns).toMatch(/\bbank_entered_at\b/)
+    expect(result.invoices[0]).toMatchObject({ approved_at: '2026-04-01T08:00:00Z', bank_entered_at: '2026-04-08T09:00:00Z' })
+    expect(result.invoices[1]).toMatchObject({ approved_at: null, bank_entered_at: null })
+  })
+})
+
+// crm#1282: the app showed two invoices as "I betalning" (an open bank
+// payment order, unsigned at the bank) while this listing said approved with
+// the full remaining_amount, so the agent could not tell what had happened.
+describe('gnubok_list_supplier_invoices: open_payment, read as the app reads it', () => {
+  it('carries the open bank payment order of an unsettled invoice, with the bank status and failure code', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ id: 'si-in-bank', status: 'approved' }),
+        invoiceRow({ id: 'si-free', status: 'approved' }),
+        invoiceRow({ id: 'si-paid', status: 'paid', remaining_amount: 0 }),
+      ],
+      count: 3,
+    })
+    enqueue({ data: [] }) // supplier_payment_batch_items: no payment file
+    enqueue({
+      data: [
+        {
+          id: 'order-1',
+          supplier_invoice_id: 'si-in-bank',
+          status: 'submitted',
+          created_at: '2026-10-01T08:52:46Z',
+          supplier_invoice_payment_id: null,
+          provider_status: 'RCVD',
+          provider_error_code: null,
+        },
+      ],
+    })
+
+    const result = (await tool().execute({}, COMPANY, USER, supabase as never)) as ListResult
+
+    const byId = new Map(result.invoices.map((invoice) => [invoice.id, invoice]))
+    expect(byId.get('si-in-bank')).toMatchObject({
+      status: 'approved',
+      open_payment: {
+        batch: null,
+        payment_order: { id: 'order-1', status: 'submitted', created_at: '2026-10-01T08:52:46Z', provider_status: 'RCVD', provider_error_code: null },
+      },
+    })
+    expect(byId.get('si-free')).toMatchObject({ open_payment: null })
+    expect(byId.get('si-paid')).toMatchObject({ open_payment: null })
+    // Only the unsettled invoices are asked about, inside the company, among the open statuses.
+    expect(findCall('payment_orders', 'in')).toEqual(['supplier_invoice_id', ['si-in-bank', 'si-free']])
+    expect(findCalls('payment_orders', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(findCalls('payment_orders', 'in')).toContainEqual(['status', expect.arrayContaining(['submitted', 'awaiting_signature', 'executed'])])
+  })
+
+  it('carries the payment file an invoice sits in, and leaves a failed order out', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ id: 'si-file' }), invoiceRow({ id: 'si-failed' })], count: 2 })
+    enqueue({ data: [{ supplier_invoice_id: 'si-file', batch: { id: 'file-1', status: 'created', created_at: '2026-10-02T08:00:00Z' } }] })
+    // The read asks for open statuses only; a row the database still returned in a final status counts for nothing.
+    enqueue({ data: [{ id: 'order-2', supplier_invoice_id: 'si-failed', status: 'failed', created_at: '2026-10-02T09:00:00Z', supplier_invoice_payment_id: null, provider_status: null, provider_error_code: 'EXECUTION_DATE_INVALID' }] })
+
+    const result = (await tool().execute({}, COMPANY, USER, supabase as never)) as ListResult
+
+    expect(result.invoices[0]).toMatchObject({ id: 'si-file', open_payment: { batch: { id: 'file-1', created_at: '2026-10-02T08:00:00Z' }, payment_order: null } })
+    expect(result.invoices[1]).toMatchObject({ id: 'si-failed', open_payment: null })
+  })
+
+  it('fails the call when the payment instructions cannot be read: a null would say nothing pays the invoice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow()], count: 1 })
+    enqueue({ data: [] })
+    enqueue({ data: null, error: { message: 'DB error', code: '57014' } })
+
+    await expect(tool().execute({}, COMPANY, USER, supabase as never)).rejects.toThrow(/DB error/)
   })
 })

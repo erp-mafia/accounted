@@ -32,7 +32,7 @@ export function Sentence({
       {hasOptions || tools ? (
         <p className="imp-tools">
           {hasOptions ? (
-            <Button variant="link" size="sm" className={CHANGE_LINK_CLASS} onClick={onToggle} aria-expanded={open}>
+            <Button variant="link" className={CHANGE_LINK_CLASS} onClick={onToggle} aria-expanded={open}>
               {open ? closeLabel : changeLabel}
             </Button>
           ) : null}
@@ -44,7 +44,7 @@ export function Sentence({
 }
 
 /** Ändra and its siblings: an inline dotted-underline text link on the Button primitive. */
-export const CHANGE_LINK_CLASS = 'h-auto px-0 text-[12.5px] text-foreground underline decoration-dotted underline-offset-[3px]'
+export const CHANGE_LINK_CLASS = 'h-auto px-0 text-xs text-foreground underline decoration-dotted underline-offset-[3px]'
 
 export function OptRows({ children }: { children: ReactNode }) {
   return <div className="opts">{children}</div>

@@ -37,7 +37,7 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 describe('GET /api/invoices/[id]/pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
+  const company = makeCompanySettings({ company_name: 'Exempelbolaget Sverige', bankgiro: '123-4567' })
   const invoice = makeInvoice({
     id: 'invoice-1',
     invoice_number: '2621',
@@ -91,7 +91,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
 
     expect(response.status).toBe(200)
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
@@ -123,7 +123,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
     // The filename still travels with it, so the browser viewer's own save
     // action produces the same name as the download button would.
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
     expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff')
   })
 
@@ -328,7 +328,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
 
       expect(response.status).toBe(200)
       expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-        .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+        .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
     })
   })
 

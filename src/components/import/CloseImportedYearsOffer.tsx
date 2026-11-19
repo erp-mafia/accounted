@@ -10,6 +10,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { closableImportedYears, closeYearsInOrder } from '@/lib/onboarding/closable-imported-years'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * "Klarmarkera åren": the explicit, user-initiated close of imported
@@ -36,7 +37,7 @@ export function CloseImportedYearsOffer({
   const { periods, refresh } = useFiscalPeriods()
   const [running, setRunning] = useState(false)
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const targets = useMemo(() => closableImportedYears(periods, today), [periods, today])
 
   if (role === 'member' || targets.length === 0) return null
@@ -82,11 +83,11 @@ export function CloseImportedYearsOffer({
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-border p-4 text-sm">
+    <div className="space-y-2 rounded-lg p-4 text-sm bg-control shadow-raised">
       <p className="font-medium">{t('close_years_title', { count: targets.length, years: names })}</p>
       <p className="text-muted-foreground">{t('close_years_body')}</p>
       <div className="flex flex-wrap items-center gap-3 pt-1">
-        <Button variant="outline" size="sm" loading={running} onClick={() => void run()}>
+        <Button variant="outline" loading={running} onClick={() => void run()}>
           {t('close_years_action')}
         </Button>
         {showUnderlagLink ? (

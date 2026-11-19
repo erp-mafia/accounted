@@ -26,15 +26,20 @@ declarations, ingest SIE files, and subscribe to webhooks for state changes.
 ## Quickstart
 
 1. Create an API key in the Accounted dashboard at /settings/api.
-2. Authenticate with \`Authorization: Bearer gnubok_sk_<live|test>_<random>\`.
+2. Authenticate with \`Authorization: Bearer gnubok_sk_<random>\` (live) or
+   \`gnubok_sk_test_<random>\` (test). \`GET ${base}/api/v1/api-key\` (any valid key,
+   no scope) shows the key's mode, scopes and per-company write access.
 3. List companies the key can access: \`GET ${base}/api/v1/companies\`.
 4. Use the returned \`id\` as \`{companyId}\` in subsequent paths.
 
 ## Core principles
 
-- **Dry-run on every write.** Add \`?dry_run=true\` or \`X-Dry-Run: true\` to any
-  POST/PATCH/DELETE to preview the effect (journal lines, voucher number,
-  account deltas) without committing. The same call without dry-run commits.
+- **Dry-run on most writes.** Add \`?dry_run=true\` or \`X-Dry-Run: true\` to a write
+  marked \`x-dry-run-supported\` in the OpenAPI spec to preview the effect (the
+  would-be record, the journal lines) without committing. The same call without
+  dry-run commits. A write that cannot be simulated (period lock, close and
+  year-end, imports, approving a pending operation) refuses the flag with
+  400 VALIDATION_ERROR and runs nothing.
 - **Idempotency-Key on every write.** Pass a UUID in \`Idempotency-Key\`; replays
   return the cached response (24h TTL) with \`Idempotent-Replayed: true\`.
 - **Test mode.** Create a key with mode \`test\` (prefix \`gnubok_sk_test_\`) in the
@@ -57,7 +62,7 @@ declarations, ingest SIE files, and subscribe to webhooks for state changes.
 - Health check: ${base}/api/v1/health
 - Docs (cookbook + reference): ${base}/docs/api
 - Error reference: ${base}/docs/api/errors
-- Security disclosure policy: ${base}/SECURITY.md (responsible disclosure to support@accounted.se)
+- Security disclosure: report a vulnerability to support@accounted.se, never in a public issue
 
 ## Schema discovery
 

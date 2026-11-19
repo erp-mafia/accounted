@@ -2,7 +2,8 @@
  * The deferred "Bokför" step for supplier invoices (#967), one implementation
  * behind every door: the dashboard route POST /api/supplier-invoices/[id]/book,
  * the v1 operation supplier-invoices.book and its MCP tool
- * (lib/operations/invoice-booking.ts).
+ * (lib/operations/invoice-booking.ts), and every settlement of a still
+ * unbooked invoice, which books it here first (registration-first.ts).
  *
  * Companies with company_settings.defer_invoice_booking=true register
  * supplier invoices without a verifikat; ekonomi books the registration entry
@@ -11,20 +12,32 @@
  * Rules, in order:
  *   - the invoice exists in the company, is not a credit note and is not
  *     booked yet;
- *   - status registered, approved or overdue: paid and partially paid
- *     invoices were booked in full by their payment, so booking the
- *     registration now would double-post;
+ *   - status registered, approved or overdue. A settlement never reaches an
+ *     unbooked invoice of a deferring company first: every door that settles
+ *     one books its registration through this function beforehand
+ *     (registration-first.ts). So a paid or partially paid invoice without
+ *     a registration is either a kontantmetoden payment that booked the
+ *     whole invoice (a later switch to faktureringsmetoden would double-post
+ *     it here) or a payment made before that rule (2026-10-16) that booked
+ *     only the 2440 clearing, which needs a rättelse, not this step;
  *   - faktureringsmetoden: under kontantmetoden the invoice books at payment;
  *   - the invoice date is not in a locked or closed period, nor on or before
  *     the company lock date (PERIOD_LOCKED, checked before anything is
  *     generated);
- *   - an open fiscal year covers the invoice date.
+ *   - an open fiscal year covers the invoice date;
+ *   - every month-end an upplupen kostnad (29xx line) books on can take its
+ *     entry (SI_ACCRUED_COST_PERIOD_LOCKED from the registration builder,
+ *     dry run included).
  *
  * A dry run reads, checks and previews the lines the generator would post,
  * and writes nothing.
  */
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
-import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import {
+  ACCRUAL_RELEASE_FAILED_WARNING,
+  createSchedulesForSupplierInvoice,
+} from '@/lib/bookkeeping/accruals/from-invoices'
+import { supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -33,15 +46,20 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 // Statuses where the registration entry can still be created afterwards.
-// Paid/partially paid invoices are excluded: their payment flow has already
-// booked the full cash-style entry (mark-paid routes on the missing
-// registration link), so booking registration now would double-post.
+// Paid and partially paid invoices are excluded: a payment that reached one
+// without a registration booked either the whole invoice (kontantmetoden,
+// before a switch of method), which this step would double-post, or only the
+// 2440 clearing (a deferring company's payment before registration-first.ts),
+// which is corrected by a rättelse. Every settlement door now books the
+// registration first, through bookSupplierInvoice, while the invoice is still
+// in one of these statuses.
 export const SUPPLIER_INVOICE_BOOKABLE_STATUSES = ['registered', 'approved', 'overdue']
 
 const ACCRUAL_PARTIAL: OperationWarning = {
@@ -114,7 +132,14 @@ export async function bookSupplierInvoice(
     return { ok: false, code: 'SI_BOOK_CASH_METHOD' }
   }
 
-  const verdict = await checkPeriodLock(supabase, companyId, invoice.invoice_date)
+  const items = (invoice.items ?? []) as SupplierInvoiceItem[]
+  const supplierType = invoice.supplier?.supplier_type || 'company'
+
+  // The date the registration builder dates the verifikat on: the invoice
+  // date, or for an EU goods acquisition at the latest the 15th of the month
+  // after its delivery (ML 7 kap. 26 §).
+  const registrationDate = supplierInvoiceRegistrationDate(invoice, supplierType)
+  const verdict = await checkPeriodLock(supabase, companyId, registrationDate)
   if (verdict.locked) {
     return {
       ok: false,
@@ -123,12 +148,11 @@ export async function bookSupplierInvoice(
         reason: verdict.reason,
         ...(verdict.fiscal_period_id ? { fiscal_period_id: verdict.fiscal_period_id } : {}),
         invoice_date: invoice.invoice_date,
+        ...(registrationDate !== invoice.invoice_date ? { entry_date: registrationDate } : {}),
       },
     }
   }
 
-  const items = (invoice.items ?? []) as SupplierInvoiceItem[]
-  const supplierType = invoice.supplier?.supplier_type || 'company'
   const supplierName = invoice.supplier?.name ?? undefined
   const noPeriod: Failure = {
     ok: false,
@@ -159,6 +183,11 @@ export async function bookSupplierInvoice(
           supplier_invoice_id: invoice.id,
           arrival_number: invoice.arrival_number ?? null,
           supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+          // Which invoice this is, for the approver: four staged Bokför
+          // operations used to read the same (feedback seq 930807).
+          supplier_name: supplierName ?? null,
+          total: invoice.total,
+          currency: invoice.currency,
           status: invoice.status,
           journal_entry: toEntryPreview(input),
           creates_accrual_schedules: items.some((item) => item.accrual_period_start && item.accrual_period_end),
@@ -179,6 +208,9 @@ export async function bookSupplierInvoice(
       items,
       supplierType,
       supplierName,
+      // The posting port's event, while POSTING_EVENTS is on: the person (or
+      // the approved operation) booked the registration.
+      () => ({ linkBasis: linkBasisColumns('user_created') }),
     )
   } catch (err) {
     return generatorFailure(err)
@@ -239,6 +271,7 @@ export async function bookSupplierInvoice(
         journalEntry.id,
       )
       if (scheduleResult.failed > 0) warnings.push(ACCRUAL_PARTIAL)
+      if ((scheduleResult.releasesFailed ?? 0) > 0) warnings.push({ ...ACCRUAL_RELEASE_FAILED_WARNING })
     } catch (err) {
       log.error('accrual schedule creation failed on deferred booking', err as Error, {
         invoiceId: supplierInvoiceId,

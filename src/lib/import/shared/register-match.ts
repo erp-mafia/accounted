@@ -1,5 +1,5 @@
 import { normalizeEmail, normalizeNameKey } from '@/lib/import/shared/column-utils'
-import { orgNumberKey } from '@/lib/invariants/org-number'
+import { partyOrgKey } from '@/lib/invariants/org-number'
 
 /**
  * Duplicate matching for the customer and supplier register imports.
@@ -16,6 +16,13 @@ import { orgNumberKey } from '@/lib/invariants/org-number'
  * A record is never a match when both sides carry an org number and the two
  * differ: the org number is the party's legal identity, the other keys are not
  * (a customer number reused by another system, a shared invoice address).
+ *
+ * For the same reason an individual (customer_type 'individual') and a
+ * business with an org number are never a match, whichever of them is the
+ * row: an individual carries no org number to compare (customerMatchRow), so
+ * the rule above cannot tell a private person from a company that shares its
+ * e-mail, customer number or name. Rows and records without a customer_type
+ * (the supplier register) are not affected.
  */
 
 export type RegisterMatchKey = 'customer_number' | 'org_number' | 'email' | 'name'
@@ -40,6 +47,8 @@ export interface MatchableRecord {
   org_number: string | null
   email: string | null
   customer_number?: string | null
+  /** Customers only; 'individual' never matches a business with an org number. */
+  customer_type?: string | null
 }
 
 export interface MatchableRow {
@@ -47,6 +56,8 @@ export interface MatchableRow {
   org_number: string | null
   email: string | null
   customer_number?: string | null
+  /** Customers only; 'individual' never matches a business with an org number. */
+  customer_type?: string | null
 }
 
 export interface RegisterMatch<T> {
@@ -57,8 +68,6 @@ export interface RegisterMatch<T> {
 }
 
 export interface RegisterMatcherOptions {
-  /** Dedup key for an org number: customers and suppliers normalise it differently. */
-  orgKey: (value: string | null) => string | null
   namePolicy?: NameMatchPolicy
 }
 
@@ -77,12 +86,14 @@ export interface RegisterMatcher<T extends MatchableRecord> {
 const KEY_ORDER: RegisterMatchKey[] = ['customer_number', 'org_number', 'email', 'name']
 
 /**
- * Supplier org number key: the Swedish 10-digit key when the value is one (so
- * a 12-digit CSV value finds the stored 10-digit row, #2391), else the value
- * as typed, so BE0123456789 and FR0123456789 stay two suppliers.
+ * A customer import row as the matcher sees it. An individual (privatperson)
+ * has no org number: its personnummer is stored encrypted in personal_number
+ * and is never a match key, so an individual is found by customer number,
+ * e-mail or a confirmed name only. The preview and execute both match through
+ * this, so neither can match on a number the other does not.
  */
-export function supplierOrgKey(value: string | null): string | null {
-  return orgNumberKey(value) ?? (value?.trim() || null)
+export function customerMatchRow<T extends MatchableRow & { customer_type: string }>(row: T): T {
+  return row.customer_type === 'individual' ? { ...row, org_number: null } : row
 }
 
 /** Customer numbers compare trimmed and case-insensitively ("k-1" is "K-1"). */
@@ -98,13 +109,13 @@ export function normalizeNameForMatch(value: string | null | undefined): string 
 
 export function createRegisterMatcher<T extends MatchableRecord>(
   records: readonly T[],
-  options: RegisterMatcherOptions,
+  options: RegisterMatcherOptions = {},
 ): RegisterMatcher<T> {
   const namePolicy = options.namePolicy ?? NAME_MATCH_POLICY
 
   const keyOf: Record<RegisterMatchKey, (r: MatchableRow) => string | null> = {
     customer_number: (r) => normalizeCustomerNumber(r.customer_number),
-    org_number: (r) => options.orgKey(r.org_number),
+    org_number: (r) => partyOrgKey(r.org_number),
     email: (r) => normalizeEmail(r.email),
     name: (r) => normalizeNameForMatch(r.name),
   }
@@ -129,8 +140,14 @@ export function createRegisterMatcher<T extends MatchableRecord>(
 
   for (const record of records) add(record)
 
+  const isIndividual = (p: MatchableRow) => p.customer_type === 'individual'
+  const isBusinessWithOrg = (p: MatchableRow) => !isIndividual(p) && partyOrgKey(p.org_number) !== null
+  /** An individual and a business with an org number are never the same party. */
+  const crossesKind = (row: MatchableRow, record: T) =>
+    (isIndividual(row) && isBusinessWithOrg(record)) || (isBusinessWithOrg(row) && isIndividual(record))
+
   const find = (row: MatchableRow): RegisterMatch<T> | null => {
-    const rowOrg = options.orgKey(row.org_number)
+    const rowOrg = partyOrgKey(row.org_number)
     let pool: T[] | null = null
     let decidedBy: RegisterMatchKey | null = null
 
@@ -146,9 +163,10 @@ export function createRegisterMatcher<T extends MatchableRecord>(
         .filter((c) => keyOf[key](c) === value)
         .filter((c) => !pool || pool.includes(c))
         .filter((c) => {
-          const org = options.orgKey(c.org_number)
+          const org = partyOrgKey(c.org_number)
           return !rowOrg || !org || org === rowOrg
         })
+        .filter((c) => !crossesKind(row, c))
       if (candidates.length === 0) continue
 
       decidedBy ??= key
@@ -167,8 +185,8 @@ export function createRegisterMatcher<T extends MatchableRecord>(
   const resolve = (row: MatchableRow, confirmedId?: string | null): T | null => {
     const found = find(row)
     if (found && !found.possible) return found.record
-    if (confirmedId) return byId.get(confirmedId) ?? null
-    return null
+    const confirmed = confirmedId ? byId.get(confirmedId) : undefined
+    return confirmed && !crossesKind(row, confirmed) ? confirmed : null
   }
 
   return { find, resolve, add }
