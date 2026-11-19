@@ -91,6 +91,32 @@ describe('POST /api/mcp-oauth/register', () => {
     }
   })
 
+  it('accepts registration with a callback under celemine.com/upstream/', async () => {
+    const redirectUris = ['https://celemine.com/upstream/accounted/callback']
+    const response = await POST(createRequest({
+      client_name: 'Celemine',
+      redirect_uris: redirectUris,
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual(redirectUris)
+  })
+
+  it('rejects celemine.com callbacks that leave /upstream/ or the bare host', async () => {
+    for (const uri of [
+      'https://celemine.com/upstream/../evil',
+      'https://celemine.com/other/callback',
+      'https://app.celemine.com/upstream/callback',
+    ]) {
+      const response = await POST(createRequest({
+        redirect_uris: [uri],
+        token_endpoint_auth_method: 'none',
+      }))
+      expect(response.status).toBe(400)
+    }
+  })
+
   it('accepts the three redirect_uris Cursor registers in one request', async () => {
     // Cursor sends the legacy deeplink, the Cloud Agents web fallback and the
     // RFC 8252 loopback together; one unknown URI used to fail the whole set.

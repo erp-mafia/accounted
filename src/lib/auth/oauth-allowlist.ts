@@ -15,8 +15,8 @@ import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
 /**
  * Identity of a built-in client, derived from the redirect URI pattern that
  * matched. Rendered on the consent page so the user can tell a real Claude /
- * ChatGPT / Grok / Gemini / Cursor / Squidler connector from a look-alike
- * registration.
+ * ChatGPT / Grok / Gemini / Cursor / Squidler / Celemine connector from a
+ * look-alike registration.
  */
 export type BuiltInProvider =
   | 'claude'
@@ -26,12 +26,13 @@ export type BuiltInProvider =
   | 'cursor'
   | 'cursor_deeplink'
   | 'squidler'
+  | 'celemine'
   | 'flytt_extension'
   | 'local'
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * the Claude, ChatGPT, Grok, Gemini, Cursor and Squidler connectors keep working without seeded rows, and so
+ * the Claude, ChatGPT, Grok, Gemini, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
@@ -85,6 +86,16 @@ export type BuiltInProvider =
  * 2026-11-04). Each is an exact path on Squidler's own https host, never a
  * prefix, so no other squidler.io path and no other subdomain rides on it.
  *
+ * Celemine (celemine.com, a policy and security gateway between a company's
+ * AI agents and the systems they work in) connects to Accounted as one of its
+ * upstream MCP servers. It registers itself through /register with callbacks
+ * under https://celemine.com/upstream/ on its own host (founder decision
+ * 2026-11-19), so the entry is a prefix, like Claude's /api/. Each path
+ * segment must start with a letter, digit, `_` or `-` and hold only those and
+ * `.`: no dot segment (`..`), percent-encoding, query or fragment can take the
+ * browser off /upstream/ once the check has passed. Only the bare
+ * celemine.com host matches, no subdomain.
+ *
  * The browser extension "Flytta till Accounted" (flytt-extension.ts) signs
  * in through chrome.identity, whose redirect is https://<id>.chromiumapp.org/.
  * Chrome hands that URL only to the extension with that id, so it is matched
@@ -101,6 +112,7 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
   { pattern: /^https:\/\/squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
   { pattern: /^https:\/\/dev\.squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
+  { pattern: /^https:\/\/celemine\.com\/upstream(\/[A-Za-z0-9_-][A-Za-z0-9._-]*)+\/?$/, provider: 'celemine' },
   { pattern: /^https:\/\/ooeaogbjfhciekiidjaehikcbccomkmj\.chromiumapp\.org\/$/, provider: 'flytt_extension' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },

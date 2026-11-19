@@ -76,6 +76,7 @@ const CLAUDE: RedirectUriResolution = { allowed: true, kind: 'built_in', provide
 const CHATGPT: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'chatgpt' }
 const GROK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'grok' }
 const SQUIDLER: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'squidler' }
+const CELEMINE: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'celemine' }
 const FLYTT_EXTENSION: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'flytt_extension' }
 const CURSOR: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor' }
 const CURSOR_DEEPLINK: RedirectUriResolution = { allowed: true, kind: 'built_in', provider: 'cursor_deeplink' }
@@ -583,6 +584,25 @@ describe('client identity on the consent page', () => {
     expect(html).toContain('Squidler')
     expect(html).toContain('Verifierad')
     expect(html).toContain('squidler.io')
+    expect(html).not.toContain('En extern applikation')
+  })
+
+  it('names Celemine as a verified client for a callback under /upstream/', async () => {
+    mocks.resolveRedirectUri.mockResolvedValue(CELEMINE)
+    const html = await (
+      await GET(
+        new Request(
+          buildAuthorizeUrl({
+            ...params,
+            redirect_uri: 'https://celemine.com/upstream/accounted/callback',
+          }),
+        ),
+      )
+    ).text()
+
+    expect(html).toContain('Celemine')
+    expect(html).toContain('Verifierad')
+    expect(html).toContain('celemine.com')
     expect(html).not.toContain('En extern applikation')
   })
 

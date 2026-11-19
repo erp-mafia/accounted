@@ -232,6 +232,7 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
   grok: 'Grok (xAI)',
   cursor: 'Cursor',
   squidler: 'Squidler',
+  celemine: 'Celemine',
   flytt_extension: 'Flytta till Accounted',
 }
 

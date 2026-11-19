@@ -1448,6 +1448,8 @@ function describeClient(
         return { name: 'Cursor (Anysphere)', shortName: 'Cursor', tag: 'Din egen dator', verified: false }
       case 'squidler':
         return { name: 'Squidler', shortName: 'Squidler', tag: 'Verifierad', verified: true }
+      case 'celemine':
+        return { name: 'Celemine', shortName: 'Celemine', tag: 'Verifierad', verified: true }
       case 'flytt_extension':
         return { name: 'Flytta till Accounted', shortName: 'Flytta till Accounted', tag: 'Verifierad', verified: true }
       case 'local':

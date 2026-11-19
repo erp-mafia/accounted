@@ -4930,6 +4930,7 @@
     "kind_local": "Local client",
     "kind_cursor": "Cursor",
     "kind_squidler": "Squidler",
+    "kind_celemine": "Celemine",
     "kind_mcp": "MCP client",
     "disconnect": "Disconnect",
     "disconnect_aria": "Disconnect {name}",
