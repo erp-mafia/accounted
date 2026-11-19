@@ -232,6 +232,7 @@ describe('unlearnOnCorrection', () => {
 
   /** A client that holds verifikat rows by id, so the correction_of_id chain is read as production reads it. */
   function makeChainClient(entries: Record<string, { source_type: string; source_id: string | null; correction_of_id: string | null; lines: unknown[] }>) {
+    const reads: string[] = []
     const from = vi.fn((table: string) => {
       const filters: Record<string, unknown> = {}
       const chain = {
@@ -242,19 +243,23 @@ describe('unlearnOnCorrection', () => {
         },
         maybeSingle: async () => {
           if (table === 'transactions') return { data: filters.id === 'tx-1' ? BANK_ROW : null, error: null }
+          reads.push(`${table}:${String(filters.id)}`)
           const row = entries[String(filters.id)]
           return { data: row ? { id: filters.id, source_type: row.source_type, source_id: row.source_id, correction_of_id: row.correction_of_id } : null, error: null }
         },
-        then: (resolve: (v: unknown) => void) => resolve({ data: entries[String(filters.journal_entry_id)]?.lines ?? [], error: null }),
+        then: (resolve: (v: unknown) => void) => {
+          reads.push(`${table}:${String(filters.journal_entry_id)}`)
+          resolve({ data: entries[String(filters.journal_entry_id)]?.lines ?? [], error: null })
+        },
       }
       return chain
     })
-    return { from } as never
+    return { client: { from } as never, reads }
   }
 
   it('a second correction reaches the bank booking through correction_of_id and takes its occurrence back', async () => {
     const amountOnly = REVERSE_CHARGE.map((l) => ({ ...l, debit_amount: l.debit_amount ? l.debit_amount + 1 : 0, credit_amount: l.credit_amount ? l.credit_amount + 1 : 0 }))
-    const client = makeChainClient({
+    const { client, reads } = makeChainClient({
       'je-orig': { source_type: 'bank_transaction', source_id: 'tx-1', correction_of_id: null, lines: REVERSE_CHARGE },
       'je-fix1': { source_type: 'correction', source_id: null, correction_of_id: 'je-orig', lines: amountOnly },
     })
@@ -274,7 +279,7 @@ describe('unlearnOnCorrection', () => {
   })
 
   it('a second correction after one that already changed the kontering takes nothing back again', async () => {
-    const client = makeChainClient({
+    const { client, reads } = makeChainClient({
       'je-orig': { source_type: 'bank_transaction', source_id: 'tx-1', correction_of_id: null, lines: REVERSE_CHARGE },
       'je-fix1': { source_type: 'correction', source_id: null, correction_of_id: 'je-orig', lines: DOMESTIC_MOMS },
     })
@@ -289,7 +294,36 @@ describe('unlearnOnCorrection', () => {
       companyId: 'company-1',
     })
 
+    // The walk reached the bank booking and compared against what it taught;
+    // without it the bank-identity check alone would also unlearn nothing.
+    expect(reads).toContain('journal_entries:je-orig')
+    expect(reads).toContain('journal_entry_lines:je-orig')
     expect(mockUnlearn).not.toHaveBeenCalled()
+  })
+
+  it('a correction that only adds lines (the missing reverse-charge basis pair) keeps the template', async () => {
+    const { client, from } = makeClient({ transaction: BANK_ROW })
+    mockServiceClient.mockReturnValue(client)
+    const withoutBasis = REVERSE_CHARGE.filter((l) => l.account_number !== '4535' && l.account_number !== '4598')
+
+    await unlearnOnCorrection(corrected(withoutBasis, REVERSE_CHARGE))
+
+    expect(from).not.toHaveBeenCalled()
+    expect(mockUnlearn).not.toHaveBeenCalled()
+  })
+
+  it('a correction that adds lines but drops a taught account takes the occurrence back', async () => {
+    const { client } = makeClient({ transaction: BANK_ROW })
+    mockServiceClient.mockReturnValue(client)
+    mockUnlearn.mockResolvedValue('decremented')
+    const otherCostPlusRounding = [
+      ...DOMESTIC_MOMS.map((l) => (l.account_number === '5420' ? { ...l, account_number: '6540' } : l)),
+      { account_number: '3740', debit_amount: 0, credit_amount: 0.01 },
+    ]
+
+    await unlearnOnCorrection(corrected(DOMESTIC_MOMS, otherCostPlusRounding))
+
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, DOMESTIC_MOMS)
   })
 
   it('a correction the system made (kontantmetod cut-off) keeps the template', async () => {

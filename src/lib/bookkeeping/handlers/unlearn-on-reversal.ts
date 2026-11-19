@@ -37,11 +37,12 @@ export async function unlearnOnReversal({ originalEntry, companyId }: EventPaylo
 }
 
 /**
- * The journal_entry.corrected handler. A correction that books the same
- * accounts on the same sides (a new date, amount or text) rejected nothing the
- * booking taught, so the template keeps its occurrence. One that changed the
- * kontering (another cost account, other moms) takes the original's
- * occurrence back, as a reversal does. A correction the system made
+ * The journal_entry.corrected handler. A correction that drops an account or
+ * side the booking taught (another cost account, other moms) takes the
+ * original's occurrence back, as a reversal does. One that keeps every taught
+ * account on its side rejected nothing: a new date, amount or text, or lines
+ * only added to it (the missing reverse-charge basis pair of
+ * rc-basis-gaps/fix, a rounding line). A correction the system made
  * (keepLearnedTemplates: the kontantmetod cut-off) rejected nothing either.
  */
 export async function unlearnOnCorrection({ original, corrected, companyId, keepLearnedTemplates }: EventPayload<'journal_entry.corrected'>): Promise<void> {
@@ -52,12 +53,12 @@ export async function unlearnOnCorrection({ original, corrected, companyId, keep
   // booking at the start of its correction_of_id chain.
   const chain = await correctionChain(supabase, companyId, original)
   const booking = chain[chain.length - 1]
-  const taught = konteringKey(await entryLines(supabase, booking))
-  if (konteringKey(await entryLines(supabase, corrected)) === taught) return
-  // An earlier correction that changed the kontering already took the
+  const taught = konteringSides(await entryLines(supabase, booking))
+  if (!dropsAny(taught, await entryLines(supabase, corrected))) return
+  // An earlier correction that dropped a taught side already took the
   // occurrence back; a second withdrawal would take one the booking never gave.
   for (const link of chain.slice(0, -1)) {
-    if (konteringKey(await entryLines(supabase, link)) !== taught) return
+    if (dropsAny(taught, await entryLines(supabase, link))) return
   }
   await unlearnReversedBankBooking(supabase, companyId, booking)
 }
@@ -116,14 +117,21 @@ async function entryLines(
   return (data ?? []) as VerifikatLine[]
 }
 
-/** The accounts a verifikat books, each with its side, as one comparable key. */
-function konteringKey(lines: ReadonlyArray<VerifikatLine>): string {
+/** The accounts a verifikat books, each with its side. */
+function konteringSides(lines: ReadonlyArray<VerifikatLine>): Set<string> {
   const sides = new Set<string>()
   for (const l of lines) {
     if (Number(l.debit_amount) > 0) sides.add(`D${l.account_number}`)
     if (Number(l.credit_amount) > 0) sides.add(`K${l.account_number}`)
   }
-  return [...sides].sort().join(',')
+  return sides
+}
+
+/** Whether these lines leave out an account or side the booking taught. */
+function dropsAny(taught: ReadonlySet<string>, lines: ReadonlyArray<VerifikatLine>): boolean {
+  const kept = konteringSides(lines)
+  for (const side of taught) if (!kept.has(side)) return true
+  return false
 }
 
 export async function unlearnReversedBankBooking(
