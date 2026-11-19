@@ -106,11 +106,24 @@ describe('a document on a verifikat in a locked or closed year', () => {
     expect(answer.remediation?.tool).toBe('gnubok_list_fiscal_periods')
   })
 
-  it('is the answer a bank-row attach gives when only the pin could be saved', () => {
+  it('ends the upload and link doors\' next step with keeping the file unlinked', () => {
+    expect(answer.remediation?.description).toMatch(
+      /lock or close the year again\. A year that stays closed: the file is kept unlinked\. Send an upload again without journal_entry_id; a document that is already stored stays as it is \(GET \/documents\?linked=false lists both\)\.$/,
+    )
+  })
+
+  it('is the answer a bank-row attach gives when only the pin could be saved, with attach-document\'s own last step', () => {
     const attach = getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!
     expect(attach.message_sv).toContain(answer.message_sv)
     expect(attach.message_en).toContain(answer.message_en)
-    expect(attach.remediation).toEqual(answer.remediation)
+    // The same way out of the year, then the attach's own case: the document
+    // is already stored, so no advice to upload it again (#248).
+    const upload = answer.remediation!.description
+    const wayOut = upload.slice(0, upload.indexOf(' A year that stays closed:'))
+    expect(attach.remediation?.description.startsWith(`${wayOut} A year that stays closed:`)).toBe(true)
+    expect(attach.remediation?.description).toContain('the document is already stored and stays as it is')
+    expect(attach.remediation?.description).not.toMatch(/upload again|journal_entry_id/)
+    expect(attach.remediation?.tool).toBe(answer.remediation?.tool)
   })
 
   it('leaves a verifikat refused in a locked period as PERIOD_LOCKED', () => {

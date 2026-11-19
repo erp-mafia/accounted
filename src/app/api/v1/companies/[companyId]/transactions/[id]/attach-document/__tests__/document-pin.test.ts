@@ -275,14 +275,16 @@ describe('POST /transactions/:id/attach-document', () => {
     const res = await post({ document_id: DOC_ID })
     const { error } = await res.json()
     // The published code, with the one answer for a document on a locked year
-    // in message, message_en and recovery_hint: not PERIOD_LOCKED's own
-    // advice to move an entry date.
+    // in message and message_en, and attach-document's own next step as
+    // recovery_hint: not PERIOD_LOCKED's advice to move an entry date, nor
+    // the upload doors' advice to send the file again (#248).
     const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
     expect(res.status).toBe(400)
     expect(error.code).toBe('PERIOD_LOCKED')
     expect(error.message).toBe(answer.message_sv)
     expect(error.message_en).toBe(answer.message_en)
-    expect(error.recovery_hint).toBe(answer.remediation!.description)
+    expect(error.recovery_hint).toBe(getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation!.description)
+    expect(error.recovery_hint).not.toBe(answer.remediation!.description)
     expect(error.recovery_hint).not.toBe(getErrorEntry('PERIOD_LOCKED')!.remediation?.description)
     expect(error.details).toMatchObject({ journal_entry_id: JE_ID, reason: answer.message_sv })
     const writes = client.calls.filter((c) => WRITES.has(c.method) && BOOKS.has(c.table)).map((c) => c.table)
@@ -334,7 +336,7 @@ describe('POST /transactions/:id/attach-document', () => {
     expect(error.code).toBe('PERIOD_LOCKED')
     expect(error.message).toBe(answer.message_sv)
     expect(error.message_en).toBe(answer.message_en)
-    expect(error.recovery_hint).toBe(answer.remediation!.description)
+    expect(error.recovery_hint).toBe(getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation!.description)
     expect(error.details).toMatchObject({ journal_entry_id: JE_ID })
     expect(client.calls).toContainEqual(expect.objectContaining({ table: 'journal_entries', method: 'in', args: ['id', [JE_ID]] }))
     expect(wrote(client)).toBe(false)
@@ -563,7 +565,7 @@ describe('POST /transactions/:id/attach-document', () => {
     const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
     expect(error.code).toBe('PERIOD_LOCKED')
     expect(error.message_en).toBe(answer.message_en)
-    expect(error.recovery_hint).toBe(answer.remediation!.description)
+    expect(error.recovery_hint).toBe(getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation!.description)
     expect(wrote(client)).toBe(false)
   })
 })

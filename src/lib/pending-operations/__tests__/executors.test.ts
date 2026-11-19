@@ -1578,7 +1578,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     expect(result.data).toEqual({
       journal_entry_id: 'je-1',
       message_en: answer.message_en,
-      remediation: answer.remediation,
+      remediation: getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation,
     })
   })
 

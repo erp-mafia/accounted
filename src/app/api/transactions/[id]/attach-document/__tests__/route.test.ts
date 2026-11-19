@@ -485,12 +485,14 @@ describe('POST /api/transactions/[id]/attach-document: a document another row ho
       error: { code: string; message: string; message_en: string; remediation: { description: string } }
     }>(await post())
     // The published code, with the one answer for a locked year in both
-    // languages and as its next step.
+    // languages, and attach-document's own next step: the document is
+    // already stored, so not the upload doors' advice to send it again (#248).
     const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
     expect(body.error.code).toBe('PERIOD_LOCKED')
     expect(body.error.message).toBe(answer.message_sv)
     expect(body.error.message_en).toBe(answer.message_en)
-    expect(body.error.remediation).toEqual(answer.remediation)
+    expect(body.error.remediation).toEqual(getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation)
+    expect(body.error.remediation).not.toEqual(answer.remediation)
     expect(findCalls('transactions', 'update')).toEqual([])
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
     expect(findCalls('document_attachments', 'update')).toEqual([])

@@ -296,7 +296,10 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
 
     const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
     expect(refusal).toMatchObject({ code: 'PERIOD_LOCKED', message: answer.message_sv, details: { journal_entry_id: ENTRY } })
-    expect(toToolError(refusal).error.remediation?.description).toBe(answer.remediation!.description)
+    // attach-document's own next step: the document is already stored (#248).
+    expect(toToolError(refusal).error.remediation?.description).toBe(
+      getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation!.description,
+    )
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
   })
 
