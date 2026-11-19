@@ -2,6 +2,16 @@
 
 The B2C side of Swedish e-invoicing **runs on completely different rails from Peppol** and must be implemented separately. This reference covers Bankgirot's e-faktura privat, Kivra digital mailbox, Min Myndighetspost, and how a Swedish accounting/fintech product should approach B2C invoicing.
 
+## Contents
+
+- Bankgirot e-faktura privat, the bank rail
+- Kivra, the digital mailbox
+- Min Myndighetspost
+- Consumer rails vs Peppol, the architectural distinction
+- Bankgirot and Plusgirot, ownership
+- Implementation strategy for a new Swedish accounting product
+- Authoritative source list
+
 ## Bankgirot e-faktura privat, the bank rail
 
 E-faktura privat distributes invoices directly into Swedish individuals' internet bank inboxes. **Volume hit a record 168.9 million e-invoices to private individuals in 2024** (Bankföreningen).

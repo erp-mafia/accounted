@@ -31,7 +31,7 @@ vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
   resolveSkattekontoAccount: (...args: unknown[]) => resolveSkattekontoMock(...args),
 }))
 
-import { GET } from '../route'
+import { GET, POST } from '../route'
 
 /** Chainable builder resolving queued {data,error} per from() in call order. */
 function createQueuedSupabase(results: { data?: unknown; error?: unknown }[]) {
@@ -144,5 +144,72 @@ describe('GET /api/settings/booking-templates', () => {
     }>(await GET(req(), { params: Promise.resolve({}) }))
     expect(status).toBe(200)
     expect(body.data.every((t) => t.is_hidden === false)).toBe(true)
+  })
+})
+
+describe('POST /api/settings/booking-templates', () => {
+  const lines = [
+    { account: '5010', label: 'Hyra', side: 'debit', type: 'business', ratio: 1 },
+    { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1 },
+  ]
+  const tagged = [{ ...lines[0], dimensions: { '1': 'KS01', '6': 'P001' } }, lines[1]]
+  const TEAM = '22222222-2222-4222-8222-222222222222'
+
+  /** A supabase whose insert records its row and answers it back. */
+  function createInsertingSupabase() {
+    const inserted: Record<string, unknown>[] = []
+    const supabase = {
+      from: () => ({
+        insert: (row: Record<string, unknown>) => {
+          inserted.push(row)
+          return { select: () => ({ single: () => Promise.resolve({ data: row, error: null }) }) }
+        },
+      }),
+    }
+    return { supabase, inserted }
+  }
+
+  const post = (body: unknown) =>
+    POST(createMockRequest('/api/settings/booking-templates', { method: 'POST', body }), { params: Promise.resolve({}) })
+
+  beforeEach(() => {
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: {},
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    expect((await post({ name: 'Hyra', lines })).status).toBe(401)
+  })
+
+  it('returns 400 for a template with fewer than two lines', async () => {
+    const { supabase, inserted } = createInsertingSupabase()
+    auth(supabase)
+    expect((await post({ name: 'Hyra', lines: [lines[0]] })).status).toBe(400)
+    expect(inserted).toHaveLength(0)
+  })
+
+  it("keeps a company template's dimensions", async () => {
+    const { supabase, inserted } = createInsertingSupabase()
+    auth(supabase)
+    expect((await post({ name: 'Hyra', lines: tagged })).status).toBe(201)
+    expect(inserted[0]).toMatchObject({
+      company_id: '11111111-1111-4111-8111-111111111111',
+      team_id: null,
+      lines: tagged,
+    })
+  })
+
+  it('stores a team template without the dimensions its lines were sent with', async () => {
+    // A tag is one company's own code; a team template is booked by every
+    // company of the team.
+    const { supabase, inserted } = createInsertingSupabase()
+    auth(supabase)
+    expect((await post({ name: 'Hyra', lines: tagged, team_id: TEAM })).status).toBe(201)
+    expect(inserted[0]).toMatchObject({ company_id: null, team_id: TEAM })
+    expect(inserted[0].lines).toEqual(lines)
   })
 })

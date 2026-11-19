@@ -136,11 +136,11 @@ function mapping(n: number, overrides: Partial<AccountMapping> = {}): AccountMap
   }
 }
 
-// 60 rows (two pages) with every confidence badge and a created target. The
-// step opens on "all" for these, so the pager and the badges show.
+// 60 rows (two pages) with every match label and a created target. The
+// step opens on "all" for these, so the pager and the labels show.
 const settledMappings: AccountMapping[] = [
-  mapping(1, { confidence: 0.5 }),
-  mapping(2, { confidence: 0.8 }),
+  mapping(1, { sourceAccount: '9001', targetAccount: '2999', targetName: 'Suspense', confidence: 0.5, matchType: 'class' }),
+  mapping(2, { confidence: 0.7, matchType: 'bas_range' }),
   mapping(3, { isOverride: true }),
   mapping(4, { targetAccount: '3999', targetName: '' }),
   ...Array.from({ length: 56 }, (_, i) => mapping(10 + i)),
@@ -283,6 +283,13 @@ describe('SIE import wizard under the English locale (crm#1356)', () => {
     const html = render(STEPS[0][1], 'en')
     expect(html).toContain('Upload SIE file')
     expect(render(STEPS.find(([name]) => name === 'mapping, all rows')![1], 'en')).toContain('Showing 1-50 of 60')
+  })
+
+  it('names what the mapper did with a row in English', () => {
+    const html = render(STEPS.find(([name]) => name === 'mapping, all rows')![1], 'en')
+    for (const label of ['Match', 'BAS account', 'From the file', 'Moved', 'Manual']) {
+      expect(html).toContain(`>${label}<`)
+    }
   })
 })
 

@@ -260,6 +260,137 @@ describe('Extension Catch-All Route', () => {
     expect(getActor()).toBeUndefined()
   })
 
+  // A Swedish JSON body sent without a declared charset is read as Latin-1 by
+  // clients that fall back that way, and "är" arrives as "Ã¤r". The bytes were
+  // always right; only the declaration was missing.
+  it('declares charset=utf-8 on JSON so Swedish text cannot be read as Latin-1', async () => {
+    // The feature flag is checked after the extension is found, so the
+    // disabled path needs a registered skatteverket to reach.
+    vi.stubEnv('SKATTEVERKET_ENABLED', '')
+    extensionRegistry.register({
+      id: 'skatteverket',
+      name: 'Skatteverket',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/status', handler: vi.fn() }],
+    })
+
+    try {
+      const request = createMockRequest('/api/extensions/ext/skatteverket/status')
+      const response = await GET(request, createPathParams(['skatteverket', 'status']))
+
+      expect(response.status).toBe(503)
+      expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+
+      // The body still decodes as UTF-8, and reading those same bytes as Latin-1
+      // is what produced the reported mojibake.
+      const bytes = new Uint8Array(await response.clone().arrayBuffer())
+      expect(new TextDecoder('utf-8').decode(bytes)).toContain('miljö')
+      expect(new TextDecoder('latin1').decode(bytes)).toContain('miljÃ¶')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('declares the charset on the error envelope it rebuilds with a requestId', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      NextResponse.json({ error: { code: 'NOT_FOUND', message: 'Hittades inte' } }, { status: 404 })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/missing', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/missing')
+    const response = await GET(request, createPathParams(['test-ext', 'missing']))
+    const { status, body } = await parseJsonResponse<{ error: { requestId?: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.requestId).toMatch(/^req_/)
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+  })
+
+  it('does not double a charset the handler already declared', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      new NextResponse('{"ok":true}', { headers: { 'content-type': 'application/json; charset=UTF-8' } })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/declared', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/declared')
+    const response = await GET(request, createPathParams(['test-ext', 'declared']))
+
+    expect(response.headers.get('content-type')).toBe('application/json; charset=UTF-8')
+  })
+
+  it('leaves a non-JSON content-type alone', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      new NextResponse('%PDF-1.7', { headers: { 'content-type': 'application/pdf' } })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/file', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/file')
+    const response = await GET(request, createPathParams(['test-ext', 'file']))
+
+    expect(response.headers.get('content-type')).toBe('application/pdf')
+  })
+
+  it('sends the JSON of a skipAuth route (a webhook, the MCP endpoint) with the content-type the handler set', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      NextResponse.json({ error: { code: 'UNAUTHORIZED', message: 'Nyckeln saknas' } }, { status: 401 })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'POST', path: '/mcp', handler, skipAuth: true }],
+    })
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/mcp', { method: 'POST', body: {} })
+    const response = await POST(request, createPathParams(['test-ext', 'mcp']))
+    const { status, body } = await parseJsonResponse<{ error: { requestId?: string } }>(response)
+
+    expect(status).toBe(401)
+    // The requestId is still added to the envelope; only the header is kept.
+    expect(body.error.requestId).toMatch(/^req_/)
+    expect(response.headers.get('content-type')).toBe('application/json')
+  })
+
   it('dispatches POST requests correctly', async () => {
     const handler = vi.fn().mockResolvedValue(
       NextResponse.json({ ok: true })

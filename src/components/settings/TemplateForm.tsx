@@ -10,13 +10,15 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { PlusIcon, TrashIcon } from '@/components/icons'
-import { convertLibraryToBookingTemplate, applyTemplate, templateShareLines } from '@/lib/bookkeeping/template-library'
+import { convertLibraryToBookingTemplate, applyTemplate, getTemplateScope, linesWithoutDimensions, templateShareLines } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 
 export type TemplateFormMode = 'create' | 'edit' | 'duplicate'
 
@@ -45,6 +47,15 @@ export function TemplateForm({
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  // Kostnadsställe/projekt on the cost/revenue lines. The pickers render only
+  // when company_settings.dimensions_enabled, the same gate as the verifikat
+  // form; a bag the company's own template already carries is kept and saved
+  // either way. A team template gets no pickers and is edited without tags:
+  // a tag is one company's own code, and every company of the team books the
+  // template. The server stores a team template without them as well.
+  const { settings: companySettings } = useCompanySettings()
+  const isTeamTemplate = mode === 'edit' && !!initialTemplate && getTemplateScope(initialTemplate) === 'team'
+  const showDimensions = companySettings?.dimensions_enabled === true && !isTeamTemplate
   const [isSubmitting, setIsSubmitting] = useState(false)
   // When customizing a system template (mode 'duplicate') we suggest a distinct
   // "(anpassad)" name so the company copy doesn't read as the standard one.
@@ -61,7 +72,9 @@ export function TemplateForm({
   )
   const [lines, setLines] = useState<BookingTemplateLibraryLine[]>(() =>
     initialTemplate
-      ? initialTemplate.lines.map((l) => ({ ...l }))
+      ? isTeamTemplate
+        ? linesWithoutDimensions(initialTemplate.lines)
+        : initialTemplate.lines.map((l) => ({ ...l }))
       : [
           { account: '', label: '', side: 'debit', type: 'business', ratio: 1 },
           { account: '', label: '', side: 'credit', type: 'settlement', ratio: 1 },
@@ -76,11 +89,29 @@ export function TemplateForm({
     })
   }
 
+  /** Sets or clears one dimension (by SIE dimension number) on a cost/revenue line. */
+  function updateLineDimension(index: number, sieDimNo: string, code: string | null) {
+    setLines((prev) => {
+      const updated = [...prev]
+      const dimensions = { ...(updated[index].dimensions ?? {}) }
+      const trimmed = code?.trim()
+      if (trimmed) dimensions[sieDimNo] = trimmed
+      else delete dimensions[sieDimNo]
+      updated[index] = {
+        ...updated[index],
+        dimensions: Object.keys(dimensions).length > 0 ? dimensions : undefined,
+      }
+      return updated
+    })
+  }
+
   function updateLineType(index: number, newType: BookingTemplateLibraryLine['type']) {
     setLines((prev) => {
       const updated = [...prev]
       const current = updated[index]
       const next: BookingTemplateLibraryLine = { ...current, type: newType }
+      // Only a cost/revenue line carries dimensions.
+      if (newType !== 'business') delete next.dimensions
       // Auto-pick a sensible default for the type-specific field so the
       // converter (and applyTemplate) sees a complete line shape.
       if (newType === 'vat' && next.vat_rate === undefined) {
@@ -119,6 +150,8 @@ export function TemplateForm({
   // amount (ratio 1.0) and is shown in the live preview, not as a control:
   // an editable settlement ratio that doesn't feed the sum check would mislead.
   const firstRatioIndex = showRatio ? lines.indexOf(shareLines[0]) : -1
+  // The dimension help is said once, under the first cost/revenue line.
+  const firstBusinessIndex = lines.findIndex((l) => l.type === 'business')
   const businessRatioSum = shareLines.reduce((sum, l) => sum + (l.ratio ?? 1), 0)
   const ratioSumOff = showRatio && Math.abs(businessRatioSum - 1) > 0.001
 
@@ -314,6 +347,24 @@ export function TemplateForm({
                   </div>
                 )}
               </div>
+              {showDimensions && line.type === 'business' && (
+                <div className="space-y-1">
+                  {/* One picker per row: a picker's list is at least 320px
+                      wide and opens from the picker's left edge, so with two
+                      pickers side by side the right-hand list reached past
+                      the dialog and the dialog scrolled sideways. */}
+                  <LineDimensionFields
+                    stacked
+                    dimensions={line.dimensions}
+                    onChange={(sieDimNo, code) => updateLineDimension(i, sieDimNo, code)}
+                    disabled={isSubmitting}
+                    inputClassName="h-8"
+                  />
+                  {i === firstBusinessIndex && (
+                    <p className="text-[12px] leading-4 text-muted-foreground">{t('line_dimensions_help')}</p>
+                  )}
+                </div>
+              )}
             </div>
           )})}
           <Button type="button" variant="outline" onClick={addLine}>

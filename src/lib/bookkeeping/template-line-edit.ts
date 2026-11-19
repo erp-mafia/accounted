@@ -21,6 +21,8 @@ export interface TemplateEditLine {
   debit_amount: string
   credit_amount: string
   line_description?: string
+  /** The dimensions bag the mall set on the line; it is posted with the line. */
+  dimensions?: Record<string, string>
 }
 
 export type TemplateLineAmountField = 'debit_amount' | 'credit_amount'
@@ -128,6 +130,7 @@ export interface TemplatePostLine {
   debit_amount: number
   credit_amount: number
   line_description?: string
+  dimensions?: Record<string, string>
 }
 
 export interface TemplateLinesCheck {
@@ -174,6 +177,7 @@ export function checkTemplateLines(lines: readonly TemplateEditLine[]): Template
       debit_amount: debit,
       credit_amount: credit,
       ...(line.line_description ? { line_description: line.line_description } : {}),
+      ...(line.dimensions && Object.keys(line.dimensions).length > 0 ? { dimensions: line.dimensions } : {}),
     })
   }
 

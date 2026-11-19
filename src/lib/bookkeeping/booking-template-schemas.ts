@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { PACK_CATEGORIES, PACK_ENTITY_TYPES } from '@/lib/packs/schema'
 
 /**
@@ -8,7 +9,9 @@ import { PACK_CATEGORIES, PACK_ENTITY_TYPES } from '@/lib/packs/schema'
  * The category / entity_type enums mirror `booking_template_library`'s CHECK
  * constraints via the pack contract. The line schema is deliberately looser
  * than `PackLineSchema`: user templates may carry both `ratio` and `vat_rate`
- * on a line, which the pack validator rejects.
+ * on a line, which the pack validator rejects. A line may also carry a
+ * dimensions bag, held to the journal lines' own rule (DimensionsBagSchema);
+ * only a cost/revenue line's bag is booked (applyTemplate).
  */
 export const BookingTemplateLineSchema = z.object({
   account: z.string().regex(/^\d{4}$/),
@@ -17,6 +20,7 @@ export const BookingTemplateLineSchema = z.object({
   type: z.enum(['business', 'vat', 'settlement']),
   ratio: z.number().min(0).max(10).optional(),
   vat_rate: z.number().min(0).max(1).optional(),
+  dimensions: DimensionsBagSchema.optional(),
 })
 
 export const BookingTemplateCategorySchema = z.enum(PACK_CATEGORIES)

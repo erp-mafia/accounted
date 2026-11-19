@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { libraryLinesForSkattekonto, libraryLinesTouchSkattekonto } from '@/lib/bookkeeping/template-library'
+import { libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, linesWithoutDimensions } from '@/lib/bookkeeping/template-library'
 import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
 import {
   BookingTemplateCategorySchema,
@@ -143,7 +143,9 @@ export const GET = withRouteContext(
 
 /**
  * POST /api/settings/booking-templates
- * Create a company-scoped or team-scoped template.
+ * Create a company-scoped or team-scoped template. A team-scoped template is
+ * stored without the dimensions on its lines: the codes are one company's
+ * own, and every company of the team books the template.
  */
 export const POST = withRouteContext(
   'booking_template.create',
@@ -166,7 +168,7 @@ export const POST = withRouteContext(
         description: body.description,
         category: body.category,
         entity_type: body.entity_type,
-        lines: body.lines,
+        lines: body.team_id ? linesWithoutDimensions(body.lines) : body.lines,
         is_system: false,
       })
       .select()
