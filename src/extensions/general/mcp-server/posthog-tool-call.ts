@@ -77,6 +77,7 @@ const ERROR_KIND_TO_TYPE: Readonly<Record<string, string>> = {
   test_key_write_blocked: 'permission',
   unattended_write_blocked: 'permission',
   package_off: 'permission',
+  rate_limited: 'rate_limited',
 }
 
 // Same shape public.agent_telemetry_tool_label accepts for a registry name.

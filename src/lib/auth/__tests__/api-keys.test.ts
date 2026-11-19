@@ -29,6 +29,7 @@ import {
   STAGING_SCOPES,
   TOOL_SCOPE_MAP,
   API_KEY_SCOPES,
+  RATE_LIMIT_RETRY_AFTER_SECONDS,
 } from '../api-keys'
 import { createClient } from '@supabase/supabase-js'
 
@@ -319,14 +320,57 @@ describe('validateApiKey', () => {
     expect(result).toEqual({ error: 'Invalid API key', status: 401 })
   })
 
-  it('returns rate limit error when rate_limited is true', async () => {
+  it('returns rate limit error with the upper-bound wait when the row carries none (DB without 20261119081500)', async () => {
     setupMockRpc({
       data: [{ user_id: 'u1', company_id: 'c1', scopes: null, rate_limited: true }],
       error: null,
     })
 
     const result = await validateApiKey('gnubok_sk_test-key-value')
-    expect(result).toEqual({ error: 'Rate limit exceeded', status: 429 })
+    expect(result).toEqual({
+      error: 'Rate limit exceeded',
+      status: 429,
+      rateLimit: {
+        retryAfterSeconds: RATE_LIMIT_RETRY_AFTER_SECONDS,
+        limitPerMinute: null,
+        apiKeyId: null,
+        userId: 'u1',
+        companyId: 'c1',
+      },
+    })
+  })
+
+  it('returns the seconds left in the window and the key limit when the row carries them', async () => {
+    setupMockRpc({
+      data: [{
+        user_id: 'u1',
+        company_id: 'c1',
+        api_key_id: 'key-1',
+        scopes: null,
+        rate_limited: true,
+        rate_limit_per_minute: 100,
+        retry_after_seconds: 17,
+      }],
+      error: null,
+    })
+
+    const result = await validateApiKey('gnubok_sk_test-key-value')
+    expect(result).toEqual({
+      error: 'Rate limit exceeded',
+      status: 429,
+      rateLimit: { retryAfterSeconds: 17, limitPerMinute: 100, apiKeyId: 'key-1', userId: 'u1', companyId: 'c1' },
+    })
+  })
+
+  it('never answers a wait above the window length or below one second', async () => {
+    for (const [stored, expected] of [[600, 60], [0, 60], [-3, 60], ['17', 60]] as const) {
+      setupMockRpc({
+        data: [{ user_id: 'u1', company_id: 'c1', scopes: null, rate_limited: true, retry_after_seconds: stored }],
+        error: null,
+      })
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect('rateLimit' in result && result.rateLimit?.retryAfterSeconds).toBe(expected)
+    }
   })
 
   it('returns userId, companyId, scopes on success', async () => {

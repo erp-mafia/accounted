@@ -49,11 +49,14 @@ export interface AgentToolError {
  * DOC_ATTACH_OTHER_VERIFIKAT names the verifikat that holds the document, the
  * one the row is booked on and, in details.next, the link with copy: true
  * that puts the same underlag on it (crm#1813).
+ * RATE_LIMITED carries details.retry_after_seconds and
+ * details.limit_per_minute when a key is over its per-minute limit (#225).
  */
 const CODES_WITH_DETAILS = new Set([
   'DOC_ATTACH_OTHER_VERIFIKAT',
   'FORBIDDEN',
   'PREVIEW_STALE',
+  'RATE_LIMITED',
   'TRANSACTION_ALREADY_STAGED',
   'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE',
   'SALARY_RUN_VACATION_PAY_UNDETERMINED',

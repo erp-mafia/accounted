@@ -406,7 +406,7 @@ import {
   hashRequest,
 } from '@/lib/api/idempotency'
 import { IDEMPOTENCY_KEY_PROPERTY, withRetryKey } from './retry-key'
-import { toToolError, type NextActionHint } from './tool-result'
+import { toToolError, type AgentToolError, type NextActionHint } from './tool-result'
 import {
   addCompanyToNextHint,
   addCompanyToTopLevelNext,
@@ -30478,7 +30478,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | 'package_off' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | 'package_off' | 'rate_limited' | null
   errorMessage: string | null
   /**
    * The specific English diagnostic, passed as `structured.error.message_en`.
@@ -30911,6 +30911,30 @@ function namesOwnSkill(toolName: string, args: Record<string, unknown>): boolean
 }
 
 /**
+ * The tool result of a tools/call refused because the key is over its
+ * per-minute limit: RATE_LIMITED (retryable) with details.retry_after_seconds
+ * and details.limit_per_minute, so a program waits that long and retries the
+ * same call instead of failing on a transport error.
+ */
+function rateLimitedToolError(o: {
+  retryAfterSeconds: number
+  limitPerMinute: number | null
+  toolName: string
+}): AgentToolError {
+  const limit = o.limitPerMinute !== null ? `its limit of ${o.limitPerMinute} requests per minute` : 'its per-minute request limit'
+  return toToolError(
+    Object.assign(
+      codedRefusal(
+        'RATE_LIMITED',
+        `This API key is over ${limit} (every MCP request counts). Nothing was run. Wait ${o.retryAfterSeconds} seconds, then retry the same call; a write that takes idempotency_key does not stage twice when retried with the same key. Lower the concurrency of a loop to stay under the limit.`
+      ),
+      { details: { retry_after_seconds: o.retryAfterSeconds, limit_per_minute: o.limitPerMinute } }
+    ),
+    { toolName: o.toolName }
+  )
+}
+
+/**
  * Handle an MCP JSON-RPC request.
  * Auth is done via Bearer API key (extension route has skipAuth: true).
  *
@@ -31058,11 +31082,73 @@ async function handleMcpMessage(request: Request, parsed: ParsedMcpBody): Promis
     if ('error' in authResult) {
       const status = authResult.status
       if (status === 429) {
+        // Over the key's per-minute limit (issue #225). Nothing was run. A
+        // tools/call answers as a tool result a program can branch on
+        // (RATE_LIMITED with details.retry_after_seconds), and is counted per
+        // key as an mcp.tool_called event; every other request keeps the
+        // plain 429. Both carry the real wait the database answered.
+        const rateLimit = authResult.rateLimit
+        const retryAfterSeconds = rateLimit?.retryAfterSeconds ?? RATE_LIMIT_RETRY_AFTER_SECONDS
+        const limitPerMinute = rateLimit?.limitPerMinute ?? null
+        const limitedKeyId = rateLimit?.apiKeyId ?? null
+        log.warn('api key rate limited', {
+          apiKeyId: limitedKeyId,
+          mcpMethod: String(body.method).slice(0, 64),
+          tool: requestedTool?.slice(0, 64) ?? null,
+          retryAfterSeconds,
+          limitPerMinute,
+        })
+        noteCompletionLog(request, { fields: { apiKeyId: limitedKeyId, companyId: rateLimit?.companyId ?? null } })
+        if (requestedTool !== null) {
+          const knownTool = tools.some((t) => t.name === requestedTool)
+          const limited = rateLimitedToolError({ retryAfterSeconds, limitPerMinute, toolName: requestedTool })
+          const rawSession = request.headers.get('mcp-session-id')
+          emitToolCall({
+            tool: knownTool ? requestedTool : '<unknown>',
+            requiredScope: null,
+            actor: {
+              type: 'api_key',
+              ...(limitedKeyId ? { id: limitedKeyId } : {}),
+              sessionId: rawSession && /^[A-Za-z0-9_-]{1,128}$/.test(rawSession) ? rawSession : null,
+              ...resolveClientLabel({
+                marker:
+                  request.headers.get('x-accounted-client') ??
+                  request.headers.get('x-gnubok-client') ??
+                  new URL(request.url).searchParams.get('client'),
+                oauthProvider: null,
+                clientInfoName: clientInfoNameFromMeta(body.params?._meta),
+                userAgent: request.headers.get('user-agent'),
+              }),
+            },
+            latencyMs: 0,
+            success: false,
+            isError: true,
+            errorCode: limited.error.code,
+            errorKind: 'rate_limited',
+            errorMessage: limited.error.message_sv,
+            errorDetail: limited.error.message_en,
+            requestId: body.id ?? null,
+            userId: rateLimit?.userId ?? '',
+            companyId: rateLimit?.companyId ?? null,
+          })
+          // A stateless-core client (spec 2026-07-28) gets resultType, as
+          // decorate() below gives every other result.
+          const meta = (body.params?._meta ?? {}) as Record<string, unknown>
+          const version = meta[META_PROTOCOL_VERSION]
+          const stateless = typeof version === 'string' && version >= STATELESS_PROTOCOL_VERSION
+          return NextResponse.json(
+            jsonRpc(body.id ?? null, {
+              ...(stateless ? { resultType: 'complete' } : {}),
+              content: [{ type: 'text', text: JSON.stringify(projectMcpPayload(limited, toolNamespace), null, 2) }],
+              isError: true,
+            })
+          )
+        }
         return new Response(authResult.error, {
           status: 429,
           headers: {
             'Content-Type': 'text/plain',
-            'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+            'Retry-After': String(retryAfterSeconds),
           },
         })
       }

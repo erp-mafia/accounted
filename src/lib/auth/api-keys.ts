@@ -176,7 +176,7 @@ export function extractBearerToken(request: Request): string | null {
 export type ApiKeyMode = 'live' | 'test'
 
 /**
- * Seconds a rate-limited caller should wait before retrying.
+ * Seconds a rate-limited caller waits when the database does not say.
  *
  * `validate_and_increment_api_key` enforces a FIXED one-minute tumbling
  * window per key row (`rate_limit_window_start`), and the limited branch
@@ -184,12 +184,27 @@ export type ApiKeyMode = 'live' | 'test'
  * have more than 60 seconds left to run. 60 is therefore an exact upper
  * bound rather than a guess, which is what `Retry-After` requires.
  *
- * The exact reset instant is `rate_limit_window_start + 1 minute` and is
- * known inside the RPC, but its RETURNS TABLE carries no window column, so
- * TypeScript cannot see it. Emitting the IETF `RateLimit` / `RateLimit-Policy`
- * fields (draft-ietf-httpapi-ratelimit-headers) needs that column first.
+ * Since migration 20261119081500 the limited row carries the real wait
+ * (`retry_after_seconds`, the seconds left in the window, 1..60), which
+ * validateApiKey answers in `rateLimit`. This constant is the answer only on
+ * a database that has not run that migration.
  */
 export const RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+
+/**
+ * What a key over its per-minute limit is told, and whose key it is: the
+ * seconds until its window resets, its limit, and the ids a door needs to
+ * log and count the refusal per key.
+ */
+export interface ApiKeyRateLimit {
+  /** Whole seconds until the key's window resets: 1..60. */
+  retryAfterSeconds: number
+  /** The key's requests per minute; null on a database without the migration. */
+  limitPerMinute: number | null
+  apiKeyId: string | null
+  userId: string | null
+  companyId: string | null
+}
 
 /**
  * The service account a key belongs to (migration 20261016120000), as the
@@ -332,7 +347,7 @@ export async function validateApiKey(
        */
       clientName?: string | null
     }
-  | { error: string; status: number; code?: ApiKeyRefusalCode }
+  | { error: string; status: number; code?: ApiKeyRefusalCode; rateLimit?: ApiKeyRateLimit }
 > {
   if (isRefreshToken(key)) {
     return {
@@ -363,7 +378,17 @@ export async function validateApiKey(
   const row = data[0]
 
   if (row.rate_limited) {
-    return { error: 'Rate limit exceeded', status: 429 }
+    return {
+      error: 'Rate limit exceeded',
+      status: 429,
+      rateLimit: {
+        retryAfterSeconds: parseRetryAfterSeconds(row.retry_after_seconds),
+        limitPerMinute: positiveInteger(row.rate_limit_per_minute),
+        apiKeyId: nonEmptyString(row.api_key_id),
+        userId: nonEmptyString(row.user_id),
+        companyId: nonEmptyString(row.company_id),
+      },
+    }
   }
 
   // Fail closed on an allowlist the row carries but that parses to nothing:
@@ -454,6 +479,16 @@ async function codedRefusal(
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+}
+
+/** The limited row's wait, held to 1..60; the upper bound when the row has none (a DB without 20261119081500). */
+function parseRetryAfterSeconds(value: unknown): number {
+  const seconds = positiveInteger(value)
+  return seconds === null ? RATE_LIMIT_RETRY_AFTER_SECONDS : Math.min(seconds, RATE_LIMIT_RETRY_AFTER_SECONDS)
 }
 
 /** The key's service account, or null for a person's key (or a DB without the columns). */

@@ -131,6 +131,7 @@ export function buildServerInstructionParts(o: ServerInstructionsOptions): { hea
         ]),
     '• Naming a proposal: a staged answer and each row of gnubok_list_pending_operations carry operation_number, the proposal\'s number in its company (counts up, never changes). The user sees it in Accounted as "Förslag 128", so say the number when you talk about a proposal and read it as operation_number when the user names one; tools take operation_id. A proposal decided before numbers were introduced has none.',
     'A tool whose tools/list `_meta.requires_approval` is true stages for approval; `_meta.preflight` (when present) names a read-only check to run first (e.g. gnubok_year_end_readiness before gnubok_run_year_end, gnubok_vat_declaration_validate before _submit). Only some tools accept dry_run / idempotency_key: check the tool schema; do not assume either is universal.',
+    'Rate limit: every request to this server counts against the key\'s per-minute limit (100 by default). Over it, a tools/call answers error code RATE_LIMITED with details.retry_after_seconds: nothing ran; wait that long, then retry the same call. A program that loops or calls in parallel keeps its rate under the limit.',
     toolNamespace === 'gnubok'
       ? 'Tool names carry the legacy gnubok_ prefix (a stable identifier kept across the rebrand); the server and app are "Accounted". Same product: the prefix is not a different system.'
       : 'Tool names use the accounted_ prefix. Legacy gnubok_ aliases remain accepted for existing integrations.',

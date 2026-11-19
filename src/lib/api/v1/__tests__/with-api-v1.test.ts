@@ -224,6 +224,27 @@ describe('withApiV1: auth', () => {
     expect(res.headers.get('Retry-After')).toBe(String(RATE_LIMIT_RETRY_AFTER_SECONDS))
   })
 
+  it('advertises the seconds left in the key window when the database answers them', async () => {
+    mockValidate.mockResolvedValue({
+      error: 'Rate limit exceeded',
+      status: 429,
+      rateLimit: { retryAfterSeconds: 12, limitPerMinute: 100, apiKeyId: 'key-1', userId: 'u1', companyId: 'c1' },
+    })
+
+    const handler = withApiV1('companies.list', async (_req, ctx) =>
+      ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      emptyParams(),
+    )
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('12')
+  })
+
   it('does not advertise Retry-After on a non-throttle error', async () => {
     mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
 

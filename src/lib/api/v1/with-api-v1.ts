@@ -889,7 +889,9 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         return await v1ErrorResponseFromCode(code, log, {
           requestId,
           reason: auth.error,
-          ...(rateLimited ? { retryAfterSeconds: RATE_LIMIT_RETRY_AFTER_SECONDS } : {}),
+          ...(rateLimited
+            ? { retryAfterSeconds: auth.rateLimit?.retryAfterSeconds ?? RATE_LIMIT_RETRY_AFTER_SECONDS }
+            : {}),
         })
       }
 
