@@ -518,8 +518,8 @@ describe('oversize free text', () => {
     expect(box?.props.wrap).toBe(false)
 
     const landedOn = new Set<number>()
-    // The fixed layout keeps totals, the box and the payment area together,
-    // so it takes more filler rows to move the box to a later page.
+    // The fixed layout keeps the totals and the box together (the payment
+    // area may follow on the next page), so the filler rows move them as one.
     for (const fillers of [0, 4, 8, 12, 16, 24, 32, 40]) {
       const filler = Array.from({ length: fillers }, (_, i) => makeItem({ sort_order: i, id: `fill-${i}`, description: `Rad ${i + 1}` }))
       const pages = await layOut(InvoicePDF({ invoice, customer, items: [...filler, ...rotItems], company }))

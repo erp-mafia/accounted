@@ -20,17 +20,25 @@
  * everything at commit, so a rule the preview could not see (the exact bank
  * amount an anchored 19xx line must keep) still refuses the commit.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
-import { recordateEntry } from '@/lib/core/bookkeeping/storno-service'
+import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
+import { refuseCorrectedImportVatWithoutBase, type ImportVatShapeLine } from '@/lib/bookkeeping/import-vat-base'
+import { isBankLedgerAccount } from '@/lib/core/bookkeeping/correction-bank-leg'
 import {
   AccountsNotInChartError,
   CannotCorrectNonPostedError,
@@ -44,6 +52,9 @@ import {
 } from '@/lib/bookkeeping/errors'
 import type { JournalEntry } from '@/types'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import type { z } from 'zod'
+import type { StrikeLinesSchema } from '@/lib/api/schemas'
+import { toError } from '@/lib/errors/to-error'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -59,7 +70,7 @@ function refused(messageSv: string, details?: Record<string, unknown>): Failure 
 }
 
 function voucherLabel(entry: { voucher_series?: string | null; voucher_number?: number | null }): string | null {
-  return entry.voucher_number ? `${entry.voucher_series ?? ''}${entry.voucher_number}` : null
+  return entry.voucher_number ? formatVoucher(entry) : null
 }
 
 /**
@@ -208,7 +219,9 @@ export async function correctJournalEntryMetadata(
 ): Promise<OperationOutcome<Record<string, unknown>>> {
   if (options.dryRun) return previewMetadataCorrection(ctx, entryId, input)
 
-  const { data, error } = await ctx.supabase.rpc('correct_entry_metadata', {
+  // The log row records WHO beside the user: the commit actor of this
+  // request (a person in the app, an API key, an OAuth client, ...).
+  const { data, error } = await rpcWithActor(ctx.supabase, 'correct_entry_metadata', {
     p_company_id: ctx.companyId,
     p_entry_id: entryId,
     p_description: input.description ?? null,
@@ -274,18 +287,8 @@ async function previewMetadataCorrection(
 // Line rättelse: strike lines and add replacements inside the same verifikat
 // ---------------------------------------------------------------------------
 
-export interface InlineRattelseLine {
-  account_number: string
-  debit_amount: number
-  credit_amount: number
-  line_description?: string
-  dimensions?: Record<string, string>
-}
-
-export interface StrikeLinesInput {
-  strike_line_ids: string[]
-  lines: InlineRattelseLine[]
-}
+/** The request every door validates (StrikeLinesSchema). */
+export type StrikeLinesInput = z.output<typeof StrikeLinesSchema>
 
 export async function strikeJournalEntryLines(
   ctx: OperationContext,
@@ -295,6 +298,23 @@ export async function strikeJournalEntryLines(
 ): Promise<OperationOutcome<Record<string, unknown>>> {
   if (options.dryRun) return previewLineRattelse(ctx, entryId, input)
 
+  // The RPC knows no momsrutor: the importmoms rule (#94) runs here, on the
+  // verifikat as the rättelse leaves it. An entry this read cannot see is the
+  // RPC's to refuse (not found, other company).
+  const { data: current } = await ctx.supabase
+    .from('journal_entries')
+    .select('source_type, lines:journal_entry_lines(id, account_number, debit_amount, credit_amount)')
+    .eq('id', entryId)
+    .eq('company_id', ctx.companyId)
+    .maybeSingle()
+  if (current) {
+    const row = current as { source_type: string; lines: Array<{ id: string } & ImportVatShapeLine> | null }
+    const struck = new Set(input.strike_line_ids)
+    const resulting = [...(row.lines ?? []).filter((l) => !struck.has(l.id)), ...input.lines]
+    const importVat = await importVatRefusal(ctx, row.source_type, resulting)
+    if (importVat) return importVat
+  }
+
   // Seed standard BAS accounts the replacement lines reference but the
   // company chart lacks (same courtesy as the engine/storno flow); unknown
   // numbers stay missing and fail the RPC's chart check with a clear error.
@@ -303,7 +323,7 @@ export async function strikeJournalEntryLines(
     await backfillStandardBASAccounts(ctx.supabase, ctx.companyId, ctx.userId, accountNumbers)
   }
 
-  const { data, error } = await ctx.supabase.rpc('correct_entry_lines_inline', {
+  const { data, error } = await rpcWithActor(ctx.supabase, 'correct_entry_lines_inline', {
     p_company_id: ctx.companyId,
     p_entry_id: entryId,
     p_strike_line_ids: input.strike_line_ids,
@@ -318,6 +338,21 @@ export async function strikeJournalEntryLines(
   })
   if (error) return rpcFailure(ctx, 'correct_entry_lines_inline', entryId, error)
   return { ok: true, data: (data ?? {}) as Record<string, unknown> }
+}
+
+/**
+ * Importmoms (rutor 60-62) with no ruta 50 line in the verifikat the rättelse
+ * leaves, kept and added lines together (#94): refused as the booking doors
+ * refuse it (#83).
+ */
+async function importVatRefusal(
+  ctx: OperationContext,
+  sourceType: string,
+  resulting: readonly ImportVatShapeLine[],
+): Promise<Failure | null> {
+  const refusal = await refuseCorrectedImportVatWithoutBase(ctx.supabase, ctx.companyId, sourceType, resulting)
+  if (!refusal) return null
+  return { ok: false, code: refusal.code, details: refusal.details, messageSv: refusal.messageSv }
 }
 
 interface LineRow {
@@ -480,15 +515,14 @@ async function previewLineRattelse(
   const remaining = lines.filter((l) => !struckSet.has(l.id)).map(toPreviewLine)
   const struck = struckRows.map(toPreviewLine)
   const resulting: PreviewLine[] = [...remaining, ...added]
-  const totalDebit = sumSide(resulting, 'debit_amount')
-  const totalCredit = sumSide(resulting, 'credit_amount')
+  const { totalDebit, totalCredit, difference } = lineBalance(resulting)
 
   if (resulting.length < 2) {
     return refused(
       'Verifikationen måste ha minst två rader efter rättelsen. Använd "Återför (storno)" för att makulera hela verifikationen.',
     )
   }
-  if (totalDebit !== totalCredit) {
+  if (difference !== 0) {
     return { ok: false, code: 'JOURNAL_ENTRY_NOT_BALANCED', details: { total_debit: totalDebit, total_credit: totalCredit } }
   }
   if (totalDebit === 0) {
@@ -499,6 +533,8 @@ async function previewLineRattelse(
   if (struckKeys.length === addedKeys.length && struckKeys.every((k, i) => k === addedKeys[i])) {
     return { ok: false, code: 'MEANINGLESS_CORRECTION', error: new MeaninglessCorrectionError('identical_to_original') }
   }
+  const importVat = await importVatRefusal(ctx, entry.source_type, resulting)
+  if (importVat) return importVat
 
   // Reconciliation anchors. A reskontra side (15xx under a customer payment,
   // 24xx under a supplier payment) must keep its net: refused here as the RPC
@@ -518,7 +554,7 @@ async function previewLineRattelse(
     }
   }
   const bankAccountsChanged = anchors.bank
-    ? changedAccounts.filter((acc) => acc.startsWith('19') || anchors.cashLedgerAccounts.includes(acc))
+    ? changedAccounts.filter((acc) => isBankLedgerAccount(acc, anchors.cashLedgerAccounts))
     : []
 
   const struckDebit = sumSide(struck, 'debit_amount')
@@ -605,21 +641,38 @@ function bookkeepingFailure(err: unknown): Failure {
   return { ok: false, code: typeof code === 'string' ? code : 'BOOKKEEPING_DATABASE_ERROR', error: err }
 }
 
+/**
+ * Move a posted verifikat to another date (recordateEntry: storno and the
+ * same lines on the new date).
+ *
+ * Posting port (step 2i): through postingPort.correctJournalEntry, which
+ * hands recordateEntry its arguments unchanged and, while POSTING_EVENTS is
+ * shadow or strict, records ledger.storno and ledger.correction of the
+ * verifikat, each linked to its new verifikat before its number is drawn.
+ * `options.posting` is what the door saw (its link basis, which reads the
+ * approval being committed: the kernel may not), called only while the port
+ * is on.
+ */
 export async function redateJournalEntry(
   ctx: OperationContext,
   entryId: string,
   input: RedateInput,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; posting?: () => { linkBasis?: LinkBasisColumns } } = {},
 ): Promise<OperationOutcome<RedateResult>> {
   if (options.dryRun) return previewRedate(ctx, entryId, input)
   try {
-    const result = await recordateEntry(ctx.supabase, ctx.companyId, ctx.userId, entryId, input.new_entry_date, {
-      allowDeepChain: input.allow_deep_chain,
+    const result = await postingPort.correctJournalEntry({
+      supabase: ctx.supabase,
+      companyId: ctx.companyId,
+      userId: ctx.userId,
+      entryId,
+      ...correctionBusinessEvents({ entryId, occurredOn: todayIsoStockholm, linkBasis: () => options.posting?.().linkBasis }),
+      correction: { newDate: input.new_entry_date, options: { allowDeepChain: input.allow_deep_chain } },
     })
     return { ok: true, data: result }
   } catch (err) {
     if (!isBookkeepingError(err)) {
-      ctx.log.error('recordate failed', err instanceof Error ? err : new Error(String(err)), { entryId })
+      ctx.log.error('recordate failed', toError(err), { entryId })
     }
     return bookkeepingFailure(err)
   }

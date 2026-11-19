@@ -43,7 +43,7 @@ async function refusal(name: string, args: Record<string, unknown>, supabase: un
 const VALID_EMPLOYEE = {
   first_name: 'Anna',
   last_name: 'Andersson',
-  personnummer: '190001010000',
+  personnummer: '190001010008',
   employment_start: '2026-01-15',
   salary_type: 'monthly',
   monthly_salary: 35000,
@@ -70,7 +70,7 @@ describe('gnubok_create_employee', () => {
     expect(error.code).toBe('VALIDATION_ERROR')
     expect(error.retryable).toBe(false)
     expect(error.message_en).toMatch(/^Invalid employee: vacation_days_per_year: /)
-    expect(error.message_sv).toBe('vacation_days_per_year: Måste vara minst 25.')
+    expect(error.message_sv).toMatch(/^vacation_days_per_year: Semesterdagar per år måste vara minst 25 \(semesterlagen 4 §\)/)
   })
 
   it.each([
@@ -108,17 +108,52 @@ describe('gnubok_create_employee', () => {
     expect(error.message_en).toMatch(/^Invalid employee: employment_type: /)
     expect(error.message_sv).toMatch(/^employment_type: En enskild firma kan inte ha sin ägare/)
   })
+
+  it('refuses a personnummer with a wrong check digit at staging, like the dashboard and v1', async () => {
+    // The schema only checks for 12 digits; the MCP tool used to stage a
+    // number Skatteverket would reject on the AGI weeks later.
+    const { supabase } = createQueuedMockSupabase()
+
+    const error = await refusal('gnubok_create_employee', { ...VALID_EMPLOYEE, personnummer: '190001010000' }, supabase)
+
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_sv).toBe('personnummer: Personnumrets kontrollsiffra stämmer inte. Kontrollera alla 12 siffror.')
+    expect(error.message_en).toBe('Invalid employee: personnummer: is not a valid personnummer')
+    expect(JSON.stringify(error)).not.toContain('190001010000')
+  })
 })
 
 describe('gnubok_update_employee', () => {
+  it('refuses to put an enskild firma\'s owner on payroll at staging, the rule the approval applies', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1', first_name: 'Test', last_name: 'Testsson', employment_type: 'employee' } })
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // company_settings
+
+    const error = await refusal('gnubok_update_employee', { employee_id: 'emp-1', employment_type: 'company_owner' }, supabase)
+
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toMatch(/^Invalid employee update: employment_type: an enskild firma cannot employ/)
+  })
+
   it('names vacation_days_per_year in the update schema refusal', async () => {
     const { supabase } = createQueuedMockSupabase()
+    const error = await refusal('gnubok_update_employee', { employee_id: 'emp-1', vacation_days_per_year: 41 }, supabase)
+
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.retryable).toBe(false)
+    expect(error.message_en).toMatch(/^Invalid employee update: vacation_days_per_year: /)
+    expect(error.message_sv).toBe('vacation_days_per_year: Får vara högst 40.')
+  })
+
+  it('names vacation_days_per_year when fewer than 25 days meet a stored vacation rule other than none', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1', first_name: 'Test', last_name: 'Testsson', vacation_rule: 'procentregeln', vacation_days_per_year: 25 } })
     const error = await refusal('gnubok_update_employee', { employee_id: 'emp-1', vacation_days_per_year: 12 }, supabase)
 
     expect(error.code).toBe('VALIDATION_ERROR')
     expect(error.retryable).toBe(false)
     expect(error.message_en).toMatch(/^Invalid employee update: vacation_days_per_year: /)
-    expect(error.message_sv).toBe('vacation_days_per_year: Måste vara minst 25.')
+    expect(error.message_sv).toMatch(/^vacation_days_per_year: Semesterdagar per år måste vara minst 25/)
   })
 
   it('names the field a merged-row rule refuses', async () => {
@@ -206,6 +241,50 @@ describe('gnubok_get_salary_run', () => {
       tool: 'gnubok_create_salary_run',
       args: { period_year: 2026, period_month: 2 },
     })
+  })
+
+  // Replays "No salary run for 2026-11 in this company." (78 calls, 35
+  // companies, 2026-10-30..11-12): agents then asked for 2026-10, 2026-09...
+  it('names the runs that do exist when the asked month has none', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({
+      data: [
+        { id: 'run-sep', period_year: 2026, period_month: 9, status: 'paid' },
+        { id: 'run-aug', period_year: 2026, period_month: 8, status: 'booked' },
+      ],
+    })
+
+    const error = await refusal('gnubok_get_salary_run', { period_year: 2026, period_month: 11 }, supabase)
+
+    expect(error.code).toBe('SALARY_RUN_NOT_FOUND')
+    expect(error.message_en).toBe(
+      'No salary run for 2026-11 in this company. Its latest runs: 2026-09 (paid, salary_run_id run-sep); 2026-08 (booked, salary_run_id run-aug).',
+    )
+    expect(error.remediation).toMatchObject({ tool: 'gnubok_create_salary_run' })
+  })
+
+  it('says so when the company has no salary runs at all', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ data: [] })
+
+    const error = await refusal('gnubok_get_salary_run', { period_year: 2026, period_month: 11 }, supabase)
+
+    expect(error.message_en).toBe(
+      'No salary run for 2026-11 in this company. The company has no salary runs at all, so no other month has one either.',
+    )
+  })
+
+  it('claims nothing about other months when listing them failed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    const error = await refusal('gnubok_get_salary_run', { period_year: 2026, period_month: 11 }, supabase)
+
+    expect(error.code).toBe('SALARY_RUN_NOT_FOUND')
+    expect(error.message_en).toBe('No salary run for 2026-11 in this company.')
   })
 
   it('answers VALIDATION_ERROR for a missing selector', async () => {
@@ -298,6 +377,46 @@ describe('gnubok_generate_agi', () => {
     expect(error.message_sv).toMatch(/^AGI kan endast genereras/)
     expect(error.message_en).toMatch(/must be past draft/)
     expect(error.remediation).toMatchObject({ tool: 'gnubok_book_salary_run', args: { salary_run_id: 'run-1' } })
+  })
+
+  // Staging used to accept a run whose company had no telefon; the refusal
+  // came only after someone approved the generation (crm#1435).
+  it('answers AGI_INCOMPLETE_DATA at staging when the company lacks a phone, naming where to fill it in', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' } })
+    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { company_name: 'Bolaget AB', org_number: '556123-4567', phone: null, email: 'info@bolaget.example', tax_contact_name: null, tax_contact_phone: null, tax_contact_email: null } })
+    enqueue({ data: { full_name: 'Anna Andersson', email: 'anna@bolaget.example' } }) // profiles
+
+    const error = await refusal('gnubok_generate_agi', { salary_run_id: 'run-1' }, supabase)
+
+    expect(error.code).toBe('AGI_INCOMPLETE_DATA')
+    expect(error.retryable).toBe(false)
+    expect(error.message_sv).toBe(
+      'AGI kan inte genereras, följande uppgifter saknas: telefon. Fyll i telefon under Inställningar → Moms och skatt → ' +
+        'Kontaktperson för skatteärenden (eller Telefon under Inställningar → Företagsuppgifter).',
+    )
+    expect(error.message_en).toBe(error.message_sv)
+    expect(error.remediation).toMatchObject({ tool: 'gnubok_update_company_settings' })
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  it('stages when the company data is complete', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' } })
+    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { company_name: 'Bolaget AB', org_number: '556123-4567', phone: '08-123 45 67', email: null, tax_contact_name: null, tax_contact_phone: null, tax_contact_email: null } })
+    enqueue({ data: { full_name: 'Anna Andersson', email: 'anna@bolaget.example' } }) // profiles
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations.insert
+
+    const result = (await tool('gnubok_generate_agi').execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, ACTOR,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(1)
   })
 })
 

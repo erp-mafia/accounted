@@ -27,6 +27,7 @@ function makeBuilder() {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
+  b.maybeSingle = b.single
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
 }
@@ -54,7 +55,7 @@ const SOURCE_SIE = [
   '#DIM 1 "Kostnadsställe"',
   '#DIM 6 "Projekt"',
   '#UNDERDIM 2 "Kostnadsbärare" 1',
-  // Custom dimension + custom child — exactly what PR10's "Ny dimension"
+  // Custom dimension + custom child - exactly what PR10's "Ny dimension"
   // (SIE 20+, optional parent) produces. Proves the round-trip covers
   // user-created dims, not just the reserved 1/2/6 set.
   '#DIM 20 "Avdelning"',
@@ -91,7 +92,7 @@ describe('SIE dimensions round-trip', () => {
     // ── What the importer writes ─────────────────────────────────
     const usage = collectSIEDimensionUsage(parsedSource)
 
-    // Registry rows exactly as importDimensionRegistry inserts them.
+    // Registry rows as the SIE job inserts them from this usage.
     const dimensionRows = [...usage.dims.entries()].map(([sieDimNo, info], i) => ({
       id: `dim-${sieDimNo}`,
       sie_dim_no: sieDimNo,
@@ -105,7 +106,7 @@ describe('SIE dimensions round-trip', () => {
       name: v.name,
     }))
 
-    // Journal lines exactly as importVouchers inserts them (dimensions jsonb
+    // Journal lines as prepareSIEVouchers prepares them (dimensions jsonb
     // via normalizeLineDimensions; SIE amount sign → debit/credit).
     const journalEntries = parsedSource.vouchers.map((v, i) => ({
       id: `e${i + 1}`,

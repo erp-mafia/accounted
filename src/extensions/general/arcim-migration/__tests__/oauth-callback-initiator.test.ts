@@ -67,6 +67,7 @@ import {
   getAuthUrl,
   listConsents,
   createConsent,
+  submitProviderToken,
   ProviderCompanyMismatchError,
 } from '../lib/provider-client'
 
@@ -201,9 +202,54 @@ describe('GET /callback: the completing session must be the initiator', () => {
     const html = await res.text()
 
     expect(html).toContain('Anslutningen misslyckades')
-    expect(html).toContain('Uppgifterna gäller ett annat företag')
+    // PH 193: names the company the login opened and how to bring it in,
+    // not only "choose again at the provider".
+    expect(html).toContain('Anslutningen gäller Annat Bolag AB (org.nr 556703-7485)')
+    expect(html).toContain('(org.nr 556016-0680)')
+    expect(html).toContain('Lägg till företag')
     expect(html).not.toContain('Provider company mismatch')
     expect(html).not.toContain('Anslutningen lyckades')
+
+    // The no-opener fallback URL carries the registry sentence only: an
+    // enskild firma's org number is a personnummer, and URLs are logged.
+    const literal = html.match(/window\.location\.replace\(("(?:[^"\\]|\\.)*")\)/)?.[1]
+    const fallback = new URL(JSON.parse(literal!) as string)
+    expect(fallback.searchParams.get('reason')).toContain('Lägg till företag')
+    expect(fallback.searchParams.get('reason')).not.toMatch(/556703|556016|Annat Bolag/)
+  })
+})
+
+describe('POST /submit-token: valid credentials for another company', () => {
+  const submitTokenHandler = findRoute('POST', '/submit-token').handler as RouteHandler
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('answers 422 naming the company the token opened, both org numbers and the way to add it', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderCompanyMismatchError('5560160680', '5567037485', 'Annat Bolag AB'),
+    )
+    const request = createMockRequest(`${APP_URL}/api/extensions/ext/arcim-migration/submit-token`, {
+      method: 'POST',
+      body: { consentId: 'consent-1', provider: 'bokio', apiToken: 'token', companyId: 'bokio-company' },
+    })
+    const ctx = { ...connectCtx(), log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } } as unknown as ExtensionContext
+
+    const res = await submitTokenHandler(request, ctx)
+    const body = await res.json() as { error: { code: string; message: string; message_en: string; details: Record<string, unknown> } }
+
+    expect(res.status).toBe(422)
+    expect(body.error.code).toBe('PROVIDER_COMPANY_MISMATCH')
+    expect(body.error.message).toContain('Annat Bolag AB (org.nr 556703-7485)')
+    expect(body.error.message).toContain('Lägg till företag')
+    expect(body.error.message_en).toContain('Add company')
+    expect(body.error.details).toMatchObject({ expectedOrgNumber: '5560160680', actualOrgNumber: '5567037485' })
   })
 })
 

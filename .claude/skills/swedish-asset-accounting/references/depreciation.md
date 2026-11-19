@@ -100,7 +100,7 @@ Book value must NEVER fall below tax value:
 ### K2 vs K3
 
 - **K2:** Often eliminates need for överavskrivning entirely. 5-year rule (20%) matches kompletteringsregeln. Building rates can match SKV. No deferred tax permitted.
-- **K3:** Strict separation required. Book depreciation must reflect economic consumption. Deferred tax required (ch. 29). In juridisk person, K3 29.37 permits obeskattade reserver at gross. In consolidated accounts: split into equity (79.4%) and uppskjuten skatteskuld (20.6% at current corporate tax rate).
+- **K3:** Strict separation required. Book depreciation must reflect economic consumption. Deferred tax required (ch. 29). In juridisk person, K3 29.37 requires obeskattade reserver at gross: the deferred tax on them ska inte särredovisas. Only in consolidated accounts are they split into equity (79.4%, K3 4.12) and uppskjuten skatteskuld (20.6% at current corporate tax rate).
 
 ---
 

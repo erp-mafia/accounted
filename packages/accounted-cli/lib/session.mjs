@@ -127,7 +127,7 @@ export function createSession({ origin, company, envKey, store, send, headers })
       const renewed = await renew(rejected)
       if (!renewed) {
         throw new AuthError(
-          'The sign-in has ended (disconnected in Settings, or no longer valid). Run `accounted login`.'
+          'The sign-in has ended (disconnected under Agents › Connect an agent, or no longer valid). Run `accounted login`.'
         )
       }
       res = await post(body, renewed.access_token)

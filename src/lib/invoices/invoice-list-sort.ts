@@ -1,8 +1,30 @@
-import { getDisplayTotal } from '@/lib/invoices/rounding'
-import type { Invoice, InvoiceStatus } from '@/types'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import type { InvoiceStatus } from '@/types'
+import type { InvoiceListRow } from './invoice-list-row'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { effectiveInvoiceStatus } from './overdue'
 
 export type InvoiceListSortColumn = 'number' | 'customer' | 'due' | 'amount' | 'status'
 export type InvoiceListSortDirection = 'asc' | 'desc'
+
+/** What the sort reads off a list row: any shape that carries these sorts the same way. */
+type SortableInvoice = Pick<
+  InvoiceListRow,
+  | 'id'
+  | 'invoice_number'
+  | 'external_invoice_number'
+  | 'document_type'
+  | 'status'
+  | 'invoice_date'
+  | 'due_date'
+  | 'valid_until'
+  | 'total'
+  | 'currency'
+  | 'ore_rounding'
+  | 'credited_invoice_id'
+  | 'remaining_amount'
+> & { customer?: { name?: string | null } | null }
 
 export interface InvoiceListSort {
   column: InvoiceListSortColumn
@@ -20,31 +42,34 @@ const statusRank: Record<InvoiceStatus, number> = {
   partially_paid: 2,
   overdue: 3,
   paid: 4,
+  // Settled by a konstaterad kundförlust: after paid, before credited.
+  written_off: 5,
   credited: 6,
   cancelled: 7,
 }
 
-function displayedNumber(invoice: Invoice): string | null {
+function displayedNumber(invoice: SortableInvoice): string | null {
   return invoice.invoice_number ?? invoice.external_invoice_number ?? null
 }
 
-function displayedCustomer(invoice: Invoice): string | null {
+function displayedCustomer(invoice: SortableInvoice): string | null {
   return invoice.customer?.name ?? null
 }
 
-function displayedDueDate(invoice: Invoice): string | null {
+function displayedDueDate(invoice: SortableInvoice): string | null {
   // The list shows a quote's "Giltig till" in the date column (a quote stays
   // a draft, so the draft rule below would blank it).
   if (invoice.document_type === 'quote') return invoice.valid_until || null
-  if (invoice.credited_invoice_id || invoice.status === 'draft') return null
+  if (isCreditNoteDocument(invoice) || invoice.status === 'draft') return null
   return invoice.due_date || null
 }
 
-function displayedStatusRank(invoice: Invoice): number {
+function displayedStatusRank(invoice: SortableInvoice, today: string): number {
   if (invoice.status === 'cancelled') return statusRank.cancelled
+  if (isCreditNoteDocument(invoice)) return 5
   if (invoice.status === 'paid') return statusRank.paid
-  if (invoice.credited_invoice_id) return 5
-  return statusRank[invoice.status]
+  // The status the row shows: a sent invoice past its due date sorts as overdue (lib/invoices/overdue.ts).
+  return statusRank[effectiveInvoiceStatus(invoice, today) as InvoiceStatus]
 }
 
 function compareNullable<T>(
@@ -60,10 +85,11 @@ function compareNullable<T>(
 }
 
 function comparePrimary(
-  left: Invoice,
-  right: Invoice,
+  left: SortableInvoice,
+  right: SortableInvoice,
   sort: InvoiceListSort,
   oreRounding: boolean,
+  today: string,
 ): number {
   switch (sort.column) {
     case 'number':
@@ -94,19 +120,20 @@ function comparePrimary(
       return sort.direction === 'asc' ? result : -result
     }
     case 'status': {
-      const result = displayedStatusRank(left) - displayedStatusRank(right)
+      const result = displayedStatusRank(left, today) - displayedStatusRank(right, today)
       return sort.direction === 'asc' ? result : -result
     }
   }
 }
 
-export function sortInvoiceList(
-  invoices: Invoice[],
+export function sortInvoiceList<T extends SortableInvoice>(
+  invoices: readonly T[],
   sort: InvoiceListSort,
   oreRounding: boolean,
-): Invoice[] {
+  today: string = todayIsoStockholm(),
+): T[] {
   return [...invoices].sort((left, right) => {
-    const primary = comparePrimary(left, right, sort, oreRounding)
+    const primary = comparePrimary(left, right, sort, oreRounding, today)
     if (primary !== 0) return primary
 
     const dateTieBreak = right.invoice_date.localeCompare(left.invoice_date)

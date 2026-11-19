@@ -10,6 +10,12 @@ vi.mock('../lib/sync', () => ({
   syncAccountTransactions: vi.fn(),
 }))
 
+const connectorMode = vi.hoisted(() => ({ current: null as null | { baseUrl: string; key: string } }))
+vi.mock('@/lib/connect/instance/upstreams', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/connect/instance/upstreams')>()),
+  bankConnectorMode: () => connectorMode.current,
+}))
+
 vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn().mockResolvedValue(null),
 }))
@@ -56,7 +62,7 @@ if (!syncRoute) {
 function makeContext(connection: Record<string, unknown>, updateSpy: Mock): ExtensionContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {}
-  for (const m of ['select', 'eq', 'gte', 'lt', 'limit', 'order']) chain[m] = vi.fn(() => chain)
+  for (const m of ['select', 'eq', 'or', 'gte', 'lt', 'limit', 'order']) chain[m] = vi.fn(() => chain)
   chain.single = vi.fn().mockResolvedValue({ data: connection, error: null })
   chain.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null })
   chain.update = vi.fn((payload: unknown) => {
@@ -84,7 +90,6 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock): Exte
     } as any,
     emit: vi.fn().mockResolvedValue(undefined),
     settings: { get: vi.fn(), set: vi.fn(), getAll: vi.fn() } as never,
-    storage: {} as never,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
     services: {} as never,
   }
@@ -259,5 +264,66 @@ describe('POST /sync (enable-banking): bank rate limit', () => {
     expect(res.status).toBe(503)
     expect(await res.json()).toMatchObject({ code: 'BANK_UNAVAILABLE' })
     expect(serviceWrites).toHaveLength(0)
+  })
+})
+
+describe('POST /sync (enable-banking): the person asking', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    serviceWrites.length = 0
+    connectorMode.current = null
+  })
+
+  const personRequest = () =>
+    new Request('http://localhost/api/extensions/ext/enable-banking/sync', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-forwarded-for': '203.0.113.7, 10.0.0.1',
+        'user-agent': 'Mozilla/5.0 test',
+      },
+      body: JSON.stringify({ connection_id: 'conn-1' }),
+    })
+  const heldFor3h = () => makeConnection({ sync_lease_until: new Date(Date.now() + 3 * 60 * 60_000).toISOString() })
+
+  it('sends the person to the bank, so the read does not spend the background budget', async () => {
+    ;(syncAccountTransactions as unknown as Mock).mockResolvedValue({ imported: 1, duplicates: 0, errors: 0 })
+    const ctx = makeContext(makeConnection(), vi.fn())
+
+    const res = await syncRoute.handler(personRequest(), ctx)
+
+    expect(res.status).toBe(200)
+    const options = (syncAccountTransactions as unknown as Mock).mock.calls[0][8]
+    expect(options.signer).toMatchObject({ ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0 test' })
+  })
+
+  it('lets a person through a held background cooldown', async () => {
+    ;(syncAccountTransactions as unknown as Mock).mockResolvedValue({ imported: 1, duplicates: 0, errors: 0 })
+    const ctx = makeContext(heldFor3h(), vi.fn())
+
+    const res = await syncRoute.handler(personRequest(), ctx)
+
+    expect(res.status).toBe(200)
+    expect(syncAccountTransactions).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers and holds as before when the bank refuses the person too', async () => {
+    ;(syncAccountTransactions as unknown as Mock).mockRejectedValue(sveaLimit())
+    const ctx = makeContext(heldFor3h(), vi.fn())
+
+    const res = await syncRoute.handler(personRequest(), ctx)
+
+    expect(res.status).toBe(429)
+    expect(serviceWrites).toHaveLength(1)
+  })
+
+  it('keeps the held cooldown through the hosted connector, which cannot carry the person', async () => {
+    connectorMode.current = { baseUrl: 'https://connect.test/api/connect/bank', key: 'k' }
+    const ctx = makeContext(heldFor3h(), vi.fn())
+
+    const res = await syncRoute.handler(personRequest(), ctx)
+
+    expect(res.status).toBe(429)
+    expect(syncAccountTransactions).not.toHaveBeenCalled()
   })
 })

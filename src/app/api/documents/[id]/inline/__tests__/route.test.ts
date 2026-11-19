@@ -49,7 +49,7 @@ const mockUser = { id: 'user-1', email: 'test@test.se' }
 
 // NFD filename as macOS/iOS uploads produce them: o + combining diaeresis
 // U+0308 (char code 776). This is the exact shape that made the raw header
-// build throw in prod (undici Headers require code units <= 0xFF).
+// build throw in production (undici Headers require code units <= 0xFF).
 const NFD_FILE_NAME = 'kvitto fo\u0308rvaring.pdf'
 
 function makeDoc(overrides: Record<string, unknown> = {}) {

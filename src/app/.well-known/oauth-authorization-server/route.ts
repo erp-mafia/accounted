@@ -5,13 +5,13 @@ import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
  * RFC 8414: OAuth 2.0 Authorization Server Metadata.
  * Tells MCP clients where the authorize/token endpoints are.
  *
- * The issuer reflects the (allowlisted) request host: clients that
- * connected via the legacy app.gnubok.se domain must keep seeing a
- * self-consistent issuer there, or their issuer validation breaks on
- * re-auth after the app.accounted.se cutover.
+ * The issuer reflects the request host when this deployment serves it (see
+ * resolveDiscoveryBaseUrl): clients that connected via the legacy
+ * app.gnubok.se domain or a byrå's brand domain must see a self-consistent
+ * issuer there, or their issuer validation fails.
  */
 export async function GET(request: Request) {
-  const appUrl = resolveDiscoveryBaseUrl(request)
+  const appUrl = await resolveDiscoveryBaseUrl(request)
 
   return NextResponse.json({
     issuer: appUrl,

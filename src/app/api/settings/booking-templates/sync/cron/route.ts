@@ -1,6 +1,5 @@
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { withCronContext } from '@/lib/api/with-cron-context'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { syncSystemPacks } from '@/lib/packs/sync'
 
@@ -28,18 +27,8 @@ import { syncSystemPacks } from '@/lib/packs/sync'
 // The catalogue is small (tens of rows); this never approaches the budget.
 export const maxDuration = 60
 
-export const GET = withCronContext('cron.booking_templates_sync', async (_request, ctx) => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+export const GET = withServiceCronContext('cron.booking_templates_sync', async (_request, ctx) => {
+  const supabase = ctx.supabase
 
   const result = await syncSystemPacks(supabase)
 

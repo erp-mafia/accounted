@@ -1,13 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import {
   Select,
   SelectContent,
@@ -24,21 +25,22 @@ import {
   TableBody,
 } from '@/components/ui/table'
 import {
-  Download,
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
-  FileText,
-  ExternalLink,
-  RefreshCw,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
+  CheckCircleIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+} from '@/components/icons'
 import { formatCurrency, formatWholeKr } from '@/lib/utils'
 import type {
   PeriodiskSammanstallningReport,
   PsPeriodType,
   PsWarning,
 } from '@/lib/reports/periodisk-sammanstallning'
-import { parseApiError } from './api-error'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 function typeBadge(row: { services: number; goods: number; triangulation: number }) {
   const types: string[] = []
@@ -60,8 +62,8 @@ function deadlineLabel(end: string): string {
 }
 
 export function PeriodiskSammanstallningView() {
-  const currentYear = new Date().getFullYear()
-  const currentMonth = new Date().getMonth() + 1
+  const errorLocale = useLocale() as ErrorLocale
+  const { year: currentYear, month: currentMonth } = stockholmYearMonth()
   const currentQuarter = Math.ceil(currentMonth / 3)
 
   const [periodType, setPeriodType] = useState<PsPeriodType>('quarterly')
@@ -115,7 +117,7 @@ export function PeriodiskSammanstallningView() {
         if (!res.ok || json?.error) {
           setResult({
             key: fetchKey,
-            error: parseApiError(json?.error, 'Kunde inte hämta periodisk sammanställning.'),
+            error: getErrorMessage(json, { locale: errorLocale, fallback: 'Kunde inte hämta periodisk sammanställning.' }),
           })
         } else {
           setResult({ key: fetchKey, data: json.data })
@@ -129,7 +131,7 @@ export function PeriodiskSammanstallningView() {
     return () => {
       cancelled = true
     }
-  }, [fetchKey, periodType, year, period])
+  }, [fetchKey, periodType, year, period, errorLocale])
 
   const upToDate = result !== null && result.key === fetchKey
   const data = result?.data ?? null
@@ -146,12 +148,17 @@ export function PeriodiskSammanstallningView() {
   const errors = data?.warnings.filter(w => w.level === 'error') ?? []
   const cautions = data?.warnings.filter(w => w.level === 'warning') ?? []
   const hasBlockingErrors = errors.length > 0
+  // An EU sale no buyer can be named for, or a total off its momsdeklaration
+  // ruta (crm#1336): blocking for goods, a warning for services, never
+  // "nothing to file" either way.
+  const hasUnattributedSales =
+    data?.warnings.some(w => w.code === 'UNATTRIBUTED_EU_SALE' || w.code === 'RUTA_DIFFERENCE') ?? false
 
   return (
     <div className="space-y-8">
       {/* Period selection: the report below follows it automatically */}
       <Card>
-        <CardContent className="p-4">
+        <CardContent>
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <Label htmlFor="ps-period-type">Periodicitet</Label>
@@ -211,31 +218,19 @@ export function PeriodiskSammanstallningView() {
               onClick={() => setRetryKey((k) => k + 1)}
               disabled={loading}
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
         </CardContent>
       </Card>
 
-      {error && (
-        <Card>
-          <CardContent className="p-6 flex flex-wrap items-center gap-3 text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span className="text-sm">{error}</span>
-            <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
-              Försök igen
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+      {error && <LoadError title={error} onRetry={() => setRetryKey((k) => k + 1)} />}
 
       {!error && loading && !data && (
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <Skeleton className="h-5 w-40" />
-            <Skeleton className="h-32" />
-          </CardContent>
-        </Card>
+        <LateReveal className="space-y-3">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-32" />
+        </LateReveal>
       )}
 
       {data && !error && (
@@ -259,19 +254,19 @@ export function PeriodiskSammanstallningView() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wider">Tjänster (typ 3)</div>
+                  <div className="text-xs text-muted-foreground">Tjänster (typ 3)</div>
                   <div className="font-display text-xl tabular-nums">
                     {formatWholeKr(data.totals.services)} kr
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wider">Varor (typ 1)</div>
+                  <div className="text-xs text-muted-foreground">Varor (typ 1)</div>
                   <div className="font-display text-xl tabular-nums">
                     {formatWholeKr(data.totals.goods)} kr
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground uppercase tracking-wider">Trepart (typ 2)</div>
+                  <div className="text-xs text-muted-foreground">Trepart (typ 2)</div>
                   <div className="font-display text-xl tabular-nums">
                     {formatWholeKr(data.totals.triangulation)} kr
                   </div>
@@ -279,11 +274,11 @@ export function PeriodiskSammanstallningView() {
               </div>
 
               {/* Reconciliation */}
-              {data.reconciliation.matches !== null && data.totals.rowCount > 0 && (
+              {data.reconciliation.matches !== null && (data.totals.rowCount > 0 || !data.reconciliation.matches) && (
                 <div className="text-sm text-muted-foreground border-t pt-3">
                   {data.reconciliation.matches ? (
                     <span className="text-foreground inline-flex items-start gap-2">
-                      <CheckCircle2 className="h-4 w-4 mt-1 shrink-0 text-success" />
+                      <CheckCircleIcon className="h-4 w-4 mt-1 shrink-0 text-success" />
                       <span>
                         Stämmer mot momsdeklarationen
                         {' '}(Ruta 39: {formatWholeKr(data.reconciliation.ruta39 ?? 0)} kr,
@@ -293,7 +288,7 @@ export function PeriodiskSammanstallningView() {
                     </span>
                   ) : (
                     <span className="text-destructive inline-flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 mt-1 shrink-0" />
+                      <ExclamationTriangleIcon className="h-4 w-4 mt-1 shrink-0" />
                       <span>
                         Avviker från momsdeklarationen: kontrollera bokföringen.
                         {' '}Ruta 39: {formatWholeKr(data.reconciliation.ruta39 ?? 0)} kr,
@@ -302,11 +297,6 @@ export function PeriodiskSammanstallningView() {
                       </span>
                     </span>
                   )}
-                </div>
-              )}
-              {data.reconciliation.matches === null && data.totals.rowCount > 0 && (
-                <div className="text-xs text-muted-foreground border-t pt-3">
-                  Avstämning mot momsdeklarationen tillgänglig endast när PS-perioden sammanfaller med momsperioden.
                 </div>
               )}
 
@@ -325,7 +315,7 @@ export function PeriodiskSammanstallningView() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base text-destructive flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4" />
+                  <ExclamationCircleIcon className="h-4 w-4" />
                   {errors.length} fel måste åtgärdas
                 </CardTitle>
               </CardHeader>
@@ -343,7 +333,7 @@ export function PeriodiskSammanstallningView() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2 text-foreground">
-                  <AlertTriangle className="h-4 w-4 text-warning" />
+                  <ExclamationTriangleIcon className="h-4 w-4 text-warning" />
                   Varningar ({cautions.length})
                 </CardTitle>
               </CardHeader>
@@ -359,22 +349,17 @@ export function PeriodiskSammanstallningView() {
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Rader</CardTitle>
                 <div className="flex flex-wrap items-center gap-3">
-                  {hasBlockingErrors && (
-                    <p className="text-xs text-muted-foreground">
-                      Åtgärda felen ovan innan CSV kan laddas ner.
-                    </p>
-                  )}
                   <Button
                     variant="outline"
                     onClick={downloadCsv}
                     disabled={hasBlockingErrors}
                   >
-                    <Download className="h-4 w-4 mr-2" />
+                    <ArrowDownTrayIcon className="h-4 w-4" />
                     Ladda ner CSV (SKV 5740)
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -421,9 +406,12 @@ export function PeriodiskSammanstallningView() {
                 </Table>
               </CardContent>
             </Card>
-          ) : (
+          ) : hasBlockingErrors || hasUnattributedSales ? null : (
+            // "Nothing to file" only when nothing is listed above either: an
+            // EU sale no buyer can be named for leaves no rows but may still
+            // be owed a row, and the cards above name the verifikat.
             <EmptyState
-              icon={FileText}
+              icon={DocumentTextIcon}
               title="Inga EU-försäljningar i perioden"
               description="Inga EU-försäljningar med omvänd skattskyldighet under denna period. Periodisk sammanställning behöver inte lämnas in."
             >
@@ -434,7 +422,7 @@ export function PeriodiskSammanstallningView() {
                 className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 underline underline-offset-4"
               >
                 Läs mer hos Skatteverket
-                <ExternalLink className="h-3 w-3" />
+                <ArrowTopRightOnSquareIcon className="h-3 w-3" />
               </a>
             </EmptyState>
           )}
@@ -445,12 +433,13 @@ export function PeriodiskSammanstallningView() {
 }
 
 function WarningItem({ warning }: { warning: PsWarning }) {
+  const t = useTranslations('reports')
   return (
     <div className="flex items-start gap-2">
       <span className="text-muted-foreground shrink-0">•</span>
       <div className="flex-1">
         <div>{warning.message}</div>
-        {(warning.customerId || warning.invoiceId) && (
+        {(warning.customerId || warning.invoiceId || warning.journalEntryId) && (
           <div className="text-xs text-muted-foreground mt-1 flex gap-3">
             {warning.customerId && (
               <Link href={`/customers/${warning.customerId}`} className="underline-offset-4 hover:underline">
@@ -460,6 +449,11 @@ function WarningItem({ warning }: { warning: PsWarning }) {
             {warning.invoiceId && (
               <Link href={`/invoices/${warning.invoiceId}`} className="underline-offset-4 hover:underline">
                 Öppna faktura
+              </Link>
+            )}
+            {warning.journalEntryId && (
+              <Link href={`/bookkeeping/${warning.journalEntryId}`} className="underline-offset-4 hover:underline">
+                {t('ps_open_voucher', { voucher: warning.voucher ?? '' })}
               </Link>
             )}
             {warning.amount !== undefined && (

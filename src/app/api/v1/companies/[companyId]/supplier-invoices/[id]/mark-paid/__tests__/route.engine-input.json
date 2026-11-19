@@ -1,0 +1,263 @@
+[
+  {
+    "name": "accrual: a registered SEK invoice paid in full from the default account",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-28",
+          "description": "Utbetalning leverantörsfaktura F-6000, Kontorsbolaget AB (ankomstnr 120)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-6000, Kontorsbolaget AB (ankomstnr 120)"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning leverantörsfaktura F-6000, Kontorsbolaget AB (ankomstnr 120)"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "accrual: a partial payment from a named account with a note",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-29",
+          "description": "Utbetalning leverantörsfaktura F-6001, Kontorsbolaget AB (ankomstnr 121)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 600,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-6001, Kontorsbolaget AB (ankomstnr 121)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "1931",
+              "debit_amount": 0,
+              "credit_amount": 600,
+              "line_description": "Utbetalning leverantörsfaktura F-6001, Kontorsbolaget AB (ankomstnr 121)",
+              "dimensions": {
+                "6": "P100"
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "cash: a never-booked invoice under kontantmetoden",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-30",
+          "description": "Kontantbetalning leverantörsfaktura F-6002, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_cash_payment",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-6002, Kontorsbolaget AB"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Kontantbetalning leverantörsfaktura F-6002, Kontorsbolaget AB"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Kontantbetalning leverantörsfaktura F-6002, Kontorsbolaget AB"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Kontantbetalning leverantörsfaktura F-6002, Kontorsbolaget AB"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "custom lines: the caller's own rows",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-01",
+          "description": "Utbetalning leverantörsfaktura F-6003, Kontorsbolaget AB",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Egen rad"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [],
+    "outcome": {
+      "status": 200,
+      "error": null
+    }
+  },
+  {
+    "name": "a concurrent payment wins: the payment verifikat is cancelled",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-02",
+          "description": "Utbetalning leverantörsfaktura F-6004, Kontorsbolaget AB (ankomstnr 124)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000005",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-6004, Kontorsbolaget AB (ankomstnr 124)"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning leverantörsfaktura F-6004, Kontorsbolaget AB (ankomstnr 124)"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-4",
+        {
+          "gapExplanation": "Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd"
+        }
+      ]
+    ],
+    "outcome": {
+      "status": 409,
+      "error": "SI_PAID_ALREADY"
+    }
+  },
+  {
+    "name": "the invoice update fails: the payment verifikat is cancelled",
+    "calls": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-10-03",
+          "description": "Utbetalning leverantörsfaktura F-6005, Kontorsbolaget AB (ankomstnr 125)",
+          "source_type": "supplier_invoice_paid",
+          "source_id": "00000000-0000-4000-8000-000000000006",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Utbetalning leverantörsfaktura F-6005, Kontorsbolaget AB (ankomstnr 125)"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Utbetalning leverantörsfaktura F-6005, Kontorsbolaget AB (ankomstnr 125)"
+            }
+          ]
+        }
+      ]
+    ],
+    "cancels": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-5",
+        {
+          "gapExplanation": "Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning"
+        }
+      ]
+    ],
+    "outcome": {
+      "status": 500,
+      "error": "SI_PAID_FAILED"
+    }
+  }
+]

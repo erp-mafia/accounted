@@ -123,13 +123,17 @@ function clearPreviousChart(
     Boolean(mapping.providerVatCode)
     && !(mapping.vatTreatmentReviewed && mapping.requiresVatTreatmentReview)
 
-  const stale = mappings.filter(fromPreviousChart)
-  if (stale.length === 0) return mappings
+  if (!mappings.some(fromPreviousChart)) return mappings
 
+  const cleared = mappings.map((mapping) => fromPreviousChart(mapping)
+    ? { ...mapping, providerVatCode: null, providerVatTreatment: null }
+    : mapping)
   const restored = new Map(
     enrichAccountMappingsWithVat(
-      stale.map((mapping) => ({ ...mapping, providerVatCode: null, providerVatTreatment: null })),
+      cleared.filter((_, i) => fromPreviousChart(mappings[i])),
       existingAccounts,
+      // The legs of a basis pair beside a restored row are other rows (crm#1096).
+      cleared,
     ).map((mapping) => [mapping.sourceAccount, mapping]),
   )
   return mappings.map((mapping) =>
@@ -214,7 +218,10 @@ export function applySourceChartCsv(
     // rate the user had deliberately changed.
     if (mapping === base[i]) return mapping
     const treatment = mapping.providerVatTreatment
-    if (!mapping.providerVatCode || !treatment) return mapping
+    // Nor a row that does not carry the code's treatment: one the vouchers
+    // ruled a reverse-charge momskod out on (crm#1096) would otherwise get the
+    // code's rate as a booking default with no momskod beside it.
+    if (!mapping.providerVatCode || !treatment || mapping.defaultVatTreatment !== treatment) return mapping
     if (!vatRateComesFromLabel(treatment, Number(mapping.sourceAccount.charAt(0)))) return mapping
     const stated = format.rateFromCode(mapping.providerVatCode)
     if (stated === null || stated === mapping.defaultVatRate) return mapping
@@ -247,7 +254,9 @@ export function applySourceChartCsv(
   // identity is the whole test.
   const touched = applied.filter((mapping, i) => mapping !== base[i])
   const codesApplied = touched.filter((m) => m.providerVatCode).length
-  const treatmentsApplied = touched.filter((m) => m.providerVatTreatment).length
+  // A treatment the vouchers ruled out (crm#1096) was read but not applied.
+  const treatmentsApplied = touched
+    .filter((m) => m.providerVatTreatment && m.defaultVatTreatment === m.providerVatTreatment).length
   const accountsWithoutTreatment = touched
     .filter((m) => m.providerVatCode && !m.providerVatTreatment)
     .map((m) => m.sourceAccount)

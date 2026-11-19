@@ -1,7 +1,8 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import type { FactRow } from '@/lib/arkiv/facts/store'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { Payload } from '@/lib/documents/extract/fields'
@@ -53,7 +54,6 @@ export interface DocumentRecordView {
 
 export const GET = withRouteContext('arkiv.document', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
   const notFound = () => errorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-  if (!isArkivEnabled(ctx.companyId)) return notFound()
   const { id } = await params
   const { data: doc, error } = await ctx.supabase
     .from('document_attachments')
@@ -148,7 +148,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
       state: !d.pages_read_at ? (storedPages ? 'read' : 'unread') : d.read_error?.startsWith('partial:') ? 'partial' : d.read_error ? (needsReadOnDemand(d) ? 'unread' : 'skipped') : 'read',
       lane: readLaneFor(d),
     },
-    journal_entry: e ? { id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` } : null,
+    journal_entry: e ? { id: e.id, voucher: formatVoucher(e) } : null,
     deletable: pins != null && offersDocumentDelete(d, pins),
     classification: classification.data ? (classification.data as DocumentRecordView['classification']) : null,
     line_items: (d.extracted_data?.lineItems ?? [])

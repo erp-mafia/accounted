@@ -1,6 +1,7 @@
 import { defineAgentIntent } from './types'
 import { OPUS_MODEL, EFFORT_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 // vat.review: "Fråga [namn]" from the VAT declaration preview.
 //
@@ -74,15 +75,15 @@ export const vatReview = defineAgentIntent<VatReviewArgs, CapturedVatReview>({
 
     // Period defaulting: if the caller didn't specify, use the company's
     // declared period and the most recent applicable bucket.
-    const now = new Date()
+    const { year: currentYear, month: currentMonth } = stockholmYearMonth()
     const resolvedType =
       period_type ??
       (momsPeriod === 'yearly' ? 'yearly' : momsPeriod === 'monthly' ? 'monthly' : 'quarterly')
-    const resolvedYear = year ?? now.getFullYear()
+    const resolvedYear = year ?? currentYear
     let resolvedPeriod: number | undefined = period
     if (resolvedPeriod == null) {
-      if (resolvedType === 'monthly') resolvedPeriod = now.getMonth() // previous month
-      else if (resolvedType === 'quarterly') resolvedPeriod = Math.floor(now.getMonth() / 3) || 4
+      if (resolvedType === 'monthly') resolvedPeriod = currentMonth - 1 // previous month
+      else if (resolvedType === 'quarterly') resolvedPeriod = Math.floor((currentMonth - 1) / 3) || 4
       else resolvedPeriod = 1
     }
 
@@ -125,7 +126,7 @@ export const vatReview = defineAgentIntent<VatReviewArgs, CapturedVatReview>({
     lines.push('4. Varna explicit för anomalier: stora avvikelser mot förra perioden, oväntade reverse-charge-belopp, saknad motpost.')
     lines.push('5. Påminn om deadline (deklarationsdatum + betalningsdatum) och rekommendera fortsatta steg om allt ser bra ut.')
     lines.push('')
-    lines.push('Svara på svenska, kort och konkret. Använd tabellform när det hjälper användaren skanna siffrorna. Ditt första svar är det första användaren ser.')
+    lines.push('Svara kort och konkret. Använd tabellform när det hjälper användaren skanna siffrorna. Ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

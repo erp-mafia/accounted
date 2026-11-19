@@ -1,3 +1,4 @@
+import { netVat } from '@/lib/bookkeeping/gross-split';
 import { roundOre } from '@/lib/money';
 
 /**
@@ -135,5 +136,5 @@ export function lineVatFromPercent(
   if (taxPercent === undefined || !Number.isFinite(taxPercent)) return undefined;
 
   const rate = taxPercent > 1 ? taxPercent / 100 : taxPercent;
-  return roundOre(lineNet * rate);
+  return netVat(lineNet, rate);
 }

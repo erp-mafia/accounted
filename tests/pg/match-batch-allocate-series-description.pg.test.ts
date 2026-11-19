@@ -266,7 +266,7 @@ describe('match_batch_allocate: verifikat description', () => {
     // app/api/transactions/[id]/match-supplier-invoice: `Utbetalning leverantörsfaktura ${number}, ${supplier.name}`
     expect(entry.description).toBe('Utbetalning leverantörsfaktura 5571, Bryggleverantören AB')
     const preview = buildBatchAllocationPreview({
-      transaction: { amount: -1250, currency: 'SEK', date: '2026-01-16' },
+      transaction: { amount: -1250, date: '2026-01-16' },
       bankAccount: '1930',
       allocations,
       invoices: { [invoiceId]: { currency: 'SEK', remaining_amount: 1250, total: 1250 } },
@@ -323,7 +323,7 @@ describe('match_batch_allocate: verifikat description', () => {
     expect(entry.description).toBe('Samlingsbetalning 2026-06-05')
     expect(result.voucher_series).toBe('E')
     const preview = buildBatchAllocationPreview({
-      transaction: { amount: -3000, currency: 'SEK', date: '2026-06-05' },
+      transaction: { amount: -3000, date: '2026-06-05' },
       bankAccount: '1930',
       allocations,
       invoices: {

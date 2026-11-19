@@ -123,22 +123,28 @@ describe('dayValueSek applies the degree', () => {
 describe('source pins: no consumer reads monthly_salary raw as money', () => {
   const runCalculation = source('lib/salary/run-calculation.ts')
   const semesterberedning = source('lib/salary/semesterberedning.ts')
+  const shiftPremiumEngine = source('lib/salary/shift-premium-engine.ts')
 
-  it('the absence derivation is fed the degree-adjusted salary', () => {
-    const call = runCalculation.match(/loadAndDeriveAbsence\(\{[\s\S]*?\n\s*\}\)/)
-    expect(call, 'loadAndDeriveAbsence call not found').not.toBeNull()
+  it('the absence derivation is fed the degree-adjusted salary (none for hourly pay)', () => {
+    const call = runCalculation.match(/deriveEmployeeAbsence\(\{[\s\S]*?\n\s*\}\)/)
+    expect(call, 'deriveEmployeeAbsence call not found').not.toBeNull()
     expect(call![0]).toContain(
-      'monthlySalary: degreeAdjustedMonthlySalary(sre.monthly_salary, emp.employment_degree)',
+      // runMonthlySalary: the row's monthly salary, or the employee's after a
+      // switch of pay type (crm#1337).
+      'monthlySalary: hourlyPay ? 0 : degreeAdjustedMonthlySalary(runMonthlySalary, emp.employment_degree)',
     )
-    expect(call![0]).not.toMatch(/monthlySalary:\s*sre\.monthly_salary/)
+    expect(call![0]).not.toMatch(/monthlySalary:\s*(sre\.monthly_salary|runMonthlySalary)\b/)
   })
 
   it('the premium hourly rate is derived from the degree-adjusted salary', () => {
-    // The param type closes with "}): number {", the body with "}\n".
-    const fn = runCalculation.match(/function effectiveHourlyRate\([\s\S]*?\n\}\n/)
-    expect(fn, 'effectiveHourlyRate not found').not.toBeNull()
-    expect(fn![0]).toContain('degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)')
-    expect(fn![0]).not.toMatch(/const monthly = emp\.monthly_salary/)
+    // The pay basis moved from run-calculation's effectiveHourlyRate into the
+    // engine (premiumPayBasis) so the settings example prices the same way.
+    // The body closes with "}\n".
+    const fn = shiftPremiumEngine.match(/export function premiumPayBasis\([\s\S]*?\n\}\n/)
+    expect(fn, 'premiumPayBasis not found').not.toBeNull()
+    expect(fn![0]).toContain('degreeAdjustedMonthlySalary(fullTime, emp.employment_degree)')
+    expect(fn![0]).toMatch(/hourlyRate: actual > 0 \? roundOre\(actual \/ hourlyDivisor/)
+    expect(runCalculation).toContain('premiumPayBasis({')
   })
 
   it('the vacation day value is derived from the degree-adjusted salary', () => {

@@ -14,7 +14,25 @@ import { z } from 'zod'
 import { BULK_BOOK_MAX_INVOICES, bookInvoice, bulkBookInvoices } from '@/lib/invoices/book-service'
 import { bookSupplierInvoice } from '@/lib/supplier-invoices/book-service'
 import type { Invoice, SupplierInvoice } from '@/types'
+import { formatAmount } from '@/lib/utils'
 import { defineOperation } from './types'
+
+/**
+ * The approval title of a staged supplier-invoice Bokför, from the dry run's
+ * preview: "Bokför leverantörsfaktura 55012 (Leverantör AB, 6 250,00 SEK)".
+ * Every one used to read "Bokför leverantörsfaktura", so an approver with four
+ * of them in /pending could not tell them apart (feedback seq 930807). Parts
+ * the preview lacks are left out, never guessed.
+ */
+export function bookSupplierInvoiceTitle(preview?: Record<string, unknown>): string {
+  const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null)
+  const invoiceNumber = text(preview?.supplier_invoice_number)
+  const supplierName = text(preview?.supplier_name)
+  const total = typeof preview?.total === 'number' && Number.isFinite(preview.total) ? preview.total : null
+  const amount = total === null ? null : `${formatAmount(total)} ${text(preview?.currency) ?? 'SEK'}`
+  const details = [supplierName, amount].filter((part): part is string => part !== null)
+  return `Bokför leverantörsfaktura${invoiceNumber ? ` ${invoiceNumber}` : ''}${details.length > 0 ? ` (${details.join(', ')})` : ''}`
+}
 
 const META_EXAMPLE = { request_id: 'req_…', api_version: '2026-05-12' }
 
@@ -84,11 +102,11 @@ export const invoicesBook = defineOperation({
   docs: {
     summary: 'Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step).',
     description:
-      'For companies with defer_invoice_booking=true (Registrera men bokför inte): :send and :mark-sent issue the invoice without posting anything, and this step posts the revenue verifikat afterwards (Debit 1510 Kundfordringar / Credit revenue per VAT rate + utgående moms; ROT/RUT share on 1513; periodiserade lines on 29xx with their schedules). Dated on the invoice date. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The delivered PDF, if archived at send, is linked to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
+      'For companies with defer_invoice_booking=true (Registrera men bokför inte): :send and :mark-sent issue the invoice without posting anything, and this step posts the revenue verifikat afterwards (Debit 1510 Kundfordringar / Credit revenue per VAT rate + utgående moms; ROT/RUT share on 1513; periodiserade lines on 29xx or 17xx with their schedules). Dated on the invoice date. An upplupen intäkt (17xx line, months before the invoice month) books each month of its period on the last day of that month right after; a month that cannot take the entry refuses the booking with INVOICE_ACCRUED_INCOME_PERIOD_LOCKED before anything is posted. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The delivered PDF, if archived at send, is linked to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
     useWhen:
       'A customer invoice is sent or overdue, has no journal_entry_id, and the company books invoices in a separate step (defer_invoice_booking), typically after someone has checked the kontering.',
     doNotUseFor:
-      'Drafts (issue them with :send or :mark-sent first), paid invoices (their payment already booked the sale in full), credit notes, quotes, proformas or delivery notes, or any invoice under kontantmetoden (booked at payment).',
+      'Drafts (issue them with :send or :mark-sent first), paid or partially paid invoices (a payment books the sale first through this step; a kontantmetoden payment books the whole sale), credit notes, quotes, proformas or delivery notes, or any invoice under kontantmetoden (booked at payment).',
     pitfalls: [
       'An invoice that already has a journal_entry_id answers 400 INVOICE_BOOK_ALREADY_BOOKED.',
       'Status other than sent or overdue answers 400 INVOICE_BOOK_INVALID_STATUS with details.currentStatus.',
@@ -96,6 +114,7 @@ export const invoicesBook = defineOperation({
       PERIOD_LOCKED_PITFALL,
       'No open fiscal year covering the invoice date answers 400 INVOICE_BOOK_NO_FISCAL_PERIOD: create the räkenskapsår first.',
       'A posted verifikat is permanent: undo a wrong booking with storno (POST /journal-entries/{id}/reverse), never by editing.',
+      'Settling an unbooked invoice (mark-paid, a bank match, a samlingsbetalning, a link to an existing verifikat) runs this step first and refuses the payment with its code when it refuses: there is no need to call it before recording a payment, and no way to pay around it.',
     ],
     example: {
       response: {
@@ -128,6 +147,9 @@ export const invoicesBook = defineOperation({
     'INVOICE_BOOK_CASH_METHOD',
     'PERIOD_LOCKED',
     'INVOICE_BOOK_NO_FISCAL_PERIOD',
+    'INVOICE_ACCRUED_INCOME_PERIOD_INVALID',
+    'INVOICE_ACCRUED_INCOME_PERIOD_LOCKED',
+    'INVOICE_DEFERRED_INCOME_PERIOD_PAST',
     'INVOICE_BOOK_CONFLICT',
     'INVOICE_BOOK_FAILED',
   ],
@@ -249,11 +271,11 @@ export const supplierInvoicesBook = defineOperation({
   docs: {
     summary: 'Book a registered supplier invoice that was registered without a verifikat (the deferred Bokför step).',
     description:
-      'For companies with defer_invoice_booking=true (Registrera men bokför inte): POST /supplier-invoices registers the invoice without posting anything, and this step posts the registration verifikat afterwards (Debit cost accounts per line + 2641 ingående moms, or fiktiv moms for reverse charge; Credit 2440 Leverantörsskulder; periodiserade lines on 17xx with their schedules). Dated on the invoice date. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The retained source document is anchored to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
+      'For companies with defer_invoice_booking=true (Registrera men bokför inte): POST /supplier-invoices registers the invoice without posting anything, and this step posts the registration verifikat afterwards (Debit cost accounts per line + 2641 ingående moms, or fiktiv moms for reverse charge; Credit 2440 Leverantörsskulder; periodiserade lines on 17xx or 29xx with their schedules). Dated on the invoice date. An upplupen kostnad (29xx line) books each month of its period on the last day of that month right after; a month that cannot take the entry refuses the booking with SI_ACCRUED_COST_PERIOD_LOCKED before anything is posted. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The retained source document is anchored to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.',
     useWhen:
       'A supplier invoice is registered, approved or overdue, has no registration_journal_entry_id, and the company books supplier invoices in a separate step (defer_invoice_booking).',
     doNotUseFor:
-      'Paid or partially paid invoices (their payment booked them in full), credit notes, or any supplier invoice under kontantmetoden (booked at payment via :mark-paid).',
+      'Paid or partially paid invoices (a payment books the registration first through this step; a kontantmetoden payment books the whole invoice), credit notes, or any supplier invoice under kontantmetoden (booked at payment via :mark-paid).',
     pitfalls: [
       'An invoice that already has a registration_journal_entry_id answers 400 SI_BOOK_ALREADY_BOOKED.',
       'Status other than registered, approved or overdue answers 400 SI_BOOK_INVALID_STATUS with details.currentStatus.',
@@ -261,6 +283,7 @@ export const supplierInvoicesBook = defineOperation({
       PERIOD_LOCKED_PITFALL,
       'No open fiscal year covering the invoice date answers 400 SI_BOOK_NO_FISCAL_PERIOD.',
       'Booking does not attest the invoice: :approve is a separate step and may come before or after.',
+      'Settling an unbooked invoice (mark-paid, a bank match, a samlingsbetalning, a link to an existing verifikat) runs this step first and refuses the payment with its code when it refuses: there is no need to call it before paying, and no way to pay around it.',
     ],
     example: {
       response: {
@@ -294,6 +317,9 @@ export const supplierInvoicesBook = defineOperation({
     'SI_BOOK_CASH_METHOD',
     'PERIOD_LOCKED',
     'SI_BOOK_NO_FISCAL_PERIOD',
+    'SI_ACCRUED_COST_PERIOD_INVALID',
+    'SI_ACCRUED_COST_PERIOD_LOCKED',
+    'SI_PREPAID_COST_PERIOD_PAST',
     'SI_BOOK_CONFLICT',
     'SI_BOOK_FAILED',
   ],
@@ -308,7 +334,7 @@ export const supplierInvoicesBook = defineOperation({
     description:
       'Stage the deferred Bokför step for a registered supplier invoice that has no verifikat yet (defer_invoice_booking companies). The preview shows the exact registration lines. Refused for paid invoices, credit notes, kontantmetoden and locked periods.',
     keywords: ['bokför leverantörsfaktura', 'registrera men bokför inte', 'obokförd leverantörsfaktura', 'leverantörsskuld'],
-    stage: { pendingType: 'book_supplier_invoice', title: () => 'Bokför leverantörsfaktura' },
+    stage: { pendingType: 'book_supplier_invoice', title: (_input, preview) => bookSupplierInvoiceTitle(preview) },
   },
   run: async (ctx, { supplier_invoice_id }, { dryRun }) => {
     const outcome = await bookSupplierInvoice(ctx, supplier_invoice_id, { dryRun })

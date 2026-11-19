@@ -8,6 +8,8 @@ import {
   insertFiscalPeriod,
 } from '@/tests/pg/fixtures'
 import { getPool, withUserContext } from '@/tests/pg/setup'
+import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
+import { MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 
 /**
  * Covers 20260529120100_match_batch_allocate (latest body:
@@ -1048,4 +1050,74 @@ describe('match_batch_allocate', () => {
       })
     })
   })
+})
+
+// crm#1297: Skatteverket pays a day's beslut in one transfer, so one bank row
+// settles up to MAX_BANK_ROW_SPLIT invoices. The cap holds only if the RPC
+// books that many inside one PostgREST request, under the authenticator
+// role's 8 s statement_timeout (20260721144311), and if the verifikat it
+// books still fits one select of MAX_ROWS_PER_REQUEST lines. Every invoice
+// here is half a krona short, the most lines an allocation books: Cr 1510
+// for the remaining plus Dr 3740 for the öre.
+describe('match_batch_allocate at MAX_BANK_ROW_SPLIT (crm#1297)', () => {
+  it('books a full batch as one readable verifikat inside the request statement timeout', async () => {
+    const { userId, companyId } = await seedTenant()
+    const customerId = await insertCustomer({ userId, companyId })
+    const { rows: invoices } = await getPool().query<{ id: string; total: string }>(
+      `INSERT INTO public.invoices
+         (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date,
+          status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount,
+          vat_treatment)
+       SELECT gen_random_uuid(), $1, $2, $3, 'R-' || g, '2026-06-01', '2026-07-01', 'sent', 'SEK',
+              amount.total, 0, amount.total, 0, amount.total, 'standard_25'
+         FROM generate_series(1, $4::int) AS g, LATERAL (SELECT 300.50 + g % 7 AS total) AS amount
+       RETURNING id, total`,
+      [userId, companyId, customerId, MAX_BANK_ROW_SPLIT],
+    )
+    const owed = invoices.reduce((sum, invoice) => sum + Number(invoice.total), 0)
+    const allocations = invoices.map((invoice) => ({
+      kind: 'customer_invoice',
+      invoice_id: invoice.id,
+      amount: Number(invoice.total) - 0.5,
+    }))
+    const transfer = allocations.reduce((sum, a) => sum + a.amount, 0)
+    const txId = await insertTransaction({ userId, companyId, amount: transfer })
+
+    await withUserContext(userId, async (client) => {
+      await client.query(`SET LOCAL statement_timeout = '8s'`)
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(true)
+      expect(result.allocations).toHaveLength(MAX_BANK_ROW_SPLIT)
+      expect(result.total_allocated).toBe(transfer)
+      expect(result.leftover).toBe(0)
+
+      const lines = await client.query<{ account_number: string; n: string; debit: string; credit: string }>(
+        `SELECT account_number, count(*) AS n, sum(debit_amount) AS debit, sum(credit_amount) AS credit
+           FROM public.journal_entry_lines
+          WHERE journal_entry_id = $1
+          GROUP BY account_number
+          ORDER BY account_number`,
+        [result.journal_entry_id],
+      )
+      expect(lines.rows.map((l) => [l.account_number, Number(l.n), Number(l.debit), Number(l.credit)])).toEqual([
+        ['1510', MAX_BANK_ROW_SPLIT, 0, owed],
+        ['1930', 1, transfer, 0],
+        ['3740', MAX_BANK_ROW_SPLIT, MAX_BANK_ROW_SPLIT * 0.5, 0],
+      ])
+      const lineCount = lines.rows.reduce((sum, l) => sum + Number(l.n), 0)
+      expect(lineCount).toBeLessThanOrEqual(MAX_ROWS_PER_REQUEST)
+
+      const settled = await client.query<{ payments: string; open: string }>(
+        `SELECT (SELECT count(*) FROM public.invoice_payments WHERE transaction_id = $1) AS payments,
+                (SELECT count(*) FROM public.invoices WHERE company_id = $2 AND status <> 'paid') AS open`,
+        [txId, companyId],
+      )
+      expect(Number(settled.rows[0]!.payments)).toBe(MAX_BANK_ROW_SPLIT)
+      expect(Number(settled.rows[0]!.open)).toBe(0)
+    })
+  }, 30_000)
 })

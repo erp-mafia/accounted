@@ -30,37 +30,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as getOperationRoute } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const USER_ID = 'user-1'
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -98,13 +71,13 @@ function keyWith(extra: Record<string, unknown> = {}) {
 }
 
 function supabaseWith(membership: { company_id: string; role: string } | null) {
-  const client = makeFlexibleSupabase({
+  const client = createTableMockSupabase({
     operations: [
       { data: { company_id: COMPANY_ID }, error: null }, // company lookup by id
       { data: OPERATION_ROW, error: null }, // getOperation, company-scoped
     ],
     company_members: { data: membership, error: null },
-  })
+  }).supabase
   mockServiceClient.mockReturnValue(client)
   return client
 }
@@ -115,7 +88,7 @@ function get(id = OPERATION_ID, headers: Record<string, string> = { Authorizatio
   })
 }
 
-function operationReads(client: ReturnType<typeof makeFlexibleSupabase>): number {
+function operationReads(client: ReturnType<typeof createTableMockSupabase>['supabase']): number {
   return client.from.mock.calls.filter(([t]) => t === 'operations').length
 }
 
@@ -138,7 +111,7 @@ describe('GET /api/v1/operations/:id', () => {
   })
 
   it('returns 404 for an unknown operation id', async () => {
-    const client = makeFlexibleSupabase({ operations: { data: null, error: null } })
+    const client = createTableMockSupabase({ operations: { data: null, error: null } }).supabase
     mockServiceClient.mockReturnValue(client)
     const res = await get()
     expect(res.status).toBe(404)
@@ -189,5 +162,66 @@ describe('GET /api/v1/operations/:id', () => {
     supabaseWith({ company_id: COMPANY_ID, role: 'viewer' })
     const res = await get()
     expect(res.status).toBe(200)
+  })
+
+  describe('an operation whose request was killed', () => {
+    function stale(startedMsAgo: number, update: { data?: unknown; error?: unknown } = { data: [{ id: OPERATION_ID }] }) {
+      const row = {
+        ...OPERATION_ROW,
+        status: 'running',
+        started_at: new Date(Date.now() - startedMsAgo).toISOString(),
+        completed_at: null,
+        result: null,
+      }
+      const mock = createTableMockSupabase({
+        operations: (chain) => {
+          if (chain.some((c) => c.method === 'update')) return update
+          const select = chain.find((c) => c.method === 'select')?.args[0]
+          return { data: select === 'company_id' ? { company_id: COMPANY_ID } : row }
+        },
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      })
+      mockServiceClient.mockReturnValue(mock.supabase)
+      return mock
+    }
+
+    it('is reported as failed with OPERATION_ABANDONED once it is older than any route may run, in the same shape', async () => {
+      const mock = stale(16 * 60_000)
+
+      const res = await get()
+
+      expect(res.status).toBe(200)
+      const { data } = await res.json()
+      expect(data).toMatchObject({
+        operation_id: OPERATION_ID,
+        type: 'fiscal_periods.year_end',
+        status: 'failed',
+        result: null,
+        error: { code: 'OPERATION_ABANDONED', message: expect.stringContaining('may be partly or fully done') },
+        completed_at: expect.any(String),
+        poll_url: `/api/v1/operations/${OPERATION_ID}`,
+      })
+      // Written once, guarded on the row still running.
+      expect(mock.payloads('operations', 'update')).toEqual([
+        { status: 'failed', completed_at: expect.any(String), error: expect.objectContaining({ code: 'OPERATION_ABANDONED' }) },
+      ])
+      expect(mock.findCalls('operations', 'eq')).toContainEqual(['status', 'running'])
+    })
+
+    it('stays running while its request may still be alive', async () => {
+      const mock = stale(10 * 60_000)
+      const res = await get()
+      expect((await res.json()).data.status).toBe('running')
+      expect(mock.payloads('operations', 'update')).toEqual([])
+    })
+
+    it('answers the stored row when another poll or the request itself resolved it first', async () => {
+      // The guarded write matched nothing; the re-read is what is answered.
+      const mock = stale(16 * 60_000, { data: [] })
+      const res = await get()
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.status).toBe('running')
+      expect(mock.payloads('operations', 'update')).toHaveLength(1)
+    })
   })
 })

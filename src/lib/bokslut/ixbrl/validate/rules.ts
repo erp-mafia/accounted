@@ -15,6 +15,10 @@
 
 import type { IxbrlArsredovisningInput } from '../types'
 import { isOrgNumberShaped, hasInvalidOrgNumberCheckDigit } from '@/lib/invariants/org-number'
+import { exceedsFiscalYearCap } from '@/lib/bookkeeping/validate-period-duration'
+import { addDaysIso, hasEnded, todayIsoStockholm } from '@/lib/dates/iso'
+import { pateckningDatum } from '../revisorspateckning'
+import { runK3PreflightChecks } from './k3-rules'
 
 export interface PreflightIssue {
   /** Bolagsverket kontrollera code where one exists, else our own ACC-xxx. */
@@ -38,15 +42,23 @@ const issue = (code: string, severity: 'error' | 'warn', message: string): Prefl
   message,
 })
 
-function monthsBetween(startIso: string, endIso: string): number {
-  const start = new Date(`${startIso}T00:00:00Z`)
-  const end = new Date(`${endIso}T00:00:00Z`)
-  return (
-    (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
-    (end.getUTCMonth() - start.getUTCMonth()) +
-    (end.getUTCDate() >= start.getUTCDate() ? 0 : -1)
+/**
+ * A year that is not the company's first has no comparison figures: the year
+ * before it is not on record, or it did not load. The refusal names the year
+ * and the only ways to record it. A year in a hole wider than the 18 months
+ * one year may run cannot go through the create door, which demands that a gap
+ * fill ends the day before the next year, so a SIE file or a bank row dated in
+ * that year is what is left.
+ */
+const missingComparatives = (code: string, statement: string, input: IxbrlArsredovisningInput): PreflightIssue =>
+  issue(
+    code,
+    'error',
+    `Jämförelsesiffror saknas i ${statement}. De krävs eftersom det här inte är företagets första räkenskapsår, ` +
+      `och räkenskapsåret som slutar ${addDaysIso(input.period.start, -1)} finns inte i bokföringen eller gick inte att läsa. ` +
+      'Lägg in året genom att importera en SIE-fil för det eller bokföra en bankrad daterad i det. ' +
+      'Saknas högst 18 månader kan du också lägga till det under Inställningar → Bokföring → Räkenskapsår.',
   )
-}
 
 const RULES: Rule[] = [
   // ---- completeness -------------------------------------------------------
@@ -55,7 +67,7 @@ const RULES: Rule[] = [
       ? issue('1020', 'error', 'Företagsnamnet saknas i årsredovisningen.')
       : null,
   // Shared rule (lib/invariants/org-number.ts), so this validator agrees with
-  // the AGI, KU10 and SRU export paths about what a valid org number is. The
+  // the AGI and SRU export paths about what a valid org number is. The
   // previous local regex rejected the 12-digit form outright and skipped the
   // check digit, so a company stored in 12-digit form could file AGI all year
   // and then fail here with a message that did not say why.
@@ -140,11 +152,11 @@ const RULES: Rule[] = [
 
   // ---- date ordering ------------------------------------------------------
   (input, today) =>
-    input.period.end >= today
+    !hasEnded(input.period.end, today)
       ? issue('1015', 'error', `Räkenskapsårets sista dag (${input.period.end}) har inte passerats ännu.`)
       : null,
   (input) =>
-    monthsBetween(input.period.start, input.period.end) >= 18
+    exceedsFiscalYearCap(input.period.start, input.period.end)
       ? issue('1046', 'error', `Räkenskapsåret ${input.period.start}: ${input.period.end} är längre än 18 månader.`)
       : null,
   (input) =>
@@ -207,23 +219,101 @@ const RULES: Rule[] = [
   },
   (input) => {
     if (input.isFirstFiscalYear) return null
-    const prev = input.totals.tillgangar.previous
-    return prev === null
-      ? issue('3006', 'error', 'Jämförelsesiffror saknas i balansräkningen. De behövs om det inte är företagets första räkenskapsår.')
-      : null
+    return input.totals.tillgangar.previous === null ? missingComparatives('3006', 'balansräkningen', input) : null
   },
   (input) => {
     if (input.isFirstFiscalYear) return null
-    const prev = input.totals.aretsResultat.previous
-    return prev === null
-      ? issue('3007', 'error', 'Jämförelsesiffror saknas i resultaträkningen. De behövs om det inte är företagets första räkenskapsår.')
-      : null
+    return input.totals.aretsResultat.previous === null ? missingComparatives('3007', 'resultaträkningen', input) : null
   },
   (input) => {
     const rrResult = input.totals.aretsResultat.current
     const brResult = input.br['AretsResultatEgetKapital']?.current ?? 0
     return rrResult !== brResult
       ? issue('ACC-2099', 'error', `Årets resultat enligt resultaträkningen (${rrResult} kr) stämmer inte med eget kapital-posten Årets resultat (${brResult} kr): kör bokslutet (resultatdisposition) innan inlämning.`)
+      : null
+  },
+
+  // ---- revisorspåteckning (ABL 9 kap. 28 §) --------------------------------
+  // The revisor's hänvisning to the revisionsberättelse. ACC codes: these are
+  // Accounted's own checks, not mirrors of a published kontrollera code.
+  (input) => {
+    const pateckning = input.revisorspateckning
+    return pateckning?.required && pateckning.revisorer.length === 0
+      ? issue(
+          'ACC-REVISOR-MISSING',
+          'error',
+          'Revisionsberättelse krävs men ingen revisor finns bland undertecknarna: lägg till revisorn så att revisorspåteckningen kommer med (ABL 9 kap. 28 §).',
+        )
+      : null
+  },
+  (input) => {
+    const pateckning = input.revisorspateckning
+    return pateckning && pateckning.revisorer.some((revisor) => !revisor.signedDate)
+      ? issue(
+          'ACC-REVISOR-DATE',
+          'error',
+          'Datum för revisorspåteckningen saknas: registrera revisorns påteckning när revisionsberättelsen har lämnats.',
+        )
+      : null
+  },
+  (input) => {
+    const pateckning = input.revisorspateckning
+    return pateckning && pateckning.revisorer.length > 0 && pateckning.opinion === null
+      ? issue(
+          'ACC-REVISOR-OPINION',
+          'error',
+          'Ange vad revisionsberättelsen innehåller (utan eller med modifierade uttalanden) så att revisorspåteckningen kan märkas rätt.',
+        )
+      : null
+  },
+  (input) => {
+    const pateckning = input.revisorspateckning
+    return pateckning?.revisionsbolag && !pateckning.revisorer.some((revisor) => revisor.huvudansvarig)
+      ? issue(
+          'ACC-REVISOR-HUVUDANSVARIG',
+          'error',
+          `Revisionsbolaget ${pateckning.revisionsbolag} är valt som revisor men ingen huvudansvarig revisor finns bland undertecknarna.`,
+        )
+      : null
+  },
+  (input) => {
+    const pateckning = input.revisorspateckning
+    return pateckning && !pateckning.required && pateckning.revisorer.length > 0
+      ? issue(
+          'ACC-REVISOR-NOT-REQUIRED',
+          'warn',
+          'Det finns en revisor bland undertecknarna men revisionsberättelse är inte angiven som krävd: kontrollera uppgiften i grunduppgifterna.',
+        )
+      : null
+  },
+  (input) => {
+    const datum = input.revisorspateckning ? pateckningDatum(input.revisorspateckning.revisorer) : null
+    if (!datum) return null
+    const latestBoard = input.underskrifter.signers.reduce<string | null>(
+      (max, signer) => (signer.signedDate && (max === null || signer.signedDate > max) ? signer.signedDate : max),
+      null,
+    )
+    return latestBoard && datum < latestBoard
+      ? issue(
+          'ACC-REVISOR-ORDER',
+          'warn',
+          `Revisorspåteckningen (${datum}) är daterad före styrelsens sista underskrift (${latestBoard}).`,
+        )
+      : null
+  },
+  (input) => {
+    const datum = input.revisorspateckning ? pateckningDatum(input.revisorspateckning.revisorer) : null
+    const agm = input.faststallelseintyg.arsstammaDatum
+    if (!datum || !agm) return null
+    const latest = new Date(`${agm}T00:00:00Z`)
+    latest.setUTCDate(latest.getUTCDate() - 21)
+    const latestIso = latest.toISOString().slice(0, 10)
+    return datum > latestIso
+      ? issue(
+          'ACC-REVISOR-AGM',
+          'warn',
+          `Revisionsberättelsen (${datum}) ska lämnas till styrelsen senast tre veckor före årsstämman (${agm}), ABL 9 kap. 28 §.`,
+        )
       : null
   },
 
@@ -246,12 +336,14 @@ export function runPreflightChecks(
   input: IxbrlArsredovisningInput,
   todayIso?: string,
 ): PreflightResult {
-  const today = todayIso ?? new Date().toISOString().slice(0, 10)
+  const today = todayIso ?? todayIsoStockholm()
   const issues: PreflightIssue[] = []
   for (const rule of RULES) {
     const result = rule(input, today)
     if (result) issues.push(result)
   }
+  // K3's own checks (equity specification, kassaflödesanalys, sources).
+  issues.push(...runK3PreflightChecks(input))
   // Mapper warnings (unmapped accounts, reclassifications) ride along as warn.
   for (const warning of input.warnings) {
     issues.push(issue('ACC-WARN', 'warn', warning))

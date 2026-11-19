@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { tools } from '../server'
 import { findUiWidget } from '../widgets'
+import { SIE_FILE_EXTENSIONS, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 
 describe('SIE drop widget', () => {
   const widget = findUiWidget('ui://sie-drop/app.html')
@@ -46,10 +47,261 @@ describe('SIE drop widget', () => {
     expect(html).toContain("sendNotification('ui/updateContext'")
   })
 
+  it('takes the SIE extensions from the shared list (accounted#32)', () => {
+    const html = widget!.html
+    expect(html).toContain(`accept="${SIE_FILE_EXTENSIONS.join(',')}"`)
+    expect(html).toContain(`${JSON.stringify(SIE_FILE_EXTENSIONS)}.some(`)
+    expect(html).toContain(`SIE-export (${SIE_FILE_EXTENSIONS_SV})`)
+  })
+
   it('is attached definition-level to gnubok_create_sie_upload', () => {
     const tool = tools.find((t) => t.name === 'gnubok_create_sie_upload')!
     expect((tool as { _meta?: { ui: { resourceUri: string } } })._meta).toEqual({
       ui: { resourceUri: 'ui://sie-drop/app.html' },
     })
+  })
+})
+
+/**
+ * crm#1201: the card imports into the company it was opened for. The card's
+ * script runs here in a bare VM with a stub DOM and host bridge, so what is
+ * asserted is the arguments the card actually sends, not the HTML text.
+ */
+describe('SIE drop widget: company binding', async () => {
+  const vm = await import('node:vm')
+  const html = findUiWidget('ui://sie-drop/app.html')!.html
+  const script = html.slice(html.indexOf('<script>') + '<script>'.length, html.lastIndexOf('</script>'))
+
+  const CARD_COMPANY = { company_id: '22222222-2222-4222-8222-222222222222', name: 'Syskonbolaget AB', org_number: '5560000002' }
+  const OTHER_COMPANY = { company_id: '11111111-1111-4111-8111-111111111111', name: 'Nuvarande AB', org_number: '5560000001' }
+
+  type Handler = (event: unknown) => void
+  interface Stub {
+    textContent: string
+    innerHTML: string
+    disabled: boolean
+    hidden: () => boolean
+    click: () => void
+    fire: (type: string, event?: unknown) => void
+  }
+
+  function boot() {
+    const posted: Array<{ id?: number; method: string; params?: { name?: string; arguments?: Record<string, unknown> } }> = []
+    const windowListeners: Record<string, Handler[]> = {}
+    const elements = new Map<string, Stub & Record<string, unknown>>()
+    const element = (id: string) => {
+      let stub = elements.get(id)
+      if (!stub) {
+        const classes = new Set<string>(['report', 'actions', 'note', 'target'].includes(id) ? ['hidden'] : [])
+        const handlers: Record<string, Handler[]> = {}
+        stub = {
+          textContent: '',
+          innerHTML: '',
+          disabled: false,
+          classList: {
+            add: (c: string) => classes.add(c),
+            remove: (c: string) => classes.delete(c),
+            toggle: (c: string) => (classes.has(c) ? (classes.delete(c), false) : (classes.add(c), true)),
+            contains: (c: string) => classes.has(c),
+          },
+          addEventListener: (type: string, fn: Handler) => {
+            ;(handlers[type] ??= []).push(fn)
+          },
+          click: () => (handlers.click ?? []).forEach((fn) => fn({})),
+          hidden: () => classes.has('hidden'),
+          fire: (type: string, event: unknown = { preventDefault() {} }) => (handlers[type] ?? []).forEach((fn) => fn(event)),
+        }
+        elements.set(id, stub)
+      }
+      return stub
+    }
+    class FakeFileReader {
+      result: ArrayBuffer | null = null
+      onload: (() => void) | null = null
+      readAsArrayBuffer(file: { bytes: ArrayBuffer }) {
+        this.result = file.bytes
+        Promise.resolve().then(() => this.onload?.())
+      }
+    }
+    const context = vm.createContext({
+      window: {
+        parent: { postMessage: (msg: (typeof posted)[number]) => posted.push(msg) },
+        addEventListener: (type: string, fn: Handler) => {
+          ;(windowListeners[type] ??= []).push(fn)
+        },
+      },
+      document: {
+        getElementById: element,
+        documentElement: { classList: { add() {}, remove() {} } },
+      },
+      FileReader: FakeFileReader,
+      crypto: { subtle: { digest: async () => new Uint8Array(32).fill(171).buffer } },
+      btoa: (s: string) => Buffer.from(s, 'binary').toString('base64'),
+      Uint8Array,
+      Map,
+      Promise,
+    })
+    vm.runInContext(script, context)
+    const deliver = (data: unknown) => (windowListeners.message ?? []).forEach((fn) => fn({ data }))
+    const flush = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
+    }
+    const lastCall = (name: string) => [...posted].reverse().find((m) => m.method === 'tools/call' && m.params?.name === name)
+    const dropFile = async () => {
+      element('drop').fire('drop', {
+        preventDefault() {},
+        dataTransfer: { files: [{ name: 'export.se', bytes: new TextEncoder().encode('#FLAGGA 0').buffer }] },
+      })
+      await flush()
+    }
+    // Host handshake first, as every MCP Apps host does.
+    deliver({ jsonrpc: '2.0', id: posted[0].id, result: {} })
+    return { posted, element, deliver, flush, lastCall, dropFile }
+  }
+
+  const preflightReply = (target: typeof CARD_COMPANY) => ({
+    structuredContent: {
+      verdict: 'ok',
+      target_company: target,
+      file: { company_name: 'Syskonbolaget AB', org_number: '556000-0002', fiscal_year: { start: '2026-01-01', end: '2026-12-31' }, voucher_count: 1, account_count: 2 },
+      validation: { valid: true, errors: [], warnings: [], notices: [] },
+      mappings: [{ sourceAccount: '1930', targetAccount: '1930' }],
+    },
+  })
+
+  it('shows the company from the tool result before anything is dropped', () => {
+    const card = boot()
+    expect(card.element('target').hidden()).toBe(true)
+    card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { upload_id: 'u', target_company: CARD_COMPANY } } })
+    expect(card.element('target').hidden()).toBe(false)
+    expect(card.element('target').textContent).toBe('Importeras till Syskonbolaget AB (5560000002).')
+  })
+
+  it('passes the card company to the preflight and the import', async () => {
+    const card = boot()
+    card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { target_company: CARD_COMPANY } } })
+    await card.dropFile()
+
+    const preflight = card.lastCall('gnubok_sie_preflight')!
+    expect(preflight.params!.arguments).toMatchObject({ company_id: CARD_COMPANY.company_id, filename: 'export.se' })
+
+    card.deliver({ jsonrpc: '2.0', id: preflight.id, result: preflightReply(CARD_COMPANY) })
+    await card.flush()
+    expect(card.element('actions').hidden()).toBe(false)
+    expect(card.element('report').innerHTML).toContain('Importeras till')
+    expect(card.element('report').innerHTML).toContain('Syskonbolaget AB (5560000002)')
+
+    card.element('import').click()
+    await card.flush()
+    expect(card.lastCall('gnubok_import_sie')!.params!.arguments).toMatchObject({ company_id: CARD_COMPANY.company_id })
+  })
+
+  it('blocks Importera when the preflight checked another company than the card names', async () => {
+    const card = boot()
+    card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { target_company: CARD_COMPANY } } })
+    await card.dropFile()
+    const preflight = card.lastCall('gnubok_sie_preflight')!
+
+    card.deliver({ jsonrpc: '2.0', id: preflight.id, result: preflightReply(OTHER_COMPANY) })
+    await card.flush()
+    expect(card.element('actions').hidden()).toBe(true)
+    expect(card.element('report').innerHTML).toContain('Fel företag')
+    expect(card.element('report').innerHTML).toContain('Kontrollen kördes för Nuvarande AB')
+  })
+
+  // crm#1544: a newer export of a year already imported. The preflight
+  // answers duplicate with the append plan; the card offers only the new
+  // verifikat, and stages the import with on_existing_year=append.
+  const appendReply = (append: Record<string, unknown>) => {
+    const reply = preflightReply(CARD_COMPANY)
+    return { structuredContent: { ...reply.structuredContent, verdict: 'duplicate', duplicate: { kind: 'period', import_id: 'base' }, append } }
+  }
+  const PLAN = {
+    base_import_id: 'base', counts: { total: 12, present: 10, conflicts: 0, possibleDuplicates: 0, new: 2, toAdd: 2 },
+    vouchers: [], series: [], warnings: [], refusal: null,
+  }
+  async function preflightWith(result: unknown) {
+    const card = boot()
+    card.deliver({ jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { structuredContent: { target_company: CARD_COMPANY } } })
+    await card.dropFile()
+    card.deliver({ jsonrpc: '2.0', id: card.lastCall('gnubok_sie_preflight')!.id, result })
+    await card.flush()
+    return card
+  }
+
+  it('offers to add only the new verifikat of an imported year, and stages an append', async () => {
+    const card = await preflightWith(appendReply(PLAN))
+    expect(card.element('actions').hidden()).toBe(false)
+    expect(card.element('import').textContent).toBe('Lägg till 2 nya verifikat')
+    const report = card.element('report').innerHTML
+    expect(report).toContain('Året är redan importerat: nya verifikat kan läggas till')
+    expect(report).toContain('Redan bokförda</span><span class="v">10')
+    expect(report).toContain('Nya</span><span class="v">2')
+
+    card.element('import').click()
+    await card.flush()
+    expect(card.lastCall('gnubok_import_sie')!.params!.arguments).toMatchObject({ on_existing_year: 'append', company_id: CARD_COMPANY.company_id })
+  })
+
+  it('keeps the button away when the append is refused, and shows why', async () => {
+    const card = await preflightWith(appendReply({ ...PLAN, refusal: { code: 'SIE_IMPORT_APPEND_CONFLICT', message: '1 av filens verifikationer har ändrats: A7.' } }))
+    expect(card.element('actions').hidden()).toBe(true)
+    expect(card.element('report').innerHTML).toContain('Redan importerad')
+    expect(card.element('report').innerHTML).toContain('1 av filens verifikationer har ändrats: A7.')
+  })
+
+  it('keeps the button away when nothing is new, and an identical file stays a duplicate', async () => {
+    for (const append of [{ ...PLAN, counts: { ...PLAN.counts, present: 12, new: 0, toAdd: 0 } }, undefined]) {
+      const card = await preflightWith(appendReply(append as Record<string, unknown>))
+      expect(card.element('actions').hidden()).toBe(true)
+      expect(card.element('report').innerHTML).toContain('Redan importerad')
+    }
+  })
+
+  it('says the possible duplicates are left out and where to include them', async () => {
+    const card = await preflightWith(appendReply({ ...PLAN, counts: { ...PLAN.counts, possibleDuplicates: 3 } }))
+    expect(card.element('report').innerHTML).toContain('3 verifikat liknar redan bokförda och läggs inte till.')
+    expect(card.element('report').innerHTML).toContain('app.accounted.se/import?mode=sie')
+  })
+
+  it('stages an ordinary import of a new year without on_existing_year', async () => {
+    const card = await preflightWith(preflightReply(CARD_COMPANY))
+    expect(card.element('import').textContent).toBe('Importera')
+    card.element('import').click()
+    await card.flush()
+    expect(card.lastCall('gnubok_import_sie')!.params!.arguments).not.toHaveProperty('on_existing_year')
+  })
+
+  it('without a tool result it sends no company_id and shows the company the server checked', async () => {
+    const card = boot()
+    await card.dropFile()
+    const preflight = card.lastCall('gnubok_sie_preflight')!
+    expect(preflight.params!.arguments).not.toHaveProperty('company_id')
+
+    card.deliver({ jsonrpc: '2.0', id: preflight.id, result: preflightReply(OTHER_COMPANY) })
+    await card.flush()
+    expect(card.element('report').innerHTML).toContain('Importeras till</span><span class="v">Nuvarande AB (5560000001)')
+    expect(card.element('actions').hidden()).toBe(false)
+  })
+})
+
+// crm#1455 follow-up: the card sends the file as base64 inside tools/call,
+// under the platform's request cap on hosted. A larger file got a bare
+// failure; the card now says so before reading it and tells the agent the
+// direct Storage upload.
+describe('SIE drop widget: files over what the card can carry', () => {
+  const html = findUiWidget('ui://sie-drop/app.html')!.html
+
+  it('derives its limit from the tool result: 3/4 of max_bytes where direct_upload_url is offered', () => {
+    expect(html).toContain('sc.direct_upload_url && typeof sc.max_bytes')
+    expect(html).toContain('inlineMaxBytes = Math.floor(sc.max_bytes * 3 / 4)')
+  })
+
+  it('stops before reading the file, tells the user where to import it and the agent how to upload it', () => {
+    const guard = html.indexOf('if (inlineMaxBytes && file.size > inlineMaxBytes)')
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(html.indexOf('new FileReader()'))
+    expect(html).toContain('app.accounted.se/import?mode=sie')
+    expect(html).toContain('PUT filens exakta bytes till direct_upload_url')
   })
 })

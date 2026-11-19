@@ -10,18 +10,29 @@ import {
   SettingsInput,
   SettingsReveal,
   SettingsRow,
+  SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import { formatAmount } from '@/lib/utils'
+import type { KuSignalTrigger } from '@/lib/tax/ku-signal'
 import type { CompanySettings } from '@/types'
 
 interface TaxSettingsFormProps {
   settings: CompanySettings
-  /** Ledger-derived signal: EU sales postings exist (3108/3308/3107). */
+  /** Ledger-derived signal: EU sales in the declaration's rutor 35/38/39. */
   euSalesDetected?: boolean
-  /** Ledger-derived signal: utdelning/ägarlån postings exist (2898/2393/2893). */
-  kuSignalDetected?: boolean
+  /** Ledger-derived signal: EU purchases in the declaration's rutor 20/21/37. */
+  euPurchasesDetected?: boolean
+  /** Ledger-derived signal: what calls for kontrolluppgifter (interest on an ägarlån, utdelning). */
+  kuTriggers?: KuSignalTrigger[]
   /** Invoice-derived signal: invoices with ROT/RUT deductions exist. */
   rotRutSignalDetected?: boolean
+  /**
+   * The form Bolagsverket registers the company as, when it is one Accounted
+   * cannot represent yet (a handelsbolag or kommanditbolag set up as another
+   * form): named beside the form the books follow (PH 237).
+   */
+  registryFormLabel?: string | null
 }
 
 /**
@@ -31,7 +42,7 @@ interface TaxSettingsFormProps {
  */
 function SignalLine({ text, help }: { text: string; help: React.ReactNode }) {
   return (
-    <p className="flex items-center gap-2 border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-attn">
+    <p className="flex items-center gap-2 border-b-hairline px-1 py-3 text-xs leading-relaxed text-attn">
       <span>{text}</span>
       <HelpPopover className="shrink-0">{help}</HelpPopover>
     </p>
@@ -41,8 +52,10 @@ function SignalLine({ text, help }: { text: string; help: React.ReactNode }) {
 export function TaxSettingsForm({
   settings,
   euSalesDetected = false,
-  kuSignalDetected = false,
+  euPurchasesDetected = false,
+  kuTriggers = [],
   rotRutSignalDetected = false,
+  registryFormLabel = null,
 }: TaxSettingsFormProps) {
   const t = useTranslations('settings_tax_form')
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
@@ -77,9 +90,15 @@ export function TaxSettingsForm({
                   enskild_firma: t('entity_enskild_firma'),
                   ideell_forening: t('entity_ideell_forening'),
                   ekonomisk_forening: t('entity_ekonomisk_forening'),
+                  bostadsrattsforening: t('entity_bostadsrattsforening'),
                 })
               : ''}
           </span>
+          {registryFormLabel && (
+            <SettingsRowNote className="basis-full">
+              {t('entity_registry_unsupported', { registry: registryFormLabel })}
+            </SettingsRowNote>
+          )}
         </SettingsRow>
 
         <SettingsRow label={t('f_skatt_label')} htmlFor="f_skatt" help={t('f_skatt_help')}>
@@ -113,6 +132,14 @@ export function TaxSettingsForm({
           <SignalLine
             text={t('eu_trade_suggestion_title')}
             help={t('eu_trade_suggestion_help')}
+          />
+        )}
+        {/* EU purchases alone change only the helårsmoms date, so the
+            prompt is for yearly filers; sales are covered by the line above. */}
+        {euPurchasesDetected && !euSalesDetected && vatRegistered && momsPeriod === 'yearly' && !hasEuTrade && (
+          <SignalLine
+            text={t('eu_purchase_suggestion_title')}
+            help={t('eu_purchase_suggestion_help')}
           />
         )}
 
@@ -305,8 +332,22 @@ export function TaxSettingsForm({
       {/* Fiscal year & salaries */}
       {/* Kontrolluppgifter (KU) */}
       <SettingsGroup label={t('kontrolluppgifter_heading')}>
-        {kuSignalDetected && !kuEnabled && (
-          <SignalLine text={t('ku_suggestion_title')} help={t('ku_suggestion_help')} />
+        {kuTriggers.length > 0 && !kuEnabled && (
+          <SignalLine
+            text={kuTriggers
+              .map((trigger) =>
+                trigger.kind === 'owner_loan_interest'
+                  ? t('ku_suggestion_interest', {
+                      amount: formatAmount(trigger.amount),
+                      year: trigger.year,
+                      interest_accounts: trigger.interest_accounts.join(', '),
+                      loan_accounts: trigger.loan_accounts.join(', '),
+                    })
+                  : t('ku_suggestion_dividend', { amount: formatAmount(trigger.amount) }),
+              )
+              .join(' ')}
+            help={t('ku_suggestion_help')}
+          />
         )}
 
         <SettingsRow

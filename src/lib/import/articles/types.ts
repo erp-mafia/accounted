@@ -1,6 +1,18 @@
 import type { ArticleType } from '@/types'
 import type { ImportNotice } from '@/lib/import/notices'
 
+/**
+ * Keys per POST /api/import/articles/match, by count and by size; the
+ * browser sends a larger file in as many batches as it needs. A key is about
+ * 30 bytes of JSON plus its number and name, and its answer about 105 bytes
+ * plus the matched article's name. Counting rows alone let a re-import of a
+ * price list with long names (every row matched) answer past the hosted
+ * 4.5 MB limit; with the request held to 2 MB the answer stays near
+ * 72 bytes per key plus the request, about 3.4 MB at the row cap.
+ */
+export const ARTICLE_MATCH_MAX_ROWS = 20_000
+export const ARTICLE_MATCH_MAX_BYTES = 2 * 1024 * 1024
+
 /** Result of auto-detecting columns in an article register file. */
 export interface DetectedArticleColumns {
   name_col: number

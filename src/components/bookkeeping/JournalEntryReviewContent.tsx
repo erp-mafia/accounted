@@ -1,9 +1,12 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
-import { AccountNumber } from '@/components/ui/account-number'
-import { CheckCircle2, Paperclip } from 'lucide-react'
-import { formatAmount, formatDate } from '@/lib/utils'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
+import { CheckCircleIcon, PaperClipIcon } from '@/components/icons'
+import { formatDate } from '@/lib/utils'
+import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
 
 interface ReviewLine {
   account_number: string
@@ -19,8 +22,6 @@ interface JournalEntryReviewContentProps {
   notes?: string
   voucherSeries?: string
   lines: ReviewLine[]
-  totalDebit: number
-  totalCredit: number
   attachmentCount?: number
   showBalanceBadge?: boolean
   hideDate?: boolean
@@ -33,12 +34,11 @@ export function JournalEntryReviewContent({
   notes,
   voucherSeries,
   lines,
-  totalDebit,
-  totalCredit,
   attachmentCount,
   showBalanceBadge = true,
   hideDate = false,
 }: JournalEntryReviewContentProps) {
+  const t = useTranslations('journal_form')
   const activeLines = lines.filter(
     (l) => l.account_number && (l.debit_amount || l.credit_amount)
   )
@@ -49,29 +49,29 @@ export function JournalEntryReviewContent({
       <div className="bg-muted rounded-lg p-4 space-y-2">
         <div className={`grid gap-4 text-sm ${hideDate && !voucherSeries ? 'grid-cols-1' : hideDate || !voucherSeries ? 'grid-cols-2' : 'grid-cols-3'}`}>
           <div>
-            <span className="text-muted-foreground">Räkenskapsår</span>
-            <p className="font-medium">{periodName}</p>
+            <span className="text-muted-foreground">{t('fiscal_year')}</span>
+            <p className="font-medium">{fiscalYearShortName(periodName)}</p>
           </div>
           {!hideDate && (
             <div>
-              <span className="text-muted-foreground">Datum</span>
+              <span className="text-muted-foreground">{t('date')}</span>
               <p className="font-medium">{formatDate(entryDate)}</p>
             </div>
           )}
           {voucherSeries && (
             <div>
-              <span className="text-muted-foreground">Serie</span>
+              <span className="text-muted-foreground">{t('series')}</span>
               <p className="font-medium font-mono">{voucherSeries}</p>
             </div>
           )}
         </div>
         <div className="text-sm">
-          <span className="text-muted-foreground">Beskrivning</span>
+          <span className="text-muted-foreground">{t('description')}</span>
           <p className="font-medium">{description}</p>
         </div>
         {notes && (
           <div className="text-sm">
-            <span className="text-muted-foreground">Intern anteckning</span>
+            <span className="text-muted-foreground">{t('internal_note')}</span>
             <p className="text-muted-foreground italic">{notes}</p>
           </div>
         )}
@@ -82,84 +82,26 @@ export function JournalEntryReviewContent({
         <div className="flex items-center gap-2">
           {showBalanceBadge && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Debet = Kredit
+              <CheckCircleIcon className="h-3.5 w-3.5" />
+              {t('review_balanced')}
             </span>
           )}
           {attachmentCount != null && attachmentCount > 0 && (
             <Badge variant="outline">
-              <Paperclip className="h-3 w-3 mr-1" />
-              {attachmentCount} underlag
+              <PaperClipIcon className="h-3 w-3 mr-1" />
+              {t('review_attachments', { count: attachmentCount })}
             </Badge>
           )}
         </div>
       )}
 
-      {/* Debit/Credit: table on desktop, cards on mobile */}
-      <div className="hidden sm:block">
-        <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-            <tr className="border-b text-left">
-              <th className="py-2 w-24">Konto</th>
-              <th className="py-2">Beskrivning</th>
-              <th className="py-2 w-28 text-right">Debet</th>
-              <th className="py-2 w-28 text-right">Kredit</th>
-            </tr>
-          </thead>
-          <tbody>
-            {activeLines.map((line, index) => (
-              <tr key={index} className="border-b last:border-0">
-                <td className="py-2">
-                  <AccountNumber number={line.account_number} />
-                </td>
-                <td className="py-2 text-muted-foreground">
-                  {line.line_description || ''}
-                </td>
-                <td className="py-2 text-right">
-                  {parseFloat(line.debit_amount) > 0
-                    ? formatAmount(parseFloat(line.debit_amount))
-                    : ''}
-                </td>
-                <td className="py-2 text-right">
-                  {parseFloat(line.credit_amount) > 0
-                    ? formatAmount(parseFloat(line.credit_amount))
-                    : ''}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="font-semibold border-t-2">
-              <td colSpan={2} className="py-2">Summa</td>
-              <td className="py-2 text-right text-success">{formatAmount(totalDebit)}</td>
-              <td className="py-2 text-right text-success">{formatAmount(totalCredit)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-      <div className="sm:hidden space-y-1.5">
-        {activeLines.map((line, index) => (
-          <div key={index} className="flex items-center justify-between py-2 border-b last:border-0 text-sm">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <AccountNumber number={line.account_number} />
-                {line.line_description && (
-                  <span className="text-muted-foreground text-xs truncate">{line.line_description}</span>
-                )}
-              </div>
-            </div>
-            <span className="font-mono text-sm shrink-0 ml-2">
-              {parseFloat(line.debit_amount) > 0
-                ? `D ${formatAmount(parseFloat(line.debit_amount))}`
-                : `K ${formatAmount(parseFloat(line.credit_amount))}`}
-            </span>
-          </div>
-        ))}
-        <div className="flex justify-between pt-2 border-t-2 font-semibold text-sm">
-          <span>Summa</span>
-          <span className="text-success">D {formatAmount(totalDebit)} / K {formatAmount(totalCredit)}</span>
-        </div>
-      </div>
+      {/* The rows to be posted, with their Summa (the voucher lines table
+          every booking surface uses). */}
+      <VoucherLinesTable
+        lines={voucherLineViews(activeLines)}
+        redundantTexts={[description]}
+        showTotals
+      />
     </div>
   )
 }

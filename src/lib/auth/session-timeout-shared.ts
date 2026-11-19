@@ -7,6 +7,21 @@ export const SESSION_TIMEOUT_REASON_HEADER = 'x-session-timeout-reason'
 export type SessionAuthMethod = 'password' | 'bankid'
 export type SessionTimeoutReason = 'idle' | 'absolute'
 
+/**
+ * The /login `reason` for a session that ended other than by a timeout:
+ * signed out on another device, removed, its refresh token refused. The
+ * proxy sends it when a page request brings a session that is gone, the
+ * dashboard's session guard when an open tab finds out, and /login says
+ * that the sign-in has ended.
+ */
+export const SESSION_ENDED_REASON = 'ended'
+
+/**
+ * The /login `reason` after "Logga ut från alla enheter" that the auth server
+ * did not confirm: this browser is signed out, the other devices may not be.
+ */
+export const SIGN_OUT_EVERYWHERE_UNCONFIRMED_REASON = 'everywhere_unconfirmed'
+
 export interface SessionTimeoutClientState {
   enabled: boolean
   idleTimeoutMs: number
@@ -48,11 +63,4 @@ export function notifySessionExpired(response: Response): boolean {
     channel.close()
   }
   return true
-}
-
-export function setSessionAuthMethodHint(method: SessionAuthMethod): void {
-  if (typeof document === 'undefined') return
-
-  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
-  document.cookie = `${SESSION_AUTH_METHOD_HINT_COOKIE}=${method}; Path=/; Max-Age=300; SameSite=Lax${secure}`
 }

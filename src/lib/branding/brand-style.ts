@@ -16,7 +16,7 @@
  *     they beat every one of the above in their own mode without relying on
  *     stylesheet order.
  *   - the sidebar block defines variables directly ON the sidebar element
- *     (`.bg-frame > aside`), and element-level custom properties always beat
+ *     (`nav[data-shell-rail]`, the icon rail), and element-level custom properties always beat
  *     inherited ones, whatever the specificity of the root declarations.
  *
  * No brand (or a brand whose color fails the accessibility gate) means the
@@ -83,7 +83,8 @@ export function hexToHslTriplet(hex: string): string | null {
 }
 
 // Sidebar tokens on deep chrome (WL-02 round 2: deep-branded chrome needs
-// light sidebar text). The sidebar consumes --foreground, --muted-foreground,
+// light sidebar text). The sidebar consumes --foreground, --strong (the
+// active area's icon and name, the create button), --muted-foreground,
 // --primary (active items), --primary-foreground, --secondary (hover/active
 // chips), --muted (count badges) and --border (trial box, hairlines); this is
 // the minimal set that keeps it readable on the deep tone. Lightness values
@@ -166,6 +167,9 @@ export function buildBrandVarsCss(brand: Pick<Brand, 'brandColor' | 'chromeColor
 
   const sidebarVars = [
     `  --foreground: ${SIDEBAR_FOREGROUND};`,
+    // The rail draws the active area and the plus in the strong ink, which
+    // is near black in the light theme: unreadable on the deep tone.
+    `  --strong: ${SIDEBAR_FOREGROUND};`,
     `  --muted-foreground: ${SIDEBAR_MUTED_FOREGROUND};`,
     `  --primary: ${SIDEBAR_FOREGROUND};`,
     `  --primary-foreground: ${chromeTriplet};`,
@@ -190,10 +194,10 @@ export function buildBrandVarsCss(brand: Pick<Brand, 'brandColor' | 'chromeColor
     `  --primary-foreground: ${chromeTriplet};`,
   ].join('\n')
 
-  // `.bg-frame > aside` is the dashboard sidebar: DashboardNav's <aside> is a
-  // direct child of the frame wrapper in every shell variant of
-  // app/(dashboard)/layout.tsx. `bg-frame` is a locked design-system class
-  // (.claude/rules/design.md), so the selector is stable.
+  // The icon rail is the part of the shell that sits on the frame (the area
+  // sidebar is inside the white page panel), so the deep-chrome tokens are
+  // scoped to it. The hook is the data-shell-rail attribute ShellRail stamps
+  // on the rail (a class would couple this block to Tailwind utility names).
   return [
     'html[data-brand]:not(.dark) {',
     brandVars,
@@ -201,7 +205,7 @@ export function buildBrandVarsCss(brand: Pick<Brand, 'brandColor' | 'chromeColor
     'html[data-brand].dark {',
     darkBrandVars,
     '}',
-    'html[data-brand] .bg-frame > aside {',
+    'html[data-brand] nav[data-shell-rail] {',
     sidebarVars,
     '}',
     'html[data-brand] nav[data-mobile-nav] {',

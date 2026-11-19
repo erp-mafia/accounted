@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getRegistry, getConcept, mustGetConcept } from '../registry'
-import { getEntryPoint, resolveEntryPoint, K2_AB_RISBS_2024_09_12 } from '../entry-points'
+import { getEntryPoint, resolveEntryPoint, K2_AB_RISBS_2024_09_12, K3_AB_RISBS_2021_10_31 } from '../entry-points'
 
 describe('taxonomy registry (k2-ab-2024-09-12)', () => {
   const registry = getRegistry('k2-ab-2024-09-12')
@@ -97,7 +97,16 @@ describe('entry points', () => {
     expect(ns['se-gaap-ext']).toBe('http://www.taxonomier.se/se/fr/gaap/gaap-ext/2024-09-12')
   })
 
-  it('rejects K3 with an actionable message', () => {
+  it('rejects K3 with an actionable message while the K3 document is off', () => {
     expect(() => resolveEntryPoint('k3')).toThrow(/K3/)
+    expect(() => resolveEntryPoint('k3', { k3Enabled: false })).toThrow(/inget iXBRL-dokument för K3/)
+  })
+
+  it('resolves K3 to the K3 AB risbs entry point once the K3 document is on', () => {
+    const ep = resolveEntryPoint('k3', { k3Enabled: true })
+    expect(ep).toBe(K3_AB_RISBS_2021_10_31)
+    expect(ep.regelverk).toBe('K3')
+    expect(ep.schemaRefs[0]).toContain('gaap/k3/risbs/2021-10-31')
+    expect(resolveEntryPoint('k2', { k3Enabled: true })).toBe(K2_AB_RISBS_2024_09_12)
   })
 })

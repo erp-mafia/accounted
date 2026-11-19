@@ -2,7 +2,8 @@
  * The agent path for a supplier's credit note in the inbox (issue #2980):
  * gnubok_create_supplier_invoice_from_inbox stages nothing for a credit note
  * and hands over to gnubok_credit_supplier_invoice with the inbox item, which
- * refuses at staging what the commit would refuse (a partial credit note).
+ * refuses at staging what the commit would refuse (a partial credit note, an
+ * invoice whose rows do not add up to it).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CreditTargetResolution, CreditTargetCandidate } from '@/lib/supplier-invoices/credit-target'
@@ -56,7 +57,10 @@ function client(row: Record<string, unknown> | null, inserts: Array<{ table: str
         get(_t, prop) {
           if (prop === 'then') return (resolve: (v: unknown) => void) => resolve({ data: row, error: null })
           if (prop === 'single' || prop === 'maybeSingle') {
-            return () => Promise.resolve(table === 'pending_operations' ? { data: { id: 'op-1' }, error: null } : { data: row, error: null })
+            if (table === 'pending_operations') return () => Promise.resolve({ data: { id: 'op-1' }, error: null })
+            // The credit refuses a settings row it cannot read (accounted#58).
+            if (table === 'company_settings') return () => Promise.resolve({ data: { accounting_method: 'accrual' }, error: null })
+            return () => Promise.resolve({ data: row, error: null })
           }
           return (...args: unknown[]) => {
             if (prop === 'insert') inserts.push({ table, payload: args[0] })
@@ -177,6 +181,55 @@ describe('gnubok_credit_supplier_invoice', () => {
     expect(schema.required).toEqual(['supplier_invoice_id'])
   })
 
+  it('declares credit_date, the service\'s own date field (crm#1733)', () => {
+    const schema = tool.inputSchema as { properties: Record<string, unknown> }
+    expect(schema.properties).toHaveProperty('credit_date')
+  })
+
+  it('passes credit_date to the dry run and stages it for the approval (crm#1733)', async () => {
+    creditMock.mockResolvedValue({
+      ok: true,
+      dryRun: true,
+      preview: {
+        credit_note: { supplier_invoice_number: 'KREDIT-10234', total: 10000, currency: 'SEK' },
+        original_supplier_invoice_number: '10234',
+        supplier_name: 'Programvara AB',
+        credit_date: '2026-09-12',
+        date_source: 'input',
+        would_create_reversal_journal_entry: true,
+      },
+    })
+    const inserts: Array<{ table: string; payload: unknown }> = []
+
+    const result = (await tool.execute(
+      { supplier_invoice_id: INVOICE_ID, credit_date: '2026-09-12' },
+      'company-1',
+      'user-1',
+      client({ id: 'fp-1', is_closed: false, locked_at: null }, inserts),
+    )) as { staged: boolean }
+
+    expect(creditMock).toHaveBeenCalledWith(expect.anything(), INVOICE_ID, { credit_date: '2026-09-12' }, { dryRun: true })
+    const staged = inserts.find((i) => i.table === 'pending_operations')?.payload as {
+      params: Record<string, unknown>
+      preview_data: Record<string, unknown>
+    }
+    expect(staged.params).toEqual({ supplier_invoice_id: INVOICE_ID, credit_date: '2026-09-12' })
+    expect(staged.preview_data).toMatchObject({ credit_date: '2026-09-12', credit_date_source: 'input' })
+    expect(result.staged).toBe(true)
+  })
+
+  it('refuses a credit_date that is not yyyy-MM-dd before the service is asked', async () => {
+    let thrown: unknown
+    try {
+      await tool.execute({ supplier_invoice_id: INVOICE_ID, credit_date: '12/09/2026' }, 'company-1', 'user-1', client(null))
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeDefined()
+    expect(JSON.stringify(toToolError(thrown))).toContain('credit_date')
+    expect(creditMock).not.toHaveBeenCalled()
+  })
+
   it('stages the credit with the inbox item and the credit note\'s own date', async () => {
     creditMock.mockResolvedValue({
       ok: true,
@@ -220,5 +273,54 @@ describe('gnubok_credit_supplier_invoice', () => {
     expect(thrown).toBeDefined()
     const envelope = toToolError(thrown) as { structuredContent?: { error?: { code?: string } } }
     expect(JSON.stringify(envelope)).toContain('SI_CREDIT_PARTIAL')
+  })
+
+  it('refuses at staging an invoice whose rows do not add up to it, so no credit is promised and then refused at approval', async () => {
+    // The real service, as the approval runs it: the dry run the tool stages
+    // from holds the rows to the invoice's payable. A header without rows (a
+    // migrated invoice) gives the reversal nothing to take off 2440.
+    const { creditSupplierInvoice: realCredit } =
+      await vi.importActual<typeof import('@/lib/supplier-invoices/credit')>('@/lib/supplier-invoices/credit')
+    creditMock.mockImplementationOnce(realCredit)
+    const original = {
+      id: INVOICE_ID,
+      supplier_id: 'sup-1',
+      supplier_invoice_number: '10234',
+      arrival_number: 12,
+      invoice_date: '2026-09-01',
+      status: 'approved',
+      currency: 'SEK',
+      exchange_rate: null,
+      subtotal: 8000,
+      vat_amount: 2000,
+      total: 10000,
+      total_sek: 10000,
+      vat_treatment: 'standard_25',
+      reverse_charge: false,
+      is_credit_note: false,
+      supplier: { id: 'sup-1', name: 'Programvara AB', supplier_type: 'swedish_business' },
+      items: [],
+    }
+    const inserts: Array<{ table: string; payload: unknown }> = []
+    const db = client(original, inserts)
+
+    let thrown: unknown
+    try {
+      await tool.execute({ supplier_invoice_id: INVOICE_ID }, 'company-1', 'user-1', db)
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(creditMock).toHaveBeenCalledWith(expect.anything(), INVOICE_ID, {}, { dryRun: true })
+    expect(thrown).toMatchObject({
+      code: 'SI_CREDIT_ROWS_MISMATCH',
+      details: { rows_payable_sek: 0, invoice_payable_sek: 10000 },
+    })
+    const envelope = JSON.stringify(toToolError(thrown))
+    expect(envelope).toContain('SI_CREDIT_ROWS_MISMATCH')
+    expect(envelope).toContain('gnubok_link_supplier_invoice_to_voucher')
+    // Nothing staged, nothing written, no ankomstnummer drawn.
+    expect(inserts).toEqual([])
+    expect((db as { rpc: ReturnType<typeof vi.fn> }).rpc).not.toHaveBeenCalled()
   })
 })

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MAX_BANK_ROW_SPLIT, MAX_LINK_REQUEST_ENTRIES } from './limits'
 
 /**
  * Shared shapes for the account-keyed reconciliation surface.
@@ -24,22 +25,50 @@ export const AccountKeySchema = z.string().regex(ACCOUNT_KEY_REGEX, 'Ogiltig acc
 
 export const ReconciliationKindSchema = z.enum(['bank', 'skattekonto', 'manual'])
 
-/** One link request: outside rows against verifikat (N:1), or a bank 1:N with allocations. */
-export const ReconciliationPairSchema = z.object({
-  external_ids: z.array(z.string().uuid()).min(1).max(50),
-  journal_entry_ids: z.array(z.string().uuid()).min(1).max(50),
-  // Bank 1:N only: the signed slice per verifikat (transaction sign
-  // convention). Omitted: each slice defaults to the voucher's bank line.
-  allocations: z
-    .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
-    .min(2)
-    .max(50)
-    .optional(),
-})
+/**
+ * One link request: outside rows against verifikat (N:1, on the skattekonto
+ * optionally with a remainder), one row against several verifikat (1:N: bank
+ * with optional allocations, skattekonto at the open amounts), or, on a bank
+ * account, NO outside rows and two or more
+ * verifikat that take each other out on the account (a wrong verifikat and
+ * the rättelse booked by hand: lib/reconciliation/ledger-settlement.ts).
+ */
+export const ReconciliationPairSchema = z
+  .object({
+    // Empty or omitted only for the ledger-only shape.
+    external_ids: z.array(z.string().uuid()).max(50).default([]),
+    // Up to MAX_BANK_ROW_SPLIT for a bank 1:N split; the other shapes carry
+    // one verifikat, or are capped by their own engine (ledger-settlement.ts).
+    journal_entry_ids: z.array(z.string().uuid()).min(1).max(MAX_BANK_ROW_SPLIT),
+    // 1:N only: the signed slice per verifikat (the row's sign convention).
+    // Bank, omitted: each slice defaults to the voucher's bank line.
+    // Skattekonto: must equal each verifikat's open amount on 1630.
+    allocations: z
+      .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
+      .min(2)
+      .max(MAX_BANK_ROW_SPLIT)
+      .optional(),
+    // Skattekonto only: link although the rows do not settle the verifikat's
+    // 1630 movement (a summarised verifikat that books more events than these).
+    // What the rows do not explain stays on the verifikat as its remainder.
+    allow_remainder: z.boolean().optional(),
+  })
+  .refine((pair) => pair.external_ids.length > 0 || pair.journal_entry_ids.length >= 2, {
+    path: ['external_ids'],
+    message:
+      'Ange minst en händelse i external_ids, eller minst två verifikat i journal_entry_ids som tar ut varandra på kontot.',
+  })
 
 /** Body fields shared by the dashboard and v1 POST .../links routes (spread into z.object). */
 export const reconciliationLinksBodyFields = {
-  pairs: z.array(ReconciliationPairSchema).max(200).optional(),
+  pairs: z
+    .array(ReconciliationPairSchema)
+    .max(200)
+    .refine(
+      (pairs) => pairs.reduce((sum, p) => sum + p.journal_entry_ids.length, 0) <= MAX_LINK_REQUEST_ENTRIES,
+      { message: `Högst ${MAX_LINK_REQUEST_ENTRIES} verifikat per anrop, sammanlagt över alla par.` },
+    )
+    .optional(),
   use_proposals: z.boolean().optional(),
   confidence_threshold: z.number().min(0).max(1).optional(),
 }
@@ -148,6 +177,10 @@ export const ReconciliationAccountSchema = z.object({
   superseded_by: AccountKeySchema.nullable(),
   /** through_date of the latest active sign-off, null when the account was never signed off. */
   signed_off_through: z.string().nullable().optional(),
+  /** Balance the outside last reported (bank or Skatteverket saldo); null when unknown, absent for manual accounts. */
+  balance: z.number().nullable().optional(),
+  /** ISO timestamp of that balance; null when unknown. */
+  balance_at: z.string().nullable().optional(),
 })
 export type ReconciliationAccount = z.infer<typeof ReconciliationAccountSchema>
 
@@ -170,6 +203,16 @@ export const ReconciliationItemBucketSchema = z.enum([
   'matched',
   'ignored',
   'upcoming',
+  /**
+   * Only when asked for by name: rows dated before history_start, outside
+   * the bridge and its counts. Skattekonto: open rows (not linked, not
+   * ignored) the 1630 ingående balans carries (crm#1153), listed so an agent
+   * can link them to the imported verifikat (a standing proposal rides
+   * along) or ignore them. Bank: verifikat with no bank link dated before the
+   * first day the bank side covers (bank.history_start, crm#1221); no bank
+   * row can match them until older bank history is imported.
+   */
+  'before_history',
 ])
 export type ReconciliationItemBucket = z.infer<typeof ReconciliationItemBucketSchema>
 
@@ -207,8 +250,8 @@ export const ReconciliationProposalSchema = z.object({
    * is linked to all of them (1:N) and journal_entry_id is the first. Length 1
    * is one voucher of the exact amount the 1:1 matcher missed (dated 4 to 7
    * days off). Absent on persisted 1:1 proposals. Apply with explicit pairs
-   * (journal_entry_ids = every voucher); use_proposals reads the persisted
-   * column only.
+   * (journal_entry_ids = every voucher) or use_proposals, which links the
+   * listing's own proposals (crm#1668).
    */
   vouchers: z.array(ReconciliationProposalVoucherSchema).min(1).optional(),
   /**
@@ -221,6 +264,34 @@ export const ReconciliationProposalSchema = z.object({
   external_ids: z.array(z.string()).min(2).optional(),
 })
 export type ReconciliationProposal = z.infer<typeof ReconciliationProposalSchema>
+
+/**
+ * A ledger-only settlement a verifikat belongs to: verifikat on the account
+ * that take each other out (a wrong verifikat and its hand-made rättelse).
+ */
+export const ReconciliationSettlementSchema = z.object({
+  /** Undo with DELETE .../links/{settlement_id}, or reconcile_unmatch with settlement_id. */
+  settlement_id: z.string(),
+  /**
+   * settled: the settlement holds and the verifikat is listed under matched.
+   * broken: another verifikat of it has since been linked to a bank row,
+   * makulerat or changed, so this one is unmatched again until the settlement
+   * is undone.
+   */
+  state: z.enum(['settled', 'broken']),
+  settled_at: z.string(),
+  settled_by: z.string(),
+  /** The other verifikat of the settlement, each with the amount it was settled at (debit positive). */
+  counterparts: z.array(
+    z.object({
+      journal_entry_id: z.string(),
+      voucher_series: z.string().nullable(),
+      voucher_number: z.number().int().nullable(),
+      entry_date: z.string().nullable(),
+      amount: z.number(),
+    }),
+  ),
+})
 
 export const ReconciliationItemSchema = z.object({
   /** Qualified id of the row on its side: skattekonto_transaction_id, transaction_id or journal_entry_id. */
@@ -253,13 +324,74 @@ export const ReconciliationItemSchema = z.object({
   proposal: ReconciliationProposalSchema.nullable().optional(),
   /** Ledger line dated within AWAITING_EXTERNAL_DAYS of the snapshot: the outside side may simply not have posted it yet. */
   awaiting_external: z.boolean().optional(),
+  /**
+   * Bank ledger rows only: the verifikat could be the account's opening
+   * balance (booked manually or by import, dated on its fiscal year's first
+   * day, no bank link), so "Märk som IB" applies. False for a verifikat dated
+   * in the year: a rättelse or payment is a movement, never an IB.
+   */
+  ib_eligible: z.boolean().optional(),
+  /**
+   * Skattekonto ledger rows only: Skatteverket rows are linked to this
+   * verifikat without explaining all of it (a summarised verifikat, or one
+   * matched line of several on 1630). `amount` is then what remains:
+   * entry_amount - linked_amount, in ledger sign, of either sign.
+   */
+  partially_linked: z
+    .object({
+      /** The verifikat's whole net on 1630. */
+      entry_amount: z.number(),
+      /** Sum of the Skatteverket rows linked to it. */
+      linked_amount: z.number(),
+      linked_count: z.number().int(),
+    })
+    .optional(),
+  /**
+   * Skattekonto ledger rows only: Skatteverket rows point at this verifikat
+   * without being counted in the comparison yet (an upcoming row booked
+   * ahead, or a row dated after the fetched saldo), so `amount` does not
+   * subtract them. A new link to the verifikat is still judged with them on
+   * it and can answer ALREADY_LINKED: unlink a holder by its id when its
+   * link is the wrong one. `amount` is their sum; external_ids lists at most
+   * 20 of them.
+   */
+  held_by_uncounted_rows: z
+    .object({
+      count: z.number().int(),
+      amount: z.number(),
+      external_ids: z.array(z.string()),
+    })
+    .optional(),
+  /**
+   * Skattekonto outside rows only: the event is already in the ledger through
+   * verifikat on 1630 that no row is linked to (see skattekonto.covered).
+   * Link it; booking it would record it a second time.
+   */
+  covered_by_ledger: z.boolean().optional(),
+  /**
+   * Bucket before_history: the row is dated before history_start and counts
+   * in no bridge line. Skattekonto outside row: the ingående balans on 1630
+   * carries it; link it to the verifikat that holds it, or ignore it. Bank
+   * ledger row: the bank has no row that early; import the older history to
+   * match it.
+   */
+  before_history: z.boolean().optional(),
+  /** Ledger rows: the settlement the verifikat is part of, when any (bank, and the skattekonto's 1:N links). */
+  settlement: ReconciliationSettlementSchema.nullable().optional(),
   actions: z.array(ReconciliationItemActionSchema),
 })
 export type ReconciliationItem = z.infer<typeof ReconciliationItemSchema>
 
 export const SkattekontoStatusBlockSchema = z.object({
   saldo_skatteverket: z.number().nullable(),
-  /** ISO timestamp of the saldo snapshot; null when never synced. */
+  /**
+   * Why saldo_skatteverket is null: 'not_connected' when the company has no
+   * Skatteverket connection (a saldo fetched before a disconnect is no
+   * reading either, crm#1701), 'not_fetched' when none was fetched yet.
+   * Null when the saldo is known.
+   */
+  saldo_missing_reason: z.enum(['not_connected', 'not_fetched']).nullable().optional(),
+  /** ISO timestamp of the saldo snapshot; null when never synced or not connected. */
   fetched_at: z.string().nullable(),
   /** Start of the comparable history: the earliest SKV-posted row we hold, or the 1630 IB date when that is later. */
   history_start: z.string().nullable(),
@@ -268,6 +400,35 @@ export const SkattekontoStatusBlockSchema = z.object({
   upcoming_count: z.number().int(),
   upcoming_total: z.number(),
   ledger_balance_before_start: z.number().nullable(),
+  /**
+   * Open Skatteverket rows (not linked, not ignored) dated before
+   * history_start: what the item bucket before_history lists. Outside every
+   * bridge line and count, and out of Att göra: the IB carries them
+   * (crm#1153, crm#2010). Set by the skattekonto engine on every status.
+   */
+  before_history_count: z.number().int().optional(),
+  before_history_total: z.number().optional(),
+  /**
+   * Set when unbooked Skatteverket rows are already in the ledger through
+   * verifikat on 1630 that no row is linked to: every open row dated on or
+   * before through_date. 'events_equal': those verifikat sum exactly to the
+   * rows. 'ledger_agrees': 1630 already equals Skatteverket at that date, so
+   * what the verifikat hold beyond the rows is the opening difference (events
+   * before the fetched history). Booking such a row records it twice: link
+   * the rows to the verifikat instead (allow_remainder when the sums differ).
+   */
+  covered: z
+    .object({
+      through_date: z.string(),
+      kind: z.enum(['events_equal', 'ledger_agrees']),
+      event_count: z.number().int(),
+      event_total: z.number(),
+      /** The unlinked verifikat on 1630 up to through_date, largest first (at most 10). */
+      journal_entry_ids: z.array(z.string()),
+      entry_count: z.number().int(),
+    })
+    .nullable()
+    .optional(),
 })
 
 /** A specification the system keeps for a manual account, in ledger sign (debit positive). */

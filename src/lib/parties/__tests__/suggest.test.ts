@@ -214,6 +214,67 @@ describe('buildSuggestions', () => {
     expect(fortnox!.reason.similar_to).toBeUndefined()
   })
 
+  it('sends a key to the archived party that still holds its org number, not to the alias party that lacks it', () => {
+    // The unique index counts an archived party until it is merged away:
+    // writing its org number onto the alias party is a duplicate key.
+    const byAlias: ExistingParty = { id: 'p-alias', display_name: 'Beijer', org_number: null, alias_keys: ['beijer byggmaterial'], status: 'suggested' }
+    const r = buildSuggestions({
+      observed: [observed({ key: 'beijer byggmaterial' })],
+      evidence: [evidence({ key: 'beijer byggmaterial', docs: 1, orgs: [{ org: ORG, n: 1 }] })],
+      existing: [byAlias],
+      archivedOrgHolders: [{ id: 'p-archived', org_number: ORG }],
+    })
+    expect(r.items[0]!.party_id).toBe('p-archived')
+    expect(r.items[0]!.reason.attach).toBe('org_number')
+  })
+
+  it('keeps one org number on one party when two keys of the same run bring it, whichever comes first', () => {
+    const byAlias: ExistingParty = { id: 'p-alias', display_name: 'Beijer', org_number: null, alias_keys: ['beijer byggmaterial'], status: 'suggested' }
+    const input = {
+      evidence: [
+        evidence({ key: 'beijer byggmaterial', docs: 1, orgs: [{ org: ORG, n: 1 }] }),
+        evidence({ key: 'bb bygg', docs: 1, orgs: [{ org: ORG, n: 1 }] }),
+      ],
+      existing: [byAlias],
+    }
+    for (const keys of [['bb bygg', 'beijer byggmaterial'], ['beijer byggmaterial', 'bb bygg']]) {
+      const r = buildSuggestions({ ...input, observed: keys.map((key) => observed({ key })) })
+      // The new key would otherwise create a party with the number, and the
+      // alias party could then never take it.
+      expect(r.items.map((i) => i.party_id)).toEqual(['p-alias', 'p-alias'])
+      expect(r.items.find((i) => i.key === 'bb bygg')!.reason.attach).toBe('org_number')
+      expect(r.items.find((i) => i.key === 'beijer byggmaterial')!.reason.attach).toBe('alias_key')
+    }
+  })
+
+  it('gives an org number two alias parties both lack to the first, and sends the second key there', () => {
+    const first: ExistingParty = { id: 'p-1', display_name: 'Beijer', org_number: null, alias_keys: ['beijer byggmaterial'], status: 'confirmed' }
+    const second: ExistingParty = { id: 'p-2', display_name: 'BB Bygg', org_number: null, alias_keys: ['bb bygg'], status: 'suggested' }
+    const r = buildSuggestions({
+      observed: [observed({ key: 'beijer byggmaterial' }), observed({ key: 'bb bygg' })],
+      evidence: [
+        evidence({ key: 'beijer byggmaterial', docs: 1, orgs: [{ org: ORG, n: 1 }] }),
+        evidence({ key: 'bb bygg', docs: 1, orgs: [{ org: ORG, n: 1 }] }),
+      ],
+      existing: [first, second],
+    })
+    expect(r.items.map((i) => i.party_id)).toEqual(['p-1', 'p-1'])
+  })
+
+  it('leaves a key on its alias party when that party has another org number of its own', () => {
+    const other: ExistingParty = { id: 'p-other', display_name: 'Beijer', org_number: '5566661012', alias_keys: ['beijer byggmaterial'], status: 'confirmed' }
+    const r = buildSuggestions({
+      observed: [observed({ key: 'beijer byggmaterial' }), observed({ key: 'bb bygg' })],
+      evidence: [
+        evidence({ key: 'beijer byggmaterial', docs: 1, orgs: [{ org: ORG, n: 1 }] }),
+        evidence({ key: 'bb bygg', docs: 1, orgs: [{ org: ORG, n: 1 }] }),
+      ],
+      existing: [other],
+    })
+    // The RPC never overwrites an org number, so nothing collides here.
+    expect(r.items.map((i) => i.party_id)).toEqual(['p-other', undefined])
+  })
+
   it('reports same-core live parties as similar_to on new suggestions', () => {
     const existing: ExistingParty = { id: 'p1', display_name: 'Levfakt Beijer Byggmaterial AB 2089', org_number: null, alias_keys: [], status: 'suggested' }
     const r = buildSuggestions({ observed: [observed({ key: 'beijer byggmaterial' })], evidence: [], existing: [existing] })
@@ -267,6 +328,44 @@ describe('suggestPartiesForCompany', () => {
   it('surfaces RPC errors', async () => {
     const rpc = vi.fn(async () => ({ data: null, error: { message: 'boom' } }))
     await expect(suggestPartiesForCompany({ rpc } as never, 'co', 'user')).rejects.toThrow(/get_observed_parties failed: boom/)
+  })
+})
+
+describe('suggestPartiesForCompany: paging and merges', () => {
+  function stubClient(opts: { parties: unknown[]; mergeError?: string }) {
+    const rpc = vi.fn(async (name: string, _args?: Record<string, unknown>) => {
+      if (name === 'get_observed_parties' || name === 'get_ledger_key_evidence') return { data: [], error: null }
+      if (name === 'merge_parties') return opts.mergeError ? { data: null, error: { message: opts.mergeError } } : { data: 'decision-1', error: null }
+      return { data: null, error: { message: `unexpected rpc ${name}` } }
+    })
+    const order = vi.fn((..._a: unknown[]) => chain)
+    const chain: Record<string, unknown> = { order, range: vi.fn(async () => ({ data: opts.parties, error: null })) }
+    for (const m of ['select', 'eq', 'is']) chain[m] = vi.fn(() => chain)
+    return { client: { rpc, from: vi.fn(() => chain) } as never, rpc, order }
+  }
+  const party = (id: string, name: string) => ({ id, display_name: name, legal_name: null, org_number: null, alias_keys: [], status: 'suggested', archived_at: null, created_at: '2026-10-01T00:00:00Z' })
+
+  it('pages the party reads in a total order: created_at, then id', async () => {
+    // Every party one run creates shares a created_at; without the id a page
+    // boundary repeats one party and skips another.
+    const { client, order } = stubClient({ parties: [] })
+    await suggestPartiesForCompany(client, 'co', 'user')
+    expect(order.mock.calls.map((c) => c[0])).toEqual(['created_at', 'id', 'created_at', 'id'])
+  })
+
+  it('does not ask to merge a party into itself when a read lists it twice', async () => {
+    const { client, rpc } = stubClient({ parties: [party('p-1', 'Kontoret AB'), party('p-1', 'Kontoret AB')] })
+    const summary = await suggestPartiesForCompany(client, 'co', 'user')
+    expect(rpc.mock.calls.map((c) => c[0])).not.toContain('merge_parties')
+    expect(summary.merged).toBe(0)
+  })
+
+  it('treats "nothing to merge" as done, and still fails on any other merge error', async () => {
+    const parties = [party('p-1', 'Kontoret AB'), party('p-2', 'Kontoret AB')]
+    const done = stubClient({ parties, mergeError: 'merge_parties: nothing to merge' })
+    await expect(suggestPartiesForCompany(done.client, 'co', 'user')).resolves.toMatchObject({ merged: 0 })
+    const failed = stubClient({ parties, mergeError: 'merge_parties: survivor is not a live party of this company' })
+    await expect(suggestPartiesForCompany(failed.client, 'co', 'user')).rejects.toThrow(/merge_parties failed/)
   })
 })
 

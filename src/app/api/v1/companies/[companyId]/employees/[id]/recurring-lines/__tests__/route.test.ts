@@ -34,45 +34,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listLines, POST as createLine } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-  count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const tableCalls: string[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null, count: null })
-            resolve({ count: null, ...next })
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    tableCalls,
-    from: vi.fn((table: string) => {
-      tableCalls.push(table)
-      return buildChain(table)
-    }),
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -130,11 +95,11 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/employees/:id/recurring-lines', () => {
   it('lists lines with the qualified id and no tenancy columns', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_recurring_lines: { data: [SAMPLE_LINE], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listLines(makeRequest(BASE_URL), lineParams(COMPANY_ID, EMPLOYEE_ID))
@@ -159,11 +124,11 @@ describe('GET /api/v1/companies/:companyId/employees/:id/recurring-lines', () =>
 
   it('accepts ?active=true', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_recurring_lines: { data: [], error: null },
-      }),
+      }).supabase,
     )
     const res = await listLines(makeRequest(`${BASE_URL}?active=true`), lineParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(200)
@@ -172,7 +137,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/recurring-lines', () =>
   })
 
   it('rejects an unknown ?active value with VALIDATION_ERROR', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase(membership))
+    mockServiceClient.mockReturnValue(createTableMockSupabase(membership).supabase)
     const res = await listLines(makeRequest(`${BASE_URL}?active=yes`), lineParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(400)
     const body = await res.json()
@@ -180,7 +145,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/recurring-lines', () =>
   })
 
   it('rejects a non-UUID employee id with VALIDATION_ERROR', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase(membership))
+    mockServiceClient.mockReturnValue(createTableMockSupabase(membership).supabase)
     const res = await listLines(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/nope/recurring-lines`),
       lineParams(COMPANY_ID, 'nope'),
@@ -192,10 +157,10 @@ describe('GET /api/v1/companies/:companyId/employees/:id/recurring-lines', () =>
 
   it('returns 404 EMPLOYEE_NOT_FOUND for an unknown employee', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         employees: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await listLines(makeRequest(BASE_URL), lineParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(404)
@@ -205,7 +170,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id/recurring-lines', () =>
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await listLines(new Request(BASE_URL), lineParams(COMPANY_ID, EMPLOYEE_ID))
     expect(res.status).toBe(401)
   })
@@ -221,12 +186,12 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
 
   it('creates a line and returns 201 with the qualified id (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         employee_recurring_lines: { data: SAMPLE_LINE, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createLine(
@@ -243,8 +208,8 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
   })
 
   it('rejects a positive amount on a deduction type with a field-level 400', async () => {
-    const supabaseMock = makeFlexibleSupabase({ ...membership, idempotency_keys: { data: null, error: null } })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    const supabaseMock = createTableMockSupabase({ ...membership, idempotency_keys: { data: null, error: null } })
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await createLine(
       makeRequest(BASE_URL, { method: 'POST', body: JSON.stringify({ ...validBody, amount: 670.17 }) }),
@@ -257,12 +222,12 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
     expect(body.error.details.issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ field: 'amount' })]),
     )
-    expect(supabaseMock.tableCalls).not.toContain('employee_recurring_lines')
+    expect(supabaseMock.tables()).not.toContain('employee_recurring_lines')
   })
 
   it('rejects valid_to before valid_from with a field-level 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ ...membership, idempotency_keys: { data: null, error: null } }),
+      createTableMockSupabase({ ...membership, idempotency_keys: { data: null, error: null } }).supabase,
     )
 
     const res = await createLine(
@@ -282,11 +247,11 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
 
   it('returns 404 EMPLOYEE_NOT_FOUND for an unknown employee', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         ...membership,
         employees: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createLine(
@@ -300,12 +265,12 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
   })
 
   it('returns a dry-run preview without writing', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       ...membership,
       employees: { data: { id: EMPLOYEE_ID }, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await createLine(
       makeRequest(`${BASE_URL}?dry_run=true`, { method: 'POST', body: JSON.stringify(validBody) }),
@@ -318,11 +283,11 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview.amount).toBe(-670.17)
     expect(body.data.preview.employee_recurring_line_id).toBeUndefined()
-    expect(supabaseMock.tableCalls).not.toContain('employee_recurring_lines')
+    expect(supabaseMock.tables()).not.toContain('employee_recurring_lines')
   })
 
   it('returns 400 when Idempotency-Key is missing', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase(membership))
+    mockServiceClient.mockReturnValue(createTableMockSupabase(membership).supabase)
 
     const res = await createLine(
       new Request(BASE_URL, {
@@ -347,7 +312,7 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await createLine(
       makeRequest(BASE_URL, { method: 'POST', body: JSON.stringify(validBody) }),
@@ -358,10 +323,120 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await createLine(
       new Request(BASE_URL, { method: 'POST', body: JSON.stringify(validBody) }),
+      lineParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(401)
+  })
+})
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts): a standing row of
+// words on every payslip, no amount and no account.
+describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines: text rows', () => {
+  const idem = { idempotency_keys: { data: null, error: null } }
+  const textBody = {
+    item_type: 'text',
+    description: 'Grundlön 40 000 kr + personligt tillägg 2 000 kr',
+    valid_from: '2026-01-01',
+  }
+  const TEXT_LINE = { ...SAMPLE_LINE, item_type: 'text', description: textBody.description, amount: 0 }
+
+  async function create(tables: Parameters<typeof createTableMockSupabase>[0], body: unknown, url = BASE_URL) {
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await createLine(
+      makeRequest(url, { method: 'POST', body: JSON.stringify(body) }),
+      lineParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    return { res, body: await res.json(), mock }
+  }
+
+  it('creates a text row with no amount and returns 201', async () => {
+    const { res, body, mock } = await create(
+      {
+        ...membership,
+        ...idem,
+        employees: { data: { id: EMPLOYEE_ID }, error: null },
+        employee_recurring_lines: { data: TEXT_LINE, error: null },
+      },
+      { ...textBody, account_number: '7210' },
+    )
+
+    expect(res.status).toBe(201)
+    expect(body.data).toMatchObject({
+      employee_recurring_line_id: LINE_ID,
+      item_type: 'text',
+      amount: 0,
+      account_number: null,
+    })
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({
+      item_type: 'text',
+      description: textBody.description,
+      amount: 0,
+      account_number: null,
+    })
+  })
+
+  it('previews a text row on dry_run with amount 0 and no account, without writing', async () => {
+    const { res, body, mock } = await create(
+      { ...membership, ...idem, employees: { data: { id: EMPLOYEE_ID }, error: null } },
+      { ...textBody, account_number: '7210' },
+      `${BASE_URL}?dry_run=true`,
+    )
+    expect(res.status).toBe(200)
+    expect(body.data.preview).toMatchObject({ item_type: 'text', amount: 0, account_number: null })
+    expect(mock.tables()).not.toContain('employee_recurring_lines')
+  })
+
+  it('returns a field-level 400 for a text row with an amount', async () => {
+    const { res, body, mock } = await create({ ...membership, ...idem }, { ...textBody, amount: 500 })
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'amount' })]),
+    )
+    expect(mock.tables()).not.toContain('employee_recurring_lines')
+  })
+
+  it('returns a field-level 400 for a text row with no words', async () => {
+    const { res, body, mock } = await create({ ...membership, ...idem }, { ...textBody, description: '  \n  ' })
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues).toEqual([{ field: 'description', message: 'En textrad måste ha en text.' }])
+    expect(mock.tables()).not.toContain('employee_recurring_lines')
+  })
+
+  it('returns 400 for a 0 kr deduction and for a deduction without an amount', async () => {
+    for (const body of [
+      { item_type: 'gross_deduction_other', description: 'Bruttolöneavdrag', amount: 0, valid_from: '2026-01-01' },
+      { item_type: 'gross_deduction_other', description: 'Bruttolöneavdrag', valid_from: '2026-01-01' },
+    ]) {
+      const { res, body: json, mock } = await create({ ...membership, ...idem }, body)
+      expect(res.status).toBe(400)
+      expect(json.error.details.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ field: 'amount' })]),
+      )
+      expect(mock.tables()).not.toContain('employee_recurring_lines')
+    }
+  })
+
+  it('returns 404 EMPLOYEE_NOT_FOUND for a text row on an unknown employee', async () => {
+    const { res, body } = await create(
+      { ...membership, ...idem, employees: { data: null, error: null } },
+      textBody,
+    )
+    expect(res.status).toBe(404)
+    expect(body.error.code).toBe('EMPLOYEE_NOT_FOUND')
+  })
+
+  it('returns 401 for a text row without a bearer token', async () => {
+    mockValidate.mockResolvedValue(null)
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+    const res = await createLine(
+      new Request(BASE_URL, { method: 'POST', body: JSON.stringify(textBody) }),
       lineParams(COMPANY_ID, EMPLOYEE_ID),
     )
     expect(res.status).toBe(401)

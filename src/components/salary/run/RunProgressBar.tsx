@@ -1,7 +1,6 @@
 'use client'
 
-import { useTranslations, useLocale } from 'next-intl'
-import { formatDateLong } from '@/lib/utils'
+import { useTranslations } from 'next-intl'
 import type { AgiFilingState } from '@/lib/salary/agi-submission-state'
 import type { RunDetail } from './types'
 
@@ -10,15 +9,10 @@ type StepState = 'done' | 'active' | 'upcoming'
 interface RunProgressBarProps {
   run: RunDetail
   isCalculated: boolean
-  // True when the run pays out nothing (nollkörning / fully net-deducted): the
-  // pay step carries no "download the file" hint because there is no file.
-  noPayout?: boolean
   // Real filing state for the AGI step (deriveAgiFilingState): without it the
-  // rail only knows generated/submitted and mislabels "waiting for BankID
-  // signature" as "lämna in till Skatteverket".
+  // rail only knows generated/submitted and would mark the step done before
+  // Skatteverket has the signed declaration.
   agiState: AgiFilingState
-  // Shown on the AGI step once signed: the kvittens is the filing receipt.
-  agiKvittensnummer?: string | null
 }
 
 const STATUS_RANK: Record<string, number> = {
@@ -32,13 +26,14 @@ const STATUS_RANK: Record<string, number> = {
 
 /**
  * The month's steps as a flat segmented rail: no box, no buttons. The actions
- * for the current stage live in the header (primary button + ⋯ menu); the
- * rail only says where the run stands and what the stage means.
+ * for the current stage live in the header (primary button + ⋯ menu), so the
+ * rail shows the step labels only and adds a line just for an exception the
+ * header does not say: failed payslips, or an AGI waiting on Skatteverket or
+ * on a BankID signature.
  */
 export function RunProgressBar(props: RunProgressBarProps) {
   const t = useTranslations('salary_run')
-  const locale = useLocale()
-  const { run, isCalculated, noPayout, agiState, agiKvittensnummer } = props
+  const { run, isCalculated, agiState } = props
   const rank = STATUS_RANK[run.status] ?? 0
   const deliveries = run.payslip_deliveries_summary
 
@@ -47,84 +42,69 @@ export function RunProgressBar(props: RunProgressBarProps) {
   const payslipsAvailable = rank >= 2
   const payslipsDone =
     payslipsAvailable && !!deliveries && deliveries.sent > 0 && deliveries.failed === 0
-  const payslipDetail = !payslipsAvailable
-    ? undefined
-    : deliveries && deliveries.sent + deliveries.failed + deliveries.skipped > 0
-      ? t('rail_payslips_summary', {
-          sent: deliveries.sent,
-          failed: deliveries.failed,
-          skipped: deliveries.skipped,
-        })
-      : t('rail_payslips_none')
 
   interface Step {
     key: string
     label: string
     state: StepState
-    detail?: string
   }
+
+  // isCalculated means the calculation is current. Past review it is frozen;
+  // before that a run whose calculation went stale is back on this step, in
+  // review too (a run that reached review before the review step checked it).
+  const calculationDone = rank > 1 || isCalculated
 
   const steps: Step[] = [
     {
       key: 'calculate',
       label: t('rail_calculate'),
-      state: rank > 0 || isCalculated ? 'done' : 'active',
-      detail: rank === 0 && !isCalculated ? t('rail_calculate_hint') : undefined,
+      state: calculationDone ? 'done' : 'active',
     },
     {
       key: 'approve',
       label: t('rail_approve'),
-      state: rank > 1 ? 'done' : run.status === 'review' ? 'active' : 'upcoming',
-      detail: run.approved_at ? formatDateLong(run.approved_at, locale) : undefined,
+      state: rank > 1 ? 'done' : run.status === 'review' && calculationDone ? 'active' : 'upcoming',
     },
     {
       key: 'pay',
       label: t('rail_pay'),
       state: rank > 2 ? 'done' : run.status === 'approved' ? 'active' : 'upcoming',
-      detail:
-        run.paid_at != null
-          ? formatDateLong(run.paid_at, locale)
-          : run.status === 'approved'
-            ? noPayout
-              ? t('rail_pay_nopayout_hint')
-              : t('rail_pay_hint')
-            : undefined,
     },
     {
       key: 'payslips',
       label: t('rail_payslips'),
       state: payslipsDone ? 'done' : payslipsAvailable ? 'active' : 'upcoming',
-      detail: payslipDetail,
     },
     {
       key: 'book',
       label: t('rail_book'),
       state: rank > 3 ? 'done' : run.status === 'paid' ? 'active' : 'upcoming',
-      detail: run.booked_at ? formatDateLong(run.booked_at, locale) : undefined,
     },
     {
       key: 'agi',
       label: t('rail_agi'),
       state: agiState === 'signed' ? 'done' : run.status === 'booked' ? 'active' : 'upcoming',
-      detail:
-        agiState === 'signed'
-          ? agiKvittensnummer
-            ? t('rail_agi_submitted_kvittens', { kvittens: agiKvittensnummer })
-            : t('rail_agi_submitted')
-          : agiState === 'awaiting_signing'
-            ? t('rail_agi_awaiting_signature')
-            : agiState === 'underlag_submitted'
-              ? t('rail_agi_underlag_submitted')
-              : agiState === 'generated'
-                ? t('rail_agi_generated')
-                : run.status === 'booked'
-                  ? t('rail_agi_hint')
-                  : undefined,
     },
   ]
 
   const doneCount = steps.filter(s => s.state === 'done').length
   const activeStep = steps.find(s => s.state === 'active')
+
+  // The one exception line, if any. A payslip that failed to go out is the
+  // employer's to resend; an AGI parked at Skatteverket waits on something
+  // outside this page. Everything else is said by the header's button.
+  const exception =
+    payslipsAvailable && deliveries && deliveries.failed > 0
+      ? t('rail_payslips_summary', {
+          sent: deliveries.sent,
+          failed: deliveries.failed,
+          skipped: deliveries.skipped,
+        })
+      : run.status === 'booked' && agiState === 'awaiting_signing'
+        ? t('rail_agi_awaiting_signature')
+        : run.status === 'booked' && agiState === 'underlag_submitted'
+          ? t('rail_agi_underlag_submitted')
+          : null
 
   function segClass(state: StepState) {
     return state === 'done'
@@ -133,9 +113,6 @@ export function RunProgressBar(props: RunProgressBarProps) {
         ? 'bg-primary/50'
         : 'bg-border'
   }
-
-  // The stage line + its detail: a single sentence that sits under the track.
-  const currentLine = activeStep?.detail ?? (activeStep ? activeStep.label : t('rail_all_done'))
 
   return (
     <div>
@@ -150,17 +127,15 @@ export function RunProgressBar(props: RunProgressBarProps) {
           <p className="text-sm font-medium">
             {activeStep ? activeStep.label : t('rail_all_done')}
           </p>
-          <p className="text-[11px] text-muted-foreground tabular-nums">
+          <p className="text-xs text-muted-foreground tabular-nums">
             {t('rail_step_counter', { done: doneCount, total: steps.length })}
           </p>
         </div>
-        {activeStep?.detail && (
-          <p className="text-[11px] text-muted-foreground">{activeStep.detail}</p>
-        )}
+        {exception && <p className="text-xs text-muted-foreground">{exception}</p>}
       </div>
 
-      {/* Desktop: segmented track with per-segment labels, then the stage
-          sentence. */}
+      {/* Desktop: segmented track with per-segment labels; a line beneath
+          only for an exception. */}
       <div className="hidden md:block space-y-3">
         <ol className="flex gap-2">
           {steps.map(step => (
@@ -181,7 +156,7 @@ export function RunProgressBar(props: RunProgressBarProps) {
             </li>
           ))}
         </ol>
-        <p className="text-xs text-muted-foreground">{currentLine}</p>
+        {exception && <p className="text-xs text-muted-foreground">{exception}</p>}
       </div>
     </div>
   )

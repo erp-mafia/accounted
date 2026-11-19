@@ -1,4 +1,5 @@
 import type { UiWidget } from './types'
+import { SIE_FILE_EXTENSIONS, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 
 /**
  * SIE Drop Widget: MCP Apps inline HTML rendered by gnubok_create_sie_upload.
@@ -8,8 +9,16 @@ import type { UiWidget } from './types'
  * 100 KB+ file imports without token-by-token reproduction risk. Flow:
  * drop → gnubok_sie_preflight (verdict shown in the card) → user clicks
  * Importera → gnubok_import_sie with the preflight's mappings (stages for
- * approval as always). The tool's upload_url stays available as a fallback
- * for hosts without the widget.
+ * approval as always). For a year already imported, the button adds only the
+ * file's new verifikat (on_existing_year=append, crm#1544). The tool's
+ * upload_url stays available as a fallback for hosts without the widget.
+ *
+ * Company binding (crm#1201): the tool result names target_company, the
+ * company the card was opened for. The card shows it before anything is
+ * dropped and passes its company_id on the preflight and the import, so a
+ * card opened for one company never imports into the connection's default
+ * company. The preflight answers with the company it actually checked
+ * against; a different one blocks Importera.
  */
 
 export const SIE_DROP_HTML = `<!DOCTYPE html>
@@ -89,6 +98,8 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   button:focus-visible { outline: 2px solid var(--success); outline-offset: 2px; }
   .note { margin-top: 10px; color: var(--text-muted); font-size: 12px; }
+  .target { margin-bottom: 12px; }
+  .target strong { font-weight: 600; }
   input[type="file"] { display: none; }
 </style>
 </head>
@@ -96,8 +107,9 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
 <div class="card">
   <h1>Importera bokföring (SIE)</h1>
   <p class="lede">Släpp SIE-filen här så kontrolleras den innan något bokförs.</p>
+  <p class="target hidden" id="target"></p>
   <div class="drop" id="drop">Släpp .se/.sie-filen här, eller klicka för att välja</div>
-  <input type="file" id="picker" accept=".se,.sie,.si" />
+  <input type="file" id="picker" accept="${SIE_FILE_EXTENSIONS.join(',')}" />
   <div class="report hidden" id="report"></div>
   <div class="actions hidden" id="actions">
     <button class="primary" id="import">Importera</button>
@@ -111,6 +123,15 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   let rpcId = 1;
   const pending = new Map();
   let fileState = null; // { name, base64, sha256, preflight }
+  // The company this card imports into: target_company from the tool result
+  // ({ company_id, name, org_number }). null until the host delivers it.
+  let target = null;
+  // The largest file the card can send (crm#1455). It sends the bytes as
+  // base64 inside tools/call, and where the tool result offers
+  // direct_upload_url the platform caps that request at max_bytes (4 MB):
+  // base64 grows a file by a third, so the card carries 3/4 of it. null: no
+  // cap below the import's own.
+  let inlineMaxBytes = null;
 
   function sendRequest(method, params) {
     const id = rpcId++;
@@ -134,6 +155,17 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       if (msg.error) reject(msg.error); else resolve(msg.result);
       return;
     }
+    if (msg.method === 'ui/notifications/tool-result') {
+      const sc = msg.params && msg.params.structuredContent;
+      if (sc && sc.target_company && sc.target_company.company_id) {
+        target = sc.target_company;
+        renderTarget();
+      }
+      if (sc && sc.direct_upload_url && typeof sc.max_bytes === 'number') {
+        inlineMaxBytes = Math.floor(sc.max_bytes * 3 / 4);
+      }
+      return;
+    }
     if (msg.method === 'ui/notifications/host-context-changed') applyTheme(msg.params);
   });
   function applyTheme(ctx) {
@@ -153,6 +185,22 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   function show(id) { el(id).classList.remove('hidden'); }
   function hide(id) { el(id).classList.add('hidden'); }
   function note(text) { el('note').textContent = text; show('note'); }
+
+  function companyLabel(c) {
+    if (!c) return '?';
+    return (c.name || 'okänt företag') + (c.org_number ? ' (' + c.org_number + ')' : '');
+  }
+  function renderTarget() {
+    if (!target) return;
+    el('target').textContent = 'Importeras till ' + companyLabel(target) + '.';
+    show('target');
+  }
+  // Every call that reads or writes the company's books names the card's
+  // company. Without it the call runs for the connection's default company.
+  function forTarget(args) {
+    if (target && target.company_id) args.company_id = target.company_id;
+    return args;
+  }
 
   function toBase64(buffer) {
     const u8 = new Uint8Array(buffer);
@@ -190,8 +238,16 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
 
   function handleFile(file) {
     const lower = file.name.toLowerCase();
-    if (!lower.endsWith('.se') && !lower.endsWith('.sie') && !lower.endsWith('.si')) {
-      note('Filen måste vara en SIE-export (.se eller .sie).');
+    if (!${JSON.stringify(SIE_FILE_EXTENSIONS)}.some(function(x) { return lower.endsWith(x); })) {
+      note('Filen måste vara en SIE-export (${SIE_FILE_EXTENSIONS_SV}).');
+      return;
+    }
+    if (inlineMaxBytes && file.size > inlineMaxBytes) {
+      const mb = function(bytes) { return (bytes / 1024 / 1024).toFixed(1).replace('.', ','); };
+      note('Filen är ' + mb(file.size) + ' MB och kortet tar högst ' + mb(inlineMaxBytes) + ' MB. Ladda upp den via app.accounted.se/import?mode=sie i stället.');
+      sendNotification('ui/updateContext', {
+        content: 'Användaren släppte ' + file.name + ' (' + file.size + ' bytes) på importkortet, över kortets gräns på ' + inlineMaxBytes + ' bytes. PUT filens exakta bytes till direct_upload_url från gnubok_create_sie_upload och skicka upload_id + sha256 till gnubok_sie_preflight, eller be användaren importera i appen.'
+      });
       return;
     }
     drop.textContent = 'Kontrollerar ' + file.name + '…';
@@ -203,13 +259,13 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
         const sha256 = toHex(hash);
         fileState = { name: file.name, base64: base64, sha256: sha256, preflight: null };
         sendNotification('ui/updateContext', {
-          content: 'Användaren släppte ' + file.name + ' på importkortet; preflight körs med exakta bytes (sha256 ' + sha256.slice(0, 12) + '…).'
+          content: 'Användaren släppte ' + file.name + ' på importkortet' + (target ? ' för ' + companyLabel(target) + ' (company_id ' + target.company_id + ')' : '') + '; preflight körs med exakta bytes (sha256 ' + sha256.slice(0, 12) + '…).'
         });
-        callTool('gnubok_sie_preflight', {
+        callTool('gnubok_sie_preflight', forTarget({
           filename: file.name,
           file_content_base64: base64,
           sha256: sha256
-        }).then(function(res) {
+        })).then(function(res) {
           const sc = parseResult(res);
           if (!sc) { drop.textContent = 'Kunde inte läsa svaret. Försök igen.'; return; }
           fileState.preflight = sc;
@@ -251,27 +307,66 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     return html ? '<div class="notices">' + html + '</div>' : '';
   }
 
+  // A year that is already imported (issue #108, crm#1544): the preflight's
+  // append plan says which of the file's verifikat are new. The card offers
+  // to add only those, never the whole year again. Possible duplicates and
+  // series choices stay in the app's wizard.
+  function appendOffer(sc) {
+    const a = sc.verdict === 'duplicate' ? sc.append : null;
+    return a && !a.refusal && a.counts && a.counts.toAdd > 0 ? a : null;
+  }
+
+  function renderAppend(a) {
+    if (!a || !a.counts) return '';
+    let html = '';
+    if (a.refusal) html += '<div class="error">' + esc(a.refusal.message) + '</div>';
+    (a.warnings || []).forEach(function(w) { html += '<div class="action">' + esc(w) + '</div>'; });
+    if (!a.refusal && a.counts.possibleDuplicates > 0) {
+      html += '<div class="action">' + a.counts.possibleDuplicates + ' verifikat liknar redan bokförda och läggs inte till. ' +
+        'Ska de med: lägg till filen i importguiden på app.accounted.se/import?mode=sie.</div>';
+    }
+    return html ? '<div class="notices">' + html + '</div>' : '';
+  }
+
   function renderReport(sc) {
     drop.textContent = fileState.name;
-    const blocked = ((sc.validation || {}).notices || []).some(function(n) { return n.blocking; });
-    const ok = (sc.verdict === 'ok' || sc.verdict === 'ok_with_warnings') && !blocked;
+    // The company the server checked the file against. It must be the card's
+    // own: anything else means the call ran for another company.
+    const checked = sc.target_company || null;
+    const wrongTarget = !!(target && checked && checked.company_id !== target.company_id);
+    const blocked = wrongTarget || ((sc.validation || {}).notices || []).some(function(n) { return n.blocking; });
+    const append = blocked ? null : appendOffer(sc);
+    fileState.append = !!append;
+    fileState.importLabel = append ? 'Lägg till ' + append.counts.toAdd + ' nya verifikat' : 'Importera';
+    const ok = (sc.verdict === 'ok' || sc.verdict === 'ok_with_warnings' || !!append) && !blocked;
     const f = sc.file || {};
     const rows = [
-      ['Företag', (f.company_name || '?') + ' (' + (f.org_number || '?') + ')'],
+      ['Importeras till', companyLabel(checked || target)],
+      ['Företag i filen', (f.company_name || '?') + ' (' + (f.org_number || '?') + ')'],
       ['Räkenskapsår', ((f.fiscal_year || {}).start || '?') + ' – ' + ((f.fiscal_year || {}).end || '?')],
       ['Verifikat', String(f.voucher_count != null ? f.voucher_count : '?')],
       ['Konton', String(f.account_count != null ? f.account_count : '?')],
     ];
+    if (sc.verdict === 'duplicate' && sc.append && sc.append.counts) {
+      rows.push(['Redan bokförda', String(sc.append.counts.present)], ['Nya', String(sc.append.counts.toAdd)]);
+    }
     let html = '<span class="status ' + (ok ? 'ok' : 'bad') + '">' +
       (blocked ? 'Fel företag'
         : sc.verdict === 'ok' ? 'Ser korrekt ut'
         : sc.verdict === 'ok_with_warnings' ? 'OK med anmärkningar'
+        : append ? 'Året är redan importerat: nya verifikat kan läggas till'
         : sc.verdict === 'duplicate' ? 'Redan importerad'
+        : sc.verdict === 'blocked' ? 'Kan inte importeras nu'
         : 'Ogiltig fil') + '</span>';
     rows.forEach(function(r) {
       html += '<div class="row"><span class="k">' + esc(r[0]) + '</span><span class="v">' + esc(r[1]) + '</span></div>';
     });
+    if (wrongTarget) {
+      html += '<div class="notices"><div class="error">Kontrollen kördes för ' + esc(companyLabel(checked)) +
+        ', inte för ' + esc(companyLabel(target)) + '. Importera inte härifrån; be agenten öppna importkortet igen.</div></div>';
+    }
     html += renderNotices(sc);
+    if (!blocked && sc.verdict === 'duplicate') html += renderAppend(sc.append);
     el('report').innerHTML = html;
     const toggle = document.getElementById('toggle-notices');
     if (toggle) {
@@ -282,6 +377,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       });
     }
     show('report');
+    el('import').textContent = fileState.importLabel;
     if (ok) { show('actions'); el('import').disabled = false; }
     else hide('actions');
   }
@@ -299,15 +395,21 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     if (!fileState || !fileState.preflight) return;
     el('import').disabled = true;
     el('import').textContent = 'Importerar…';
-    callTool('gnubok_import_sie', {
+    const importArgs = {
       filename: fileState.name,
       file_content_base64: fileState.base64,
       sha256: fileState.sha256,
       mappings: fileState.preflight.mappings || [],
       create_fiscal_period: true,
-      import_opening_balances: true,
+      // false when the year already has a posted IB (crm#1272): the
+      // preflight says so, and the import is admitted only without the file's.
+      import_opening_balances: fileState.preflight.import_opening_balances !== false,
       import_transactions: true
-    }).then(function(res) {
+    };
+    // Only the file's new verifikat, as their own batch; the server plans it
+    // again at staging and at approval, and books no IB for an append.
+    if (fileState.append) importArgs.on_existing_year = 'append';
+    callTool('gnubok_import_sie', forTarget(importArgs)).then(function(res) {
       const sc = parseResult(res);
       if (sc && sc.operation_id) {
         // Stage + arm in ONE step: the next click is already the deliberate
@@ -322,11 +424,11 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
         note('Importen är förberedd och väntar på godkännande i chatten eller i Accounted.');
       }
       sendNotification('ui/updateContext', {
-        content: 'SIE-importen av ' + fileState.name + ' är stagead' + (sc && sc.operation_id ? ' (operation ' + sc.operation_id + ')' : '') + ' och väntar på godkännande i importkortet.'
+        content: 'SIE-importen av ' + fileState.name + (fileState.append ? ' (bara filens nya verifikat, on_existing_year=append)' : '') + ' är stagead' + (sc && sc.operation_id ? ' (operation ' + sc.operation_id + ')' : '') + ' och väntar på godkännande i importkortet.'
       });
     }).catch(function(err) {
       el('import').disabled = false;
-      el('import').textContent = 'Importera';
+      el('import').textContent = fileState.importLabel || 'Importera';
       note('Import misslyckades: ' + (err && err.message ? err.message : 'okänt fel'));
     });
   });

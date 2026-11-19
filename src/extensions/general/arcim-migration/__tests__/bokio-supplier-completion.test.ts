@@ -48,6 +48,20 @@ describe('Bokio historical supplier identity', () => {
     expect(matchBokioSupplierInvoices([{ ...local(), supplier_invoice_number: '', total: 1251 }], [dto], suppliers, mappings).size).toBe(0)
     expect(matchBokioSupplierInvoices([{ ...local(), supplier_invoice_number: '' }], [dto], suppliers, []).size).toBe(0)
   })
+  // crm#1039: a number the source reused is stored without a number and kept
+  // as payment_reference (commit_provider_migration_records).
+  it('recognises an invoice stored under the reused-number rule through its source map only', () => {
+    const mappings = [{ resource: 'supplierInvoices', source_id: 'source', target_id: 'local' }]
+    const moved = { ...local(), supplier_invoice_number: null, payment_reference: '1001' }
+    expect(matchBokioSupplierInvoices([moved], [source()], suppliers, mappings).get('local')?.id).toBe('source')
+    // The number alone never joins it.
+    expect(matchBokioSupplierInvoices([moved], [source()], suppliers, []).size).toBe(0)
+    // Another payment reference, or none, is not that source invoice.
+    expect(matchBokioSupplierInvoices([{ ...moved, payment_reference: '9999' }], [source()], suppliers, mappings).size).toBe(0)
+    expect(matchBokioSupplierInvoices([{ ...moved, payment_reference: null }], [source()], suppliers, mappings).size).toBe(0)
+    // The other immutable facts are still checked.
+    expect(matchBokioSupplierInvoices([{ ...moved, invoice_date: '2026-01-03' }], [source()], suppliers, mappings).size).toBe(0)
+  })
   it('refuses a same-name fallback when either supplier population is ambiguous', () => {
     expect(matchBokioSupplierInvoices([local()], [source()], [...suppliers, { id: 'other', name: 'Supplier' }], []).size).toBe(0)
     expect(matchBokioSupplierInvoices([local()], [source(), source('other-invoice', 'other-party')], suppliers, []).size).toBe(0)

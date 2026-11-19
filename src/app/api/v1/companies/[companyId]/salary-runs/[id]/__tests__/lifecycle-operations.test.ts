@@ -68,6 +68,12 @@ vi.mock('@/lib/events', async (importOriginal) => ({
   eventBus: { emit: mocks.emit, on: vi.fn(), off: vi.fn(), clear: vi.fn() },
 }))
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as sendPayslipsRoute } from '../send-payslips/route'
 import { POST as revertRoute } from '../revert/route'
@@ -314,6 +320,45 @@ describe('POST /salary-runs/:id/send-payslips', () => {
     ])
   })
 
+  // crm#1658: each payout group gets its payslips on its own day.
+  const postBody = (payload: unknown) =>
+    sendPayslipsRoute(
+      new Request(`${BASE}/send-payslips`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-fixture-not-a-real-key',
+          'Idempotency-Key': crypto.randomUUID(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      }),
+      runParams(RUN_ID),
+    )
+
+  it('employee_ids: emails and logs only the named employees', async () => {
+    const c = client()
+    mockServiceClient.mockReturnValue(c)
+    const res = await postBody({ employee_ids: [EMP_ID] })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ sent: 1, skipped: 0, failed: 0, total: 1 })
+    expect(mocks.sendEmail).toHaveBeenCalledTimes(1)
+    const logged = writesTo(c, 'salary_payslip_deliveries', 'insert').map((call) => call.args[0])
+    expect(logged).toEqual([expect.objectContaining({ employee_id: EMP_ID, status: 'sent' })])
+  })
+
+  it('400 SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN for an id not on the run, sending and logging nothing', async () => {
+    const c = client()
+    mockServiceClient.mockReturnValue(c)
+    const stranger = '99999999-9999-4999-8999-999999999999'
+    const res = await postBody({ employee_ids: [EMP_ID, stranger] })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_PAYSLIPS_EMPLOYEE_NOT_ON_RUN')
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+    expect(wrote(c)).toBe(false)
+  })
+
   it('a provider failure is logged and reported without stopping the batch', async () => {
     mocks.sendEmail.mockResolvedValue({ success: false, error: 'rate limited' })
     const c = client()
@@ -464,9 +509,9 @@ describe('POST /salary-runs/:id/unapprove', () => {
   })
 
   it.each([
-    ['a submitted AGI declaration', { data: { id: AGI_ID, status: 'submitted' }, error: null }, APPROVED],
-    ['an AGI awaiting signature', { data: { id: AGI_ID, status: 'pending_signature' }, error: null }, APPROVED],
-    ['agi_submitted_at on the run', { data: null, error: null }, { ...APPROVED, agi_submitted_at: '2026-09-22T10:00:00Z' }],
+    ['a submitted AGI declaration', { data: [{ id: AGI_ID, status: 'submitted' }], error: null }, APPROVED],
+    ['an AGI awaiting signature', { data: [{ id: AGI_ID, status: 'pending_signature' }], error: null }, APPROVED],
+    ['agi_submitted_at on the run', { data: [], error: null }, { ...APPROVED, agi_submitted_at: '2026-09-22T10:00:00Z' }],
   ])('409 SALARY_RUN_UNAPPROVE_AGI_FILED with %s, even on a dry run', async (_label, agi, run) => {
     for (const query of ['', '?dry_run=true']) {
       const c = makeClient({ company_members: MEMBER, salary_runs: { data: run, error: null }, agi_declarations: agi })
@@ -483,7 +528,7 @@ describe('POST /salary-runs/:id/unapprove', () => {
     const c = makeClient({
       company_members: MEMBER,
       salary_runs: { data: APPROVED, error: null },
-      agi_declarations: { data: { id: AGI_ID, status: 'generated' }, error: null },
+      agi_declarations: { data: [{ id: AGI_ID, status: 'generated' }], error: null },
       salary_payslip_deliveries: { data: null, error: null, count: 2 },
     })
     mockServiceClient.mockReturnValue(c)
@@ -510,7 +555,7 @@ describe('POST /salary-runs/:id/unapprove', () => {
         { data: { id: RUN_ID, status: 'review' }, error: null },
       ],
       agi_declarations: [
-        { data: { id: AGI_ID, status: 'exported' }, error: null },
+        { data: [{ id: AGI_ID, status: 'exported' }], error: null },
         { data: [{ id: AGI_ID }], error: null },
       ],
     })
@@ -548,7 +593,7 @@ describe('POST /salary-runs/:id/unapprove', () => {
         { data: APPROVED, error: null },
         { data: { id: RUN_ID, status: 'review' }, error: null },
       ],
-      agi_declarations: { data: { id: AGI_ID, status: 'rejected' }, error: null },
+      agi_declarations: { data: [{ id: AGI_ID, status: 'rejected' }], error: null },
     })
     mockServiceClient.mockReturnValue(c)
     const res = await post()

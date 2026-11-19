@@ -123,7 +123,7 @@ The four-digit numbers in parentheses below are **SRU fältkoder** (field codes 
 - **4.3c** = andra ej avdragsgilla (böter, skattetillägg, förseningsavgifter, gåvor, ej avdragsgill representation, SRU 7653)
 
 ### Punkt 4.4 -- Avdragsgilla ej bokförda kostnader (deductions)
-- **4.4a** = lämnade koncernbidrag not booked through P&L (e.g. via equity under K3/RFR 2, SRU 7751)
+- **4.4a** = lämnade koncernbidrag not booked through P&L (a K3 parent's bidrag to a subsidiary booked as an increase of the shares, K3 6.6 andra stycket; or via equity under RFR 2; SRU 7751)
 - **4.4b** = andra ej bokförda avdragsgilla kostnader (SRU 7764)
 
 ### Punkt 4.5 -- Ej skattepliktiga intäkter (deductions)
@@ -210,7 +210,12 @@ Legal reference: IL 35 kap.
 - Lämnade: INK2R p. 3.19 (konto 883x)
 - Mottagna: INK2R p. 3.20 (konto 882x)
 
-### K3/RFR 2 treatment (may be booked via equity)
+### K3 treatment (K3 6.6: bokslutsdisposition)
+- Same as K2: lämnade INK2R p. 3.19, mottagna p. 3.20
+- Exception: a parent may book a bidrag it gives to a subsidiary as an increase of the shares' carrying amount (6.6 andra stycket). It is then not in the resultaträkning and is deducted at INK2S p. 4.4a
+- K3 35.22 only lets koncernbidrag that were not bokslutsdispositioner before the transition to K3 stay unreclassified; new bidrag are never booked via equity under K3
+
+### RFR 2 treatment (legal entities in IFRS groups; may be booked via equity)
 - Lämnade: INK2S p. 4.4a
 - Mottagna: INK2S p. 4.6c
 
@@ -239,7 +244,7 @@ Legal reference: IL 24:24-29 §§.
 
 3. **Glömd schablonintäkt på periodiseringsfond at p. 4.6a.** Pure tax item, no bookkeeping entry. Frequently forgotten. Must be reported annually.
 
-4. **Koncernbidrag K2/K3 inconsistency.** K2 flows through income statement; K3 may flow through equity. Leads to double-reporting or missing amounts if INK2R/INK2S split is wrong.
+4. **Koncernbidrag outside the income statement.** K2 and K3 both book koncernbidrag as bokslutsdisposition (K3 6.6). Only a K3 parent's bidrag booked on the shares (6.6 andra stycket) or an RFR 2 equity booking stays out of the resultaträkning and needs 4.4a/4.6c. Leads to double-reporting or missing amounts if INK2R/INK2S split is wrong.
 
 5. **Missing SLP underlag at INK2 p. 1.4.** Companies with pension costs frequently forget to calculate and report särskild löneskatt base (24.26% rate).
 

@@ -15,7 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type {
   OpeningBalanceSplitPreview,
@@ -142,7 +142,7 @@ export default function SplitOpeningBalanceDialog({ fiscalPeriodId, open, onOpen
 
   return (
     <Dialog open={open} onOpenChange={(value) => { if (!applying) onOpenChange(value) }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[640px]">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
@@ -162,7 +162,7 @@ export default function SplitOpeningBalanceDialog({ fiscalPeriodId, open, onOpen
 
         {preview && (
           <div className="space-y-4 animate-fade-in">
-            {attention && <p className="attn text-[12.5px]">{attention}</p>}
+            {attention && <p className="attn text-xs">{attention}</p>}
 
             {shown.length === 0 && !hardBlocked && (
               <p className="text-sm text-muted-foreground">
@@ -189,10 +189,10 @@ export default function SplitOpeningBalanceDialog({ fiscalPeriodId, open, onOpen
                     return (
                       <Fragment key={account.account_number}>
                         <TableRow className="bg-muted/30">
-                          <TableCell colSpan={3} className="py-2 text-[12.5px] font-semibold text-muted-foreground">
+                          <TableCell colSpan={3} className="py-2 text-xs font-semibold text-muted-foreground">
                             <span className="tabular-nums">{account.account_number}</span>
                             {account.account_name ? ` ${account.account_name}` : ''}
-                            <span className="ml-2 font-normal tabular-nums">{formatCurrency(account.total)}</span>
+                            <span className="ml-2 font-normal tabular-nums">{formatRowAmount(account.total)}</span>
                             {account.skip_reason && (
                               <span className="ml-2 font-normal">
                                 {account.skip_reason === 'existing_split'
@@ -212,10 +212,10 @@ export default function SplitOpeningBalanceDialog({ fiscalPeriodId, open, onOpen
                             <TableRow key={key || 'untagged'}>
                               <TableCell className="py-2">{bagLabel(bag)}</TableCell>
                               <TableCell className="py-2 text-right tabular-nums text-muted-foreground">
-                                {before !== 0 ? formatCurrency(before) : '-'}
+                                {before !== 0 ? formatRowAmount(before) : '-'}
                               </TableCell>
                               <TableCell className="py-2 text-right tabular-nums">
-                                {account.status === 'skipped' ? '-' : after !== 0 ? formatCurrency(after) : '-'}
+                                {account.status === 'skipped' ? '-' : after !== 0 ? formatRowAmount(after) : '-'}
                               </TableCell>
                             </TableRow>
                           )
@@ -228,13 +228,13 @@ export default function SplitOpeningBalanceDialog({ fiscalPeriodId, open, onOpen
             )}
 
             {shown.length > 0 && preview.accounts_unchanged > 0 && (
-              <p className="text-[12.5px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {t('unchanged_count', { count: preview.accounts_unchanged })}
               </p>
             )}
 
             {preview.can_apply && (
-              <p className="text-[12.5px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {preview.voucher ? t('outcome', { voucher: preview.voucher }) : t('outcome_no_voucher')}
               </p>
             )}

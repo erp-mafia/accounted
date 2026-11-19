@@ -43,4 +43,13 @@ describe('Arcim customer metadata mapping', () => {
       invoice_email_bcc_addresses: null,
     })
   })
+
+  it.each([[0, 0], [10, 10], [365, 365], [undefined, 30], [Number.NaN, 30], [10.5, 30], [-1, 30], [400, 30]])(
+    'imports stated payment terms %j as %i days', (days, expected) => {
+      const dto: CustomerDto = {
+        id: 'customer-1', customerNumber: '1001', party: { name: 'Kund AB', identifications: [] }, active: true,
+        defaultPaymentTermsDays: days,
+      }
+      expect(mapCustomer(dto, 'user-1', 'company-1').default_payment_terms).toBe(expected)
+    })
 })

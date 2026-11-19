@@ -80,6 +80,7 @@ import { DELETE as deleteSignature, PATCH as patchSignature } from '../signature
 import { GET as getPdf } from '../pdf/route'
 import { GET as getIxbrl } from '../ixbrl/route'
 import { GET as validateIxbrl } from '../ixbrl/validate/route'
+import { routeRpcCalls, isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -133,7 +134,7 @@ const BOOKS = new Set([
   'arsredovisning_signature_requests',
 ])
 const wrote = (client: Client) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const PERIOD_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -311,6 +312,47 @@ describe('POST .../arsredovisning/narrative', () => {
     const cleared = client.calls.find((c) => c.table === 'annual_report_profiles' && c.method === 'update')
     expect(cleared?.args[0]).toEqual({ narrative_confirmed_at: null })
   })
+
+  it('merges the K3 disclosure answers and equity classifications: only the keys sent change, null removes one', async () => {
+    const stored = {
+      id: 'narr-1',
+      company_id: COMPANY_ID,
+      fiscal_period_id: PERIOD_ID,
+      note_overrides: {},
+      disclosure_answers: { 'fb.agare': { applies: false }, 'not.rattelse': { applies: false } },
+      equity_movement_overrides: { 'cccccccc-cccc-4ccc-8ccc-cccccccccccc': 'utdelning' },
+      updated_at: 'x',
+    }
+    const client = use({
+      fiscal_periods: PERIOD,
+      arsredovisning_submissions: NONE,
+      arsredovisning_narratives: { data: stored, error: null },
+    })
+    const res = await post({
+      disclosure_answers: { 'not.rattelse': null, 'not.handelser_efter_balansdagen': { applies: false } },
+      equity_movement_overrides: { 'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'rattelse_av_fel' },
+    })
+    expect(res.status).toBe(200)
+    const upsert = client.calls.find((c) => c.table === 'arsredovisning_narratives' && c.method === 'upsert')
+    const row = upsert?.args[0] as Record<string, unknown>
+    expect(row.disclosure_answers).toEqual({
+      'fb.agare': { applies: false },
+      'not.handelser_efter_balansdagen': { applies: false },
+    })
+    expect(row.equity_movement_overrides).toEqual({
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc': 'utdelning',
+      'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'rattelse_av_fel',
+    })
+  })
+
+  it('400 on an unknown disclosure id or an equity kind a user may not assign', async () => {
+    const client = use({ fiscal_periods: PERIOD, arsredovisning_submissions: NONE })
+    expect((await post({ disclosure_answers: { 'okand.fraga': { applies: true } } })).status).toBe(400)
+    expect(
+      (await post({ equity_movement_overrides: { 'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'arets_resultat' } })).status,
+    ).toBe(400)
+    expect(wrote(client)).toBe(false)
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────
@@ -434,7 +476,7 @@ describe('POST .../arsredovisning/versions', () => {
     const body = await res.json()
     expect(body.data).toMatchObject({ annual_report_version_id: VERSION_ID, status: 'draft', content_hash: 'a'.repeat(64) })
     expect(body.data.report_data).toBeUndefined()
-    expect(client.calls.filter((c) => c.table === 'rpc').map((c) => c.method)).toEqual([
+    expect(client.calls.filter((c) => c.table === 'rpc' && !isIdempotencyClaim(c)).map((c) => c.method)).toEqual([
       'acquire_sie_period_read',
       'finish_sie_period_read',
     ])
@@ -643,7 +685,7 @@ describe('file routes and the iXBRL pre-flight', () => {
     expect(res.headers.get('Content-Type')).toBe('application/pdf')
     expect(res.headers.get('Content-Disposition')).toContain('attachment')
     expect(res.headers.get('Content-Disposition')).toContain('arsredovisning-2026-12-31-utkast.pdf')
-    expect(client.calls.filter((c) => c.table === 'rpc').map((c) => c.method)).toEqual([
+    expect(client.calls.filter((c) => c.table === 'rpc' && !isIdempotencyClaim(c)).map((c) => c.method)).toEqual([
       'acquire_sie_period_read',
       'finish_sie_period_read',
     ])
@@ -659,7 +701,7 @@ describe('file routes and the iXBRL pre-flight', () => {
     const res = await getPdf(request(`${BASE}/pdf?version_id=${VERSION_ID}`), periodParams)
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Disposition')).toContain('papperskopia')
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(buildCanonicalAnnualReport).not.toHaveBeenCalled()
   })
 
@@ -694,7 +736,7 @@ describe('file routes and the iXBRL pre-flight', () => {
     expect(body.data.ok).toBe(false)
     expect(body.data.issues.map((issue: { code: string }) => issue.code)).toContain('1107')
     expect(body.data.annual_report_version_id).toBeNull()
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('GET ixbrl/validate 404 PERIOD_NOT_FOUND for a missing period, 400 for a malformed version id', async () => {

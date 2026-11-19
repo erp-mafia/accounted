@@ -31,50 +31,10 @@ vi.mock('@supabase/supabase-js', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listDimensions } from '../route'
 import { POST as createValue } from '../[id]/values/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-/**
- * Per-table queue mock: TableResp[] consumes one entry per await, then sticks
- * on the last entry. The special key `rpc` answers `supabase.rpc(...)` calls.
- */
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  // Every chained call, so a test can read what reached an insert.
-  const calls: Array<{ table: string; method: string; args: unknown[] }> = []
-  const buildChain = (key: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(key)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls.push({ table: key, method: String(prop), args })
-          return buildChain(key)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    calls,
-    from: vi.fn((table: string) => buildChain(table)),
-    rpc: vi.fn(() => buildChain('rpc')),
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const DIMENSION_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -135,13 +95,13 @@ beforeEach(() => {
 
 describe('GET /api/v1/companies/:companyId/dimensions', () => {
   it('ensures system dims and returns the registry with nested values', async () => {
-    const client = makeFlexibleSupabase({
+    const client = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      rpc: { data: null, error: null },
+      'rpc:ensure_company_dimensions': { data: null, error: null },
       dimensions: { data: SAMPLE_DIMS, error: null },
       dimension_values: { data: [SAMPLE_VALUE], error: null },
     })
-    mockServiceClient.mockReturnValue(client)
+    mockServiceClient.mockReturnValue(client.supabase)
 
     const res = await listDimensions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/dimensions`),
@@ -149,7 +109,7 @@ describe('GET /api/v1/companies/:companyId/dimensions', () => {
     )
 
     expect(res.status).toBe(200)
-    expect(client.rpc).toHaveBeenCalledWith('ensure_company_dimensions', {
+    expect(client.supabase.rpc).toHaveBeenCalledWith('ensure_company_dimensions', {
       p_company_id: COMPANY_ID,
     })
     const body = await res.json()
@@ -168,14 +128,62 @@ describe('GET /api/v1/companies/:companyId/dimensions', () => {
     expect(body.data.dimensions[1].values).toEqual([])
   })
 
-  it('rejects keys without reports:read scope (403)', async () => {
+  // crm#1548: tagging invoice lines needs the registry, not the books.
+  it.each([['invoices:read'], ['dimensions:read']])('lists the registry for a key holding only %s', async (scope) => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: COMPANY_ID,
+      scopes: [scope],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        'rpc:ensure_company_dimensions': { data: null, error: null },
+        dimensions: { data: SAMPLE_DIMS, error: null },
+        dimension_values: { data: [SAMPLE_VALUE], error: null },
+      }).supabase,
+    )
+
+    const res = await listDimensions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/dimensions`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.dimensions).toHaveLength(2)
+  })
+
+  it('rejects a key without reports:read, invoices:read or dimensions:read (403)', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: COMPANY_ID,
+      scopes: ['customers:read', 'suppliers:read', 'invoices:draft'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+
+    const res = await listDimensions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/dimensions`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.details.required_scope).toBe('dimensions:read')
+  })
+
+  it('refuses an invoicer membership, whose area has no dimension page (403)', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
       companyId: COMPANY_ID,
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'invoicer' }, error: null },
+      }).supabase,
+    )
 
     const res = await listDimensions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/dimensions`),
@@ -192,12 +200,12 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
 
   it('creates a value (201, happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimensions: { data: { id: DIMENSION_ID }, error: null },
         dimension_values: { data: { ...SAMPLE_VALUE, created_at: '2026-07-02T12:00:00Z' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createValue(
@@ -215,9 +223,9 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
 
   it('returns 400 when Idempotency-Key is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const req = new Request(url, {
@@ -232,10 +240,10 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
 
   it('rejects a non-Fortnox code with 400 VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createValue(
@@ -253,11 +261,11 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
 
   it('returns 404 DIMENSION_NOT_FOUND for a dimension outside the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimensions: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createValue(
@@ -275,12 +283,12 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
 
   it('returns 409 DIMENSION_VALUE_DUPLICATE_CODE on a 23505', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimensions: { data: { id: DIMENSION_ID }, error: null },
         dimension_values: { data: null, error: { code: '23505', message: 'duplicate' } },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createValue(
@@ -335,13 +343,13 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
     expect(body.data.preview.code).toBe('P001')
   })
   it('creates the value archived when is_active=false, as the dashboard does', async () => {
-    const client = makeFlexibleSupabase({
+    const client = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       dimensions: { data: { id: DIMENSION_ID, resets_annually: false }, error: null },
       dimension_values: { data: { ...SAMPLE_VALUE, is_active: false, created_at: '2026-09-27T12:00:00Z' }, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(client)
+    mockServiceClient.mockReturnValue(client.supabase)
 
     const res = await createValue(
       makeRequest(url, {
@@ -366,12 +374,12 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
   })
 
   it('refuses start/end dates on a resets-annually dimension with 400 DIMENSION_VALUE_DATES_NOT_ALLOWED', async () => {
-    const client = makeFlexibleSupabase({
+    const client = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       dimensions: { data: { id: DIMENSION_ID, resets_annually: true }, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(client)
+    mockServiceClient.mockReturnValue(client.supabase)
 
     const res = await createValue(
       makeRequest(url, {
@@ -387,7 +395,7 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
   })
 
   it('keeps start/end dates on an accumulating dimension (projekt)', async () => {
-    const client = makeFlexibleSupabase({
+    const client = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       dimensions: { data: { id: DIMENSION_ID, resets_annually: false }, error: null },
       dimension_values: {
@@ -396,7 +404,7 @@ describe('POST /api/v1/companies/:companyId/dimensions/:id/values', () => {
       },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(client)
+    mockServiceClient.mockReturnValue(client.supabase)
 
     const res = await createValue(
       makeRequest(url, {

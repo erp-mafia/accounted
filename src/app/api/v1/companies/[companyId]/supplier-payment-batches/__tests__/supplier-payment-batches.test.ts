@@ -41,6 +41,8 @@ import { POST as previewBatch } from '../preview/route'
 import { GET as getBatch } from '../[id]/route'
 import { GET as downloadFile } from '../[id]/file/route'
 import { POST as cancelBatch } from '../[id]/cancel/route'
+import { routeRpcCalls, isIdempotencyClaim } from '@/tests/helpers'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -84,7 +86,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['supplier_payment_batches', 'supplier_payment_batch_items', 'supplier_invoices'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const BATCH_ID = 'b1111111-1111-4111-8111-111111111111'
@@ -124,6 +126,16 @@ const SETTINGS = {
   },
   error: null,
 }
+
+/** A Swedbank company with the two ids Swedbank assigns: its files take the ISO 2.0 form. */
+const SWEDBANK_ISO2 = {
+  bic: 'SWEDSESS',
+  swedbank_signer_id: '123456789ORI0001',
+  swedbank_corporate_pay_id: '123456789CPO0001',
+}
+
+/** A Svea Bank company with a bankgiro: its bank takes only Bankgirot's LB file (crm#1424). */
+const SVEA = { iban: 'SE4496600000000012345678', bic: 'SVEASESS', bankgiro: '991-2346' }
 
 function invoiceRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -277,6 +289,64 @@ describe('POST /supplier-payment-batches/preview', () => {
     const body = await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()
     expect(body.data).toMatchObject({ debtor_ok: false, debtor_missing: 'iban' })
   })
+
+  it("reports a Nordea company's missing Signer ID, then its missing CCM agreement id, as debtor_missing (crm#1530)", async () => {
+    const preview = async (settings: Record<string, unknown>) => {
+      mockServiceClient.mockReturnValue(
+        makeClient({
+          company_members: MEMBER,
+          supplier_invoices: { data: [invoiceRow()], error: null },
+          supplier_payment_batch_items: { data: [], error: null },
+          companies: COMPANY,
+          company_settings: { data: { ...SETTINGS.data, bic: 'NDEASESS', ...settings }, error: null },
+        }),
+      )
+      return (await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()).data
+    }
+    expect(await preview({})).toMatchObject({ debtor_ok: false, debtor_missing: 'nordea_signer_id' })
+    expect(await preview({ nordea_signer_id: 'NB10000123456' })).toMatchObject({
+      debtor_ok: false,
+      debtor_missing: 'nordea_agreement_id',
+    })
+    expect(await preview({ nordea_signer_id: 'NB10000123456', nordea_agreement_id: 'NB123456' })).toMatchObject({
+      debtor_ok: true,
+      debtor_missing: null,
+    })
+  })
+
+  it('leaves a bankgiro payee out of a Swedbank ISO 2.0 file (crm#1156)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        supplier_invoices: { data: [invoiceRow()], error: null },
+        supplier_payment_batch_items: { data: [], error: null },
+        companies: COMPANY,
+        company_settings: { data: { ...SETTINGS.data, ...SWEDBANK_ISO2 }, error: null },
+      }),
+    )
+    const body = await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()
+    expect(body.data.eligible).toEqual([])
+    expect(body.data.excluded).toEqual([{ supplier_invoice_id: INVOICE_A, reason: 'swedbank_iso2_giro_payee' }])
+    expect(body.data).toMatchObject({ debtor_ok: true, debtor_missing: null })
+  })
+
+  it('names the LB file a Svea Bank company gets, and the bankgiro it needs for one', async () => {
+    const preview = async (settings: Record<string, unknown>) => {
+      mockServiceClient.mockReturnValue(
+        makeClient({
+          company_members: MEMBER,
+          supplier_invoices: { data: [invoiceRow()], error: null },
+          supplier_payment_batch_items: { data: [], error: null },
+          companies: COMPANY,
+          company_settings: { data: { ...SETTINGS.data, ...settings }, error: null },
+        }),
+      )
+      return (await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()).data
+    }
+    expect(await preview(SVEA)).toMatchObject({ format: 'bg_lb', debtor_ok: true, debtor_missing: null, excluded: [] })
+    expect(await preview({ ...SVEA, bankgiro: null })).toMatchObject({ format: 'bg_lb', debtor_ok: false, debtor_missing: 'bankgiro' })
+    expect(await preview({})).toMatchObject({ format: 'pain001' })
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────
@@ -333,6 +403,7 @@ describe('POST /supplier-payment-batches', () => {
     const body = await res.json()
     expect(body.data).toEqual({
       supplier_payment_batch_id: BATCH_ID,
+      handle: toHandle('supplier_payment_batch', BATCH_ID),
       msg_id: 'ACCOUNTED-5566778899-BB1111111',
       format: 'pain001',
       status: 'created',
@@ -345,8 +416,8 @@ describe('POST /supplier-payment-batches', () => {
         download: '/api/v1/companies/{companyId}/supplier-payment-batches/{supplier_payment_batch_id}/file',
       },
     })
-    expect(client.rpc).toHaveBeenCalledTimes(1)
-    const [fn, args] = client.rpc.mock.calls[0] as [string, Record<string, unknown>]
+    expect(routeRpcCalls(client.rpc)).toHaveLength(1)
+    const [fn, args] = routeRpcCalls(client.rpc)[0] as [string, Record<string, unknown>]
     expect(fn).toBe('create_supplier_payment_batch')
     expect(args).toMatchObject({
       p_company_id: COMPANY_ID,
@@ -380,7 +451,7 @@ describe('POST /supplier-payment-batches', () => {
       ],
     })
     expect(body.data.preview.msg_id).toBeUndefined()
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(wrote(client)).toBe(false)
   })
 
@@ -396,6 +467,49 @@ describe('POST /supplier-payment-batches', () => {
       { id: INVOICE_B, reason: 'not_found' },
     ])
     expect(wrote(client)).toBe(false)
+  })
+
+  it('400 SI_BATCH_INELIGIBLE_INVOICE for a bankgiro payee in a Swedbank ISO 2.0 file, saying what to do instead', async () => {
+    const client = eligibleClient({ company_settings: { data: { ...SETTINGS.data, ...SWEDBANK_ISO2 }, error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ items: [{ supplier_invoice_id: INVOICE_A }] })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_BATCH_INELIGIBLE_INVOICE')
+    expect(body.error.details.invoices).toEqual([{ id: INVOICE_A, reason: 'swedbank_iso2_giro_payee' }])
+    expect(body.error.details.reason).toContain('Swedbanks ISO 2.0-avtal betalar bara till bankkonton')
+    expect(body.error.details.reason).toContain('ISO 1.0-avtal för leverantörsbetalningar')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('writes an LB file for a Svea Bank company whatever format the caller names, and refuses its bank-account payee saying why', async () => {
+    const client = eligibleClient({
+      company_settings: { data: { ...SETTINGS.data, ...SVEA }, error: null },
+      rpc: { data: { ok: true, batch: batchRow({ format: 'bg_lb' }) }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ format: 'pain001', items: [{ supplier_invoice_id: INVOICE_A }] })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ format: 'bg_lb', file: { filename: 'betalfil_20260810_b1111111.txt' } })
+    const [, args] = routeRpcCalls(client.rpc)[0] as [string, Record<string, unknown>]
+    expect(args).toMatchObject({ p_format: 'bg_lb' })
+
+    const accountPayee = eligibleClient({
+      company_settings: { data: { ...SETTINGS.data, ...SVEA }, error: null },
+      supplier_invoices: {
+        data: [invoiceRow({ supplier: { ...invoiceRow().supplier, bankgiro: null, clearing_number: '6000', account_number: '123456789' } })],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(accountPayee)
+    const refused = await post({ items: [{ supplier_invoice_id: INVOICE_A }] })
+    expect(refused.status).toBe(400)
+    const refusal = await refused.json()
+    expect(refusal.error.code).toBe('SI_BATCH_INELIGIBLE_INVOICE')
+    expect(refusal.error.details.invoices).toEqual([{ id: INVOICE_A, reason: 'lb_bank_account_payee' }])
+    expect(refusal.error.details.reason).toContain('tar bara emot Bankgirots LB-fil')
+    expect(wrote(accountPayee)).toBe(false)
   })
 
   it('400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING above the remaining amount', async () => {
@@ -432,7 +546,7 @@ describe('POST /supplier-payment-batches', () => {
     const confirmed = eligibleClient({ supplier_payment_batch_items: active })
     mockServiceClient.mockReturnValue(confirmed)
     expect((await post({ items: [{ supplier_invoice_id: INVOICE_A }], confirm_already_batched: true })).status).toBe(201)
-    expect((confirmed.rpc.mock.calls[0] as [string, Record<string, unknown>])[1].p_confirm_already_batched).toBe(true)
+    expect((routeRpcCalls(confirmed.rpc)[0] as [string, Record<string, unknown>])[1].p_confirm_already_batched).toBe(true)
   })
 
   it('expected_payees locks a two-request flow: 409 SI_BATCH_PAYEE_CHANGED when the payee differs, 201 when it holds', async () => {
@@ -688,9 +802,35 @@ describe('GET /supplier-payment-batches/:id/file', () => {
       download_count: 3,
     })
     expect(body.data.content).toContain('<MsgId>ACCOUNTED-5566778899-BB1111111</MsgId>')
+    expect(body.data.charset).toBe('utf-8')
     expect(body.data.sha256).toMatch(/^[0-9a-f]{64}$/)
     const stamp = client.calls.find((c) => c.table === 'supplier_payment_batches' && c.method === 'update')
     expect(stamp?.args[0]).toMatchObject({ download_count: 3 })
+  })
+
+  it('answers a Svea Bank batch\'s LB file as ISO 8859-1 text, its sha256 over those bytes', async () => {
+    const batch = batchRow({
+      format: 'bg_lb',
+      debtor_snapshot: { name: 'Testbolaget AB', org_number: '556677-8899', iban: SVEA.iban, bic: SVEA.bic, bankgiro: '9912346', city: null },
+    })
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        supplier_payment_batches: [{ data: batch, error: null }, { data: null, error: null }],
+        supplier_payment_batch_items: { data: [itemRow({ payee_name: 'Åkeri Öst AB' })], error: null },
+      }),
+    )
+    const body = await (await get()).json()
+    expect(body.data).toMatchObject({
+      format: 'bg_lb',
+      filename: 'betalfil_20260810_b1111111.txt',
+      content_type: 'text/plain',
+      charset: 'iso-8859-1',
+    })
+    expect(body.data.content.split('\r\n')[1]).toMatch(/^140050501055CD3014794407 {13}000000073750260815/)
+    const { createHash } = await import('node:crypto')
+    expect(body.data.sha256).toBe(createHash('sha256').update(Buffer.from(body.data.content, 'latin1')).digest('hex'))
+    expect(body.data.sha256).not.toBe(createHash('sha256').update(body.data.content, 'utf8').digest('hex'))
   })
 })
 

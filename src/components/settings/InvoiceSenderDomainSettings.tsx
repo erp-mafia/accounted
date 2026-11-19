@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowPathIcon, CheckIcon, PlusIcon, Square2StackIcon, TrashIcon } from '@/components/icons'
 import {
   SettingsGroup,
   SettingsRow,
@@ -81,6 +81,11 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
         return
       }
       const json = await res.json()
+      // The read answers `available: false` for a company without the grant.
+      if (json.available === false) {
+        setAvailable(false)
+        return
+      }
       setAvailable(true)
       applyRow(json.data ?? null)
     } catch {
@@ -119,7 +124,13 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
         body: JSON.stringify({ domain: domainInput }),
       })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? t('claim_error_title'))
+      // The platform's email provider account is out of domains (crm#1288):
+      // nothing the user did or can fix, and their invoice mail is unaffected.
+      if (json.code === 'SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT') {
+        toast({ title: t('claim_unavailable_title'), description: t('claim_unavailable_description') })
+        return
+      }
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('claim_error_title') }))
       applyRow(json.data)
       setDomainInput('')
       toast({ title: t('claim_success_title'), description: t('claim_success_description') })
@@ -135,7 +146,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
     try {
       const res = await fetch(`${BASE}/verify`, { method: 'POST' })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? t('verify_error_title'))
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('verify_error_title') }))
       applyRow(json.data)
       toast(
         json.data.status === 'verified'
@@ -159,7 +170,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
           body: JSON.stringify(body),
         })
         const json = await res.json()
-        if (!res.ok) throw new Error(json.error ?? t('save_error_title'))
+        if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('save_error_title') }))
         applyRow(json.data)
         toast({ title: t('saved_title') })
       } catch (err) {
@@ -183,7 +194,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
     try {
       const res = await fetch(BASE, { method: 'DELETE' })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? t('remove_error_title'))
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('remove_error_title') }))
       applyRow(null)
       toast({ title: t('remove_success_title') })
     } catch (err) {
@@ -229,7 +240,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
       ) : loadFailed ? (
         <div role="status" className="flex items-center justify-between gap-4 px-1 py-3 text-sm">
           <p className="text-muted-foreground">{t('load_error')}</p>
-          <Button variant="outline" size="sm" onClick={() => void fetchDomain()}>
+          <Button variant="outline" onClick={() => void fetchDomain()}>
             {t('retry')}
           </Button>
         </div>
@@ -247,7 +258,8 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                 if (e.key === 'Enter') void handleClaim()
               }}
             />
-            <Button size="sm" onClick={() => void handleClaim()} disabled={!domainInput.trim()} loading={isClaiming}>
+            <Button onClick={() => void handleClaim()} disabled={!domainInput.trim()} loading={isClaiming}>
+              <PlusIcon className="h-4 w-4" />
               {t('add_button')}
             </Button>
           </SettingsRow>
@@ -263,8 +275,8 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
               <Badge variant={STATUS_VARIANT[domain.status]}>{statusLabels[domain.status]}</Badge>
             )}
             <div className="ml-auto flex shrink-0 items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => void handleVerify()} loading={isChecking}>
-                {!isChecking && <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+              <Button variant="outline" onClick={() => void handleVerify()} loading={isChecking}>
+                {!isChecking && <ArrowPathIcon className="h-3.5 w-3.5" />}
                 {t('check_again')}
               </Button>
               <Button
@@ -274,7 +286,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                 loading={isRemoving}
                 aria-label={t('remove_aria')}
               >
-                {!isRemoving && <Trash2 className="h-3.5 w-3.5" />}
+                {!isRemoving && <TrashIcon className="h-3.5 w-3.5" />}
               </Button>
             </div>
           </SettingsRow>
@@ -308,8 +320,8 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                   className="max-w-xs"
                 />
               </SettingsRow>
-              <div className="flex items-start gap-3 rounded-lg border border-border p-4 text-sm">
-                <Check className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="flex items-start gap-3 rounded-lg p-4 text-sm bg-control shadow-raised">
+                <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 <div className="space-y-1">
                   <p className="font-medium">
                     {t('preview_label')}{' '}
@@ -325,7 +337,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                 </div>
               </div>
               <div className="flex justify-end px-1 pt-4">
-                <Button type="button" size="sm" onClick={handleSaveSender} disabled={isSaving}>
+                <Button type="button" onClick={handleSaveSender} disabled={isSaving}>
                   {isSaving ? t('saving') : t('save')}
                 </Button>
               </div>
@@ -334,20 +346,20 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
             <div className="space-y-3 px-1 py-3">
               <p className="text-sm text-muted-foreground">{t('dns_instructions')}</p>
               {records.length > 0 ? (
-                <div className="overflow-x-auto rounded-lg border border-border">
+                <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b border-border">
-                        <th className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('dns_type')}</th>
-                        <th className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('dns_name')}</th>
-                        <th className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('dns_value')}</th>
-                        <th className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('dns_status')}</th>
+                      <tr className="border-b-hairline">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">{t('dns_type')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">{t('dns_name')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">{t('dns_value')}</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">{t('dns_status')}</th>
                         <th className="px-3 py-2" />
                       </tr>
                     </thead>
                     <tbody>
                       {records.map((r, i) => (
-                        <tr key={`${r.type}-${r.name}-${i}`} className="border-b border-border last:border-0">
+                        <tr key={`${r.type}-${r.name}-${i}`} className="border-b-hairline last:border-0">
                           <td className="px-3 py-2 font-mono text-xs">{r.type}</td>
                           <td className="px-3 py-2 font-mono text-xs break-all">{r.name}</td>
                           <td className="px-3 py-2 font-mono text-xs break-all">{r.value}</td>
@@ -360,7 +372,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                               onClick={() => void handleCopy(r.value)}
                               aria-label={t('copy_record_aria', { type: r.type })}
                             >
-                              <Copy className="h-3.5 w-3.5" />
+                              <Square2StackIcon className="h-3.5 w-3.5" />
                             </Button>
                           </td>
                         </tr>

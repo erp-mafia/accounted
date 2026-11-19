@@ -30,14 +30,15 @@ import {
   calculateCashPosition,
   calculateGrossMargin,
   calculateExpenseRatio,
-  calculateAvgPaymentDays,
+  averagePaymentDays,
   calculateVatLiability,
   aggregateTopSuppliers,
   fetchTopSupplierInvoices,
   fetchKpiAccountOverrides,
-  fetchPaidInvoicesInRange,
+  fetchPaymentDaysInRange,
   kpiReceivablesAsOf,
   type KpiSupplierInvoiceRow,
+  type PaymentDaysTotals,
 } from '@/lib/reports/kpi'
 import { roundOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
@@ -107,13 +108,14 @@ async function buildReport(
   const prefsQuery = () => fetchKpiAccountOverrides(supabase, companyId)
   // Payments inside the period only: the KPI describes the reported period,
   // and the MCP tool reads the same helper so the two cannot disagree.
-  const paidInvoicesQuery = () =>
-    fetchPaidInvoicesInRange(supabase, companyId, period.period_start, period.period_end)
+  const paymentDaysQuery = () =>
+    fetchPaymentDaysInRange(supabase, companyId, period.period_start, period.period_end)
   // Receivables as they stood at period end for a past period (live state
   // for the current one), never today's for last year's report.
   const receivablesAsOf = kpiReceivablesAsOf(period.period_end)
-  // Paginated: awaiting the bare query capped the rows at PostgREST's 1000
-  // default and silently corrupted the supplier totals for large companies.
+  // One read of every row (kpi.ts): awaiting a bare query capped the rows at
+  // PostgREST's 1000 default and silently corrupted the supplier totals for
+  // large companies.
   const topSuppliersQuery = () =>
     fetchTopSupplierInvoices(supabase, companyId, period.period_start, period.period_end)
 
@@ -122,7 +124,7 @@ async function buildReport(
   let trialBalanceResult: { rows: TrialBalanceRow[] }
   let arLedger: ARLedgerReport
   let monthlyBreakdown: MonthlyBreakdown
-  let paidInvoices: Array<{ invoice_date: string; paid_at: string }>
+  let paymentDays: PaymentDaysTotals
   let topSuppliersResult: { data: unknown[] | null; error: unknown }
   let filteredTrialBalance: { rows: TrialBalanceRow[] } | null
 
@@ -141,7 +143,7 @@ async function buildReport(
       generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' }),
       generateARLedger(supabase, companyId, receivablesAsOf),
       generateMonthlyBreakdown(supabase, companyId, periodId, { dimensions }),
-      paidInvoicesQuery(),
+      paymentDaysQuery(),
       topSuppliersQuery(),
       generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include', dimensions }),
     ])
@@ -150,7 +152,7 @@ async function buildReport(
     trialBalanceResult = tb
     arLedger = ar
     monthlyBreakdown = mb
-    paidInvoices = paid
+    paymentDays = paid
     topSuppliersResult = sup
     filteredTrialBalance = filteredTb
   } else {
@@ -183,7 +185,7 @@ async function buildReport(
       ),
       prefsQuery(),
       generateARLedger(supabase, companyId, receivablesAsOf),
-      paidInvoicesQuery(),
+      paymentDaysQuery(),
       topSuppliersQuery(),
     ])
 
@@ -219,7 +221,7 @@ async function buildReport(
     )
     accountOverrides = prefsRes
     arLedger = ar
-    paidInvoices = paid
+    paymentDays = paid
     topSuppliersResult = sup
     filteredTrialBalance = null
   }
@@ -290,7 +292,7 @@ async function buildReport(
     totalExpenses: incomeStatement.total_expenses,
     grossMargin: calculateGrossMargin(incomeStatement),
     expenseRatio: calculateExpenseRatio(incomeStatement),
-    avgPaymentDays: calculateAvgPaymentDays(paidInvoices),
+    avgPaymentDays: averagePaymentDays(paymentDays),
     periodComplete: period.is_closed,
     months: monthlyBreakdown.months,
     period: { start: period.period_start, end: period.period_end },

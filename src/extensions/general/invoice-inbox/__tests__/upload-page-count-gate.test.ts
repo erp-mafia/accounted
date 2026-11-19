@@ -1,17 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
+import { parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { receiptImage } from '@/tests/fixtures/receipt-images'
 
 // Mocks. extract-invoice-fields is the AI call we want to assert is NOT
 // invoked when the gate trips. uploadDocument is the storage write: we
 // short-circuit it to a synthetic doc row.
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', async () => {
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', async () => {
   const actual = await vi.importActual<
-    typeof import('@/extensions/general/invoice-inbox/lib/extract-invoice-fields')
-  >('@/extensions/general/invoice-inbox/lib/extract-invoice-fields')
+    typeof import('@/lib/documents/inbox-extraction/extract-invoice-fields')
+  >('@/lib/documents/inbox-extraction/extract-invoice-fields')
   return {
     ...actual,
     extractInvoiceFields: vi.fn(),
@@ -56,16 +56,20 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
 // The deferred extraction worker builds its own cookieless service client
 // (the request-scoped one may be gone once the response is flushed). Route
 // it to the same mock supabase so the CAS flip is observable.
+// Match on arrival runs after the flip; its own reads and writes are tested
+// in lib/documents/bank-match, not by this file's hand-built client.
+vi.mock('@/lib/operations/inbox-bank-match', () => ({ proposeBankMatchForInboxItem: vi.fn() }))
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
   return { ...actual, createServiceClientNoCookies: vi.fn() }
 })
 
-import { extractInvoiceFields, emptyResult } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { processArchivedDocument, uploadAndExtract } from '../lib/upload-and-extract'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 
 function findRoute(method: string, path: string) {
   return invoiceInboxExtension.apiRoutes!.find(
@@ -87,6 +91,9 @@ interface FlipCapture {
 function makeSupabase(
   captured: { row?: Record<string, unknown> },
   flip: FlipCapture = { filters: [] },
+  // The row's reading when the worker reads it before the flip (a person
+  // may have chosen a purchase category meanwhile). Undefined: no read path.
+  currentReading?: Record<string, unknown> | null,
 ) {
   const supplierChain = {
     select: vi.fn().mockReturnThis(),
@@ -118,6 +125,17 @@ function makeSupabase(
       flip.payload = payload
       return updateChain
     }),
+    ...(currentReading !== undefined
+      ? {
+          select: vi.fn(() => {
+            const read = {
+              eq: vi.fn(() => read),
+              maybeSingle: vi.fn().mockResolvedValue({ data: { extracted_data: currentReading }, error: null }),
+            }
+            return read
+          }),
+        }
+      : {}),
   }
   return {
     from: vi.fn((table: string) => {
@@ -135,7 +153,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as ExtensionContext
@@ -202,28 +219,35 @@ describe('detected receipt MIME propagation', () => {
       eventType: 'DocumentIngested', payload: expect.objectContaining({ mime_type: 'image/jpeg' }),
     }))
   })
+})
 
-  it('uses archived MIME when attaching an image to an existing inbox item', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'item-1', document_id: null, created_supplier_invoice_id: null, correlation_id: 'correlation-1' }, error: null })
-    enqueue({ data: { is_sandbox: false }, error: null })
-    enqueue({ data: null, error: null }) // own-company identity
-    enqueue({ data: null, error: null }) // link the inbox item
-    vi.mocked(createServiceClientNoCookies).mockReturnValue(makeSupabase({}) as never)
+describe('the mail a document came with reaches its reading (crm#1749)', () => {
+  it.each([false, true])('passes the subject and received time to the extraction (deferred=%s)', async (deferred) => {
+    const supabase = makeSupabase({})
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
     vi.mocked(uploadDocument).mockResolvedValueOnce({ id: 'doc-1', mime_type: 'image/jpeg' } as never)
     vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
-    const buffer = receiptImage('jpeg')
-    const form = new FormData()
-    form.set('file', new File([buffer], 'receipt.png', { type: 'image/png' }))
-    const response = await findRoute('POST', '/items/:id/attach-document').handler(new Request(
-      'http://localhost/items/item-1/attach-document?_id=item-1', { method: 'POST', body: form },
-    ), buildCtx(supabase))
-    expect(response.status).toBe(200)
+    const file = { name: 'invoice.jpg', buffer: receiptImage('jpeg'), type: 'image/jpeg' }
+    const mail = { from: 'billing@example.com', subject: 'Your invoice of Nov 7, 2026', receivedAt: '2026-11-07T07:41:00.000Z' }
+
+    await uploadAndExtract(supabase as never, 'user-1', 'company-1', file, 'email', mail, undefined, { deferExtraction: deferred })
+
+    await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
     expect(extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
-      buffer: Buffer.from(buffer), mimeType: 'image/jpeg', fileName: 'receipt.png',
+      emailContext: { subject: 'Your invoice of Nov 7, 2026', receivedAt: '2026-11-07T07:41:00.000Z' },
     }))
-    expect(appendProcessingHistory).toHaveBeenCalledWith(expect.objectContaining({
-      eventType: 'DocumentIngested', payload: expect.objectContaining({ mime_type: 'image/jpeg' }),
+  })
+
+  it('gives an upload without a mail no email context', async () => {
+    const supabase = makeSupabase({})
+    vi.mocked(uploadDocument).mockResolvedValueOnce({ id: 'doc-1', mime_type: 'image/jpeg' } as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
+    const file = { name: 'receipt.jpg', buffer: receiptImage('jpeg'), type: 'image/jpeg' }
+
+    await uploadAndExtract(supabase as never, 'user-1', 'company-1', file, 'upload')
+
+    expect(extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
+      emailContext: { subject: null, receivedAt: null },
     }))
   })
 })
@@ -312,28 +336,24 @@ describe('POST /upload: staged extraction + page-count gate (issue #553)', () =>
     // No slice happened, so no pages truncation marker.
     expect((flip.payload?.extracted_data as { pages?: unknown })?.pages).toBeUndefined()
   })
+})
 
-  it('honors client-side skip_extraction=true synchronously with skip_reason=client_opt_out', async () => {
-    // The BYO-extraction opt-out must stay on the synchronous path: the
-    // caller PUTs its parsed fields right after upload, and a deferred flip
-    // would overwrite them.
+describe('POST /upload: the deferred worker keeps a person\'s purchase category', () => {
+  it('carries a choice made while the row waited onto the flipped reading', async () => {
     const captured: { row?: Record<string, unknown> } = {}
-    const supabase = makeSupabase(captured)
+    const flip: FlipCapture = { filters: [] }
+    const choice = { code: 'expense.office.supplies', source: 'person', set_at: '2026-10-15T09:00:00.000Z', set_via: 'dashboard' }
+    const supabase = makeSupabase(captured, flip, { totals: { total: 1 }, purchaseCategory: choice })
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
 
-    const bytes = await makePdfBuffer(1)
-    const file = new File([bytes as BlobPart], '1-page.pdf', { type: 'application/pdf' })
-    const form = new FormData()
-    form.set('file', file)
-    form.set('skip_extraction', 'true')
-    const req = makeMultipartRequest(form)
+    const res = await uploadRoute.handler(await makeUploadRequest(6), buildCtx(supabase))
+    expect(res.status).toBe(200)
 
-    const res = await uploadRoute.handler(req, buildCtx(supabase))
-    const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
-
-    expect(extractInvoiceFields).not.toHaveBeenCalled()
-    expect(body.data.status).toBe('received')
-    expect(body.data.extraction_skipped).toBe(true)
-    expect(body.data.skip_reason).toBe('client_opt_out')
-    expect(captured.row?.status).toBe('received')
+    await vi.waitFor(() => expect(flip.payload).toBeDefined())
+    expect((flip.payload?.extracted_data as { purchaseCategory?: unknown }).purchaseCategory).toEqual(choice)
+    // Then the bank is checked for the item's payment, with the worker's client.
+    await vi.waitFor(() => expect(proposeBankMatchForInboxItem).toHaveBeenCalledWith(supabase, 'company-1', 'inbox-1'))
   })
 })
+

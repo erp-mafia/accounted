@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState, useMemo } from 'react'
 import type { EntityType } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -9,12 +9,14 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { Trash2, Plus } from 'lucide-react'
-import { convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
+import { PlusIcon, TrashIcon } from '@/components/icons'
+import { convertLibraryToBookingTemplate, applyTemplate, templateShareLines } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
-import { formatCurrency } from '@/lib/utils'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 export type TemplateFormMode = 'create' | 'edit' | 'duplicate'
 
@@ -40,6 +42,8 @@ export function TemplateForm({
   onSaved: () => void
 }) {
   const t = useTranslations('settings_booking_templates')
+  const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
   // When customizing a system template (mode 'duplicate') we suggest a distinct
@@ -87,7 +91,7 @@ export function TemplateForm({
     })
   }
 
-  // Default new lines to a VAT line — the 2-line template starts with one
+  // Default new lines to a VAT line - the 2-line template starts with one
   // business + one settlement, and the natural extension is a VAT leg.
   // Defaulting to 'business' instead would silently break the converter
   // (which requires exactly one business line) and the template would
@@ -104,16 +108,18 @@ export function TemplateForm({
   // Ratio is only load-bearing when a template splits the amount across more
   // than one cost/revenue line. Hide it for the simple case to keep the form
   // approachable for non-accountants; it stays 1.0 under the hood.
-  const businessLineCount = lines.filter((l) => l.type === 'business').length
+  // A reverse-charge basis pair (45xx / 4598) is no share of the cost: it
+  // mirrors the cost line it belongs to, so its legs get no input and no part
+  // in the sum check (templateShareLines).
+  const shareLines = templateShareLines(lines)
+  const businessLineCount = shareLines.length
   const showRatio = businessLineCount > 1
   // The ratio only validates against cost/revenue lines (businessRatioSum), so
   // only those get an editable input. The settlement leg is the full counter-
-  // amount (ratio 1.0) and is shown in the live preview, not as a control —
+  // amount (ratio 1.0) and is shown in the live preview, not as a control:
   // an editable settlement ratio that doesn't feed the sum check would mislead.
-  const firstRatioIndex = showRatio ? lines.findIndex((l) => l.type === 'business') : -1
-  const businessRatioSum = lines
-    .filter((l) => l.type === 'business')
-    .reduce((sum, l) => sum + (l.ratio ?? 1), 0)
+  const firstRatioIndex = showRatio ? lines.indexOf(shareLines[0]) : -1
+  const businessRatioSum = shareLines.reduce((sum, l) => sum + (l.ratio ?? 1), 0)
   const ratioSumOff = showRatio && Math.abs(businessRatioSum - 1) > 0.001
 
   // Live split preview for a 1 000 kr amount. Computed only once every line has
@@ -128,14 +134,14 @@ export function TemplateForm({
   }, [lines])
 
   // Soft, non-blocking hint when the chosen name collides with an existing
-  // company template (no DB unique constraint — duplicates are allowed).
+  // company template (no DB unique constraint - duplicates are allowed).
   const nameCollision =
     mode !== 'edit' &&
     name.trim().length > 0 &&
     duplicateNamePool.some((n) => n.trim().toLowerCase() === name.trim().toLowerCase())
 
   // Real-time check: can this draft be picked from the transaction sheet?
-  // If not, we show a hint — save remains allowed (templates may still be
+  // If not, we show a hint - save remains allowed (templates may still be
   // useful from the journal-entry form).
   const isConvertible = (() => {
     const draft: BookingTemplateLibrary = {
@@ -178,7 +184,7 @@ export function TemplateForm({
       })
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
-        toast({ title: json.error || t('toast_create_failed'), variant: 'destructive' })
+        toast({ title: getErrorMessage(json, { locale: errorLocale, fallback: t('toast_create_failed') }), variant: 'destructive' })
         return
       }
       toast({ title: isEdit ? t('toast_updated') : t('toast_created') })
@@ -225,9 +231,9 @@ export function TemplateForm({
         </div>
         <div className="space-y-2 mt-1">
           {lines.map((line, i) => {
-            const showRatioInput = showRatio && line.type === 'business'
+            const showRatioInput = showRatio && shareLines.includes(line)
             return (
-            <div key={i} className="rounded-lg border border-border p-2 space-y-1.5">
+            <div key={i} className="rounded-lg p-2 space-y-1.5 bg-control shadow-raised">
               <div className="flex items-center gap-2">
                 <Input
                   value={line.account}
@@ -245,12 +251,13 @@ export function TemplateForm({
                 <Button
                   type="button"
                   variant="outline"
-                  size="icon-sm"
+                  size="icon"
                   onClick={() => removeLine(i)}
                   disabled={lines.length <= 2}
+                  aria-label={tCommon('delete')}
                   className="shrink-0"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <TrashIcon className="h-3.5 w-3.5" />
                 </Button>
               </div>
               <div className="flex items-center gap-2">
@@ -285,10 +292,14 @@ export function TemplateForm({
                 )}
                 {showRatioInput && (
                   <div className="flex items-center gap-1 shrink-0">
+                    {/* step="any": a share is any decimal (särskild löneskatt
+                        0.2426, a third 0.3333). A stepped input made the
+                        browser refuse to submit the form (crm#1657); every
+                        amount is rounded to öre in applyTemplate anyway. */}
                     <Input
                       type="number"
                       inputMode="decimal"
-                      step="0.1"
+                      step="any"
                       min={0}
                       max={10}
                       value={String(line.ratio ?? 1)}
@@ -297,7 +308,7 @@ export function TemplateForm({
                         if (!Number.isNaN(n)) updateLine(i, 'ratio', n)
                       }}
                       aria-label={t('ratio_label')}
-                      className="w-16 font-mono tabular-nums text-right"
+                      className="w-20 font-mono tabular-nums text-right"
                     />
                     {i === firstRatioIndex && <InfoTooltip content={t('ratio_help')} />}
                   </div>
@@ -305,15 +316,15 @@ export function TemplateForm({
               </div>
             </div>
           )})}
-          <Button type="button" variant="outline" size="sm" onClick={addLine}>
-            <Plus className="h-3 w-3 mr-1" />
+          <Button type="button" variant="outline" onClick={addLine}>
+            <PlusIcon className="h-3 w-3" />
             {t('add_line')}
           </Button>
         </div>
       </div>
 
       {ratioSumOff && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs text-attn leading-snug">
             {t('ratio_sum_warning')}
           </p>
@@ -323,35 +334,12 @@ export function TemplateForm({
       {preview && (
         <div>
           <Label>{t('preview_label')}</Label>
-          <table className="w-full text-xs mt-1">
-            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-              <tr className="border-b">
-                <th className="text-left py-1 w-14">{t('th_account')}</th>
-                <th className="text-left py-1">{t('th_description')}</th>
-                <th className="text-right py-1 w-20">{t('th_debit')}</th>
-                <th className="text-right py-1 w-20">{t('th_credit')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.map((pl, i) => (
-                <tr key={i} className="border-b last:border-0">
-                  <td className="py-1 font-mono">{pl.account_number}</td>
-                  <td className="py-1">{pl.line_description}</td>
-                  <td className="py-1 text-right tabular-nums">
-                    {pl.debit_amount ? formatCurrency(Number(pl.debit_amount)) : ''}
-                  </td>
-                  <td className="py-1 text-right tabular-nums">
-                    {pl.credit_amount ? formatCurrency(Number(pl.credit_amount)) : ''}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <VoucherLinesTable lines={voucherLineViews(preview)} withCurrency className="mt-1" />
         </div>
       )}
 
       {nameCollision && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs text-attn leading-snug">
             {t('duplicate_name_warning')}
           </p>
@@ -359,7 +347,7 @@ export function TemplateForm({
       )}
 
       {!isConvertible && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs text-attn leading-snug">
             {t('unconvertible_hint')}
           </p>

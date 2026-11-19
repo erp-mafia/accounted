@@ -23,7 +23,7 @@ import {
   listConnections,
   saveConnection,
 } from './lib/connections'
-import { resolveCallbackOrigin } from './lib/callback-origin'
+import { resolveCallbackOrigin } from '@/lib/auth/callback-origin'
 import { isMailConnectEnabled } from './lib/connect-gate'
 import { requireFlowInitiator } from '@/lib/auth/oauth-flow-binding'
 import { createClient } from '@/lib/supabase/server'
@@ -73,11 +73,6 @@ export const mailExtension: Extension = {
   version: '0.1.0',
   sector: 'general',
 
-  settingsPanel: {
-    label: 'Brevlådor',
-    path: '/settings/mail',
-  },
-
   apiRoutes: [
     // Start the consent flow. Returns the URL rather than redirecting so the
     // caller can open it in a deliberate, user-gesture tab.
@@ -85,7 +80,6 @@ export const mailExtension: Extension = {
       method: 'POST',
       path: '/oauth/start',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const refused = await refuseViewer(ctx)
         if (refused) return refused
         if (!isGoogleMailConfigured()) return jsonError('provider_not_configured', 400)
@@ -204,7 +198,6 @@ export const mailExtension: Extension = {
       method: 'GET',
       path: '/connections',
       handler: async (_request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const connections = await listConnections(createServiceClientNoCookies(), ctx.companyId)
         return NextResponse.json({
           data: {
@@ -221,8 +214,10 @@ export const mailExtension: Extension = {
     {
       method: 'DELETE',
       path: '/connections',
+      // The handler decides the role: the grant's owner may always take their
+      // own access away, anyone else needs owner or admin.
+      viewerMay: true,
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const id = new URL(request.url).searchParams.get('id')
         if (!id) return jsonError('missing_id', 400)
         // A malformed id would otherwise reach the database as a cast error

@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertCircle } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TOOLBAR_FIELD_CLASS } from '@/components/ui/toolbar-search'
 import {
@@ -17,9 +17,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { SalaryJournalReport } from '@/lib/reports/salary-journal'
+import type { SalaryJournalReport, SalaryJournalRow } from '@/lib/reports/salary-journal'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Lönejournal on screen: booked salary runs per employee and month for a
@@ -29,10 +30,16 @@ import type { SalaryJournalReport } from '@/lib/reports/salary-journal'
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1)
 
+/** Translation key for a row's category cell: the category for employees, the role for owners and board members. */
+function categoryKey(row: Pick<SalaryJournalRow, 'employmentType' | 'personnelCategory'>): string {
+  if (row.personnelCategory) return `category_${row.personnelCategory}`
+  return row.employmentType === 'board_member' ? 'category_board_member' : 'category_company_owner'
+}
+
 export function LonejournalView() {
   const t = useTranslations('lonejournal')
   const locale = useLocale()
-  const currentYear = new Date().getFullYear()
+  const currentYear = stockholmYearMonth().year
   const [year, setYear] = useState(currentYear)
   const [monthFrom, setMonthFrom] = useState(1)
   const [monthTo, setMonthTo] = useState(12)
@@ -42,6 +49,9 @@ export function LonejournalView() {
   const [result, setResult] = useState<{ key: string; data?: SalaryJournalReport; error?: string } | null>(null)
 
   const query = `year=${year}&month_from=${monthFrom}&month_to=${monthTo}`
+  // "Försök igen" asks again under a new key, so the skeleton shows meanwhile.
+  const [attempt, setAttempt] = useState(0)
+  const requestKey = `${query}#${attempt}`
   useEffect(() => {
     let cancelled = false
     fetch(`/api/reports/salary-journal?${query}`)
@@ -49,24 +59,24 @@ export function LonejournalView() {
         const json = await res.json().catch(() => ({}))
         if (cancelled) return
         if (!res.ok) {
-          setResult({ key: query, error: getErrorMessage(json, { statusCode: res.status }) })
+          setResult({ key: requestKey, error: getErrorMessage(json, { statusCode: res.status }) })
           return
         }
-        setResult({ key: query, data: json.data as SalaryJournalReport })
+        setResult({ key: requestKey, data: json.data as SalaryJournalReport })
       })
       .catch(() => {
-        if (!cancelled) setResult({ key: query, error: t('load_failed') })
+        if (!cancelled) setResult({ key: requestKey, error: t('load_failed') })
       })
     return () => {
       cancelled = true
     }
-  }, [query, t])
+  }, [query, requestKey, t])
 
   const monthName = (month: number) =>
     new Intl.DateTimeFormat(locale, { month: 'long' }).format(new Date(2026, month - 1, 1))
 
   const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i)
-  const upToDate = result !== null && result.key === query
+  const upToDate = result !== null && result.key === requestKey
   const report = upToDate ? result.data ?? null : null
   const error = upToDate ? result.error ?? null : null
 
@@ -128,26 +138,22 @@ export function LonejournalView() {
       </div>
 
       {!upToDate ? (
-        <div className="space-y-3" aria-busy>
+        <LateReveal className="space-y-3">
           <Skeleton className="h-4 w-1/3" />
           <Skeleton className="h-40 w-full" />
-        </div>
+        </LateReveal>
       ) : error || !report ? (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-destructive">
-            <AlertCircle className="mx-auto mb-2 h-6 w-6" />
-            {error ?? t('load_failed')}
-          </CardContent>
-        </Card>
+        <LoadError title={error ?? t('load_failed')} onRetry={() => setAttempt((n) => n + 1)} />
       ) : report.rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('empty')}</p>
+        <EmptyState title={t('empty')} />
       ) : (
         <Card>
-          <CardContent className="p-0">
+          <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>{t('col_employee')}</TableHead>
+                  <TableHead>{t('col_category')}</TableHead>
                   <TableHead>{t('col_period')}</TableHead>
                   <TableHead className="text-right">{t('col_gross')}</TableHead>
                   <TableHead className="text-right">{t('col_tax')}</TableHead>
@@ -161,21 +167,22 @@ export function LonejournalView() {
                 {report.rows.map((row, i) => (
                   <TableRow key={`${row.employeeId}-${row.periodYear}-${row.periodMonth}-${i}`}>
                     <TableCell data-ph-mask>{row.employeeName}</TableCell>
+                    <TableCell className="text-muted-foreground">{t(categoryKey(row))}</TableCell>
                     <TableCell className="tabular-nums">
                       {row.periodYear}-{String(row.periodMonth).padStart(2, '0')}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.grossSalary)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.taxWithheld)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.netSalary)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.avgifterAmount)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.vacationAccrual)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(row.totalEmployerCost)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.grossSalary)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.taxWithheld)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.netSalary)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.avgifterAmount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.vacationAccrual)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(row.totalEmployerCost)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
               <TableFooter>
                 <TableRow>
-                  <TableCell colSpan={2} className="font-medium">
+                  <TableCell colSpan={3} className="font-medium">
                     {t('total')}
                   </TableCell>
                   <TableCell className="text-right tabular-nums font-medium">{formatCurrency(report.totals.grossSalary)}</TableCell>
@@ -186,6 +193,40 @@ export function LonejournalView() {
                   <TableCell className="text-right tabular-nums font-medium">{formatCurrency(report.totals.totalEmployerCost)}</TableCell>
                 </TableRow>
               </TableFooter>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Per group: the arbetare total Fora reads, the tjänstemän total
+          Collectum reads, and owners and board members on their own
+          accounts. Only worth a block when the roster spans groups. */}
+      {report && (report.groupTotals ?? []).length > 1 && (
+        <Card>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('col_group')}</TableHead>
+                  <TableHead className="text-right">{t('col_employees')}</TableHead>
+                  <TableHead className="text-right">{t('col_gross')}</TableHead>
+                  <TableHead className="text-right">{t('col_avgifter')}</TableHead>
+                  <TableHead className="text-right">{t('col_vacation')}</TableHead>
+                  <TableHead className="text-right">{t('col_total')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody className="stagger-enter">
+                {report.groupTotals.map((group) => (
+                  <TableRow key={group.group}>
+                    <TableCell>{t(`group_${group.group}`)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{group.employeeCount}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.grossSalary)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.avgifterAmount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.vacationAccrual)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatRowAmount(group.totalEmployerCost)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
             </Table>
           </CardContent>
         </Card>

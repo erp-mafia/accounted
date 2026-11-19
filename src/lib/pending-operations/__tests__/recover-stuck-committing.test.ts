@@ -4,7 +4,7 @@
  * The transition legality against real triggers is covered by
  * tests/pg/pending-operations-committing-recovery.pg.test.ts; these tests pin
  * the decision logic: row selection filters, per-type evidence probes, the
- * conservative rejected-by-default outcome, CAS guards, and the metric-style
+ * unknown-by-default outcome, CAS guards, and the metric-style
  * pending_op_recovery log line.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -119,14 +119,13 @@ describe('buildRecoveryUpdate', () => {
     })
   })
 
-  it('rejects with an explanation when no evidence exists, never back to pending', () => {
+  it('marks the outcome unknown when no evidence exists, never rejected or pending', () => {
     const row = makeRow()
     const update = buildRecoveryUpdate(row, null, '2026-07-22T02:30:00.000Z')
 
-    expect(update.status).toBe('rejected')
-    expect(update.result_data.auto_rejected).toBe(true)
-    // Distinct from 'expired' so the UI's "Utgick automatiskt" badge (strict
-    // on reason === 'expired') never claims recovery rows.
+    expect(update.status).toBe('unknown')
+    expect(update.result_data.outcome_unknown).toBe(true)
+    expect(update.result_data.auto_rejected).toBeUndefined()
     expect(update.result_data.reason).toBe('stuck_committing')
     expect(update.result_data.recovery).toMatchObject({
       evidence: null,
@@ -274,11 +273,11 @@ describe('recoverStuckCommittingOperations', () => {
     enqueue({ data: [bookedOp, unknownOp] }) // listing page
     enqueue({ data: true }) // is_transaction_booked probe
     enqueue({ data: { id: 'op-booked' } }) // CAS finalize committed
-    enqueue({ data: { id: 'op-unknown' } }) // CAS finalize rejected
+    enqueue({ data: { id: 'op-unknown' } }) // CAS finalize unknown
 
     const summary = await recoverStuckCommittingOperations(supabase, { log, now })
 
-    expect(summary).toEqual({ scanned: 2, committed: 1, rejected: 1, skipped: 0 })
+    expect(summary).toEqual({ scanned: 2, committed: 1, unknown: 1, skipped: 0 })
 
     // Listing: status CAS filter + threshold on updated_at (the claim
     // timestamp, bumped by the updated_at trigger on the pending->committing
@@ -312,11 +311,11 @@ describe('recoverStuckCommittingOperations', () => {
       ]),
     )
 
-    // No-evidence finalize: terminal rejected, never back to pending.
-    const rejectedWrite = captures[3]
-    expect(rejectedWrite.payload).toMatchObject({ status: 'rejected' })
-    expect((rejectedWrite.payload!.result_data as Record<string, unknown>).auto_rejected).toBe(true)
-    expect(rejectedWrite.filters).toEqual(
+    // No-evidence finalize: terminal unknown, never back to pending.
+    const unknownWrite = captures[3]
+    expect(unknownWrite.payload).toMatchObject({ status: 'unknown' })
+    expect((unknownWrite.payload!.result_data as Record<string, unknown>).outcome_unknown).toBe(true)
+    expect(unknownWrite.filters).toEqual(
       expect.arrayContaining([
         { method: 'eq', args: ['id', 'op-unknown'] },
         { method: 'eq', args: ['status', 'committing'] },
@@ -329,7 +328,9 @@ describe('recoverStuckCommittingOperations', () => {
     const outcomes = recoveryLines.map(
       (c) => (c.args[1] as Record<string, unknown>).outcome,
     )
-    expect(outcomes).toEqual(['committed', 'rejected'])
+    expect(outcomes).toEqual(['committed', 'unknown'])
+    // Verified present needs nobody; an unknown outcome needs a person.
+    expect(recoveryLines.map((c) => c.level)).toEqual(['warn', 'error'])
     expect(recoveryLines[0].args[1]).toMatchObject({
       pendingOperationId: 'op-booked',
       companyId: 'company-1',
@@ -355,11 +356,39 @@ describe('recoverStuckCommittingOperations', () => {
 
     const summary = await recoverStuckCommittingOperations(supabase, { log })
 
-    expect(summary).toEqual({ scanned: 1, committed: 0, rejected: 0, skipped: 1 })
+    expect(summary).toEqual({ scanned: 1, committed: 0, unknown: 0, skipped: 1 })
     // No terminal write was attempted: only the listing + the failed probe.
     expect(captures.filter((c) => c.payload !== undefined)).toHaveLength(0)
     const line = calls.find((c) => c.args[0] === 'pending_op_recovery')
     expect(line?.level).toBe('error')
+  })
+
+  it('logs a row that keeps failing at warn for the caller that runs every few minutes, and at error by default (nightly)', async () => {
+    const run = async (failureLevel?: 'warn' | 'error') => {
+      const { supabase, enqueue } = createCapturingSupabase()
+      const { log, calls } = createLogSpy()
+      enqueue({ data: [makeRow({ id: 'op-probe-fail', operation_type: 'categorize_transaction', params: { transaction_id: 'tx-1' } })] })
+      enqueue({ error: { message: 'probe down' } })
+      await recoverStuckCommittingOperations(supabase, { log, ...(failureLevel ? { failureLevel } : {}) })
+      return calls.filter((c) => c.args[0] === 'pending_op_recovery')
+    }
+
+    const every5Minutes = await run('warn')
+    expect(every5Minutes.map((c) => c.level)).toEqual(['warn'])
+    expect(every5Minutes[0]!.args[1]).toMatchObject({ outcome: 'skipped_probe_error', error: 'is_transaction_booked probe failed: probe down' })
+    expect((await run()).map((c) => c.level)).toEqual(['error'])
+  })
+
+  it('logs a failed terminal write at the caller\'s failure level too', async () => {
+    const { supabase, enqueue } = createCapturingSupabase()
+    const { log, calls } = createLogSpy()
+    enqueue({ data: [makeRow({ id: 'op-write-fail' })] })
+    enqueue({ error: { message: 'write down' } })
+
+    await recoverStuckCommittingOperations(supabase, { log, failureLevel: 'warn' })
+
+    const lines = calls.filter((c) => c.args[0] === 'pending_op_recovery')
+    expect(lines.map((c) => [c.level, (c.args[1] as Record<string, unknown>).outcome])).toEqual([['warn', 'skipped_write_error']])
   })
 
   it('counts a lost CAS as skipped when a concurrent finalize resolved the row first', async () => {
@@ -371,7 +400,7 @@ describe('recoverStuckCommittingOperations', () => {
 
     const summary = await recoverStuckCommittingOperations(supabase, { log })
 
-    expect(summary).toEqual({ scanned: 1, committed: 0, rejected: 0, skipped: 1 })
+    expect(summary).toEqual({ scanned: 1, committed: 0, unknown: 0, skipped: 1 })
     const line = calls.find((c) => c.args[0] === 'pending_op_recovery')
     expect((line?.args[1] as Record<string, unknown>).outcome).toBe('lost_cas')
   })
@@ -384,6 +413,6 @@ describe('recoverStuckCommittingOperations', () => {
 
     const summary = await recoverStuckCommittingOperations(supabase, { log })
 
-    expect(summary).toEqual({ scanned: 0, committed: 0, rejected: 0, skipped: 0 })
+    expect(summary).toEqual({ scanned: 0, committed: 0, unknown: 0, skipped: 0 })
   })
 })

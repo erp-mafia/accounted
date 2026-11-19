@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from 'react'
 import type { Company, CompanyRole, Team } from '@/types'
-import type { CapabilityKey } from '@/lib/entitlements/keys'
+import { CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntitlementState } from '@/lib/entitlements/has-capability'
 
 /** The user's byrå team membership (teams.kind = 'byra'), when any (WL-08). */
@@ -59,6 +59,23 @@ interface CompanyContextValue {
    */
   assistantAvailable: boolean
   /**
+   * Whether the built-in assistant chat is switched on in this installation
+   * (ASSISTANT_CHAT_ENABLED, lib/env/assistant-chat-switch.ts), as the layout
+   * read it. Absent reads as on: the chat is there until someone switches it
+   * off. Gates the doors into the chat only (the pages' "ask the assistant"
+   * buttons, the palette's question row, the floating button's setting, the
+   * panel coming back after a reload; the layout leaves out the floating
+   * button itself). The routes' ASSISTANT_CHAT_OFF answer stays the real
+   * enforcement.
+   */
+  assistantChatEnabled?: boolean
+  /**
+   * The last day a company that keeps the built-in chat has it
+   * (ASSISTANT_CHAT_UNTIL, YYYY-MM-DD), as the layout read it; null or absent
+   * when no day is set. The chat's own notice names it.
+   */
+  assistantChatUntil?: string | null
+  /**
    * Trial expiry while the trial is the company's only source of paid access;
    * null when paying/comped or after the trial lapsed. Drives the countdown
    * touchpoint in the sidebar.
@@ -78,6 +95,20 @@ interface CompanyContextValue {
    * greyed with a lock instead of hiding them. Optional; absent = none.
    */
   lockedCompanyIds?: string[]
+  /**
+   * Where "Lägg till företag" leads for this user (addCompanyHref): the
+   * journey when the BankID picker would be empty. Optional; absent = the
+   * picker door, which redirects on its own.
+   */
+  addCompanyHref?: string
+  /**
+   * Whether the support dialog offers the AI assistant for this company and
+   * user (lib/agent/support/rollout.ts: SUPPORT_ASSISTANT_COMPANY_IDS, an AI
+   * backend configured, never the invoicing-only role or the sandbox), as the
+   * layout read it. Absent reads as no: the dialog is then the form to a
+   * person, as it was. POST /api/support/ask stays the real enforcement.
+   */
+  supportAssistant?: boolean
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)
@@ -115,6 +146,19 @@ export function useCapability(key: CapabilityKey): boolean {
 }
 
 /**
+ * Whether POST /api/agent/categorize can answer for the active company. The
+ * route refuses a sandbox company and one without the AI capability, and its
+ * callers hide the refusal, so asking anyway only spends a request: 480 of
+ * them from many companies in the week to 2026-11-12, nearly all on an expired
+ * trial. Fail-open outside a CompanyProvider, like useCapability.
+ */
+export function useAssistantReadsAvailable(): boolean {
+  const ctx = useContext(CompanyContext)
+  if (!ctx) return true
+  return !ctx.isSandbox && ctx.capabilities.includes(CAPABILITY.ai)
+}
+
+/**
  * Whether the deployment can run the in-app assistant (see
  * CompanyContextValue.assistantAvailable). Read it at every entry point that
  * opens AgentChat / /api/agent/invoke; the single-call console (general.help)
@@ -125,4 +169,16 @@ export function useAssistantAvailable(): boolean {
   const ctx = useContext(CompanyContext)
   if (!ctx) return true
   return ctx.assistantAvailable
+}
+
+/**
+ * Whether the built-in assistant chat is switched on (see
+ * CompanyContextValue.assistantChatEnabled). Read it at every door that opens
+ * the chat for a person, beside useAssistantAvailable where the door opens
+ * the tool-loop runtime. On unless the layout said off, so also outside a
+ * CompanyProvider: the server answers ASSISTANT_CHAT_OFF.
+ */
+export function useAssistantChatEnabled(): boolean {
+  const ctx = useContext(CompanyContext)
+  return ctx?.assistantChatEnabled !== false
 }

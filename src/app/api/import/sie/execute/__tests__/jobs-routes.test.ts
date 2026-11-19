@@ -51,6 +51,23 @@ describe('durable SIE HTTP boundaries',()=>{
     const { after } = await import('next/server')
     expect(after).not.toHaveBeenCalled()
   })
+  // crm#1022: a locked range is refused before anything is queued, and the
+  // database's sentence (the range, the setting to change) is what the
+  // dashboard shows, not the generic conflict line.
+  it.each(['undo', 'resume', 'compatibility-undo'])('answers a locked range with the database sentence through the real %s service', async name => {
+    const sentence = 'Bokföringen är låst t.o.m. 2025-12-31, och ångringen bokför storno med de importerade verifikationernas datum, ' +
+      '2024-03-04 till 2024-12-31. Lås upp till och med 2024-03-04 först: sätt Bokföring låst t.o.m. till 2024-03-03 eller tidigare, ' +
+      'eller töm fältet, under Inställningar > Bokföring och försök igen. Lås bokföringen igen när ångringen är klar.'
+    const actual = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
+    action.mockImplementationOnce(actual.requestSIEJobAction)
+    queued.enqueueMany([{ data: { id: job.id, job_state: 'paused' } },
+      { error: { code: '55000', message: `SIE_IMPORT_PERIOD_LOCKED: ${sentence}` } }])
+    const response = name === 'compatibility-undo' ? await undo(request({}), params) : await act(request({ action: name }), params)
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toMatchObject({ code: 'SIE_IMPORT_PERIOD_LOCKED', message: sentence })
+    const { after } = await import('next/server')
+    expect(after).not.toHaveBeenCalled()
+  })
   for(const [name,route] of Object.entries(routes)) it(`${name} requires authentication`,async()=>{
     auth.mockResolvedValue({user:null,supabase,error:NextResponse.json({error:'Unauthorized'},{status:401})})
     expect((await route(request({}))).status).toBe(401)
@@ -65,6 +82,23 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(response.status).toBe(201)
     expect(sign).toHaveBeenCalledWith(expect.stringMatching(/^company-1\/sie-intake\/[a-f0-9-]+\.se$/),{upsert:false})
     expect((await response.json()).data.token).toBe('upload-token')
+  })
+  // accounted#32: the reservation takes every SIE extension from the shared
+  // list (.si included) and refuses a name without one before any token.
+  it.each(['bok.se','BOK.SIE','lon.si'])('reserves an upload for %s',async filename=>{
+    expect((await routes.upload(request({filename,size:1024}))).status).toBe(201)
+  })
+  it.each(['bok','bok.txt','bok.sie.zip'])('refuses %s before issuing a token',async filename=>{
+    expect((await routes.upload(request({filename,size:1024}))).status).toBe(400)
+    expect(sign).not.toHaveBeenCalled()
+  })
+  it.each(['bok','bok.txt'])('execute refuses %s as an unsupported file type',async filename=>{
+    const form=new FormData()
+    form.set('file',new File(['#SIETYP 4\n#RAR 0 20260101 20261231'],filename))
+    const response=await routes.execute(new Request('https://example.test/api/import/sie/execute',{method:'POST',body:form}))
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('SIE_PARSE_INVALID_TYPE')
+    expect(submit).not.toHaveBeenCalled()
   })
   it('refuses an oversized upload before issuing a token',async()=>{
     expect((await routes.upload(request({filename:'large.se',size:50*1024*1024+1}))).status).toBe(400)
@@ -90,6 +124,22 @@ describe('durable SIE HTTP boundaries',()=>{
     const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
     expect(response.status).toBe(409)
     expect((await response.json()).error.code).toBe('SIE_IMPORT_PERIOD_ALREADY_IMPORTED')
+  })
+  // crm#1272: a hand-booked IB in the target year, with the IB toggle on.
+  it('answers a year with a booked IB with its own 409 code and the sentence naming the verifikat', async () => {
+    const { jobDatabaseError } = await import('@/lib/import/sie-jobs')
+    const sentence = 'Räkenskapsåret 2026-01-01 till 2026-12-31 har redan en bokförd ingående balans (verifikation A1, 2026-01-01), ' +
+      'och importen skulle bokföra filens ingående balans en gång till. Importera filen utan ingående balanser, så läggs verifikationerna ovanpå den bokförda.'
+    submit.mockRejectedValueOnce(jobDatabaseError({ code: '55000', message: `SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE: ${sentence}` }))
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'ib.se'))
+    form.set('mappings', '[]')
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(409)
+    const { error } = await response.json()
+    expect(error.code).toBe('SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE')
+    expect(error.message).toBe(sentence)
+    expect(error.remediation).toMatchObject({ tool: 'gnubok_import_sie', args: { import_opening_balances: false } })
   })
   it('answers a klarmarkerat target year with the reopen sentence as a 400, not a generic 500', async () => {
     // ensureFiscalPeriod throws a plain Error marked user-facing, which the
@@ -173,6 +223,61 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('answers another organisation\'s file with 409 and both numbers through the real submission gate', async () => {
+    vi.stubEnv('SIE_IMPORT_JOBS', 'true')
+    const actual = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
+    submit.mockImplementationOnce(actual.submitSIEJob)
+    queued.enqueue({ data: { org_number: '5599887766' } })
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#FNAMN "Other AB"\n#ORGNR 556677-8899\n#RAR 0 20260101 20261231\n' +
+      '#VER A 1 20260201 "Sale"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}'], 'other.se'))
+    form.set('mappings', JSON.stringify(['1930', '3001'].map(number => ({
+      sourceAccount: number, targetAccount: number, sourceName: 'Account', targetName: 'Account',
+      confidence: 1, matchType: 'manual', isOverride: true,
+    }))))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toMatchObject({
+      code: 'SIE_IMPORT_ORG_NUMBER_MISMATCH',
+      details: { file_org_number: '556677-8899', company_org_number: '5599887766', file_company_name: 'Other AB' },
+    })
+    expect(supabase.storage.from).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('passes the review step\'s confirmation through to submission', async () => {
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'confirmed.se'))
+    form.set('mappings', '[]')
+    form.set('options', JSON.stringify({ confirmOrgNumberMismatch: true }))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(202)
+    expect(submit.mock.calls[0][5]).toMatchObject({ confirmOrgNumberMismatch: true })
+  })
+
+  // #63: the switch travels as an option; submitSIEJob drops the unused
+  // definitions' mappings (covered in sie-job-input.test.ts).
+  it('passes the only-used-accounts option through to submission, also without supplied mappings', async () => {
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231\n#KONTO 1930 "Bank"\n#KONTO 3001 "Sales"\n#KONTO 6110 "Unused"\n' +
+      '#VER A 1 20260201 "Sale"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}'], 'used-only.se'))
+    form.set('options', JSON.stringify({ onlyUsedAccounts: true }))
+    queued.enqueue({ data: [] }) // stored mappings
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(202)
+    expect(submit.mock.calls[0][5]).toMatchObject({ onlyUsedAccounts: true, filename: 'used-only.se' })
+  })
+
+  it('refuses a non-boolean only-used-accounts option before submitting', async () => {
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'bad-option.se'))
+    form.set('mappings', '[]')
+    form.set('options', JSON.stringify({ onlyUsedAccounts: 'yes' }))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(400)
+    expect(submit).not.toHaveBeenCalled()
+  })
+
   it('without supplied mappings, applies the upload\'s class 9 decision over a stored 9xxx mapping (#3312)', async () => {
     // What an earlier provider import saved for the account, which the job refuses as a target for amounts.
     queued.enqueue({ data: [{ id: 'm-1', user_id: 'actor-1', source_account: '9999', source_name: 'OBS', target_account: '9999',
@@ -248,5 +353,11 @@ describe('durable SIE HTTP boundaries',()=>{
     queued.enqueue({data:[{id:'period',name:'2027',import_hold:null,opening_balance_review_token:'review'}]})
     const response=await routes.holds(new Request('https://example.test/api/import/sie/holds'))
     expect((await response.json()).data[0]).toMatchObject({import_hold:null,opening_balance_review_token:'review'})
+  })
+  it('says whether a flagged year has its own IB verifikat, so the banner can tell a derived IB apart (crm#1099)',async()=>{
+    queued.enqueue({data:[{id:'period',name:'2019',import_hold:null,opening_balance_review_token:'review',opening_balance_entry_id:null}]})
+    const response=await routes.holds(new Request('https://example.test/api/import/sie/holds'))
+    expect((await response.json()).data[0]).toMatchObject({opening_balance_entry_id:null})
+    expect(String(queued.findCall('fiscal_periods','select')?.[0])).toContain('opening_balance_entry_id')
   })
 })

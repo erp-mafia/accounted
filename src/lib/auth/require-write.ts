@@ -3,6 +3,34 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/lib/company/context'
 import type { CompanyRole } from '@/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
+
+const moduleLog = createLogger('auth/require-write')
+
+/** Why a write was refused to a caller who may only read: the role, or what the connection was given. */
+export type ReadOnlyReason = 'ROLE_READ_ONLY' | 'CONNECTION_READ_ONLY'
+
+const READ_ONLY_MESSAGES: Record<ReadOnlyReason, { messageSv: string; messageEn: string }> = {
+  ROLE_READ_ONLY: {
+    messageSv: 'Du har endast läsbehörighet i detta företag.',
+    messageEn: 'You only have read access in this company.',
+  },
+  CONNECTION_READ_ONLY: {
+    messageSv: 'Den här anslutningen har endast läsbehörighet i detta företag.',
+    messageEn: 'This connection only has read access in this company.',
+  },
+}
+
+/**
+ * The refusal of a write to a read-only caller: one code and one shape at
+ * every door (session routes, the extension dispatcher, v1 and MCP), so a
+ * client branches on `error.details.code`. The envelope's code stays FORBIDDEN,
+ * what v1 has always answered; the reason is the same in all of them. Each door
+ * puts this in its own envelope and may add its own facts to the details.
+ */
+export function readOnlyRefusal(reason: ReadOnlyReason) {
+  return { ...READ_ONLY_MESSAGES[reason], details: { code: reason } }
+}
 
 /**
  * Write-permission guard for API routes.
@@ -33,13 +61,23 @@ type WritePermissionResult =
  * `companyId` skips the `resolve_active_company` round trip that
  * `getActiveCompanyId` would otherwise repeat (withRouteContext resolves it
  * two awaits earlier for every route); passing `role` skips the membership
- * select as well. Only ever pass values that came from `getActiveCompanyId`
- * / `company_members` for the same user in the same request: this is a
- * dedupe, not a trust boundary.
+ * select as well (withRouteContext hands over the role the resolver RPC
+ * returned; an undefined role means not known, and the select runs). Only
+ * ever pass values that came from `getActiveCompanyId` / `company_members`
+ * for the same user in the same request: this is a dedupe, not a trust
+ * boundary.
  */
 export interface KnownRouteContext {
   companyId: string
   role?: CompanyRole
+}
+
+/** The session doors' answer to a read-only caller: readOnlyRefusal in the dashboard's envelope. */
+export function readOnlyResponse(
+  log: Parameters<typeof errorResponseFromCode>[1] = moduleLog,
+  requestId?: string,
+): NextResponse {
+  return errorResponseFromCode('FORBIDDEN', log, { requestId, ...readOnlyRefusal('ROLE_READ_ONLY') })
 }
 
 async function selectRole(
@@ -75,15 +113,7 @@ export async function requireWritePermission(
 
   const role = known?.role ?? (await selectRole(supabase, companyId, userId))
 
-  if (!role || role === 'viewer') {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: 'Du har endast läsbehörighet i detta företag.' },
-        { status: 403 },
-      ),
-    }
-  }
+  if (!role || role === 'viewer') return { ok: false, response: readOnlyResponse() }
 
   return { ok: true }
 }
@@ -154,7 +184,7 @@ export type CompanyRoleResult =
 export async function getCompanyRole(
   supabase: SupabaseClient,
   userId: string,
-  known?: Pick<KnownRouteContext, 'companyId'>,
+  known?: KnownRouteContext,
 ): Promise<CompanyRoleResult> {
   const companyId = known?.companyId ?? (await getActiveCompanyId(supabase, userId))
 
@@ -168,7 +198,7 @@ export async function getCompanyRole(
     }
   }
 
-  const role = await selectRole(supabase, companyId, userId)
+  const role = known?.role ?? (await selectRole(supabase, companyId, userId))
 
   if (!role) {
     return {

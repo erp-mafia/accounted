@@ -30,7 +30,8 @@ const ALLOWED_PARSER_IMPORTERS = new Set([
   'app/api/reports/income-statement/route.ts',
   'app/api/reports/income-statement/xlsx/route.ts',
   'app/api/reports/income-statement/pdf/route.ts',
-  'app/api/reports/general-ledger/route.ts',
+  'app/api/reports/general-ledger/accounts/route.ts',
+  'app/api/reports/general-ledger/lines/route.ts',
   'app/api/reports/general-ledger/xlsx/route.ts',
   'app/api/reports/kpi/route.ts',
   'app/api/reports/monthly-breakdown/route.ts',
@@ -55,6 +56,17 @@ const ALLOWED_DIMENSION_READ_OPERATIONS = new Set([
   'reports.kpi',
   // dim_no picks the matrix axis (one column per value); it filters nothing.
   'reports.dimension-pnl',
+  // Budget against actual (accounted#134): resultatkonton only. The actuals
+  // come from get_account_month_actuals, which keeps 3000-8999 on both of its
+  // paths, and budget_lines' CHECK admits no other account, so the filter
+  // never reaches a balance account. Not a statutory report.
+  'reports.budget-vs-actual',
+  // dim_a and dim_b pick the matrix's two axes (accounted#133); the lines
+  // read takes code_a and code_b to name one cell. Result accounts only:
+  // get_dimension_cross_buckets and get_dimension_cross_lines keep
+  // 3000-8999 on every path, so neither reaches a balance account.
+  'reports.dimension-cross',
+  'reports.dimension-cross-lines',
 ])
 
 /** MCP tools allowed to apply a dimension filter. */
@@ -82,6 +94,7 @@ const STATUTORY_GENERATORS = [
   'lib/reports/continuity-check.ts',
   'lib/reports/periodisk-sammanstallning.ts',
   'lib/reports/ink2/ink2-engine.ts',
+  'lib/reports/ink3/ink3-engine.ts',
   'lib/reports/ne-bilaga/ne-engine.ts',
   'lib/bokslut/arsredovisning/build-data.ts',
   'lib/bokslut/ixbrl/build-input.ts',
@@ -189,7 +202,7 @@ describe('dimension filter: statutory exclusion', () => {
     const entry = REPORT_CATALOG.find((r) => r.slug === 'dimension-pnl')
     expect(entry).toBeDefined()
     expect(entry?.needsDimensions).toBe(true)
-    // Free tier for everyone (founder decision 2026-07-02): no other gate.
+    // Free tier for everyone (product decision 2026-07-02): no other gate.
     expect(entry?.entityType).toBeUndefined()
     expect(entry?.needsEmployees).toBeUndefined()
   })

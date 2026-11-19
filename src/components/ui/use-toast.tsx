@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import type { ToastActionElement, ToastProps } from "@/components/ui/toast"
+import { toastDurationMs } from "@/components/ui/toast-duration"
 
 const TOAST_LIMIT = 1
 const TOAST_REMOVE_DELAY = 1000000
@@ -149,6 +150,15 @@ function toast({ ...props }: Toast) {
     type: "ADD_TOAST",
     toast: {
       ...props,
+      // The one place a toast gets its time on screen: a plain confirmation
+      // leaves sooner, errors and toasts with a button keep the full time
+      // (toast-duration.ts). An explicit duration from the caller wins.
+      duration: props.duration ?? toastDurationMs({
+        variant: props.variant,
+        title: props.title,
+        description: props.description,
+        hasAction: props.action != null,
+      }),
       id,
       open: true,
       onOpenChange: (open) => {

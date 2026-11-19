@@ -8,10 +8,8 @@ import { COMMUNITY_OPEN } from '@/lib/agent-skills/agents'
 import { notifyReviewersOfSubmission } from '@/lib/agent-skills/community-notify'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
-import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 
-ensureInitialized()
 const log = createLogger('api/skills')
 type Params = { params: Promise<{ id: string }> }
 const failure = (status: number, code: string, message: string, message_en: string) => NextResponse.json({ error: { code, message, message_en } }, { status })

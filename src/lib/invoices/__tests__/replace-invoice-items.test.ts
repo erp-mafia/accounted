@@ -24,6 +24,7 @@ function makeItem(overrides: Partial<InvoiceWriteItemRow> = {}): InvoiceWriteIte
     vat_rate: 25,
     vat_amount: 250,
     article_id: null,
+    article_number: null,
     revenue_account: null,
     sales_order_item_id: null,
     deduction_type: null,
@@ -57,6 +58,7 @@ function storedRow(overrides: Record<string, unknown> = {}): Record<string, unkn
     vat_rate: 25,
     vat_amount: 250,
     article_id: null,
+    article_number: null,
     revenue_account: null,
     ...overrides,
   }

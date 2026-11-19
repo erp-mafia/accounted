@@ -13,11 +13,12 @@ import type { ExtractionView } from '@/app/api/documents/[id]/extraction/route'
 import { DOC_TYPES, type DocType } from '@/lib/documents/classify/taxonomy'
 import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatDateLong } from '@/lib/utils'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { DefList, DefRow, SourceLink, inlineHref } from './DefList'
 import { useFieldLabel } from './useFieldLabel'
 
 /**
- * The decision sheet (canvas artboard Granska): one document, the type we
+ * The decision sheet: one document, the type we
  * believe it is with the nearest alternatives, what was read from it with
  * its page, the fields where two readings disagreed, what saving will do,
  * and one primary action. Answers up to three questions in one save: does
@@ -80,6 +81,10 @@ export function DocumentDecision({
   onFailed: () => void
 }) {
   const t = useTranslations('arkiv')
+  // useCanWrite's rule; outside a provider (the sandbox) the server decides.
+  const companyContext = useCompanyOptional()
+  const canWrite = !companyContext || (companyContext.role !== null && companyContext.role !== 'viewer')
+  const lockedTitle = canWrite ? undefined : t('viewer_disabled_tooltip')
   const locale = useLocale()
   const fieldLabel = useFieldLabel()
   const [extraction, setExtraction] = useState<ExtractionView | null | undefined>(undefined)
@@ -181,22 +186,22 @@ export function DocumentDecision({
         <SlideOverBody className="space-y-4">
           <div className="grid gap-5 sm:grid-cols-[190px_minmax(0,1fr)]">
             {doc.mime_type?.startsWith('image/') ? (
-              <div className="flex h-[250px] flex-col rounded-lg border border-border bg-secondary p-2">
+              <div className="flex h-[250px] flex-col rounded-lg bg-secondary p-2 bg-control shadow-raised">
                 {/* eslint-disable-next-line @next/next/no-img-element -- a same-origin preview behind auth, not a static asset */}
                 <img src={inlineHref(doc.document_id, null)} alt={doc.file_name} className="min-h-0 flex-1 rounded-sm object-contain" />
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  <a href={inlineHref(doc.document_id, null)} target="_blank" rel="noreferrer" className="underline decoration-border underline-offset-2 hover:text-foreground">
+                <p className="mt-2 text-xs text-muted-foreground">
+                  <a href={inlineHref(doc.document_id, null)} target="_blank" rel="noreferrer" className="underline decoration-foreground/25 underline-offset-2 hover:text-foreground">
                     {t('record_open_document')}
                   </a>
                 </p>
               </div>
             ) : (
-            <div className="h-[250px] rounded-lg border border-border bg-secondary p-3.5">
+            <div className="h-[250px] rounded-lg bg-secondary p-3.5 bg-control shadow-raised">
               <div className="mb-2 h-[5px] w-[60%] rounded-sm bg-border" />
               <div className="mb-1.5 h-[5px] w-[90%] rounded-sm bg-border" />
               <div className="mb-3 h-[5px] w-[84%] rounded-sm bg-border" />
               {highlight ? (
-                <div className="rounded-sm border-[1.5px] border-attn/70 bg-attn/10 px-1.5 py-1 text-[11px] leading-snug">
+                <div className="rounded-sm border-[1.5px] border-attn/70 bg-attn/10 px-1.5 py-1 text-xs leading-snug">
                   {highlight.length > 160 ? `${highlight.slice(0, 159)}…` : highlight}
                 </div>
               ) : (
@@ -204,8 +209,8 @@ export function DocumentDecision({
               )}
               <div className="mt-3 h-[5px] w-[88%] rounded-sm bg-border" />
               <div className="mt-1.5 h-[5px] w-[76%] rounded-sm bg-border" />
-              <p className="mt-3.5 text-[11px] text-muted-foreground">
-                <a href={inlineHref(doc.document_id, null)} target="_blank" rel="noreferrer" className="underline decoration-border underline-offset-2 hover:text-foreground">
+              <p className="mt-3.5 text-xs text-muted-foreground">
+                <a href={inlineHref(doc.document_id, null)} target="_blank" rel="noreferrer" className="underline decoration-foreground/25 underline-offset-2 hover:text-foreground">
                   {t('record_open_document')}
                 </a>
               </p>
@@ -213,16 +218,16 @@ export function DocumentDecision({
             )}
             <div className="min-w-0 space-y-3.5">
               <div>
-                <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{t('decision_we_think')}</p>
+                <p className="mb-2 text-xs font-medium text-muted-foreground">{t('decision_we_think')}</p>
                 <div className="flex flex-wrap gap-1.5">
                   {options.map((type) => (
-                    <Button key={type} size="sm" variant={chosen === type ? 'default' : 'outline'} onClick={() => setChosen(type)}>
+                    <Button key={type} variant={chosen === type ? 'default' : 'outline'} onClick={() => setChosen(type)}>
                       {typeLabel(type)}
                     </Button>
                   ))}
                   {showAll ? (
                     <Select value={chosen ?? undefined} onValueChange={(v) => setChosen(v as DocType)}>
-                      <SelectTrigger className="h-8 w-56 rounded-full text-[13px]">
+                      <SelectTrigger className="h-8 w-56 rounded-md text-[13px]">
                         <SelectValue placeholder={t('decision_other')} />
                       </SelectTrigger>
                       <SelectContent>
@@ -234,7 +239,7 @@ export function DocumentDecision({
                       </SelectContent>
                     </Select>
                   ) : (
-                    <Button size="sm" variant="outline" onClick={() => setShowAll(true)}>
+                    <Button variant="outline" onClick={() => setShowAll(true)}>
                       {t('decision_other')}
                     </Button>
                   )}
@@ -260,7 +265,7 @@ export function DocumentDecision({
                 <Skeleton className="h-16 w-full" />
               ) : extraction ? (
                 <div>
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{t('record_fields')}</p>
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">{t('record_fields')}</p>
                   <DefList className="text-[13px]">
                     {settled.map((f) => (
                       <DefRow
@@ -283,9 +288,9 @@ export function DocumentDecision({
                       const failed = extraction.validation.find((c) => c.field === name)
                       const readings = (extraction.payload[name]?.readings ?? []).filter((r) => r.value != null)
                       return (
-                        <div key={name} className="border-b border-border py-2 last:border-b-0">
+                        <div key={name} className="border-b-hairline py-2 last:border-b-0">
                           <div className="grid items-baseline gap-x-4" style={{ gridTemplateColumns: '120px minmax(0, 1fr)' }}>
-                            <dt className="text-[12.5px] text-muted-foreground">{fieldLabel(name)}</dt>
+                            <dt className="text-xs text-muted-foreground">{fieldLabel(name)}</dt>
                             <dd className="m-0">
                               <Badge variant="warning">
                                 {failed?.check === 'audit' ? t('decision_audit') : failed ? t(`checks.${failed.check}` as never) : t('decision_two_readings')}
@@ -296,7 +301,6 @@ export function DocumentDecision({
                             {readings.map((r, i) => (
                               <Button
                                 key={i}
-                                size="sm"
                                 variant={picks[name] === asText(r.value) ? 'default' : 'outline'}
                                 onClick={() => setPicks((p) => ({ ...p, [name]: asText(r.value) }))}
                                 title={r.quote ?? undefined}
@@ -316,7 +320,7 @@ export function DocumentDecision({
                             ) : (
                               <button
                                 type="button"
-                                className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                                className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground"
                                 onClick={() => setCustom((c) => ({ ...c, [name]: true }))}
                               >
                                 {t('decision_custom_value')}
@@ -330,7 +334,7 @@ export function DocumentDecision({
                   {settledAll.length > settled.length || showAll ? (
                     <button
                       type="button"
-                      className="mt-1 text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                      className="mt-1 text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-2 hover:text-foreground"
                       onClick={() => setShowAll((v) => !v)}
                     >
                       {showAll ? t('show_fewer_fields') : t('show_all_fields', { count: settledAll.length })}
@@ -344,14 +348,14 @@ export function DocumentDecision({
         </SlideOverBody>
         <SlideOverFooter>
           {doc.question === 'held' && (
-            <Button variant="outline" disabled={busy} onClick={discard} className="mr-auto">
+            <Button variant="outline" disabled={busy || !canWrite} title={lockedTitle} onClick={discard} className="mr-auto">
               {t('discard')}
             </Button>
           )}
           <Button variant="outline" disabled={busy} onClick={onClose}>
             {t('decision_skip')}
           </Button>
-          <Button disabled={busy || !chosen} onClick={save}>
+          <Button disabled={busy || !chosen || !canWrite} title={lockedTitle} onClick={save}>
             {doc.question === 'fields' && chosen === doc.doc_type ? t('confirm_fields') : chosen ? t('decision_save_as', { type: typeLabel(chosen) }) : t('save_type')}
           </Button>
         </SlideOverFooter>

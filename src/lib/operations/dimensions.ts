@@ -37,7 +37,9 @@ const DIMENSION_ID = z.string().uuid().describe('The dimension row id (from GET 
 export const dimensionsList = defineOperation({
   id: 'dimensions.list',
   kind: 'read',
-  scope: 'reports:read',
+  // Included in reports:read and invoices:read (crm#1548: tag invoice lines
+  // without reading the books).
+  scope: 'dimensions:read',
   risk: 'low',
   reversible: false,
   docs: {

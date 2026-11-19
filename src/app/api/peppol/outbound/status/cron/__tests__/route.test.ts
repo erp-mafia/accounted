@@ -96,6 +96,10 @@ describe('GET /api/peppol/outbound/status/cron', () => {
     expect(response.status).toBe(200)
     expect((await response.json()).data).toMatchObject({ polled: 2, advanced: 1 })
     expect((pollMock.mock.calls[0][0] as { transport: PeppolTransport }).transport).toBe(transport)
+    // Bounded inside the 300 s limit, with room left for the health check.
+    const deadline = (pollMock.mock.calls[0][0] as { deadline: number }).deadline
+    expect(deadline).toBeGreaterThan(Date.now() + 100_000)
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 150_000)
   })
 
   it('runs the health check after the poll, on the same service client, and logs its summary with the poll', async () => {

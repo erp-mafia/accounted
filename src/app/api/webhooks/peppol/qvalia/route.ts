@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import {
   persistPeppolEvidence,
   persistVerifiedPeppolEvent,
@@ -13,8 +12,6 @@ import {
 } from '@/lib/invoices/transports/qvalia'
 import { createLogger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
-
-ensureInitialized()
 
 const log = createLogger('peppol.qvalia.webhook')
 

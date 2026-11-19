@@ -24,27 +24,27 @@ const supabase = {} as SupabaseClient
 beforeEach(() => vi.clearAllMocks())
 
 describe('buildLedgerTools', () => {
-  it('requests exactly the read whitelist from the registry', () => {
-    getMany.mockReturnValue([])
-    buildLedgerTools(supabase, 'c1', 'u1')
+  it('requests exactly the read whitelist from the registry', async () => {
+    getMany.mockResolvedValue([])
+    await buildLedgerTools(supabase, 'c1', 'u1')
     expect(getMany).toHaveBeenCalledWith([...LEDGER_READ_TOOLS])
   })
 
-  it('keeps read-only + unannotated tools, drops writable/destructive ones', () => {
-    getMany.mockReturnValue([
+  it('keeps read-only + unannotated tools, drops writable/destructive ones', async () => {
+    getMany.mockResolvedValue([
       tool('gnubok_get_income_statement', { readOnlyHint: true }),
       tool('gnubok_list_accounts'), // unannotated: on the curated read whitelist, kept
       tool('gnubok_categorize_transaction', { readOnlyHint: false }),
       tool('gnubok_delete_voucher', { destructiveHint: true }),
     ])
-    const defs = buildLedgerTools(supabase, 'c1', 'u1')
+    const defs = await buildLedgerTools(supabase, 'c1', 'u1')
     expect(defs.map((d) => d.name)).toEqual(['gnubok_get_income_statement', 'gnubok_list_accounts'])
   })
 
   it('adapts each tool: name/description/jsonSchema and an execute bound to the actor', async () => {
     const src = tool('gnubok_get_vat_report', { readOnlyHint: true })
-    getMany.mockReturnValue([src])
-    const defs = buildLedgerTools(supabase, 'company-9', 'user-7', 'conv-3')
+    getMany.mockResolvedValue([src])
+    const defs = await buildLedgerTools(supabase, 'company-9', 'user-7', 'conv-3')
     expect(defs).toHaveLength(1)
     const def = defs[0]
     expect(def.name).toBe('gnubok_get_vat_report')
@@ -64,15 +64,15 @@ describe('buildLedgerTools', () => {
 
   it('omits the actor id when there is no conversation', async () => {
     const src = tool('gnubok_get_trial_balance', { readOnlyHint: true })
-    getMany.mockReturnValue([src])
-    const [def] = buildLedgerTools(supabase, 'c1', 'u1')
+    getMany.mockResolvedValue([src])
+    const [def] = await buildLedgerTools(supabase, 'c1', 'u1')
     await def.execute({})
     expect(src.execute).toHaveBeenCalledWith({}, 'c1', 'u1', supabase, { type: 'agent_chat' })
   })
 
-  it('returns nothing when the registry is empty (core-only build)', () => {
-    getMany.mockReturnValue([])
-    expect(buildLedgerTools(supabase, 'c1', 'u1')).toEqual([])
+  it('returns nothing when the registry is empty (core-only build)', async () => {
+    getMany.mockResolvedValue([])
+    expect(await buildLedgerTools(supabase, 'c1', 'u1')).toEqual([])
   })
 
   it('never lists a write or memory-write tool on the whitelist', () => {

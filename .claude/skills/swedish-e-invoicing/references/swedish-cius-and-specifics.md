@@ -253,7 +253,7 @@ Net effect on moms is zero, but both legs must be reported in momsdeklarationen.
 ## Faktureringsmetoden vs kontantmetoden
 
 - **Faktureringsmetoden**, mandatory if turnover > **SEK 3 million**, default for AB. Books invoices on issuance against 1510/2440. Moms recognised on invoice date.
-- **Kontantmetoden**, books only on payment, against 1930/1910. Year-end conversion mandatory: any outstanding kund-/leverantörsfaktura must be booked over to 1510/2440 and the underlying intäkt/kostnad recognised, then reversed on 1 Jan.
+- **Kontantmetoden**, books only on payment, against 1930/1910. Year-end conversion mandatory: any outstanding kund-/leverantörsfaktura must be booked over to 1510/2440 and the underlying intäkt/kostnad recognised. Two shapes keep the moms counted once: keep the invoice on 1510/2440 into the new year and let the payment only clear it, with no moms (årsomföring); or reverse it on 1 Jan and book the payment as cash again, in which case the reversal's moms must be declared in the new year too.
 
 The bookkeeping engine must carry a `bookkeeping_method` flag driving posting timing and a year-end converter routine.
 

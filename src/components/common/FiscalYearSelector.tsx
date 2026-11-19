@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { STORAGE_KEY_PREFIX, ALL_YEARS_VALUE } from '@/components/common/fiscal-year-storage'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
@@ -172,7 +172,7 @@ export function FiscalYearSelector({
             className="gap-1 text-xs font-normal shrink-0"
             title={lockState === 'locked' ? t('tooltip_locked') : t('tooltip_closed')}
           >
-            <Lock className="h-3 w-3" />
+            <LockClosedIcon className="h-3 w-3" />
             {lockState === 'locked' ? t('badge_locked') : t('badge_closed')}
           </Badge>
         )}

@@ -7,12 +7,16 @@ import {
   verifyOAuthState,
 } from './lib/crypto'
 import { performSync } from './lib/sync'
-import { resolveCallbackOrigin } from './lib/callback-origin'
+import { patchScheduleRow, readScheduleRow, withManualRunClaim } from './lib/run-claim'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { resolveCallbackOrigin } from '@/lib/auth/callback-origin'
+import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
+import { createServiceClient } from '@/lib/supabase/server'
 import { stockholmHourToUtcHour } from './lib/schedule'
 import { CLOUD_PROVIDERS, providerFromRequest } from './lib/provider-registry'
 import { googleDriveProvider } from './lib/google-provider'
 import { dropboxProvider } from './lib/dropbox-provider'
-import type { CloudStorageProvider } from './lib/cloud-provider'
+import { CloudScopeMissingError, type CloudStorageProvider } from './lib/cloud-provider'
 import type {
   CloudBackupStatus,
   CloudConnection,
@@ -70,6 +74,10 @@ async function readProviderStatus(
     configured: provider.isConfigured(),
     connected: !!connection,
     needs_reauth: connection?.status === 'needs_reauth',
+    reauth_reason:
+      connection?.status === 'needs_reauth'
+        ? (connection.needs_reauth_reason ?? 'token_revoked')
+        : null,
     account_email: connection?.account_email ?? null,
     connected_at: connection?.connected_at ?? null,
     last_sync: lastSync ?? null,
@@ -84,10 +92,9 @@ async function readProviderStatus(
  */
 async function handleOAuthCallback(
   request: Request,
-  ctx: ExtensionContext | undefined,
+  ctx: ExtensionContext,
   provider: CloudStorageProvider
 ): Promise<Response> {
-  if (!ctx) return jsonError('Missing context', 500)
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
@@ -95,8 +102,12 @@ async function handleOAuthCallback(
   // Resolve exactly as /connect did: the token exchange repeats the
   // redirect_uri from the authorization request.
   const origin = resolveCallbackOrigin(url.origin)
+  const verified = state ? verifyOAuthState(state) : null
+  // Land the person on the domain they started from (a brand domain or the
+  // app), which is also the host serving this request after the hop.
+  const landingOrigin = verified?.origin ?? origin
   const redirect = (status: string, reason?: string) => {
-    const target = new URL('/settings/backup', origin)
+    const target = new URL('/settings/backup', landingOrigin)
     target.searchParams.set('cloud_backup', status)
     target.searchParams.set('provider', provider.id)
     if (reason) target.searchParams.set('reason', reason)
@@ -110,7 +121,6 @@ async function handleOAuthCallback(
     return redirect('error', 'missing_params')
   }
 
-  const verified = verifyOAuthState(state)
   if (!verified) {
     return redirect('error', 'invalid_state')
   }
@@ -151,15 +161,26 @@ async function handleOAuthCallback(
     // builds in the background.
     after(async () => {
       try {
-        await performSync({
-          supabase: ctx.supabase,
-          companyId: ctx.companyId,
-          userId: ctx.userId,
-          origin,
-          includeDocuments: true,
-          allowDocumentFallback: true,
-          provider,
-        })
+        // Under the run claim: a new schedule is due at once, so the hourly
+        // cron can start on the same destination while this first backup is
+        // still uploading, and a first Drive upload has no file to update.
+        const run = await withManualRunClaim(
+          ctx.supabase,
+          { companyId: ctx.companyId, scheduleKey: provider.keys.schedule },
+          () =>
+            performSync({
+              supabase: ctx.supabase,
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              origin,
+              includeDocuments: true,
+              allowDocumentFallback: true,
+              provider,
+            })
+        )
+        if (run.busy) {
+          ctx.log.info(`initial ${provider.id} sync left to the run already in progress`)
+        }
       } catch (err) {
         ctx.log.error(`initial ${provider.id} sync after connect failed`, err)
       }
@@ -167,6 +188,12 @@ async function handleOAuthCallback(
 
     return redirect(firstConnect ? 'connected_first' : 'connected')
   } catch (err) {
+    if (err instanceof CloudScopeMissingError) {
+      // The person left the storage box unticked on the consent screen: their
+      // choice, not our failure. Nothing was stored; the card says what to do.
+      ctx.log.info(`${provider.id} grant refused: storage scope not granted`)
+      return redirect('error', 'missing_scope')
+    }
     ctx.log.error(`${provider.id} oauth callback failed`, err)
     return redirect(
       'error',
@@ -175,20 +202,63 @@ async function handleOAuthCallback(
   }
 }
 
+/**
+ * Whether another company holds a connection to the same provider account.
+ * Google ends the whole grant for the account when one token is revoked, so
+ * revoking on disconnect would silently stop every other company's backup on
+ * that account (a byrå backing up several clients to one Drive). Unknown
+ * counts as shared: an unrevoked grant is harmless, a wrong revoke is not.
+ */
+async function grantSharedWithOtherCompany(
+  provider: CloudStorageProvider,
+  connection: CloudConnection,
+  companyId: string
+): Promise<boolean> {
+  if (!connection.account_email) return true
+  // Service role: RLS shows only the active company's rows.
+  const { count, error } = await createServiceClient()
+    .from('extension_data')
+    .select('id', { count: 'exact', head: true })
+    .eq('extension_id', 'cloud-backup')
+    .eq('key', provider.keys.connection)
+    .eq('value->>account_email', connection.account_email)
+    .neq('company_id', companyId)
+  return error !== null || (count ?? 0) > 0
+}
+
+/** Where the provider callbacks hand the browser on; see oauthCallbackHop. */
+const COMPLETE_PATH = '/oauth/complete'
+
+/**
+ * The provider's registered redirect URI always points at the canonical app
+ * host, but the session cookie is host-only: someone who started on a brand
+ * domain arrives here without one, and an authenticated callback answered
+ * them with a bare 401. This unauthenticated hop only forwards the provider's
+ * answer to the origin sealed in the state, where the authenticated
+ * /oauth/complete finishes the flow with the person's own session. A state
+ * that does not verify forwards to the app origin, which reports it.
+ */
+function oauthCallbackHop(request: Request, provider: CloudStorageProvider): Response {
+  const url = new URL(request.url)
+  const state = url.searchParams.get('state')
+  const verified = state ? verifyOAuthState(state) : null
+  const target = new URL(
+    `/api/extensions/ext/cloud-backup${COMPLETE_PATH}`,
+    verified?.origin ?? resolveCallbackOrigin(url.origin)
+  )
+  for (const key of ['code', 'state', 'error']) {
+    const value = url.searchParams.get(key)
+    if (value) target.searchParams.set(key, value)
+  }
+  target.searchParams.set('provider', provider.id)
+  return NextResponse.redirect(target)
+}
+
 export const cloudBackupExtension: Extension = {
   id: 'cloud-backup',
   name: 'Molnsynkronisering',
   version: '1.1.0',
   sector: 'general',
-
-  // The canonical entry point for cloud-backup is now `/import#cloud-backup`
-  // (under "Importera/Exportera"). `/settings/backup` is preserved as a
-  // permanent redirect to that anchor so legacy bookmarks and OAuth callbacks
-  // keep working: see `app/(dashboard)/settings/backup/page.tsx`.
-  settingsPanel: {
-    label: 'Molnsynkronisering',
-    path: '/settings/backup',
-  },
 
   apiRoutes: [
     // Kick off OAuth: return the provider's consent URL.
@@ -196,12 +266,15 @@ export const cloudBackupExtension: Extension = {
       method: 'POST',
       path: '/connect',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request, { requireConfigured: true })
         if ('error' in resolved) return resolved.error
         try {
           const origin = resolveCallbackOrigin(new URL(request.url).origin)
-          const state = createOAuthState(ctx.userId, ctx.companyId)
+          const state = createOAuthState(
+            ctx.userId,
+            ctx.companyId,
+            await resolveOAuthOrigin(request)
+          )
           const url = resolved.provider.buildAuthorizationUrl(origin, state)
           return NextResponse.json({ url })
         } catch (err) {
@@ -214,19 +287,24 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Google redirects here after the user consents. The path is registered
-    // with Google as an authorised redirect URI: never rename it.
-    {
-      method: 'GET',
-      path: googleDriveProvider.callbackPath,
-      handler: (request, ctx) => handleOAuthCallback(request, ctx, googleDriveProvider),
-    },
+    // Each provider redirects here after consent. The paths are registered
+    // with the providers as authorised redirect URIs: never rename them.
+    ...CLOUD_PROVIDERS.map((provider) => ({
+      method: 'GET' as const,
+      path: provider.callbackPath,
+      skipAuth: true as const,
+      handler: async (request: Request) => oauthCallbackHop(request, provider),
+    })),
 
-    // Dropbox equivalent, on its own registered redirect URI.
+    // The hop's destination, on the host the flow started from.
     {
       method: 'GET',
-      path: dropboxProvider.callbackPath,
-      handler: (request, ctx) => handleOAuthCallback(request, ctx, dropboxProvider),
+      path: COMPLETE_PATH,
+      handler: async (request, ctx) => {
+        const resolved = resolveProvider(request)
+        if ('error' in resolved) return resolved.error
+        return handleOAuthCallback(request, ctx, resolved.provider)
+      },
     },
 
     // Revoke the refresh token and clear the stored connection + schedule for
@@ -235,7 +313,6 @@ export const cloudBackupExtension: Extension = {
       method: 'POST',
       path: '/disconnect',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request)
         if ('error' in resolved) return resolved.error
         const { provider } = resolved
@@ -245,11 +322,15 @@ export const cloudBackupExtension: Extension = {
           )
           if (connection) {
             try {
-              const refreshToken = decryptToken(connection.refresh_token_encrypted)
-              await provider.revoke(
-                refreshToken,
-                resolveCallbackOrigin(new URL(request.url).origin)
-              )
+              if (await grantSharedWithOtherCompany(provider, connection, ctx.companyId)) {
+                ctx.log.info(`${provider.id} grant shared with another company; not revoked`)
+              } else {
+                const refreshToken = decryptToken(connection.refresh_token_encrypted)
+                await provider.revoke(
+                  refreshToken,
+                  resolveCallbackOrigin(new URL(request.url).origin)
+                )
+              }
             } catch (err) {
               ctx.log.warn('token revoke failed (continuing)', err)
             }
@@ -275,7 +356,6 @@ export const cloudBackupExtension: Extension = {
       method: 'GET',
       path: '/status',
       handler: async (_request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const providers: CloudProviderStatus[] = []
         for (const provider of CLOUD_PROVIDERS) {
           providers.push(await readProviderStatus(ctx, provider))
@@ -295,30 +375,14 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Read one provider's auto-sync schedule. Returns the default (disabled)
-    // shape if the user has never configured one.
-    {
-      method: 'GET',
-      path: '/schedule',
-      handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
-        const resolved = resolveProvider(request)
-        if ('error' in resolved) return resolved.error
-        const schedule = await ctx.settings.get<CloudSchedule>(
-          resolved.provider.keys.schedule
-        )
-        return NextResponse.json({ data: schedule ?? DEFAULT_SCHEDULE })
-      },
-    },
-
-    // Update one provider's auto-sync schedule. Preserves the fields the cron
-    // writes (`last_auto_sync_*`, failure counter, alert throttle): those are
-    // not user-editable.
+    // Update one provider's auto-sync schedule. Preserves the fields the runs
+    // write (the run claim, `last_auto_sync_*`, failure counter, alert
+    // throttle): those are not user-editable, and the edit is written at the
+    // record's version so a run's write in between is kept.
     {
       method: 'PUT',
       path: '/schedule',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request)
         if ('error' in resolved) return resolved.error
         try {
@@ -351,18 +415,45 @@ export const cloudBackupExtension: Extension = {
           }
 
           const key = resolved.provider.keys.schedule
-          const existing = await ctx.settings.get<CloudSchedule>(key)
-          const updated: CloudSchedule = {
-            ...existing,
-            enabled: body.enabled,
+          // Only the fields a person edits. Everything else on the record is
+          // the runs': the claim, the outcome, the failure count and the
+          // alert throttle.
+          const edit = (current: CloudSchedule | null): CloudSchedule => ({
+            ...current,
+            enabled: body.enabled as boolean,
+            // Off to on: the card's stale-backup warning counts from here.
+            ...(body.enabled && !current?.enabled ? { enabled_at: new Date().toISOString() } : {}),
             hour_utc: hourUtc,
             hour_local: hourLocal,
-            last_auto_sync_at: existing?.last_auto_sync_at ?? null,
-            last_auto_sync_status: existing?.last_auto_sync_status ?? null,
-            last_auto_sync_error: existing?.last_auto_sync_error ?? null,
+            last_auto_sync_at: current?.last_auto_sync_at ?? null,
+            last_auto_sync_status: current?.last_auto_sync_status ?? null,
+            last_auto_sync_error: current?.last_auto_sync_error ?? null,
+          })
+          const recordKey = { companyId: ctx.companyId, scheduleKey: key }
+          const row = await readScheduleRow(ctx.supabase, recordKey)
+          if (!row) {
+            // No record yet, so no run to race with.
+            const created = edit(null)
+            await ctx.settings.set(key, created)
+            return NextResponse.json({ data: created })
           }
-          await ctx.settings.set(key, updated)
-          return NextResponse.json({ data: updated })
+          // Written at the version read, and on the record as it is then when
+          // a run wrote in between: a plain read and write put back a claim
+          // its run had released (the next hour then counted a failed night
+          // that never happened) or erased one a run still held (letting a
+          // second run start beside it, and dropping the first one's outcome).
+          // The member who saves becomes the record's owner, as a plain save
+          // always made them: the failure mail goes to them and the backup runs
+          // as them, so a member who has left does not keep the alerts.
+          const saved: { value: CloudSchedule | null } = { value: null }
+          const outcome = await patchScheduleRow(ctx.supabase, recordKey, row, (current) => (saved.value = edit(current)), { user_id: ctx.userId })
+          if (outcome !== 'written' || !saved.value) {
+            // Removed meanwhile (disconnected), or written over on every try.
+            return errorResponseFromCode('CONFLICT', ctx.log, {
+              reason: `schedule edit for ${resolved.provider.id} not saved: ${outcome}`,
+            })
+          }
+          return NextResponse.json({ data: saved.value })
         } catch (err) {
           ctx.log.error('update schedule failed', err)
           return jsonError(
@@ -379,7 +470,6 @@ export const cloudBackupExtension: Extension = {
       method: 'POST',
       path: '/sync',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request)
         if ('error' in resolved) return resolved.error
         try {
@@ -388,22 +478,35 @@ export const cloudBackupExtension: Extension = {
             allow_document_fallback?: boolean
           }
           const origin = resolveCallbackOrigin(new URL(request.url).origin)
-          const result = await performSync({
-            supabase: ctx.supabase,
-            companyId: ctx.companyId,
-            userId: ctx.userId,
-            origin,
-            includeDocuments: body.include_documents !== false,
-            allowDocumentFallback: body.allow_document_fallback === true,
-            provider: resolved.provider,
-          })
+          // One run per destination at a time (lib/run-claim.ts): while the
+          // nightly backup is uploading, a second run would upload the same
+          // archives next to it.
+          const run = await withManualRunClaim(
+            ctx.supabase,
+            { companyId: ctx.companyId, scheduleKey: resolved.provider.keys.schedule },
+            () =>
+              performSync({
+                supabase: ctx.supabase,
+                companyId: ctx.companyId,
+                userId: ctx.userId,
+                origin,
+                includeDocuments: body.include_documents !== false,
+                allowDocumentFallback: body.allow_document_fallback === true,
+                provider: resolved.provider,
+              })
+          )
+          if (run.busy) return jsonError('sync_in_progress', 409)
+          const result = run.result
 
           if (!result.ok) {
             if (result.reason === 'not_connected') {
               return jsonError('not_connected', 400)
             }
             if (result.reason === 'needs_reauth') {
-              return jsonError('needs_reauth', 400)
+              return NextResponse.json(
+                { error: 'needs_reauth', reauth_reason: result.reauthReason ?? null },
+                { status: 400 }
+              )
             }
             if (result.reason === 'archive_too_large') {
               return NextResponse.json(

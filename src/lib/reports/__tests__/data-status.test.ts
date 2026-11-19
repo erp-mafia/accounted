@@ -19,7 +19,7 @@ const OPEN_PERIOD = {
   is_closed: false,
   locked_at: null,
 }
-const BANK_ACCOUNT = { id: 'ca-1', iban: 'SE1', currency: 'SEK', updated_at: '2026-01-01' }
+const BANK_ACCOUNT = { id: 'ca-1', iban: 'SE1', currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01' }
 
 interface Tables {
   period?: Record<string, unknown> | null
@@ -27,7 +27,14 @@ interface Tables {
   settings?: Record<string, unknown> | null
   drafts?: number
   connections?: Array<{ status: string; last_synced_at: string | null }>
-  cashAccounts?: Array<{ id: string; iban: string | null; currency: string | null; updated_at: string | null }>
+  cashAccounts?: Array<{
+    id: string
+    iban: string | null
+    currency: string | null
+    ledger_account: string
+    is_primary: boolean
+    created_at: string
+  }>
 }
 
 /**
@@ -61,7 +68,7 @@ function makeSupabase(t: Tables) {
   const from = (table: string) => {
     const local: Array<{ method: string; args: unknown[] }> = []
     const chain: Record<string, unknown> = {}
-    for (const m of ['select', 'eq', 'gte', 'lte', 'not', 'order', 'limit', 'is', 'in']) {
+    for (const m of ['select', 'eq', 'gte', 'lte', 'not', 'order', 'limit', 'is', 'in', 'range']) {
       chain[m] = (...args: unknown[]) => {
         calls.push({ table, method: m, args })
         local.push({ method: m, args })
@@ -189,17 +196,19 @@ describe('buildReportDataStatus', () => {
           { status: 'active', last_synced_at: '2026-09-20T08:00:00Z' },
         ],
       })
-      expect(stale.status.bank).toMatchObject({ feed_status: 'active', last_sync_at: '2026-09-20T08:00:00Z' })
+      expect(stale.status.bank).toMatchObject({ feed_status: 'active', last_sync_at: '2026-09-20T08:00:00Z', stale: true })
       expect(feedCaveat(stale.status)).toBe('A bank feed last synced 2026-09-20: its transactions after that date are not imported yet.')
 
       const fresh = await build({ connections: [{ status: 'active', last_synced_at: '2026-09-26T06:00:00Z' }] })
       expect(fresh.status.bank.feed_status).toBe('active')
+      expect(fresh.status.bank.stale).toBe(false)
       expect(feedCaveat(fresh.status)).toBeUndefined()
 
       const earlierRange = await build(
         { connections: [{ status: 'active', last_synced_at: '2026-09-20T08:00:00Z' }] },
         { toDate: '2026-06-30' },
       )
+      expect(earlierRange.status.bank.stale).toBe(false)
       expect(feedCaveat(earlierRange.status)).toBeUndefined()
     })
 
@@ -222,14 +231,14 @@ describe('buildReportDataStatus', () => {
           { status: 'error', last_synced_at: null },
         ],
       })
-      expect(status.bank).toMatchObject({ feed_status: 'stopped', last_sync_at: '2026-08-12T05:00:00Z' })
+      expect(status.bank).toMatchObject({ feed_status: 'stopped', last_sync_at: '2026-08-12T05:00:00Z', stale: true })
       expect(feedCaveat(status)).toBe(
         'The bank feed has stopped syncing (last synced 2026-08-12): transactions after that date are not imported unless added another way.',
       )
 
       // A feed that stopped hours ago is still stopped: no 36 h grace.
       const recent = await build({ connections: [{ status: 'error', last_synced_at: '2026-09-26T06:00:00Z' }] })
-      expect(recent.status.bank.feed_status).toBe('stopped')
+      expect(recent.status.bank).toMatchObject({ feed_status: 'stopped', stale: true })
       expect(feedCaveat(recent.status)).toMatch(/^The bank feed has stopped syncing \(last synced 2026-09-26\)/)
 
       // A range that ends before the last sync lost nothing.
@@ -237,7 +246,14 @@ describe('buildReportDataStatus', () => {
         { connections: [{ status: 'expired', last_synced_at: '2026-08-12T05:00:00Z' }] },
         { toDate: '2026-06-30' },
       )
+      expect(earlier.status.bank.stale).toBe(false)
       expect(feedCaveat(earlier.status)).toBeUndefined()
+    })
+
+    it('never calls a feed that has not synced yet stale: there is no date to measure from', async () => {
+      const { status } = await build({ connections: [{ status: 'active', last_synced_at: null }] })
+      expect(status.bank).toMatchObject({ feed_status: 'active', last_sync_at: null, stale: false })
+      expect(feedCaveat(status)).toBeUndefined()
     })
 
     it('ignores revoked and pending_selection connections', async () => {
@@ -247,7 +263,7 @@ describe('buildReportDataStatus', () => {
           { status: 'pending_selection', last_synced_at: null },
         ],
       })
-      expect(status.bank).toMatchObject({ feed_status: null, last_sync_at: null })
+      expect(status.bank).toMatchObject({ feed_status: null, last_sync_at: null, stale: false })
       expect(feedCaveat(status)).toBeUndefined()
     })
   })
@@ -265,6 +281,16 @@ describe('buildReportDataStatus', () => {
       latestSignoffs.mockResolvedValue(new Map([['bank:ca-1', { through_date: '2026-07-31' }]]))
       const { status } = await build({ cashAccounts: [BANK_ACCOUNT] })
       expect(status.bank.reconciled_through).toBe('2026-07-31')
+      expect(status.caveats).toContain('Bank reconciliation is signed off only through 2026-07-31.')
+    })
+
+    it('reads the last month end on the Swedish calendar, on the first night of a month', async () => {
+      latestSignoffs.mockResolvedValue(new Map([['bank:ca-1', { through_date: '2026-07-31' }]]))
+      const double = makeSupabase({ cashAccounts: [BANK_ACCOUNT] })
+      const status = (await buildReportDataStatus(double.supabase, 'co-1', {
+        periodId: 'fp-1',
+        now: new Date('2026-08-31T22:30:00Z'), // 00:30 on 1 September in Sweden
+      })) as ReportDataStatus
       expect(status.caveats).toContain('Bank reconciliation is signed off only through 2026-07-31.')
     })
 
@@ -296,14 +322,15 @@ describe('buildReportDataStatus', () => {
 
     it('reports the earliest sign-off across live accounts, a reconnect duplicate counting once', async () => {
       const accounts = [
-        { id: 'a', iban: 'SE1', currency: 'SEK', updated_at: '2026-01-01' },
-        { id: 'b', iban: null, currency: 'SEK', updated_at: null },
-        // Reconnect duplicate of 'a': the newer row is the live one.
-        { id: 'a2', iban: 'SE1', currency: 'SEK', updated_at: '2026-05-01' },
+        { id: 'a', iban: 'SE1', currency: 'SEK', ledger_account: '1930', is_primary: false, created_at: '2026-01-01' },
+        { id: 'b', iban: null, currency: 'SEK', ledger_account: '1931', is_primary: false, created_at: '2026-02-01' },
+        // Reconnect duplicate of 'a': no ledger history, so the older row keeps
+        // the account and this one, never signed off, does not count.
+        { id: 'a2', iban: 'SE1', currency: 'SEK', ledger_account: '1932', is_primary: false, created_at: '2026-05-01' },
       ]
       latestSignoffs.mockResolvedValue(
         new Map([
-          ['bank:a2', { through_date: '2026-08-31' }],
+          ['bank:a', { through_date: '2026-08-31' }],
           ['bank:b', { through_date: '2026-07-31' }],
         ]),
       )

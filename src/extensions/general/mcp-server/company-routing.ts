@@ -3,17 +3,26 @@ import type { ApiKeyScope } from '@/lib/auth/api-keys'
 // Pure data module (no server imports): the same classifier the settings UI
 // and the v1 REST wrapper use, so "what counts as a write" has one owner.
 import { scopeKind } from '@/lib/auth/scope-catalog'
+import { roleAllowsScope } from '@/lib/auth/invoicer-role'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getUserCompanies } from '@/lib/company/context'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
+import { readOnlyRefusal, type ReadOnlyReason } from '@/lib/auth/require-write'
+import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   resolveCompanyScope,
   type CompanyScopeInput,
   type ResolvedCompanyScope,
-  type ScopedCompany,
 } from '@/lib/portfolio/scope'
 import type { CompanyRole } from '@/types'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { createLogger } from '@/lib/logger'
 import { COMPANY_PIN_QUERY_PARAM } from './tool-namespace'
+import { handleAwareInputSchema } from './handle-args'
+import { RECONNECT_ADVICE } from './tool-reach'
+
+const log = createLogger('mcp-company-routing')
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -118,7 +127,9 @@ export function isOptionalCompanyTool(toolName: string): boolean {
  */
 const OPERATION_SCOPED_TOOLS = new Set([
   'gnubok_approve_pending_operation',
+  'gnubok_approve_from_view',
   'gnubok_reject_pending_operation',
+  'gnubok_withdraw_pending_operation',
 ])
 
 export function isOperationScopedTool(toolName: string): boolean {
@@ -239,9 +250,16 @@ export function isSimpleCompanyMode(reachableCount: number | null): boolean {
   return reachableCount !== null && reachableCount <= 1
 }
 
+/**
+ * No `format: 'uuid'`: the dispatcher also takes a cmp_ handle here
+ * (handle-args.ts), and a host that enforces formats would refuse it. Nor
+ * the handle-or-UUID pattern the other id fields carry: this property rides
+ * on every company-scoped tool in the multi-company catalog, where the
+ * pattern would cost about 1 100 tokens. extractRequestedCompany refuses
+ * anything that is not a company id.
+ */
 const COMPANY_ID_INPUT_PROPERTY = {
   type: 'string',
-  format: 'uuid',
   description: 'Target company ID. Omit for default.',
 } as const
 
@@ -289,9 +307,11 @@ export function companyEchoPayload(result: unknown, company: CompanyEcho): unkno
 
 /**
  * Companies the caller could have meant, for a NOT_FOUND / FORBIDDEN company
- * answer: the same set gnubok_list_companies returns, reduced to id and
- * name. Best effort: a lookup failure yields an empty list, never an error
- * on top of the error being reported.
+ * answer, and the cross-company pending list: the same set
+ * gnubok_list_companies returns, reduced to id and name, minus companies the
+ * multi-user seat gate pauses for this user (the shared rule,
+ * resolveDormantCompanyIds). Best effort: a lookup failure yields an empty
+ * list, never an error on top of the error being reported.
  */
 export async function listAccessibleCompanies(
   supabase: SupabaseClient,
@@ -301,17 +321,22 @@ export async function listAccessibleCompanies(
   try {
     type MembershipRow = {
       company_id: string
+      role: string
       companies:
         | { id: string; name: string; archived_at: string | null }
         | Array<{ id: string; name: string; archived_at: string | null }>
         | null
     }
     const memberships = (await getUserCompanies(supabase, userId)) as unknown as MembershipRow[]
+    const dormant = await resolveDormantCompanyIds(supabase, memberships)
     const accessible = memberships.flatMap((membership) => {
       const company = Array.isArray(membership.companies)
         ? membership.companies[0]
         : membership.companies
-      return company && company.archived_at === null && isCompanyAllowed(allowedCompanyIds, company.id)
+      return company &&
+        company.archived_at === null &&
+        isCompanyAllowed(allowedCompanyIds, company.id) &&
+        !dormant.has(membership.company_id)
         ? [company]
         : []
     })
@@ -345,6 +370,90 @@ export async function listAccessibleCompanies(
   }
 }
 
+/**
+ * Is this refusal a "not found"? Every registry code a door answers 404 for:
+ * NOT_FOUND and the domain codes (BATCH_TX_NOT_FOUND, INVOICE_NOT_FOUND,
+ * DOCUMENT_UPLOAD_NOT_FOUND, ...). The registry decides, so a code added
+ * later is covered without being listed here.
+ */
+export function isNotFoundCode(code: string): boolean {
+  return getErrorEntry(code)?.httpStatus === 404
+}
+
+/** How many other companies a "not found" names; gnubok_list_companies has them all. */
+export const OTHER_COMPANY_CANDIDATES_MAX = 10
+
+/**
+ * What a "not found" from a tool says next to its candidates. The last
+ * sentence is for a client whose tool list predates the key's second
+ * company: a single-company list carries no company_id (simple company
+ * mode), some connectors fetch the list once, and such an agent read its own
+ * copy as "this tool has no company_id" (crm#1953).
+ */
+export const OTHER_COMPANY_NOTE =
+  'Not found in the company this call ran for (company). candidates are other companies this key reaches ' +
+  '(gnubok_list_companies lists all): if the record belongs to one of them, repeat the call with its company_id. ' +
+  `Every company-scoped tool takes company_id; if your copy of the tool does not show it, your client kept an older tools/list: ${RECONNECT_ADVICE}.`
+
+/**
+ * A "not found" from a tool itself, on a key that reaches several companies:
+ * the answer names the company the call ran for and the others the key
+ * reaches (crm#1953).
+ *
+ * A wrong company_id was already answered with candidates, but that is the
+ * company resolution refusing. Once the company resolves (the default, when
+ * none was named), the tool looks its record up inside that company, and a
+ * record that lives in another reachable company came back as a bare "not
+ * found" with nothing saying company_id was the fix. One answer for every
+ * such refusal, whichever tool raised it and whether the call ran
+ * synchronously or as a task.
+ *
+ * Unchanged when there is nothing to add: a tool that takes no company, a
+ * refusal that is not a "not found", a key that reaches one company or a
+ * pinned connection (simple company mode), no other company in reach. Best
+ * effort like listAccessibleCompanies: a failed lookup leaves the refusal as
+ * it was, never an error on top of the error being reported.
+ */
+export async function withOtherCompanyCandidates<T extends { error: { code: string } }>(
+  refusal: T,
+  call: {
+    supabase: SupabaseClient
+    userId: string
+    /** The company the tool ran for; null for a tool that takes none. */
+    company: CompanyEcho | null
+    /** The key's company allowlist, as for a wrong company_id's candidates. */
+    allowedCompanyIds?: CompanyAllowlist
+    /** The dispatcher's memoised answer; a pinned connection is simple. */
+    isSimpleCompanyMode: () => Promise<boolean>
+  }
+): Promise<
+  | T
+  | (T & { company: CompanyEcho; candidates: Array<{ company_id: string; name: string }>; candidates_note: string })
+> {
+  const { company } = call
+  if (!company || !isNotFoundCode(refusal.error.code)) return refusal
+  try {
+    if (await call.isSimpleCompanyMode()) return refusal
+    const ranFor = company.company_id.toLowerCase()
+    const others = (await listAccessibleCompanies(call.supabase, call.userId, call.allowedCompanyIds)).filter(
+      (candidate) => candidate.company_id.toLowerCase() !== ranFor
+    )
+    if (others.length === 0) return refusal
+    return {
+      company,
+      ...refusal,
+      candidates: others.slice(0, OTHER_COMPANY_CANDIDATES_MAX),
+      candidates_note: OTHER_COMPANY_NOTE,
+    }
+  } catch (error) {
+    log.warn('other-company candidates not added: the refusal goes out as it was', {
+      code: refusal.error.code,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return refusal
+  }
+}
+
 interface ToolSchemaSource {
   name: string
   inputSchema: Record<string, unknown>
@@ -370,7 +479,7 @@ export function noCompanyYetError(): Error {
 }
 
 function isCompanyRole(value: unknown): value is CompanyRole {
-  return value === 'owner' || value === 'admin' || value === 'member' || value === 'viewer'
+  return value === 'owner' || value === 'admin' || value === 'member' || value === 'viewer' || value === 'invoicer'
 }
 
 export function isCompanyDependentTool(toolName: string): boolean {
@@ -402,21 +511,24 @@ export function isTenantWriteScope(scope: ApiKeyScope | undefined): boolean {
  * or the connection is pinned to one) nothing gains it: there is nothing to
  * choose between. The dispatcher still tolerates the argument from a
  * single-company caller, and refuses a different company under a pin.
+ * Typed id fields admit their handle (handleAwareInputSchema), as the
+ * dispatcher does.
  */
 export function projectToolInputSchema(
   tool: ToolSchemaSource,
   options: { omitCompanyId?: boolean } = {}
 ): Record<string, unknown> {
-  if (options.omitCompanyId) return tool.inputSchema
-  if (!isCompanyDependentTool(tool.name) && !isOptionalCompanyTool(tool.name)) return tool.inputSchema
+  const inputSchema = handleAwareInputSchema(tool.inputSchema)
+  if (options.omitCompanyId) return inputSchema
+  if (!isCompanyDependentTool(tool.name) && !isOptionalCompanyTool(tool.name)) return inputSchema
 
   const properties =
-    tool.inputSchema.properties && typeof tool.inputSchema.properties === 'object'
-      ? (tool.inputSchema.properties as Record<string, unknown>)
+    inputSchema.properties && typeof inputSchema.properties === 'object'
+      ? (inputSchema.properties as Record<string, unknown>)
       : {}
 
   return {
-    ...tool.inputSchema,
+    ...inputSchema,
     properties: {
       ...properties,
       company_id: COMPANY_ID_INPUT_PROPERTY,
@@ -430,9 +542,21 @@ export function extractRequestedCompany(
   const { company_id: rawCompanyId, ...toolArgs } = rawArgs
   if (rawCompanyId === undefined) return { requestedCompanyId: undefined, toolArgs }
   if (typeof rawCompanyId !== 'string' || !UUID_PATTERN.test(rawCompanyId)) {
-    throw codedError('VALIDATION_ERROR', 'company_id must be a valid UUID')
+    throw Object.assign(codedError('VALIDATION_ERROR', 'company_id must be a valid UUID'), {
+      malformedCompanyId: true,
+    })
   }
   return { requestedCompanyId: rawCompanyId, toolArgs }
+}
+
+/**
+ * The refusal of a company_id that is not a UUID (a name, an org number, a
+ * placeholder). It stays a VALIDATION_ERROR, but it is a wrong company_id
+ * like an unknown one, so the dispatcher answers it with the same candidates
+ * (the server instructions promise them for a wrong company_id).
+ */
+export function isMalformedCompanyIdError(err: unknown): boolean {
+  return (err as { malformedCompanyId?: unknown } | null)?.malformedCompanyId === true
 }
 
 export async function resolveMcpCompanyContext(args: {
@@ -463,19 +587,14 @@ export async function resolveMcpCompanyContext(args: {
     throw codedError('NOT_FOUND', 'Company not reachable with this key')
   }
 
-  // One query: the membership row, the archived flag, and both name sources
-  // (company_settings is one-to-one on company_id, so PostgREST embeds it as
-  // an object; the parser below also accepts the array shape).
-  const { data: membership, error } = await args.supabase
-    .from('company_members')
-    .select('company_id, role, companies!inner(archived_at, name, company_settings(company_name))')
-    .eq('user_id', args.userId)
-    .eq('company_id', companyId)
-    .is('companies.archived_at', null)
-    .maybeSingle()
-
-  if (error) {
-    throw codedError('INTERNAL_ERROR', `Failed to resolve company membership: ${error.message}`)
+  let membership: LiveMembership | null
+  try {
+    membership = await readLiveMembership(args.supabase, args.userId, companyId)
+  } catch (error) {
+    throw codedError(
+      'INTERNAL_ERROR',
+      `Failed to resolve company membership: ${error instanceof Error ? error.message : (error as { message?: string }).message}`
+    )
   }
   if (!membership) {
     throw codedError('NOT_FOUND', 'Company not found')
@@ -483,10 +602,7 @@ export async function resolveMcpCompanyContext(args: {
   if (!isCompanyRole(membership.role)) {
     throw codedError('FORBIDDEN', 'Company membership has an unsupported role')
   }
-  const companyName = displayNameFromMembership(
-    (membership as { companies?: unknown }).companies,
-    companyId
-  )
+  const companyName = membership.companyName ?? companyId
 
   // Multi-user seat gate: the MCP surface is a chokepoint like the HTTP
   // routes, so a non-owner membership in a frozen company (multi_user lapsed
@@ -511,39 +627,15 @@ export async function resolveMcpCompanyContext(args: {
   }
 }
 
-/**
- * Display name out of the embedded `companies(...)` shape: the settings
- * display name when present, else companies.name, else the id (tests and
- * older mocks embed nothing; a missing name must never fail routing).
- */
-function displayNameFromMembership(embedded: unknown, companyId: string): string {
-  const company = Array.isArray(embedded) ? embedded[0] : embedded
-  if (!company || typeof company !== 'object') return companyId
-  const record = company as { name?: unknown; company_settings?: unknown }
-  const settings = Array.isArray(record.company_settings)
-    ? record.company_settings[0]
-    : record.company_settings
-  const displayName =
-    settings && typeof settings === 'object'
-      ? (settings as { company_name?: unknown }).company_name
-      : undefined
-  if (typeof displayName === 'string' && displayName.trim().length > 0) return displayName
-  if (typeof record.name === 'string' && record.name.trim().length > 0) return record.name
-  return companyId
-}
-
-export interface McpCompanyScope extends ResolvedCompanyScope {
-  /** Companies dropped by the multi-user seat gate (non-owner in a frozen company). */
-  dormant: string[]
-}
+/** The MCP door's scope: the lib's, which carries `dormant` (the seat gate) itself. */
+export type McpCompanyScope = ResolvedCompanyScope
 
 /**
  * Resolve a scope (all | team | explicit ids) for the MCP surface: the lib
- * resolver intersects with memberships and archived state; this wrapper adds
- * the multi-user seat gate per company, the same gate resolveMcpCompanyContext
- * applies to a single company. Owners always pass. Explicit ids that are not
- * accessible come back in `unresolved` (the tool decides whether that is an
- * error); companies frozen for this user come back in `dormant`.
+ * resolver intersects with memberships, archived state and the multi-user
+ * seat gate (frozen companies come back in `dormant`); this wrapper maps the
+ * key's company allowlist onto it. Explicit ids that are not accessible come
+ * back in `unresolved` (the tool decides whether that is an error).
  */
 export async function resolveMcpCompanyScope(args: {
   supabase: SupabaseClient
@@ -553,25 +645,11 @@ export async function resolveMcpCompanyScope(args: {
   allowedCompanyIds?: CompanyAllowlist
 }): Promise<McpCompanyScope> {
   const input: CompanyScopeInput = args.scope ?? {}
-  const resolved = await resolveCompanyScope(
+  return resolveCompanyScope(
     args.supabase,
     args.userId,
     args.allowedCompanyIds ? { ...input, restrictTo: [...args.allowedCompanyIds] } : input
   )
-  const dormant: string[] = []
-  const kept: ScopedCompany[] = []
-  const gates = await Promise.all(
-    resolved.companies.map(async (company) => {
-      if (company.role === 'owner') return { company, dormant: false }
-      const access = await getMultiUserState(args.supabase, company.companyId)
-      return { company, dormant: isMembershipDormant(company.role, access.state) }
-    })
-  )
-  for (const gate of gates) {
-    if (gate.dormant) dormant.push(gate.company.companyId)
-    else kept.push(gate.company)
-  }
-  return { ...resolved, companies: kept, dormant }
 }
 
 /**
@@ -624,6 +702,21 @@ function assertIdList(values: unknown[], field: string): string[] {
   return ids
 }
 
+/** Why the write gate refuses a call: the invoicing-only role, a viewer, or a read-only connection. */
+export type McpWriteRefusal = 'ROLE_SCOPE_LIMITED' | ReadOnlyReason
+
+/** The write gate's verdict, null when the call may proceed (assertMcpCompanyWriteAccess throws on it). */
+export function mcpCompanyWriteRefusal(
+  context: McpCompanyContext,
+  scope: ApiKeyScope | undefined
+): McpWriteRefusal | null {
+  if (!roleAllowsScope(context.role, scope)) return 'ROLE_SCOPE_LIMITED'
+  if (!isTenantWriteScope(scope)) return null
+  if (context.role === 'viewer') return 'ROLE_READ_ONLY'
+  if (context.keyAccess === 'read') return 'CONNECTION_READ_ONLY'
+  return null
+}
+
 /**
  * Read-only gate for the MCP tools/call path: the user's role and the
  * connection's access level in the company.
@@ -639,24 +732,51 @@ function assertIdList(values: unknown[], field: string): string[] {
  * permission is the intersection of the key's scopes, the company's access
  * level and the user's role. The role is checked first so a viewer keeps
  * the message that names the actual fix (the role, not the connection).
+ *
+ * The invoicing-only role (lib/auth/invoicer-role.ts) is refused every tool,
+ * read or write, outside the customer, invoice and article scopes, and every
+ * company-scoped tool without a scope.
+ *
+ * `observe` hears the verdict before it is acted on (the permission shadow,
+ * ./permission-shadow.ts); it never changes it, and a throwing observer is
+ * ignored.
  */
 export function assertMcpCompanyWriteAccess(
   context: McpCompanyContext,
-  scope: ApiKeyScope | undefined
+  scope: ApiKeyScope | undefined,
+  observe?: (refusal: McpWriteRefusal | null) => void
 ): void {
-  if (!isTenantWriteScope(scope)) return
-  if (context.role === 'viewer') {
+  const refusal = mcpCompanyWriteRefusal(context, scope)
+  if (observe) {
+    try {
+      observe(refusal)
+    } catch {
+      // An observer never decides.
+    }
+  }
+  if (refusal === 'ROLE_SCOPE_LIMITED') {
     throw codedError(
       'FORBIDDEN',
+      `This company membership has the Invoicing role: only tools for customers, invoices (quotes and orders included) and articles are allowed${scope ? `, and this one requires the "${scope}" scope` : ''}. Ask a company owner or admin to change the role.`
+    )
+  }
+  if (refusal === 'ROLE_READ_ONLY') {
+    throw readOnlyToolError(
+      refusal,
       `This company membership is read-only (viewer): tools that require the "${scope}" scope change company data and are refused. Use read tools only, or ask a company owner or admin to change the role.`
     )
   }
-  if (context.keyAccess === 'read') {
-    throw codedError(
-      'FORBIDDEN',
-      `This connection has read-only access to ${context.companyName}: tools that require the "${scope}" scope change company data and are refused there. Use read tools only, or give the connection write access to this company under Settings > API & MCP.`
+  if (refusal === 'CONNECTION_READ_ONLY') {
+    throw readOnlyToolError(
+      refusal,
+      `This connection has read-only access to ${context.companyName}: tools that require the "${scope}" scope change company data and are refused there. Use read tools only, or give the connection write access to this company under Agents > Connect an agent.`
     )
   }
+}
+
+/** readOnlyRefusal as a thrown tool error: the dispatch carries `details` to the agent (tool-result.ts). */
+function readOnlyToolError(reason: ReadOnlyReason, message: string): Error {
+  return Object.assign(codedError('FORBIDDEN', message), { details: readOnlyRefusal(reason).details })
 }
 
 export function addCompanyToNextHint(next: unknown, companyId: string): unknown {

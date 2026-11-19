@@ -121,6 +121,22 @@ describe('company twin plan and atomic receipt', () => {
     await expect(heal('f'.repeat(64))).rejects.toMatchObject({ code: '23505', message: 'CASH_ACCOUNT_OPERATION_ID_CONFLICT' })
   })
 
+  // 20261016130000: the actor list follows ProcessingHistoryActorType.
+  it("records a service account's key as the receipt's actor, and still refuses a type outside the vocabulary", async () => {
+    const reviewed = await plan()
+    const serviceAccountActor = { type: 'service_account', id: randomUUID(), label: 'Nattlig synk' }
+    await client.query('SAVEPOINT unknown_actor')
+    await expect(client.query('SELECT heal_cash_account_twins($1, $2, $3, $4)',
+      [owner.companyId, reviewed.fingerprint, operationId, JSON.stringify({ type: 'robot', label: 'x' })]))
+      .rejects.toMatchObject({ code: '22023', message: 'CASH_ACCOUNT_HEAL_INVALID_INPUT' })
+    await client.query('ROLLBACK TO SAVEPOINT unknown_actor')
+    const result = (await client.query('SELECT heal_cash_account_twins($1, $2, $3, $4) AS result',
+      [owner.companyId, reviewed.fingerprint, operationId, JSON.stringify(serviceAccountActor)])).rows[0].result
+    expect(result).toMatchObject({ operationId, dryRun: false })
+    expect((await client.query('SELECT actor FROM processing_history WHERE event_id = $1', [operationId])).rows)
+      .toEqual([{ actor: serviceAccountActor }])
+  })
+
   it('verifies current bindings after the final twin disappears and excludes bank details from the receipt', async () => {
     await transaction()
     await heal((await plan()).fingerprint)
@@ -130,7 +146,8 @@ describe('company twin plan and atomic receipt', () => {
     const payload = (await client.query('SELECT payload FROM processing_history WHERE event_id = $1', [operationId])).rows[0].payload
     expect(JSON.stringify(payload)).not.toContain(iban)
     expect(JSON.stringify(payload)).not.toContain('PG twin fixture')
-    await client.query('UPDATE cash_accounts SET balance = 123, balance_updated_at = now() WHERE id = $1', [keeperId])
+    await client.query(`UPDATE cash_accounts SET balance = 123, balance_updated_at = now(),
+      balance_reference = jsonb_build_object('date', '2026-01-01', 'type', 'closingBooked', 'fetched_at', now()) WHERE id = $1`, [keeperId])
     expect((await verify()).status).toBe('consistent')
   })
 
@@ -194,6 +211,9 @@ describe('company twin plan and atomic receipt', () => {
     await expect(verify(operationId, randomUUID())).rejects.toMatchObject({ code: 'P0002' })
   })
 
+  // 1 101 rows through the transactions triggers: ~55 s on a loaded CI runner,
+  // where a 45 s timeout left the insert running and failed every later test
+  // in the file on the stuck connection.
   it('captures and verifies transaction bindings beyond the REST page limit', async () => {
     await client.query(`INSERT INTO transactions(company_id, user_id, date, amount, currency, description, cash_account_id)
       SELECT $1, $2, '2026-01-02', -25, 'SEK', 'PG large repair', $3 FROM generate_series(1, 1101)`,
@@ -203,7 +223,7 @@ describe('company twin plan and atomic receipt', () => {
     expect(await verify()).toMatchObject({ status: 'consistent', transactionsChecked: 1101 })
     await client.query('UPDATE transactions SET cash_account_id = null WHERE id = $1', [lateId])
     expect(await verify()).toMatchObject({ status: 'changed', issues: [{ kind: 'transaction-or-anchor-changed', id: lateId }] })
-  }, 45_000)
+  }, 120_000)
 
   it('proves that an existing posted voucher and its anchored transaction were preserved', async () => {
     const historical = await seedCompany()
@@ -253,7 +273,8 @@ describe('company twin plan and atomic receipt', () => {
 
   it('ignores balance-only observations and sync timestamps in the fingerprint', async () => {
     const before = await plan()
-    await client.query('UPDATE cash_accounts SET balance = 123, available_balance = 120, balance_updated_at = now() WHERE id = $1', [twinId])
+    await client.query(`UPDATE cash_accounts SET balance = 123, available_balance = 120, balance_updated_at = now(),
+      balance_reference = jsonb_build_object('date', '2026-01-01', 'type', 'closingBooked', 'fetched_at', now()) WHERE id = $1`, [twinId])
     await client.query(`UPDATE bank_connections SET last_synced_at = now(),
       accounts_data = jsonb_set(accounts_data, '{0,balance}', '123') WHERE id = $1`, [connectionId])
     expect((await plan()).fingerprint).toBe(before.fingerprint)

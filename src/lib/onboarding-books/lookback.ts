@@ -83,7 +83,5 @@ export function resolveLookback(input: LookbackInput): LookbackResult {
   }
 }
 
-/** The server clamps a from-date to 365 days: say so before the request. */
-export const LOOKBACK_MAX_DAYS = 365
 /** Beyond this some banks (Swedbank among them) abort the consent. */
 export const LOOKBACK_SAFE_DAYS = 90

@@ -17,7 +17,8 @@ import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
  *
  * Read order (one queued result per `.from()`): source-ref vouchers, fiscal
  * periods, entry status, entry lines, supplier_invoices referencing the
- * entries, invoices referencing the entries, then one update per link.
+ * entries, invoices referencing the entries, the source-rate invoice rows,
+ * the customer invoices still in draft, then one update per link.
  */
 
 vi.mock('../attach-settlement-voucher', () => ({ attachSupplierInvoiceSettlementVoucher: vi.fn() }))
@@ -31,13 +32,15 @@ const periods = [
   { id: PERIOD_2025, period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false, locked_at: null },
 ]
 
-function voucher(over: { id: string; series?: string | null; number?: number; period?: string; date?: string }) {
+function voucher(over: { id: string; series?: string | null; number?: number; period?: string; date?: string;
+  status?: 'posted' | 'reversed' }) {
   return {
     id: over.id,
     fiscal_period_id: over.period ?? PERIOD_2025,
     entry_date: over.date ?? '2025-03-14',
     source_voucher_series: over.series === undefined ? 'A' : over.series,
     source_voucher_number: over.number ?? 329,
+    status: over.status ?? 'posted',
   }
 }
 
@@ -76,6 +79,10 @@ interface Queue {
   lines?: unknown[]
   supplierRefs?: unknown[]
   customerRefs?: unknown[]
+  /** The invoice rows a source-rate link reads: the customer read first, then the supplier read. */
+  foreignRows?: unknown[][]
+  /** The customer invoices among the resolved ones that are still drafts. */
+  drafts?: unknown[]
   updates?: { data?: unknown; error?: unknown }[]
 }
 
@@ -88,6 +95,8 @@ function queue(q: Queue) {
   if (q.lines !== undefined) mock.enqueue({ data: q.lines })
   if (q.supplierRefs !== undefined) mock.enqueue({ data: q.supplierRefs })
   if (q.customerRefs !== undefined) mock.enqueue({ data: q.customerRefs })
+  for (const rows of q.foreignRows ?? []) mock.enqueue({ data: rows })
+  if (q.drafts !== undefined) mock.enqueue({ data: q.drafts })
   for (const u of q.updates ?? []) mock.enqueue(u)
 }
 
@@ -188,6 +197,7 @@ describe('linkMigratedRegistrationVouchers', () => {
       lines: customerLines('je-2', 2500),
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -205,6 +215,72 @@ describe('linkMigratedRegistrationVouchers', () => {
       ['select', ['id']],
     ]))
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+
+  it('marks a draft customer invoice sent in the write that links its verifikat', async () => {
+    // The source booked it, so it was issued there; a draft holding the
+    // verifikat booked the sale a second time on Skicka.
+    queue({
+      vouchers: [voucher({ id: 'je-2', number: 12 })],
+      entries: [{ id: 'je-2', status: 'posted' }],
+      lines: customerLines('je-2', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [{ id: 'inv-1' }],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'A', number: 12 }, totalSek: 2500 }),
+    ])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', reason: 'registration voucher linked; the draft is marked sent' })
+    const [update] = updateCalls('invoices')
+    expect(update.args[0]).toEqual({ journal_entry_id: 'je-2', status: 'sent' })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'inv-1']],
+      ['eq', ['company_id', COMPANY]],
+      ['is', ['journal_entry_id', null]],
+      ['eq', ['status', 'draft']],
+      ['select', ['id']],
+    ]))
+  })
+
+  it('reports a draft that stopped being one before the write as alreadyLinked', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-2', number: 12 })],
+      entries: [{ id: 'je-2', status: 'posted' }],
+      lines: customerLines('je-2', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [{ id: 'inv-1' }],
+      updates: [{ data: [] }],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'A', number: 12 }, totalSek: 2500 }),
+    ])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked',
+      reason: 'invoice already carried a registration link, or is no longer a draft' })
+  })
+
+  it('says a dry run would mark the draft sent, and writes nothing', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-2', number: 12 })],
+      entries: [{ id: 'je-2', status: 'posted' }],
+      lines: customerLines('je-2', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [{ id: 'inv-1' }],
+    })
+
+    const result = await run([
+      input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'A', number: 12 }, totalSek: 2500 }),
+    ], true)
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', reason: 'would link; the draft is marked sent (dry run)' })
+    expect(mock.calls.filter((c) => c.method === 'update')).toHaveLength(0)
   })
 
   it('resolves a series-less ref when exactly one verifikat carries the number in that year', async () => {
@@ -376,6 +452,7 @@ describe('linkMigratedRegistrationVouchers', () => {
       lines: customerLines('je-k', 4156),
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -398,6 +475,7 @@ describe('linkMigratedRegistrationVouchers', () => {
       lines: [...customerLines('je-k', 4156), line('je-i', '1930', 4156, 0), line('je-i', '1510', 0, 4156)],
       supplierRefs: [],
       customerRefs: [],
+      drafts: [],
       updates: [{ data: [{ id: 'inv-1' }] }],
     })
 
@@ -441,16 +519,18 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
 
-  it('explains a foreign-currency mismatch as a rate difference, and still does not link', async () => {
+  it('does not link a foreign-currency invoice at the source rate when its row cannot be read', async () => {
     // total_sek comes from our Riksbanken index; the source booked 2440 at its
-    // own rate. The amounts differ, so the bucket is amountMismatch, but the
-    // reason must say why instead of implying a bookkeeping discrepancy.
+    // own rate. Within the band the invoice takes the booked amount instead
+    // (crm#1039), but the rate is derived from its row, and this row is gone:
+    // the bucket stays amountMismatch, and the reason says why.
     queue({
       vouchers: [voucher({ id: 'je-1' })],
       entries: [{ id: 'je-1', status: 'posted' }],
       lines: supplierLines('je-1', 11240),
       supplierRefs: [],
       customerRefs: [],
+      foreignRows: [[]],
     })
 
     const result = await run([input({ invoiceId: 'si-1', totalSek: 11200, currencyCode: 'EUR' })])
@@ -459,6 +539,9 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(result.linked).toBe(0)
     expect(result.reports[0].reason).toContain('EUR')
     expect(result.reports[0].reason).toContain('rate')
+    // The two amounts travel with the report, so the import review can show
+    // the difference without parsing the reason text.
+    expect(result.reports[0]).toMatchObject({ bookedSek: 11240, expectedSek: 11200 })
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
 
@@ -512,6 +595,7 @@ describe('linkMigratedRegistrationVouchers', () => {
 
     expect(result.amountMismatch).toBe(1)
     expect(result.reports[0].reason).toContain('no SEK total')
+    expect(result.reports[0].bookedSek).toBeUndefined()
   })
 
   it('tolerates half an öre and sums several 244x lines (2440 + 2441)', async () => {
@@ -712,7 +796,7 @@ describe('Bokio cash-purchase source references', () => {
   it('attaches settlement evidence without writing the registration FK', async () => {
     cashQueue()
     expect((await run([cashInput()])).reports[0]).toMatchObject({ outcome: 'linked', linkType: 'settlement' })
-    expect(attachSupplierInvoiceSettlementVoucher).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dryRun: false, journalEntryId: 'cash' }))
+    expect(attachSupplierInvoiceSettlementVoucher).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dryRun: false, journalEntryId: 'cash', linkBasis: 'import_carried_over' }))
     expect(updateCalls('supplier_invoices')).toHaveLength(0)
   })
   it('uses the source entry date across a fiscal year boundary', async () => {
@@ -727,5 +811,404 @@ describe('Bokio cash-purchase source references', () => {
     mock = createQueuedMockSupabase(); cashQueue()
     expect((await run([{ ...cashInput(), sourceVoucher: { series: 'A', number: 329, date: '2025-03-15' } }])).linked).toBe(0)
     expect(attachSupplierInvoiceSettlementVoucher).not.toHaveBeenCalled()
+  })
+})
+
+describe('foreign-currency invoices at the source rate (crm#1039)', () => {
+  beforeEach(() => {
+    mock = createQueuedMockSupabase()
+  })
+
+  // 1 000 EUR imported at our 11.20 (11 200.00 kr); the source booked 1510
+  // at its own 11.2345 (11 234.50 kr), dated with the invoice.
+  const eurCustomerInput = () => input({ invoiceId: 'inv-eur', kind: 'customer', sourceVoucher: { series: 'B', number: 501 },
+    totalSek: 11200, currencyCode: 'EUR' })
+  const eurCustomerRow = { id: 'inv-eur', currency: 'EUR', total: 1000, subtotal: 1000, vat_amount: 0, total_sek: 11200, exchange_rate: 11.2 }
+  function eurCustomerQueue(updates?: { data?: unknown }[]) {
+    queue({
+      vouchers: [voucher({ id: 'je-eur', series: 'B', number: 501 })],
+      entries: [{ id: 'je-eur', status: 'posted' }],
+      lines: [line('je-eur', '1510', 11234.5, 0), line('je-eur', '3105', 0, 11234.5)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[eurCustomerRow]],
+      drafts: [],
+      updates,
+    })
+  }
+  const eurSourceRate = {
+    total: 1000, totalSek: 11234.5, subtotalSek: 11234.5, vatAmountSek: 0, exchangeRate: 11.2345,
+    exchangeRateDate: '2025-03-14', previousTotalSek: 11200, previousExchangeRate: 11.2,
+  }
+
+  it('links the invoice and reports the SEK amount the verifikat books, writing nothing in a dry run', async () => {
+    eurCustomerQueue()
+
+    const result = await run([eurCustomerInput()], true)
+
+    expect(result.linked).toBe(1)
+    expect(result.amountMismatch).toBe(0)
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-eur', sourceRate: eurSourceRate })
+    // The rate gives the 1510 debit back the way the reskontra and the
+    // payment lines round it, so a payment of the 8 800 EUR clears 1510.
+    expect(Math.round(1000 * result.reports[0].sourceRate!.exchangeRate * 100) / 100).toBe(11234.5)
+    expect(mock.calls.filter((c) => c.method === 'update' || c.method === 'insert')).toHaveLength(0)
+  })
+
+  it('writes the link and the SEK amount in one update, from NULL and only for the total it was derived from', async () => {
+    eurCustomerQueue([{ data: [{ id: 'inv-eur' }] }])
+
+    const result = await run([eurCustomerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', reason: 'registration voucher linked at the source rate' })
+    const [update] = updateCalls('invoices')
+    expect(update.args[0]).toEqual({
+      journal_entry_id: 'je-eur', exchange_rate: 11.2345, exchange_rate_date: '2025-03-14',
+      total_sek: 11234.5, subtotal_sek: 11234.5, vat_amount_sek: 0,
+    })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'inv-eur']],
+      ['eq', ['company_id', COMPANY]],
+      ['is', ['journal_entry_id', null]],
+      ['eq', ['total', 1000]],
+      ['select', ['id']],
+    ]))
+  })
+
+  it('marks a draft sent in the same write that takes the source rate', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-eur', series: 'B', number: 501 })],
+      entries: [{ id: 'je-eur', status: 'posted' }],
+      lines: [line('je-eur', '1510', 11234.5, 0), line('je-eur', '3105', 0, 11234.5)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[eurCustomerRow]],
+      drafts: [{ id: 'inv-eur' }],
+      updates: [{ data: [{ id: 'inv-eur' }] }],
+    })
+
+    const result = await run([eurCustomerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked',
+      reason: 'registration voucher linked at the source rate; the draft is marked sent' })
+    expect(updateCalls('invoices')[0].args[0]).toMatchObject({ journal_entry_id: 'je-eur', status: 'sent', exchange_rate: 11.2345 })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['is', ['journal_entry_id', null]],
+      ['eq', ['status', 'draft']],
+      ['eq', ['total', 1000]],
+    ]))
+  })
+
+  it('takes a supplier credit note\'s magnitude from the 2440 debit', async () => {
+    // 250 EUR, imported at 11.30 (2 825.00 kr); the verifikat debits 2440
+    // with 2 811.25 kr, the source's 11.245.
+    queue({
+      vouchers: [voucher({ id: 'je-cn' })],
+      entries: [{ id: 'je-cn', status: 'posted' }],
+      lines: [line('je-cn', '2440', 2811.25, 0), line('je-cn', '4010', 0, 2811.25)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[{ id: 'scn-eur', currency: 'EUR', total: 250, subtotal: 250, vat_amount: 0, total_sek: 2825,
+        exchange_rate: 11.3, is_credit_note: true }]],
+    })
+
+    const result = await run([input({ invoiceId: 'scn-eur', currencyCode: 'EUR', totalSek: supplierPayableEffectSek(2825, true) })], true)
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-cn',
+      sourceRate: { total: 250, totalSek: 2811.25, subtotalSek: 2811.25, exchangeRate: 11.245 } })
+  })
+
+  it('keeps a verifikat more than 10% from the SEK total as amountMismatch, and reads no invoice row', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-1' })],
+      entries: [{ id: 'je-1', status: 'posted' }],
+      lines: supplierLines('je-1', 12500),
+      supplierRefs: [],
+      customerRefs: [],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1', totalSek: 11200, currencyCode: 'EUR' })])
+
+    expect(result.amountMismatch).toBe(1)
+    expect(result.reports[0].reason).toContain('more than 10% apart')
+    expect(result.reports[0].sourceRate).toBeUndefined()
+    expect(mock.calls.filter((c) => c.table === 'supplier_invoices' && c.method === 'select')).toHaveLength(1)
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+
+  it('never re-rates a SEK invoice, whatever the difference', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-1' })],
+      entries: [{ id: 'je-1', status: 'posted' }],
+      lines: supplierLines('je-1', 1001),
+      supplierRefs: [],
+      customerRefs: [],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1', totalSek: 1000, currencyCode: 'SEK' })])
+
+    expect(result.amountMismatch).toBe(1)
+    expect(result.reports[0].sourceRate).toBeUndefined()
+    expect(mock.calls.filter((c) => c.table === 'supplier_invoices' && c.method === 'select')).toHaveLength(1)
+  })
+
+  it('falls back to the plain quotient when no four- or six-decimal rate gives the booked amount back', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-big' })],
+      entries: [{ id: 'je-big', status: 'posted' }],
+      lines: [line('je-big', '1510', 1688215.44, 0), line('je-big', '3105', 0, 1688215.44)],
+      supplierRefs: [],
+      customerRefs: [],
+      foreignRows: [[{ id: 'inv-big', currency: 'EUR', total: 162973.57, subtotal: 162973.57, vat_amount: 0,
+        total_sek: 1688000, exchange_rate: 10.3575 }]],
+    })
+
+    const result = await run([input({ invoiceId: 'inv-big', kind: 'customer', totalSek: 1688000, currencyCode: 'EUR' })], true)
+
+    const rate = result.reports[0].sourceRate!.exchangeRate
+    expect(rate).toBe(1688215.44 / 162973.57)
+    expect(roundOre(162973.57 * rate)).toBe(1688215.44)
+    expect(Math.round(162973.57 * rate * 100) / 100).toBe(1688215.44)
+  })
+
+  it('never uses the band to choose between several candidates for a series-less ref', async () => {
+    // Two series carry number 329 dated with the invoice, both within 10% of
+    // its SEK total: only an exact amount may pick one, so it stays ambiguous.
+    queue({
+      vouchers: [voucher({ id: 'je-a', series: 'A' }), voucher({ id: 'je-b', series: 'B' })],
+      entries: [{ id: 'je-a', status: 'posted' }, { id: 'je-b', status: 'posted' }],
+      lines: [...supplierLines('je-a', 11240), ...supplierLines('je-b', 11180)],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1', sourceVoucher: { series: null, number: 329 }, totalSek: 11200,
+      currencyCode: 'EUR' })])
+
+    expect(result.ambiguous).toBe(1)
+    expect(result.linked).toBe(0)
+    expect(mock.calls.filter((c) => c.method === 'update')).toHaveLength(0)
+  })
+})
+
+/**
+ * Replacing a fiscal year by an SIE re-sync reverses every verifikat the
+ * previous import brought in and imports the year again: each source ref is
+ * then carried twice in that year, by the reversed first copy and by the live
+ * second one. Every re-synced ref used to stop as ambiguous (hundreds of
+ * customer invoices per company), and invoices an earlier run had
+ * linked kept pointing at the reversed copies.
+ */
+describe('a fiscal year an SIE re-sync replaced', () => {
+  beforeEach(() => {
+    mock = createQueuedMockSupabase()
+  })
+
+  const reversedCopy = (over: Partial<Parameters<typeof voucher>[0]> = {}) =>
+    voucher({ id: 'je-copy', series: 'B', number: 57, status: 'reversed', ...over })
+  const liveCopy = (over: Partial<Parameters<typeof voucher>[0]> = {}) =>
+    voucher({ id: 'je-live', series: 'B', number: 57, ...over })
+  const customerInput = (over: Partial<MigratedInvoiceLinkInput> = {}) =>
+    input({ invoiceId: 'inv-1', kind: 'customer', sourceVoucher: { series: 'B', number: 57 }, totalSek: 2500, ...over })
+
+  it('resolves the live copy and links an unlinked invoice from NULL', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.ambiguous).toBe(0)
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', reason: 'registration voucher linked' })
+    expect(result.reports[0].replacesJournalEntryId).toBeUndefined()
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([['is', ['journal_entry_id', null]]]))
+    // The status the split rests on is read with the refs.
+    expect(mock.calls.some((c) => c.table === 'journal_entries' && c.method === 'select'
+      && String(c.args[0]).split(', ').includes('status'))).toBe(true)
+  })
+
+  it('moves the link of an invoice that still points at the reversed copy, and from that copy only', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+      drafts: [],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.linked).toBe(1)
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', replacesJournalEntryId: 'je-copy',
+      reason: 'registration voucher linked in place of its reversed copy' })
+    const [update] = updateCalls('invoices')
+    expect(update.args[0]).toEqual({ journal_entry_id: 'je-live' })
+    const chain = updateChain('invoices')
+    expect(chain).toEqual(expect.arrayContaining([
+      ['eq', ['id', 'inv-1']],
+      ['eq', ['company_id', COMPANY]],
+      ['eq', ['journal_entry_id', 'je-copy']],
+      ['select', ['id']],
+    ]))
+    expect(chain).not.toContainEqual(['is', ['journal_entry_id', null]])
+    // The copy's holders were read with the live entry's.
+    expect(mock.findCalls('invoices', 'in')).toEqual(expect.arrayContaining([
+      ['journal_entry_id', expect.arrayContaining(['je-live', 'je-copy'])],
+    ]))
+  })
+
+  it('reports the move in a dry run, for the followup to write, and writes nothing', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+    })
+
+    const result = await run([customerInput()], true)
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', replacesJournalEntryId: 'je-copy',
+      reason: 'would move the link from its reversed copy (dry run)' })
+    expect(mock.calls.filter((c) => c.method === 'update' || c.method === 'insert')).toHaveLength(0)
+  })
+
+  it('reports a moved link that no longer applies as alreadyLinked', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-1', journal_entry_id: 'je-copy' }],
+      drafts: [],
+      updates: [{ data: [] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked', reason: 'invoice no longer points at the reversed copy' })
+    expect(result.reports[0].replacesJournalEntryId).toBeUndefined()
+  })
+
+  it('leaves both links alone when another invoice holds the reversed copy', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-other', journal_entry_id: 'je-copy' }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked',
+      reason: 'a reversed copy of the verifikat is the registration voucher of another invoice' })
+    expect(updateCalls('invoices')).toHaveLength(0)
+  })
+
+  it('moves a supplier invoice\'s link the same way', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-copy', status: 'reversed' }), voucher({ id: 'je-live' })],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: supplierLines('je-live'),
+      supplierRefs: [{ id: 'si-1', registration_journal_entry_id: 'je-copy' }],
+      customerRefs: [],
+      updates: [{ data: [{ id: 'si-1' }] }],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1' })])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live', replacesJournalEntryId: 'je-copy' })
+    expect(updateCalls('supplier_invoices')[0].args[0]).toEqual({ registration_journal_entry_id: 'je-live' })
+    expect(updateChain('supplier_invoices')).toEqual(expect.arrayContaining([['eq', ['registration_journal_entry_id', 'je-copy']]]))
+  })
+
+  it('never takes a reversed copy from another fiscal year for this one\'s', async () => {
+    // The same source ref a year earlier, reversed and linked to this invoice,
+    // is not a copy of this year's verifikat: nothing moves.
+    queue({
+      vouchers: [reversedCopy({ period: 'period-2024', date: '2024-03-14' }), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [],
+      updates: [{ data: [] }],
+    })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'alreadyLinked', reason: 'invoice already carried a registration link' })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([['is', ['journal_entry_id', null]]]))
+    expect(mock.findCalls('invoices', 'in')).toEqual([['journal_entry_id', ['je-live']], ['id', ['inv-1']]])
+  })
+
+  it('moves the link at the source rate for a foreign-currency invoice', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: [line('je-live', '1510', 4405, 0), line('je-live', '3105', 0, 4405)],
+      supplierRefs: [],
+      customerRefs: [{ id: 'inv-eur', journal_entry_id: 'je-copy' }],
+      foreignRows: [[{ id: 'inv-eur', currency: 'EUR', total: 400, subtotal: 400, vat_amount: 0, total_sek: 4398, exchange_rate: 10.995 }]],
+      drafts: [],
+      updates: [{ data: [{ id: 'inv-eur' }] }],
+    })
+
+    const result = await run([customerInput({ invoiceId: 'inv-eur', totalSek: 4398, currencyCode: 'EUR' })])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'linked', replacesJournalEntryId: 'je-copy',
+      reason: 'registration voucher linked in place of its reversed copy at the source rate',
+      sourceRate: { total: 400, totalSek: 4405, exchangeRate: 11.0125 } })
+    expect(updateChain('invoices')).toEqual(expect.arrayContaining([
+      ['eq', ['journal_entry_id', 'je-copy']],
+      ['eq', ['total', 400]],
+    ]))
+  })
+
+  it('reports a ref only reversed copies carry as unresolved, saying so', async () => {
+    queue({ vouchers: [reversedCopy()] })
+
+    const result = await run([customerInput()])
+
+    expect(result.reports[0]).toMatchObject({ outcome: 'unresolved',
+      reason: 'source ref B57 is carried only by reversed (storno) verifikat in that fiscal year' })
+    expect(mock.supabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('resolves a series-less ref past the reversed copy, and says so when only copies carry it', async () => {
+    queue({
+      vouchers: [reversedCopy(), liveCopy()],
+      entries: [{ id: 'je-live', status: 'posted' }],
+      lines: customerLines('je-live', 2500),
+      supplierRefs: [],
+      customerRefs: [],
+      drafts: [],
+      updates: [{ data: [{ id: 'inv-1' }] }],
+    })
+    const resolved = await run([customerInput({ sourceVoucher: { series: null, number: 57 } })])
+    expect(resolved.reports[0]).toMatchObject({ outcome: 'linked', journalEntryId: 'je-live' })
+
+    mock = createQueuedMockSupabase()
+    queue({ vouchers: [reversedCopy()] })
+    const copiesOnly = await run([customerInput({ sourceVoucher: { series: null, number: 57 } })])
+    expect(copiesOnly.reports[0]).toMatchObject({ outcome: 'unresolved',
+      reason: 'source number 57 is carried only by reversed (storno) verifikat in that fiscal year' })
+  })
+
+  it('keeps two live copies of one ref ambiguous, whatever is reversed beside them', async () => {
+    queue({ vouchers: [reversedCopy(), liveCopy(), liveCopy({ id: 'je-live-2' })] })
+
+    const result = await run([customerInput()])
+
+    expect(result.ambiguous).toBe(1)
+    expect(result.reports[0].reason).toContain('more than one verifikat')
+    expect(mock.calls.filter((c) => c.method === 'update')).toHaveLength(0)
   })
 })

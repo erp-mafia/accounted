@@ -15,15 +15,19 @@
  * (submitted/accepted, or the run stamped agi_submitted_at): the period must
  * then be redone via a correction AGI with the same specifikationsnummer.
  * A paid or booked run is never unapproved: it is corrected through the
- * correction flow. On success it clears the approver, the AGI generation
+ * correction flow. Nor is one with a bank payment approved, at the bank or
+ * executed (SALARY_RUN_IN_BANK_PAYMENT, refused by the database,
+ * 20261027100000); the run's bank payment drafts are cancelled with it. On success it clears the approver, the AGI generation
  * stamp and the payment-file tracking, and deletes a generated but unfiled
- * (generated/exported) AGI declaration, which now carries stale amounts.
+ * (generated/exported) AGI declaration, which now carries stale amounts
+ * (a correction run's is kept: it is the period's row).
  *
  * A dry run reads and checks and answers what would change; it writes
  * nothing (it is also the MCP staging preview).
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { eventBus } from '@/lib/events'
+import { isSalaryInBankPaymentError } from '@/lib/salary/payment/in-bank-payment'
 
 /** AGI declaration states that mean Skatteverket has (or is about to have) it. */
 const AGI_FILED_STATUSES = ['pending_signature', 'submitted', 'accepted']
@@ -115,7 +119,7 @@ export async function unapproveSalaryRun(
 
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
-    .select('id, status, agi_submitted_at, agi_generated_at, payment_file_format, payment_file_generated_at')
+    .select('id, status, is_correction, agi_submitted_at, agi_generated_at, payment_file_format, payment_file_generated_at')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .single()
@@ -123,6 +127,7 @@ export async function unapproveSalaryRun(
   if (runError || !run) return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
   const runRow = run as {
     status: string
+    is_correction?: boolean | null
     agi_submitted_at: string | null
     agi_generated_at: string | null
     payment_file_format: string | null
@@ -133,23 +138,39 @@ export async function unapproveSalaryRun(
     return { ok: false, code: 'SALARY_RUN_UNAPPROVE_NOT_APPROVED', details: { current_status: runRow.status } }
   }
 
-  const { data: agiDeclaration } = await supabase
+  // Every declaration of the run, not .single(): nothing makes salary_run_id
+  // unique there, and .single() answers both "none" and "more than one" with
+  // the same error, so a run with two rows read as having none. A failed read
+  // refuses: whether the AGI is filed is unknown, and recalling a filed run
+  // is what this check exists to stop (accounted#58).
+  const { data: agiRows, error: agiError } = await supabase
     .from('agi_declarations')
     .select('id, status')
     .eq('company_id', companyId)
     .eq('salary_run_id', salaryRunId)
-    .single()
-  const agi = agiDeclaration as { id: string; status: string } | null
+  if (agiError) {
+    log.error('salary run unapprove: AGI declaration read failed', agiError as Error)
+    return { ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' }
+  }
+  const declarations = (agiRows ?? []) as Array<{ id: string; status: string }>
+  const filedAgi = declarations.find((row) => AGI_FILED_STATUSES.includes(row.status))
+  // Only a run's one declaration is replaced as stale; with several, none is
+  // deleted, as before.
+  const agi = filedAgi ?? (declarations.length === 1 ? declarations[0] : null)
 
-  if (runRow.agi_submitted_at || AGI_FILED_STATUSES.includes(agi?.status ?? '')) {
+  if (runRow.agi_submitted_at || filedAgi) {
     return {
       ok: false,
       code: 'SALARY_RUN_UNAPPROVE_AGI_FILED',
-      details: { agi_status: agi?.status ?? null, agi_submitted_at: runRow.agi_submitted_at },
+      details: { agi_status: (agi ?? declarations[0])?.status ?? null, agi_submitted_at: runRow.agi_submitted_at },
     }
   }
 
-  const staleAgi = agi && AGI_STALE_STATUSES.includes(agi.status) ? agi : null
+  // A correction run's declaration is the period's one row, taken over from
+  // the run it corrects (generate-declaration.ts): it carries the period's
+  // tax payment tracking and stays. Its XML goes stale like any other, but the
+  // cleared agi_generated_at makes the panel and the submit regenerate it.
+  const staleAgi = agi && AGI_STALE_STATUSES.includes(agi.status) && !runRow.is_correction ? agi : null
 
   if (options.dryRun) {
     // Payslips already emailed are not recalled by this; the approver should
@@ -214,6 +235,12 @@ export async function unapproveSalaryRun(
     // server fault; the caller should reload and retry.
     if (isNoRowsError(error)) {
       return { ok: false, code: 'SALARY_RUN_STATUS_CHANGED', details: { expected_status: 'approved' } }
+    }
+    // A bank payment of the run is approved, at the bank or executed
+    // (salary_run_recall_guard_bank_payments, 20261027100000): it was made
+    // from the amounts the recall would recompute.
+    if (isSalaryInBankPaymentError(error)) {
+      return { ok: false, code: 'SALARY_RUN_IN_BANK_PAYMENT' }
     }
     log.error('salary run unapprove update failed', error as Error)
     return { ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' }

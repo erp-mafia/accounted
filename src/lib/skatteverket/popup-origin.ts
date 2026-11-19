@@ -22,3 +22,11 @@ export function isAllowedSkvPopupOrigin(eventOrigin: string, windowOrigin: strin
     return false
   }
 }
+
+/** isAllowedSkvPopupOrigin against this window, the check useOAuthPopup takes. */
+export function isSkvPopupOrigin(origin: string): boolean {
+  return isAllowedSkvPopupOrigin(origin, window.location.origin)
+}
+
+/** What the Skatteverket callback page posts back to its opener. */
+export type SkvPopupMessage = { type?: string; reason?: unknown }

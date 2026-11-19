@@ -19,19 +19,15 @@
  *     never storing a personnummer.
  */
 
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
+
 const FOREIGN_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9 .,\-/]{1,39}$/
 
 export function isValidParentCompanyIdentifier(raw: string): boolean {
   const value = raw.trim()
   if (!value) return false
 
-  const digitsOnly = value.replace(/[\s-]/g, '')
-  const allDigits = /^\d+$/.test(digitsOnly)
-  if (allDigits && (digitsOnly.length === 10 || digitsOnly.length === 12)) {
-    if (digitsOnly.length === 12 && !digitsOnly.startsWith('16')) return false
-    const core = digitsOnly.length === 12 ? digitsOnly.slice(2) : digitsOnly
-    return /^\d{2}[2-9]\d{7}$/.test(core)
-  }
+  if (/^\d{10}(\d{2})?$/.test(value.replace(/[\s-]/g, ''))) return isLegalPersonOrgNumber(value)
 
   return FOREIGN_IDENTIFIER.test(value)
 }

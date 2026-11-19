@@ -3,11 +3,11 @@
  *
  * Verifies:
  *   - preferred_payment_format defaults to 'pain001' for new rows (the old
- *     'bg_lb' default from 20260508120000 is retired — banks sunset
+ *     'bg_lb' default from 20260508120000 is retired - banks sunset
  *     Bankgirot Lön during 2026).
  *   - 'bg_lb' remains a valid explicit choice (companies with a working LB
  *     routine keep it; the UI warns instead).
- *   - salary_pay_day: default 25, CHECK 1–28.
+ *   - salary_pay_day: default 25, CHECK 1-28.
  *   - salary_default_bank: NULL allowed, known keys allowed, unknown rejected.
  */
 import { describe, it, expect } from 'vitest'

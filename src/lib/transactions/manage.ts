@@ -16,7 +16,8 @@
  *     protects (BFL 7 kap);
  *   - a move additionally refuses rows anchored through
  *     transaction_voucher_links (bulk-book N>1 sets no journal_entry_id),
- *     a target outside the company and a target in another currency.
+ *     a target outside the company, a target in another currency, and a
+ *     bank-feed row onto another bank account of the company (crm#1498).
  *
  * Every UPDATE re-asserts the gate in its WHERE clause, so a row booked or
  * auto-matched between read and write is refused, never overwritten.
@@ -24,12 +25,15 @@
  * A dry run reads, checks and answers a preview; it writes nothing, never
  * calls Riksbanken and never touches the exchange rate cache.
  */
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { Currency } from '@/types'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { reenableIfUnused } from '@/lib/cash-accounts/service'
+import { normalizeIban, physicalAccountKey } from '@/lib/cash-accounts/ledger-slots'
+import { ibanLast4 } from '@/lib/cash-accounts/selection-refusal'
+import { bankFeedIbanOf } from '@/lib/transactions/external-id'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { roundOre } from '@/lib/money'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -144,9 +148,56 @@ interface TargetAccount {
   id: string
   ledger_account: string
   currency: string
+  iban?: string | null
   enabled: boolean | null
   bank_connection_id: string | null
   invoice_payee: boolean | null
+}
+
+/**
+ * A bank-feed row belongs to the bank account it was fetched from, and that
+ * account's cash account decides its ledger account. Moved onto another bank
+ * account's row, it books on that account's ledger, and when the user later
+ * gives the real account the right ledger account (the bank picker or the
+ * ledger change), the moved rows stay behind on the other one: crm#1498, where
+ * a company moved its företagskonto's rows onto the 1930 row of its second
+ * account, then swapped the two accounts' ledgers and found the rows on 1935.
+ * Changing an account's ledger account is a whole-account act, so this refuses
+ * a move whose target carries another IBAN while the row's own account is one
+ * of the company's cash accounts, and names that account. The origin comes
+ * from the row's stable external id; a row whose origin is unknown (a bank
+ * file, a uid scope, an account the company no longer has) and a target
+ * without an IBAN keep today's behaviour.
+ */
+async function refuseMoveOntoAnotherBankAccount(
+  ctx: OperationContext,
+  transaction: { currency: string | null; external_id?: string | null },
+  target: TargetAccount,
+): Promise<Failure | null> {
+  const originIban = bankFeedIbanOf(transaction.external_id)
+  const targetIban = normalizeIban(target.iban)
+  if (!originIban || !targetIban || targetIban === originIban) return null
+
+  const { data, error } = await ctx.supabase
+    .from('cash_accounts')
+    .select('ledger_account, iban, currency')
+    .eq('company_id', ctx.companyId)
+    .not('iban', 'is', null)
+  if (error) return failed(error)
+  const originKey = physicalAccountKey({ iban: originIban, currency: transaction.currency })
+  const origin = ((data ?? []) as Array<{ ledger_account: string; iban: string | null; currency: string }>)
+    .find((row) => physicalAccountKey(row) === originKey)
+  if (!origin) return null
+
+  return {
+    ok: false,
+    code: 'TRANSACTION_MOVE_OTHER_BANK_ACCOUNT',
+    details: { origin_ledger_account: origin.ledger_account, origin_iban_last4: ibanLast4(originIban) },
+    messageSv:
+      `Transaktionen hämtades från bankkontot som slutar på ${ibanLast4(originIban)} och bokförs på dess konto ` +
+      `${origin.ledger_account}. Flytta den dit, eller byt bokföringskonto för hela bankkontot under ` +
+      'Inställningar → Kopplingar, så följer dess obokförda transaktioner med.',
+  }
 }
 
 /**
@@ -169,7 +220,7 @@ export async function updateTransaction(
 
   const { data: fetched, error: fetchError } = await supabase
     .from('transactions')
-    .select('id, description, original_description, currency, cash_account_id, journal_entry_id, invoice_id, supplier_invoice_id')
+    .select('id, description, original_description, currency, cash_account_id, journal_entry_id, invoice_id, supplier_invoice_id, external_id, cash_accounts(kind)')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .single()
@@ -184,6 +235,8 @@ export async function updateTransaction(
     journal_entry_id: string | null
     invoice_id: string | null
     supplier_invoice_id: string | null
+    external_id?: string | null
+    cash_accounts?: { kind?: string | null } | null
   }
 
   // Gate: editable only when neither booked nor confirmed-matched. (A
@@ -212,7 +265,7 @@ export async function updateTransaction(
 
     const { data: account, error: accountError } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, currency, enabled, bank_connection_id, invoice_payee')
+      .select('id, ledger_account, currency, enabled, bank_connection_id, invoice_payee, kind, iban')
       .eq('company_id', companyId)
       .eq('ledger_account', input.account_number!)
       .maybeSingle()
@@ -220,12 +273,26 @@ export async function updateTransaction(
     if (!account) return { ok: false, code: 'TRANSACTION_MOVE_UNKNOWN_ACCOUNT' }
     target = account as TargetAccount
 
+    // A company card stores a purchase as money out, the opposite of how the
+    // card's own statement prints it (the import flips it). A row moved
+    // between a bank account and a card would keep the sign of the account
+    // it was imported for, so a purchase would land as a refund. Undoing the
+    // import and importing the file to the right account is the way.
+    const sourceKind = transaction.cash_accounts?.kind ?? 'bank'
+    const targetKind = (account as { kind?: string | null }).kind ?? 'bank'
+    if (transaction.cash_account_id && sourceKind !== targetKind) {
+      return { ok: false, code: 'TRANSACTION_MOVE_KIND_MISMATCH' }
+    }
+
     // A cross-currency move would strand the row: every report scope pins
     // the account currency, so the row would vanish from BOTH accounts'
     // reconciliation.
     if ((transaction.currency ?? 'SEK').toUpperCase() !== target.currency.toUpperCase()) {
       return { ok: false, code: 'TRANSACTION_MOVE_CURRENCY_MISMATCH' }
     }
+
+    const otherAccount = await refuseMoveOntoAnotherBankAccount(ctx, transaction, target)
+    if (otherAccount) return otherAccount
   }
 
   // Restoring to the bank original clears the "edited" tag; any other value
@@ -416,7 +483,7 @@ export async function refreshTransactionExchangeRate(
   const { data: updated, error: updateError } = await supabase
     .from('transactions')
     .update({
-      amount_sek: roundOre(transaction.amount * rate.rate),
+      amount_sek: sekOfForeign(transaction.amount, rate.rate),
       exchange_rate: rate.rate,
       exchange_rate_date: rate.date,
     })

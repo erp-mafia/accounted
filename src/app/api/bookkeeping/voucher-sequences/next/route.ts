@@ -5,6 +5,7 @@ import { validateQuery } from '@/lib/api/validate'
 import { VoucherSequenceNextQuerySchema } from '@/lib/api/schemas'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCashAccountVoucherSeries } from '@/lib/bookkeeping/cash-account-voucher-series'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export const GET = withRouteContext(
   'voucher_sequence.next',
@@ -23,7 +24,7 @@ export const GET = withRouteContext(
       cash_account_id: cashAccountId,
     } = query.data
 
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     // Vouchers are numbered per fiscal period, so the preview must reflect the
     // period of the entry's date (e.g. a back-dated payment), not today's.
     const date = query.data.date || today

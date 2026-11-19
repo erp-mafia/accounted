@@ -56,11 +56,17 @@ describe('needsReadOnDemand', () => {
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'download_failed: gone' })).toBe(false)
   })
 
-  it('reads again what an earlier reader could not and a later one can: an oversized photo, a HEIC', () => {
+  it('reads again what an earlier reader could not and a later one can: an oversized photo, a HEIC, a CSV', () => {
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: 400 messages.0.content.0.image.source.base64: image exceeds 5 MB maximum: 6721660 bytes > 5242880 bytes', mime_type: 'image/jpeg' })).toBe(true)
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'unsupported_mime', mime_type: 'image/heic' })).toBe(true)
+    expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: unsupported input: unrecognized file content: name the format explicitly', mime_type: 'text/csv' })).toBe(true)
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'unsupported_mime', mime_type: 'application/zip' })).toBe(false)
     expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: Invalid PDF structure.', mime_type: 'application/pdf' })).toBe(false)
+  })
+
+  it('leaves a detection failure alone where the reader still detects, and a CSV that failed for another reason', () => {
+    expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: unsupported input: unrecognized file content: name the format explicitly', mime_type: 'application/octet-stream' })).toBe(false)
+    expect(needsReadOnDemand({ pages_read_at: 'x', read_error: 'read_failed: invalid CSV: unequal row lengths', mime_type: 'text/csv' })).toBe(false)
   })
 })
 

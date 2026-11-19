@@ -148,6 +148,18 @@ describe('planInvoicePayment', () => {
 describe('planInvoicePaymentForLines', () => {
   const INV = { total: 1234.75, paid_amount: 0, remaining_amount: 1234.75 }
 
+  it('the issue verifikat booked the öresavrundning: lines clearing what 1510 carries, with no 3740, settle in full (crm#1553)', () => {
+    const lines = [
+      { account_number: '1930', debit_amount: 1235, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1235 },
+    ]
+    const r = planInvoicePaymentForLines(INV, 1235, lines, 'SEK', 1235)
+    expect(r.ok && r.plan.newStatus).toBe('paid')
+    expect(r.ok && r.plan.newRemaining).toBe(0)
+    // Without the ledger figure the same lines are a sub-krona overshoot, refused.
+    expect(planInvoicePaymentForLines(INV, 1235, lines, 'SEK').ok).toBe(false)
+  })
+
   it('absorbs when the lines carry the exact residual on 3740', () => {
     const r = planInvoicePaymentForLines(
       INV,

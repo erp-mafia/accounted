@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Skill } from './types'
+import { creatorOf, type Creator } from '@/lib/attribution/person-names'
 
 export interface CompanySkillRow {
   id: string
@@ -38,11 +39,17 @@ export async function loadCompanySkillRows(supabase: SupabaseClient, companyId: 
   return [...team, ...own]
 }
 
-export function ownSkill(row: CompanySkillRow): Skill | null {
+/**
+ * `creators` (resolveCreators over the rows' created_by) adds who saved the
+ * item as createdBy; without it the skill carries no creator, so callers that
+ * never show one skip the profiles read.
+ */
+export function ownSkill(row: CompanySkillRow, creators?: ReadonlyMap<string, Creator>): Skill | null {
   if (row.atom_id || row.draft || !row.name || !row.body) return null
   return {
     slug: `own/${row.id}`, name: row.name, summary: row.description ?? '',
     body: row.body, tags: ['own'], tier: 'own', source: 'own', reviewedAt: row.reviewed_at, itemKind: row.kind ?? 'workflow',
+    ...(creators ? { createdBy: creatorOf(creators, row.created_by) } : {}),
   }
 }
 

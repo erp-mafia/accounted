@@ -1,17 +1,28 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 // The unbooked count is the shared lib predicate (lib/transactions/unbooked.ts,
 // tested on its own); here it is a seam so the queue below only carries the
 // resource's own reads.
-const { countUnbooked, fetchAnchored, logWarn } = vi.hoisted(() => ({
+const { countUnbooked, logWarn } = vi.hoisted(() => ({
   countUnbooked: vi.fn(),
-  fetchAnchored: vi.fn(),
   logWarn: vi.fn(),
 }))
 vi.mock('@/lib/transactions/unbooked', () => ({
   countUnbookedBankTransactions: countUnbooked,
-  fetchAnchoredTransactionIds: fetchAnchored,
+}))
+// The overdue group's rows are lib/worklist listOverdueInvoiceRows (tested on
+// its own, with its collections exclusion); here it is a seam that reads the
+// queue's overdue slot, so each sequence below keeps one slot for it.
+const { listOverdue } = vi.hoisted(() => ({
+  listOverdue: vi.fn((supabase: { from: (table: string) => { select: (columns: string) => PromiseLike<{ data: unknown }> } }) =>
+    Promise.resolve(supabase.from('invoices').select('*')).then((r) => (r.data ?? []) as unknown[]),
+  ),
+}))
+vi.mock('@/lib/worklist/categories', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/worklist/categories')>()),
+  listOverdueInvoiceRows: listOverdue,
 }))
 vi.mock('@/lib/logger', () => {
   const logger = { info: vi.fn(), warn: logWarn, error: vi.fn(), child: (): unknown => logger }
@@ -20,9 +31,8 @@ vi.mock('@/lib/logger', () => {
 
 import { attentionResource } from '../resources/attention'
 
-function setUnbooked(total: number, anchored: string[] = []) {
+function setUnbooked(total: number) {
   countUnbooked.mockResolvedValue({ total, untriaged: total, business_unbooked: 0 })
-  fetchAnchored.mockResolvedValue(new Set(anchored))
 }
 
 beforeEach(() => {
@@ -50,7 +60,7 @@ const ctx = (supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) 
 })
 
 /**
- * Enqueues 14 baseline empty results in the order the resource consumes them.
+ * Enqueues 15 baseline empty results in the order the resource consumes them.
  * Tests can override individual slots before invoking by enqueueing in advance.
  */
 function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: number | null }) => void) {
@@ -61,6 +71,8 @@ function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: nu
   enqueue({ data: [] })
   // 4. pendingSupplierHead
   enqueue({ count: 0 })
+  // 4b. the company's accounting method, read beside that count
+  enqueue({ data: null })
   // 5. pendingSupplierSamples
   enqueue({ data: [] })
   // 6. pendingOpsHead
@@ -99,13 +111,43 @@ describe('Accounted://attention', () => {
     expect(result.categories).toEqual([])
   })
 
-  it('only lists overdue fakturor: proformas, delivery notes and quotes are never receivables', async () => {
+  it('counts supplier approvals with the Att göra definition: a credit note is never one', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueEmpty(enqueue)
 
     await attentionResource.read(ctx(supabase))
 
-    expect(findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+    // Both the count (countSupplierInvoicesAwaitingApproval) and the samples.
+    expect(findCalls('supplier_invoices', 'eq').filter(([column]) => column === 'is_credit_note')).toEqual([
+      ['is_credit_note', false],
+      ['is_credit_note', false],
+    ])
+  })
+
+  it('sends no agent to attest under kontantmetoden: the company has no attest step (crm#1156)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const today = new Date().toISOString().slice(0, 10)
+    enqueue({ data: [] })                                                  // unbookedSamples
+    enqueue({ data: [] })                                                  // overdueRows
+    enqueue({ count: 2 })                                                  // pendingSupplierHead
+    enqueue({ data: { accounting_method: 'cash' } })                       // accounting method
+    enqueue({ data: [{ id: 'si-1', supplier_invoice_number: 'L-1', supplier_id: 's-1', total: 1000, currency: 'SEK', due_date: today }] })
+    for (let i = 6; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                                                  // unlinked-document candidates
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+
+    expect(result.categories.find((c) => c.key === 'pending_supplier_invoices')).toBeUndefined()
+    expect(result.summary.total_items).toBe(0)
+  })
+
+  it('reads the overdue rows from the Att göra group, on the Swedish calendar day (crm#1084)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+
+    await attentionResource.read(ctx(supabase))
+
+    expect(listOverdue).toHaveBeenCalledWith(supabase, 'company-1', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/))
   })
 
   it('classifies recently-unbooked transactions as warning', async () => {
@@ -120,6 +162,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: txns })          // unbookedSamples
     enqueue({ data: [] })            // overdueRows
     enqueue({ count: 0 })            // pendingSupplierHead
+    enqueue({ data: null })          // accounting method
     enqueue({ data: [] })            // pendingSupplierSamples
     enqueue({ count: 0 })            // pendingOpsHead
     enqueue({ data: [] })            // pendingOpsSamples
@@ -146,24 +189,26 @@ describe('Accounted://attention', () => {
     expect(result.summary).toEqual({ total_items: 2, critical: 0, warning: 1, info: 0 })
   })
 
-  it('does not count a row anchored only through transaction_voucher_links as unbooked (bulk-book, 1:N split)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+  it('samples what open_bank_rows answers, oldest first', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     const today = new Date().toISOString().slice(0, 10)
     const txns = [
-      { id: 't-split', date: today, amount: -800, currency: 'SEK', description: 'Utlägg', merchant_name: null },
       { id: 't-open', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
     ]
-    // The shared count already excludes the anchored row; the samples query
-    // cannot, so the resource drops anchored ids from the samples itself.
-    setUnbooked(1, ['t-split'])
+    setUnbooked(1)
     enqueue({ data: txns })                            // 2. unbookedSamples
-    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                              // 3. overdueRows
+    enqueue({ count: 0 })                              // 4. pendingSupplierHead
+    enqueue({ data: null })                            // 4b. accounting method
+    for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
 
     const cat = result.categories.find((c) => c.key === 'unbooked_transactions')
-    expect(fetchAnchored).toHaveBeenCalledWith(supabase, 'company-1', ['t-split', 't-open'])
+    expect(findCalls('open_bank_rows', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(findCall('open_bank_rows', 'order')).toEqual(['date', { ascending: true }])
+    expect(findCall('open_bank_rows', 'limit')).toEqual([5])
     expect(cat?.count).toBe(1)
     expect(cat?.samples.map((s) => s.id)).toEqual(['t-open'])
     expect(cat?.next?.args).toEqual({ transaction_id: 't-open' })
@@ -174,7 +219,10 @@ describe('Accounted://attention', () => {
     const today = new Date().toISOString().slice(0, 10)
     countUnbooked.mockRejectedValue(new Error('untriaged transaction count failed: timeout'))
     enqueue({ data: [{ id: 't-1', date: today, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }] })
-    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                              // 3. overdueRows
+    enqueue({ count: 0 })                              // 4. pendingSupplierHead
+    enqueue({ data: null })                            // 4b. accounting method
+    for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
@@ -186,22 +234,22 @@ describe('Accounted://attention', () => {
     })
   })
 
-  it('keeps the count and logs when the sample anchor lookup fails', async () => {
+  it('keeps the count when the sample read fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    const today = new Date().toISOString().slice(0, 10)
     setUnbooked(1)
-    fetchAnchored.mockRejectedValue(new Error('invoice_payments anchor lookup failed: timeout'))
-    enqueue({ data: [{ id: 't-1', date: today, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }] })
-    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ error: { message: 'statement timeout' } }) // 2. unbookedSamples
+    enqueue({ data: [] })                              // 3. overdueRows
+    enqueue({ count: 0 })                              // 4. pendingSupplierHead
+    enqueue({ data: null })                            // 4b. accounting method
+    for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
 
-    expect(result.categories.find((c) => c.key === 'unbooked_transactions')?.count).toBe(1)
-    expect(logWarn).toHaveBeenCalledWith('attention unbooked sample anchor lookup failed', {
-      companyId: 'company-1',
-      reason: 'invoice_payments anchor lookup failed: timeout',
-    })
+    const cat = result.categories.find((c) => c.key === 'unbooked_transactions')
+    expect(cat?.count).toBe(1)
+    expect(cat?.samples).toEqual([])
+    expect(cat?.next?.args).toBeUndefined()
   })
 
   it('escalates unbooked transactions to critical when oldest is > 30 days old', async () => {
@@ -213,6 +261,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: txns })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -229,18 +278,23 @@ describe('Accounted://attention', () => {
     expect(result.summary.critical).toBe(1)
   })
 
-  it('flags overdue invoices as critical when any are > 30 days past due', async () => {
+  it('reports the overdue customer invoices as one calm group: true count, amount owed, oldest (crm#1084)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const fortyDaysAgo = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10)
     const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10)
+    // Oldest first, as listOverdueInvoiceRows orders them; more than the old
+    // 100-row read held, so the count is the group's, not a page's.
     const overdue = [
-      { id: 'i-1', invoice_number: 'F-2024001', customer_id: 'c-1', due_date: fortyDaysAgo, total: 1000, currency: 'SEK', status: 'overdue' },
-      { id: 'i-2', invoice_number: 'F-2024002', customer_id: 'c-1', due_date: tenDaysAgo, total: 500, currency: 'SEK', status: 'sent' },
+      { id: 'i-1', invoice_number: 'F-2024001', customer_id: 'c-1', due_date: fortyDaysAgo, total: 1000, total_sek: 1000, remaining_amount: 1000, currency: 'SEK', status: 'overdue' },
+      ...Array.from({ length: 119 }, (_, i) => ({
+        id: `i-${i + 2}`, invoice_number: `F-${i + 2}`, customer_id: 'c-1', due_date: tenDaysAgo, total: 500, total_sek: 500, remaining_amount: 250, currency: 'SEK', status: 'partially_paid',
+      })),
     ]
 
     enqueue({ data: [] })
     enqueue({ data: overdue })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -253,21 +307,43 @@ describe('Accounted://attention', () => {
     enqueue({ data: null })
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
-    const cat = result.categories.find((c) => c.key === 'overdue_invoices')
-    expect(cat?.severity).toBe('critical')
-    expect(cat?.count).toBe(2)
+    const cats = result.categories.filter((c) => c.key === 'overdue_invoices')
+    expect(cats).toHaveLength(1)
+    const cat = cats[0] as AttentionResponse['categories'][number] & { summary?: Record<string, unknown> }
+    // A fact to follow up, not an alarm, however old the oldest is.
+    expect(cat.severity).toBe('warning')
+    expect(cat.count).toBe(120)
+    expect(cat.summary).toMatchObject({ remaining_sek: 30750, unconverted_count: 0, oldest_due_date: fortyDaysAgo })
+    expect(cat.samples).toHaveLength(5)
+    expect(cat.samples[0]).toMatchObject({ id: 'i-1', status: 'overdue' })
+    expect(cat.samples[1]).toMatchObject({ status: 'partially_paid' })
+    expect(cat.next).toMatchObject({ tool: 'gnubok_list_invoices', args: { status: 'overdue' } })
+  })
+
+  it('skips the overdue category and logs why when the group read fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    listOverdue.mockImplementationOnce(() => Promise.reject(new Error('boom')))
+    // No overdue slot: the failing seam reads nothing.
+    enqueue({ data: [] })
+    for (let i = 0; i < 13; i += 1) enqueue({ data: i === 11 || i === 12 ? null : [], count: 0 })
+    enqueue({ data: [] })
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+    expect(result.categories.find((c) => c.key === 'overdue_invoices')).toBeUndefined()
+    expect(logWarn).toHaveBeenCalledWith('attention overdue invoices unavailable', expect.objectContaining({ reason: 'boom' }))
   })
 
   it('marks pending operations as critical when any high-risk op is queued', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const ops = [
-      { id: 'op-1', operation_type: 'close_period', title: 'Stäng FY2025', risk_level: 'high', actor_label: 'Claude', created_at: new Date().toISOString() },
-      { id: 'op-2', operation_type: 'create_customer', title: 'Ny kund', risk_level: 'low', actor_label: 'Claude', created_at: new Date().toISOString() },
+      { id: 'op-1', operation_type: 'close_period', title: 'Stäng FY2025', risk_level: 'high', actor_type: 'api_key', actor_label: 'Claude (Anthropic)', user_id: 'user-1', created_at: new Date().toISOString() },
+      { id: 'op-2', operation_type: 'create_customer', title: 'Ny kund', risk_level: 'low', actor_type: 'agent_chat', actor_label: null, user_id: null, created_at: new Date().toISOString() },
     ]
 
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 2 })
     enqueue({ data: ops })
@@ -278,19 +354,25 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: null })
     enqueue({ data: null })
+    enqueue({ data: [] }) // the unlinked documents
+    enqueue({ data: [{ id: 'user-1', email: 'jonas@example.com', full_name: 'Jonas Ek' }] }) // who the agents acted for
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
     const cat = result.categories.find((c) => c.key === 'pending_operations')
     expect(cat?.severity).toBe('critical')
     expect(cat?.count).toBe(2)
     expect(result.summary.critical).toBe(1)
+    // Who staged each one, with the person it acted for; the raw user id stays out.
+    expect(cat?.samples.map((op) => op.proposed_by)).toEqual(['Claude åt Jonas Ek', 'Assistenten'])
+    expect(cat?.samples.every((op) => !('user_id' in op) && !('actor_label' in op))).toBe(true)
   })
 
   it('surfaces documents that nothing references, pointing at the link tool', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // Slots 1-14 empty, then this test's own candidate set in slot 15 and the
     // eight reference lookups behind it.
-    for (let i = 0; i < 13; i += 1) enqueue({ data: i === 11 || i === 12 ? null : [], count: 0 })
+    // (14 slots: the supplier count reads the accounting method beside it.)
+    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-new', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -312,7 +394,8 @@ describe('Accounted://attention', () => {
 
   it('omits the unlinked-documents category when every candidate is claimed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    for (let i = 0; i < 13; i += 1) enqueue({ data: i === 11 || i === 12 ? null : [], count: 0 })
+    // (14 slots: the supplier count reads the accounting method beside it.)
+    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-1', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -334,6 +417,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -369,6 +453,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -398,6 +483,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -422,6 +508,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -441,12 +528,13 @@ describe('Accounted://attention', () => {
 
   it('combines multiple categories into a coherent summary', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
 
     setUnbooked(1)
     enqueue({ data: [{ id: 't-1', date: today, amount: -50, currency: 'SEK', description: 'X', merchant_name: null }] })
     enqueue({ data: [] })                                                  // overdueRows
     enqueue({ count: 1 })                                                  // pendingSupplierHead
+    enqueue({ data: { accounting_method: 'accrual' } })                    // accounting method
     enqueue({ data: [{ id: 'si-1', supplier_invoice_number: 'L-1', supplier_id: 's-1', total: 1000, currency: 'SEK', due_date: today }] })
     enqueue({ count: 0 })                                                  // pendingOpsHead
     enqueue({ data: [] })
@@ -464,6 +552,8 @@ describe('Accounted://attention', () => {
       new Set(['unbooked_transactions', 'pending_supplier_invoices', 'deadlines_upcoming'])
     )
     expect(result.summary.total_items).toBe(3)
+    // Due today is on time: a warning, not overdue.
+    expect(result.categories.find((c) => c.key === 'deadlines_upcoming')?.severity).toBe('warning')
   })
 })
 
@@ -475,7 +565,7 @@ describe('Accounted://attention: reconciliation_due', () => {
     enqueue({
       data: [{ account_key: 'skattekonto', through_date: '2020-01-31', reopened_at: null }],
     })
-    enqueue({ data: [{ id: '11111111-1111-4111-8111-111111111111', iban: null, currency: 'SEK', updated_at: null }] })
+    enqueue({ data: [{ id: '11111111-1111-4111-8111-111111111111', iban: null, currency: 'SEK', ledger_account: '1930', is_primary: true, created_at: '2026-01-01T00:00:00Z' }] })
     enqueue({ count: 3 })
     const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
     const cat = out.categories.find((c) => c.key === 'reconciliation_due')
@@ -491,5 +581,49 @@ describe('Accounted://attention: reconciliation_due', () => {
     enqueue({ data: [] })
     const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
     expect(out.categories.find((c) => c.key === 'reconciliation_due')).toBeUndefined()
+  })
+})
+
+/*
+ * accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
+ * (UTC+2) and in winter (UTC+1). Overdue, the deadline horizon and the open
+ * period are read on the Swedish day.
+ */
+describe('Accounted://attention: today is the Swedish calendar day', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2026-07-02', '2026-07-16'],
+    ['winter', '2026-01-15T23:30:00Z', '2026-01-16', '2026-01-30'],
+  ])('%s: %s reads as %s', async (_season, instant, today, horizon) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(instant))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+
+    await attentionResource.read(ctx(supabase))
+
+    expect(listOverdue).toHaveBeenCalledWith(supabase, 'company-1', today)
+    expect(findCall('deadlines', 'lte')).toEqual(['due_date', horizon])
+    expect(findCall('fiscal_periods', 'lte')).toEqual(['period_start', today])
+    expect(findCall('fiscal_periods', 'gte')).toEqual(['period_end', today])
+  })
+})
+
+/*
+ * crm#1848, #207: the agent's deadline list is the open set /deadlines and
+ * Att göra show. A dismissed deadline stayed in it and read as overdue.
+ */
+describe('Accounted://attention: deadlines are the open ones', () => {
+  it('leaves out completed and dismissed deadlines', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+
+    await attentionResource.read(ctx(supabase))
+
+    expect(findCalls('deadlines', 'eq')).toContainEqual(['is_completed', false])
+    expect(findCalls('deadlines', 'is')).toEqual([['dismissed_at', null]])
   })
 })

@@ -30,7 +30,11 @@ vi.mock('@/lib/auth/api-keys', () => ({
 import { woocommerceExtension } from '../index'
 import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { testConnectionAndFetchStoreInfo } from '../lib/api-client'
+import {
+  STORE_FIREWALL_CODE,
+  WooCommerceApiError,
+  testConnectionAndFetchStoreInfo,
+} from '../lib/api-client'
 import { syncWooCommerceOrders } from '../lib/order-sync'
 import { decryptCredential } from '../lib/credentials'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -99,15 +103,6 @@ describe('woocommerce extension routes', () => {
   })
 
   describe('GET /status', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('GET', '/status').handler(
-        makeRequest('GET'),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('prefers the active connection and reports configured', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
@@ -172,25 +167,13 @@ describe('woocommerce extension routes', () => {
   })
 
   describe('POST /connect', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/connect').handler(
-        makeRequest('POST', {}),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('blocks anonymous (sandbox) users before any external call', async () => {
       const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({
-        data: { user: { id: 'user-1', is_anonymous: true } },
-        error: null,
-      })
+      // The dispatcher marks an anonymous (sandbox) session on the context.
       const res = await findRoute('POST', '/connect').handler(
         makeRequest('POST', {}),
-        makeContext(supabase),
+        { ...makeContext(supabase), isAnonymous: true },
       )
       expect(res.status).toBe(403)
       const body = await res.json()
@@ -303,6 +286,30 @@ describe('woocommerce extension routes', () => {
         makeContext(supabase),
       )
       expect(res.status).toBe(400)
+    })
+
+    it('names the firewall in both languages when the store refused us before WooCommerce (crm#1669)', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] }) // no existing connection
+      vi.mocked(testConnectionAndFetchStoreInfo).mockRejectedValue(
+        new WooCommerceApiError('WooCommerce API 403', 403, STORE_FIREWALL_CODE, { bodyKind: 'html' }),
+      )
+      const res = await findRoute('POST', '/manual-connect').handler(
+        makeRequest('POST', {
+          store_url: 'https://shop.example.se',
+          consumer_key: 'ck_x',
+          consumer_secret: 'cs_y',
+        }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.code).toBe('PROBE_FIREWALL')
+      expect(body.error).toMatch(/brandvägg/)
+      expect(body.error_en).toMatch(/firewall/)
+      expect(JSON.stringify(body)).not.toContain('cs_y')
     })
 
     it('verifies, encrypts and activates on the happy path', async () => {
@@ -418,17 +425,6 @@ describe('woocommerce extension routes', () => {
       unknownCurrency: 0,
       errors: 0,
     }
-
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/backfill').handler(
-        makeRequest('POST', { from: '2026-01-01' }),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-      expect(syncWooCommerceOrders).not.toHaveBeenCalled()
-    })
 
     it('rejects a date it cannot honour with 400', async () => {
       const { supabase } = createQueuedMockSupabase()

@@ -13,6 +13,9 @@
  * The MCP staging tool (gnubok_create_invoice) is in the list too: it gates at
  * staging time, so gating it on the default set refused a lawful invoice before
  * the executor's own gate was ever reached.
+ *
+ * Doors that build through buildInvoiceWriteData (the v1 create and update
+ * routes, v1 bulk-create) have no gate of their own and are not listed.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -25,7 +28,6 @@ const WRITE_GATES = [
   'lib/invoices/self-billed-sale.ts',
   'lib/invoices/recurring-schedule-service.ts',
   'lib/pending-operations/commit.ts',
-  'app/api/v1/companies/[companyId]/invoices/bulk-create/route.ts',
   'extensions/general/mcp-server/server.ts',
 ]
 

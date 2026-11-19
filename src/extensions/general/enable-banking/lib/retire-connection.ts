@@ -4,6 +4,7 @@ import { disconnectBankConnection, readBankConfiguration } from '@/lib/cash-acco
 import type { CoreEvent } from '@/lib/events/types'
 import type { ExtensionLogger } from '@/lib/extensions/types'
 import { revokeUnusedSession } from './session-revocation'
+import { aggregatorOf, ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 
 export interface RetireBankConnectionInput {
   supabase: SupabaseClient
@@ -28,6 +29,11 @@ export interface RetireBankConnectionInput {
 export async function retireBankConnection(input: RetireBankConnectionInput): Promise<void> {
   const { supabase, companyId, userId, connectionId, log } = input
   const snapshot = await readBankConfiguration(supabase, companyId, connectionId)
+  // Only an Enable Banking connection is retired here: its consent is revoked
+  // at Enable Banking below. An Open Payments one has its own disconnect.
+  if (aggregatorOf(snapshot.connection as { aggregator?: string | null }) !== ENABLE_BANKING_AGGREGATOR) {
+    throw Object.assign(new Error('Bank connection not found'), { code: 'NOT_FOUND' })
+  }
   const connection = await disconnectBankConnection(supabase, companyId, userId, connectionId, snapshot.token)
 
   // Both local writes have committed. The service-only claim checks all

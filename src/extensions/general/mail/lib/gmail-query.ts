@@ -24,7 +24,7 @@ export const DAYS_AFTER = 10
  *
  * The bank's description is not a merchant name: it is whatever the payer typed
  * plus the rail it went over. Month names and rail words are in here because a
- * provkörning on a real ledger showed "Lön Juli Jakob Överföring via internet"
+ * provkörning on a real ledger showed "Lön Juli Anna Överföring via internet"
  * searching for `"Juli"`, which matches most of a mailbox and returned the same
  * seven unrelated messages for every purchase.
  */

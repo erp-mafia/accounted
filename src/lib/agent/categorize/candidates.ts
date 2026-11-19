@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { proposeForTransactions } from '@/lib/transactions/propose'
-import { businessAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import type { Transaction, VatTreatment } from '@/types'
 import type { AccountCandidate } from './select-account'
 
@@ -30,9 +30,8 @@ export async function gatherCandidates(
 }
 
 export function candidateFromProposal(p: BookingProposal): AccountCandidate {
-  const businessLine = p.line_pattern?.find((l) => l.type === 'business')
   return {
-    account: businessLine?.account ?? businessAccount(p),
+    account: slateAccount(p),
     label: p.name_sv,
     vatTreatment: (p.booking.kind === 'account' ? p.booking.vat_treatment : p.vat_treatment) as VatTreatment | null,
     source: p.source === 'counterparty' ? 'counterparty_template' : p.source === 'rule' ? 'mapping_rule' : 'pattern',

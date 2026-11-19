@@ -23,3 +23,4 @@ Pin the current working directory to one Accounted company. Argument: `$ARGUMENT
 
 - The company comes from the list, never from memory or from the argument text alone.
 - This command writes one local file and nothing in Accounted.
+- Flow names: `/accounted:<name>` is how Claude Code spells this plugin's flows. In another client, use the skill or command named `<name>`, and give the user the name that client shows.

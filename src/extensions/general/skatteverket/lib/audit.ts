@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
+import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
 import type { SkvAuth } from './api-client'
 
 const log = createLogger('skatteverket-audit')
@@ -39,6 +40,8 @@ export async function writeSkatteverketAudit(
   actor: SkvAuditActor,
   fields: {
     endpoint: string
+    /** The credentials the call ran on; only 'user' rows can be ownership proof (ombudClaimStanding). */
+    authMode: SkvAuth['mode']
     agRegistreradId?: string | null
     redovisningsperiod?: string | null
     outcome: SkvAuditOutcome
@@ -54,21 +57,29 @@ export async function writeSkatteverketAudit(
     // server-only service client so callers cannot fabricate regulator audit
     // rows through their user session.
     const auditClient = createServiceClient()
-    const { error } = await auditClient
-      .from('skatteverket_api_audit_log')
-      .insert({
-        company_id: actor.companyId,
-        user_id: actor.userId,
-        endpoint: fields.endpoint,
-        ag_registered_id: fields.agRegistreradId ?? null,
-        redovisningsperiod: fields.redovisningsperiod ?? null,
-        outcome: fields.outcome,
-        response_status: fields.responseStatus ?? null,
-        skv_status: fields.skvStatus ?? null,
-        request_size_bytes: fields.requestSizeBytes ?? null,
-        correlation_id: fields.correlationId ?? null,
-        error_message: fields.errorMessage ?? null,
-      })
+    const row = {
+      company_id: actor.companyId,
+      user_id: actor.userId,
+      endpoint: fields.endpoint,
+      ag_registered_id: fields.agRegistreradId ?? null,
+      redovisningsperiod: fields.redovisningsperiod ?? null,
+      outcome: fields.outcome,
+      response_status: fields.responseStatus ?? null,
+      skv_status: fields.skvStatus ?? null,
+      request_size_bytes: fields.requestSizeBytes ?? null,
+      correlation_id: fields.correlationId ?? null,
+      error_message: fields.errorMessage ?? null,
+      auth_mode: fields.authMode,
+    }
+    let { error } = await auditClient.from('skatteverket_api_audit_log').insert(row)
+    if (isMissingColumnError(error)) {
+      // auth_mode (migration 20261108074117) can reach the code before the
+      // database: the app deploys on merge, prod migrations follow from CI.
+      // The row without it still records the call; it only never counts as
+      // ownership proof, as rows from before the column never do.
+      const { auth_mode: _unknownYet, ...withoutMode } = row
+      ;({ error } = await auditClient.from('skatteverket_api_audit_log').insert(withoutMode))
+    }
     if (error) {
       log.error('skatteverket_api_audit_log insert failed', {
         companyId: actor.companyId,

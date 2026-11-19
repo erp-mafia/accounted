@@ -98,22 +98,22 @@ describe('gnubok_create_supplier: input validation', () => {
     ).rejects.toThrow(/bankgiro/i)
   })
 
-  it('rejects malformed Swedish org_number', async () => {
-    await expect(
-      tool().execute({ name: 'Acme', org_number: '12345' }, 'company-1', 'user-1', noopSupabase),
-    ).rejects.toThrow(/org_number/i)
-  })
-
-  it('rejects malformed EU VAT number', async () => {
-    await expect(
-      tool().execute({ name: 'Acme', vat_number: 'XX123' }, 'company-1', 'user-1', noopSupabase),
-    ).rejects.toThrow(/vat_number/i)
-  })
-
-  it('rejects default_expense_account outside BAS class 4-7', async () => {
-    await expect(
-      tool().execute({ name: 'Acme', default_expense_account: '1930' }, 'company-1', 'user-1', noopSupabase),
-    ).rejects.toThrow(/default_expense_account/i)
+  // The register's one rule set (CreateSupplierSchema) is the dashboard's
+  // and v1's too: a foreign registration number, a VAT number without a VIES
+  // prefix (a non-EU supplier's) and any chart account as the default stay
+  // accepted, as they always were outside this tool.
+  it.each([
+    ['org_number', 'DK12345678'],
+    ['vat_number', 'GB123456789'],
+    ['default_expense_account', '1220'],
+  ] as const)('accepts %s %s as the dashboard does', async (field, value) => {
+    const result = (await tool().execute(
+      { name: 'Acme', [field]: value, dry_run: true },
+      'company-1',
+      'user-1',
+      noopSupabase,
+    )) as { dry_run?: boolean }
+    expect(result.dry_run).toBe(true)
   })
 
   it('rejects default_payment_terms over 365', async () => {
@@ -124,8 +124,7 @@ describe('gnubok_create_supplier: input validation', () => {
 
   // vat_number is optional for every supplier type, including eu_business: an
   // EU supplier below its national registration threshold has none, and nothing
-  // downstream needs one (reverse charge keys off supplier_type). See the header
-  // of lib/pending-operations/schemas/create-supplier.ts.
+  // downstream needs one (reverse charge keys off supplier_type).
   it('accepts supplier_type eu_business without a vat_number', async () => {
     const result = await tool().execute(
       { name: 'Kleinanbieter GmbH', supplier_type: 'eu_business', dry_run: true },
@@ -135,7 +134,7 @@ describe('gnubok_create_supplier: input validation', () => {
     ) as { preview?: { supplier_type?: string; vat_number?: string }; dry_run?: boolean }
     expect(result.dry_run).toBe(true)
     expect(result.preview?.supplier_type).toBe('eu_business')
-    expect(result.preview?.vat_number).toBeUndefined()
+    expect(result.preview?.vat_number ?? null).toBeNull()
   })
 })
 

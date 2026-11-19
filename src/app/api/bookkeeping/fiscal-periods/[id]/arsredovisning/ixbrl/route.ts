@@ -1,9 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getArsredovisningIxbrlFile } from '@/lib/bokslut/arsredovisning/file-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/bookkeeping/fiscal-periods/:id/arsredovisning/ixbrl
@@ -38,13 +36,14 @@ export const GET = withRouteContext(
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return sessionFailureResponse({ ok: false, code: 'INTERNAL_ERROR' }, log, requestId)
     const file = outcome.data
-    return new Response(new Uint8Array(file.bytes), {
+    return fileResponse(new Uint8Array(file.bytes), {
+      filename: file.filename,
+      // Served as XHTML so iframe preview renders the inline XBRL
+      // document exactly as Bolagsverket will present it.
+      contentType: file.contentType,
+      disposition: download ? 'attachment' : 'inline',
+      cacheControl: 'private, no-store, no-cache, must-revalidate',
       headers: {
-        // Served as XHTML so iframe preview renders the inline XBRL
-        // document exactly as Bolagsverket will present it.
-        'Content-Type': file.contentType,
-        'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${file.filename}"`,
-        'Cache-Control': 'private, no-store, no-cache, must-revalidate',
         Pragma: 'no-cache',
         // Generation warnings surfaced without disturbing the body.
         'X-Ixbrl-Warning-Count': String(file.warningCount ?? 0),

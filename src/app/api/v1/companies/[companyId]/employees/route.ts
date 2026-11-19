@@ -29,11 +29,10 @@ import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/regis
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { CreateEmployeeSchema } from '@/lib/api/schemas'
-import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
-import { decryptPersonnummer, encryptPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
-import { getCompanyEntityType } from '@/lib/company/context'
-import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
+import { CreateEmployeeSchema, PersonnelCategorySchema } from '@/lib/api/schemas'
+import { maskPersonnummer } from '@/lib/salary/personnummer-format'
+import { decryptPersonnummer } from '@/lib/salary/personnummer'
+import { createEmployee, sealPersonnummer } from '@/lib/salary/employee-commands'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -46,6 +45,8 @@ const EmployeeSummary = z.object({
   /** Masked: first 8 digits + 'XXXX' (birthdate visible, last-4 hidden). */
   personnummer_masked: z.string(),
   employment_type: EmploymentType,
+  /** BAS wage series: arbetare 70xx, tjansteman 72xx (employees only). */
+  personnel_category: PersonnelCategorySchema,
   employment_start: z.string(),
   employment_end: z.string().nullable(),
   salary_type: SalaryType,
@@ -63,10 +64,13 @@ const EmployeesListResponse = listEnvelope(EmployeeSummary)
 // personnummer is loaded so the response can serve a masked form; the full
 // value never leaves this projection.
 const EMPLOYEE_SUMMARY_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, salary_type, monthly_salary, hourly_rate, f_skatt_status, is_active, created_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, salary_type, monthly_salary, hourly_rate, f_skatt_status, is_active, created_at'
 
 const ListFilters = z.object({
   employment_type: EmploymentType.optional().describe('Only employees with this employment type.'),
+  personnel_category: PersonnelCategorySchema.optional().describe(
+    'Only employees in this personnel category (arbetare or tjansteman).',
+  ),
   search: z
     .string()
     .min(1)
@@ -96,6 +100,7 @@ registerEndpoint({
     'Inactive employees are hidden by default; soft-delete via DELETE sets is_active=false (BFL 7 kap retention).',
     'personnummer is masked in the list response (GDPR Art.5(1)(c) data minimisation). The detail endpoint returns the full value.',
     'salary_type drives which field is meaningful: monthly_salary for monthly, hourly_rate for hourly. The other is null.',
+    'personnel_category decides the wage account series for employment_type employee only: arbetare book 70xx (7010/7082/7090), tjansteman 72xx. Owners and board members keep their own accounts whatever it says.',
   ],
   example: {
     response: {
@@ -104,8 +109,9 @@ registerEndpoint({
           id: 'a8f1…',
           first_name: 'Anna',
           last_name: 'Andersson',
-          personnummer_masked: 'YYYYMMDDXXXX',
+          personnummer_masked: 'YYYYMMDD-XXXX',
           employment_type: 'employee',
+          personnel_category: 'tjansteman',
           employment_start: '2024-01-15',
           employment_end: null,
           salary_type: 'monthly',
@@ -137,6 +143,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const filtersResult = ListFilters.safeParse({
       employment_type: url.searchParams.get('employment_type') ?? undefined,
+      personnel_category: url.searchParams.get('personnel_category') ?? undefined,
       search: url.searchParams.get('search') ?? undefined,
       include_inactive: url.searchParams.get('include_inactive') ?? undefined,
     })
@@ -157,6 +164,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     if (filters.employment_type) {
       query = query.eq('employment_type', filters.employment_type)
+    }
+    if (filters.personnel_category) {
+      query = query.eq('personnel_category', filters.personnel_category)
     }
     if (filters.search) {
       // Two layers of escaping (matches the customer/supplier list):
@@ -186,6 +196,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       last_name: string
       personnummer: string
       employment_type: string
+      personnel_category: string
       employment_start: string
       employment_end: string | null
       salary_type: string
@@ -205,10 +216,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       first_name: r.first_name,
       last_name: r.last_name,
       // Rows are encrypted at rest: decrypt before masking so the mask is
-      // birthdate-visible (YYYYMMDDXXXX). The decrypt helper passes legacy
+      // birthdate-visible (YYYYMMDD-XXXX). The decrypt helper passes legacy
       // plaintext rows through unchanged.
       personnummer_masked: maskPersonnummer(decryptPersonnummer(r.personnummer)),
       employment_type: r.employment_type,
+      personnel_category: r.personnel_category,
       employment_start: r.employment_start,
       employment_end: r.employment_end,
       salary_type: r.salary_type,
@@ -241,6 +253,7 @@ const EmployeeCreated = z.object({
   last_name: z.string(),
   personnummer_masked: z.string(),
   employment_type: EmploymentType,
+  personnel_category: PersonnelCategorySchema,
   employment_start: z.string(),
   employment_end: z.string().nullable(),
   employment_degree: z.number(),
@@ -275,6 +288,8 @@ registerEndpoint({
     'Duplicate personnummer within a company returns 409 EMPLOYEE_DUPLICATE_PERSONNUMMER. Personnummer is unique per (company_id, personnummer).',
     'For A-skatt employees who are not sidoinkomst, tax_table_number is required (29-42).',
     'salary_type drives which salary field is required: monthly_salary for monthly, hourly_rate for hourly.',
+    'personnel_category defaults to tjansteman (72xx wage accounts). Set arbetare for kollektivanställda so their wages book on 7010, vacation pay on 7082 and the vacation liability change on 7090. Ignored for company_owner and board_member.',
+    'A worker reported to Fora every month (Avtalspension SAF-LO) needs fora_fok_id (FOK plus six digits, from Fora\'s Mina sidor) together with fora_fok_start_date; never on company_owner or board_member (400).',
     'The response masks personnummer; never echo back the supplied value. Detail endpoint (deliberate drill-in) returns the full value.',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],
@@ -300,8 +315,9 @@ registerEndpoint({
         id: 'a8f1…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        personnummer_masked: 'YYYYMMDDXXXX',
+        personnummer_masked: 'YYYYMMDD-XXXX',
         employment_type: 'employee',
+        personnel_category: 'tjansteman',
         employment_start: '2024-01-15',
         employment_end: null,
         employment_degree: 100,
@@ -331,7 +347,7 @@ registerEndpoint({
 })
 
 const EMPLOYEE_RESPONSE_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, vacation_rule, vacation_days_per_year, is_active, created_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, vacation_rule, vacation_days_per_year, is_active, created_at'
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'employees.create',
@@ -347,188 +363,51 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // CreateEmployeeSchema only checks the shape (12 digits), so on its own it
     // lets a check-digit-invalid number into payroll. That number then surfaces
     // as a rejected arbetsgivardeklaration from Skatteverket weeks later, which
-    // is a far worse place to discover it. Run the same date + Luhn validation
-    // the cookie-session route runs, before the dry-run branch so a dry run
+    // is a far worse place to discover it. sealPersonnummer runs the date +
+    // Luhn validation every door runs, before the dry-run branch so a dry run
     // reports it too. The error text is a static Swedish message: it never
     // echoes the supplied personnummer back (GDPR Art.5(1)(c)).
-    const pnrValidation = validatePersonnummer(body.personnummer)
-    if (!pnrValidation.valid) {
+    const { personnummer, ...fields } = body
+    const sealed = sealPersonnummer(personnummer)
+    if (!sealed.ok) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
-        details: { field: 'personnummer', message: pnrValidation.error },
+        details: { field: 'personnummer', message: sealed.message },
       })
     }
 
-    // An enskild firma owner cannot be put on payroll (owner takes egna uttag,
-    // not lön). Reject owner/board employment types for EF: validated before
-    // dry-run so a dry run surfaces the error too. The DB trigger is the
-    // all-paths backstop. #782
-    const entityType = await getCompanyEntityType(ctx.supabase, ctx.companyId!)
-    if (!isEmploymentTypeAllowedForEntity(entityType, body.employment_type)) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'employment_type', message: EF_OWNER_EMPLOYMENT_ERROR },
-      })
+    // The rules (EF owner #782, bank details, jämkning) and the insert are
+    // lib/salary/employee-commands.ts, shared with the dashboard and MCP; a
+    // dry run runs them all and writes nothing. The row comes back masked.
+    const result = await createEmployee(ctx.supabase, {
+      companyId: ctx.companyId!,
+      userId: ctx.userId,
+      input: { ...fields, ...sealed.identity },
+      dryRun: ctx.dryRun,
+      columns: EMPLOYEE_RESPONSE_COLUMNS,
+    })
+    if (!result.ok) {
+      if (result.code === 'VALIDATION_ERROR') {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: result.details?.field, message: result.details?.message },
+        })
+      }
+      if (result.code === 'EMPLOYEE_DUPLICATE_PERSONNUMMER') {
+        // GDPR Art.5(1)(c): NEVER echo back the supplied personnummer in the
+        // duplicate-error payload: caller only gets the field name.
+        return v1ErrorResponseFromCode('EMPLOYEE_DUPLICATE_PERSONNUMMER', ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'personnummer' },
+        })
+      }
+      return v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
     }
 
     if (ctx.dryRun) {
-      return dryRunPreview(
-        {
-          id: null,
-          first_name: body.first_name,
-          last_name: body.last_name,
-          // Mask in the dry-run preview too: never echo back the supplied
-          // personnummer in any response shape.
-          personnummer_masked: maskPersonnummer(body.personnummer),
-          employment_type: body.employment_type,
-          employment_start: body.employment_start,
-          employment_end: body.employment_end ?? null,
-          employment_degree: body.employment_degree,
-          salary_type: body.salary_type,
-          monthly_salary: body.monthly_salary ?? null,
-          hourly_rate: body.hourly_rate ?? null,
-          tax_table_number: body.tax_table_number ?? null,
-          tax_column: body.tax_column,
-          tax_municipality: body.tax_municipality ?? null,
-          is_sidoinkomst: body.is_sidoinkomst,
-          f_skatt_status: body.f_skatt_status,
-          vacation_rule: body.vacation_rule,
-          vacation_days_per_year: body.vacation_days_per_year,
-          is_active: true,
-          created_at: null,
-        },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
+      return dryRunPreview(result.data.row, { requestId: ctx.requestId, log: ctx.log })
     }
-
-    const personnummerLast4 = body.personnummer.slice(-4)
-
-    const { data, error } = await ctx.supabase
-      .from('employees')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        first_name: body.first_name,
-        last_name: body.last_name,
-        // Encrypt at rest (aes-256-gcm). This is the fix for the plaintext
-        // personnummer bug: the cookie-session route already encrypts; this
-        // path used to store the raw value, which then 500'd every
-        // decrypt-on-read path with ERR_CRYPTO_INVALID_AUTH_TAG.
-        personnummer: encryptPersonnummer(body.personnummer),
-        personnummer_last4: personnummerLast4,
-        employment_type: body.employment_type,
-        employment_start: body.employment_start,
-        employment_end: body.employment_end ?? null,
-        employment_degree: body.employment_degree,
-        hours_per_week: body.hours_per_week,
-        workdays_per_week: body.workdays_per_week,
-        salary_type: body.salary_type,
-        monthly_salary: body.monthly_salary ?? null,
-        hourly_rate: body.hourly_rate ?? null,
-        tax_table_number: body.tax_table_number ?? null,
-        tax_column: body.tax_column,
-        tax_municipality: body.tax_municipality ?? null,
-        is_sidoinkomst: body.is_sidoinkomst,
-        f_skatt_status: body.f_skatt_status,
-        clearing_number: body.clearing_number ?? null,
-        bank_account_number: body.bank_account_number ?? null,
-        vacation_rule: body.vacation_rule,
-        vacation_days_per_year: body.vacation_days_per_year,
-        semestertillagg_rate: body.semestertillagg_rate,
-        vacation_pay_rate: body.vacation_pay_rate ?? null,
-        email: body.email ?? null,
-        phone: body.phone ?? null,
-        address_line1: body.address_line1 ?? null,
-        postal_code: body.postal_code ?? null,
-        city: body.city ?? null,
-        vaxa_stod_eligible: body.vaxa_stod_eligible,
-        vaxa_stod_start: body.vaxa_stod_start ?? null,
-        vaxa_stod_end: body.vaxa_stod_end ?? null,
-        jamkning_percentage: body.jamkning_percentage ?? null,
-        jamkning_valid_from: body.jamkning_valid_from ?? null,
-        jamkning_valid_to: body.jamkning_valid_to ?? null,
-        // Dimensions PR8: bag for the employee's P&L cost lines at booking.
-        default_dimensions: body.default_dimensions ?? {},
-      })
-      .select(EMPLOYEE_RESPONSE_COLUMNS)
-      .single()
-
-    if (error) {
-      // Disambiguate 23505 by constraint name: the employees table currently
-      // has only one unique index (company_id, personnummer), but a future
-      // migration could add another (e.g. (company_id, email)). Mapping every
-      // 23505 to EMPLOYEE_DUPLICATE_PERSONNUMMER would be a regression once
-      // that happens. Postgres auto-names inline `UNIQUE (...)` constraints
-      // as `<table>_<columns>_key`. Match conservatively by substring so a
-      // future rename of the constraint doesn't silently fall through.
-      if (error.code === '23505') {
-        const constraint = (error as { constraint?: string }).constraint
-        if (constraint && constraint.includes('personnummer')) {
-          // GDPR Art.5(1)(c): NEVER echo back the supplied personnummer in the
-          // duplicate-error payload: caller only gets the field name.
-          return v1ErrorResponseFromCode('EMPLOYEE_DUPLICATE_PERSONNUMMER', ctx.log, {
-            requestId: ctx.requestId,
-            details: { field: 'personnummer' },
-          })
-        }
-        // Unknown unique-constraint violation: surface as a generic DB
-        // error rather than a misleading personnummer-specific code. The
-        // route-level log line will capture the constraint name for
-        // operators investigating the next 23505.
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    type CreatedRow = {
-      id: string
-      first_name: string
-      last_name: string
-      personnummer: string
-      employment_type: string
-      employment_start: string
-      employment_end: string | null
-      employment_degree: number
-      salary_type: string
-      monthly_salary: number | null
-      hourly_rate: number | null
-      tax_table_number: number | null
-      tax_column: number | null
-      tax_municipality: string | null
-      is_sidoinkomst: boolean
-      f_skatt_status: string
-      vacation_rule: string
-      vacation_days_per_year: number
-      is_active: boolean
-      created_at: string
-    }
-    const row = data as unknown as CreatedRow
-
-    return created(
-      {
-        id: row.id,
-        first_name: row.first_name,
-        last_name: row.last_name,
-        // Mask the plaintext input, not the stored value (now ciphertext).
-        personnummer_masked: maskPersonnummer(body.personnummer),
-        employment_type: row.employment_type,
-        employment_start: row.employment_start,
-        employment_end: row.employment_end,
-        employment_degree: row.employment_degree,
-        salary_type: row.salary_type,
-        monthly_salary: row.monthly_salary,
-        hourly_rate: row.hourly_rate,
-        tax_table_number: row.tax_table_number,
-        tax_column: row.tax_column,
-        tax_municipality: row.tax_municipality,
-        is_sidoinkomst: row.is_sidoinkomst,
-        f_skatt_status: row.f_skatt_status,
-        vacation_rule: row.vacation_rule,
-        vacation_days_per_year: row.vacation_days_per_year,
-        is_active: row.is_active,
-        created_at: row.created_at,
-      },
-      { requestId: ctx.requestId },
-    )
+    return created(result.data.row, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )

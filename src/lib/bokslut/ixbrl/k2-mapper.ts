@@ -16,8 +16,9 @@
 
 import type { ConceptAmount, ConceptAmounts } from './types'
 import type { EntityType } from '@/types'
-import { equalOre, roundOre, sumOre } from '@/lib/money'
-import { supportsMemberCapital } from '@/lib/company/entity-type'
+import { equalOre, isZeroOre, roundOre, sumOre } from '@/lib/money'
+import { isEntityType, supportsMemberCapital } from '@/lib/company/entity-type'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import {
   SIGN_RECLASSIFICATION_RULES,
   type SignReclassificationId,
@@ -34,6 +35,15 @@ export interface TrialBalanceRowLike {
   account_name: string
   closing_debit: number
   closing_credit: number
+  /**
+   * The year's own activity on the account, opening balance excluded, as
+   * generateTrialBalance returns it. Only the unclosed-year derivation reads
+   * it, to tell a balance that was carried in and never touched from one
+   * booked during the year. Absent means unknown, which is never read as
+   * "untouched".
+   */
+  period_debit?: number
+  period_credit?: number
 }
 
 /**
@@ -107,31 +117,56 @@ export const K2_RR_MAPPINGS: PostMapping[] = [
     ranges: [r('7740', '7749'), r('7790', '7799')],
   },
   { concept: 'OvrigaRorelsekostnader', balance: 'debit', ranges: [r('7900', '7999')] },
-  { concept: 'ResultatAndelarKoncernforetag', balance: 'credit', ranges: [r('8000', '8099')] },
+  // Finansiella poster follow the BAS kopplingstabell for INK2R 3.12-3.18
+  // (fältkoder 7414, 7415, 7423, 7416, 7417, 7521, 7522), the same ÅRL rows.
+  // The "resultat från ..." concepts are "exklusive nedskrivningar" in the
+  // taxonomy: every x070-x089 nedskrivning/återföring account belongs to
+  // NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar.
+  // 82xx is "andra företag" (övriga finansiella anläggningstillgångar); the
+  // ägarintresse row only draws the four 81xx ägarintresse accounts.
+  {
+    concept: 'ResultatAndelarKoncernforetag',
+    balance: 'credit',
+    ranges: [r('8000', '8069'), r('8090', '8099')],
+  },
   {
     concept: 'ResultatAndelarIntresseforetagGemensamtStyrda',
     balance: 'credit',
-    ranges: [r('8100', '8199')],
+    ranges: [
+      r('8100', '8112'),
+      r('8114', '8117'),
+      r('8119', '8122'),
+      r('8124', '8132'),
+      r('8134', '8169'),
+      r('8190', '8199'),
+    ],
   },
   {
     concept: 'ResultatOvrigaforetagAgarintresse',
     balance: 'credit',
-    ranges: [r('8200', '8269')],
+    ranges: [r('8113', '8113'), r('8118', '8118'), r('8123', '8123'), r('8133', '8133')],
   },
   {
     concept: 'ResultatOvrigaFinansiellaAnlaggningstillgangar',
     balance: 'credit',
-    ranges: [r('8270', '8299')],
+    ranges: [r('8200', '8269'), r('8290', '8299')],
   },
   {
     concept: 'OvrigaRanteintakterLiknandeResultatposter',
     balance: 'credit',
-    ranges: [r('8300', '8399')],
+    ranges: [r('8300', '8369'), r('8390', '8399')],
   },
   {
     concept: 'NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar',
     balance: 'debit',
-    ranges: [r('8500', '8599')],
+    ranges: [
+      r('8070', '8089'),
+      r('8170', '8189'),
+      r('8270', '8289'),
+      r('8370', '8389'),
+      // 85xx is not a BAS range; kept so custom 85xx accounts keep their row.
+      r('8500', '8599'),
+    ],
   },
   {
     concept: 'RantekostnaderLiknandeResultatposter',
@@ -221,16 +256,17 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
     balance: 'debit',
     ranges: [r('1346', '1347')],
   },
-  {
-    concept: 'AndraLangfristigaVardepappersinnehav',
-    balance: 'debit',
-    ranges: [r('1350', '1359'), r('1380', '1389')],
-  },
+  { concept: 'AndraLangfristigaVardepappersinnehav', balance: 'debit', ranges: [r('1350', '1359')] },
   { concept: 'LanDelagareNarstaende', balance: 'debit', ranges: [r('1360', '1369')] },
   {
+    // 138x is BAS "Andra långfristiga fordringar" (reversfordringar,
+    // depositioner, kapitalförsäkring, kontraktsfordringar, 1389 its
+    // nedskrivningar). K2 kapitel 11 lists "värde av kapitalförsäkring" under
+    // the post Andra långfristiga fordringar, and INK2R 2.12 (SRU 7235) takes
+    // 137x and 138x together. It used to land in AndraLangfristigaVardepappersinnehav.
     concept: 'AndraLangfristigaFordringar',
     balance: 'debit',
-    ranges: [r('1370', '1379'), r('1390', '1399')],
+    ranges: [r('1370', '1379'), r('1380', '1389'), r('1390', '1399')],
   },
   // Varulager m.m.
   { concept: 'LagerRavarorFornodenheter', balance: 'debit', ranges: [r('1400', '1439')] },
@@ -614,6 +650,14 @@ export type K2LegalForm = 'aktiebolag' | 'ekonomisk_forening'
 
 export interface K2MappingOptions {
   legalForm?: K2LegalForm
+  /**
+   * The pair mapped as `current` is an earlier fiscal year shown as history
+   * (the flerårsöversikt maps each prior year on its own, with no comparison
+   * year). It gets the comparison year's treatment: a result that never left
+   * the result accounts is derived (deriveUnclosedYearResult) instead of
+   * being left out of that year's equity.
+   */
+  currentIsPriorYear?: boolean
 }
 
 /**
@@ -656,6 +700,18 @@ function brMappingsFor(legalForm: K2LegalForm): PostMapping[] {
  */
 export function k2LegalFormFor(entityType: EntityType): K2LegalForm {
   return supportsMemberCapital(entityType) ? 'ekonomisk_forening' : 'aktiebolag'
+}
+
+/**
+ * k2LegalFormFor over the entity_type the annual report carries, which is
+ * 'unknown' for a company whose form is not set: that company is mapped with
+ * the share-capital table, as every form without member capital is. Every
+ * mapping of one report (the statements, each flerårsöversikt year, the
+ * iXBRL input and its cross-check) reads its table here, so they cannot
+ * disagree.
+ */
+export function k2LegalFormOf(entityType: string): K2LegalForm {
+  return isEntityType(entityType) ? k2LegalFormFor(entityType) : 'aktiebolag'
 }
 
 /**
@@ -733,13 +789,102 @@ function inRanges(account: string, ranges: Range[]): boolean {
   return ranges.some((range) => account >= range.start && account <= range.end)
 }
 
+/** BAS class 3-8: the result accounts, 8990-8999 included. */
+function isResultAccount(account: string): boolean {
+  return account >= '3' && account < '9'
+}
+
+const ARETS_RESULTAT_EGET_KAPITAL = 'AretsResultatEgetKapital'
+const BALANSERAT_RESULTAT = 'BalanseratResultat'
+
+interface UnclosedYearDerivation {
+  /** The year's result according to its own income statement, exact. */
+  result: number
+  /** What the equity result account held before the year began, exact. */
+  carriedIn: number
+}
+
 /**
- * Årets resultat (BAS 8990-8999). Deliberately mapped to no K2 concept: the
- * RR ranges stop at 8989 and årets resultat is derived from the RR sum
- * (computeTotals), so a balance here is never "missing" from the ÅR.
+ * The equity of a year that was never closed in these books.
+ *
+ * Closing a year moves its result off the result accounts (class 3-8) onto
+ * the equity result account (2099); the mapper then reads Årets resultat
+ * there. A year that was closed in another system and imported without that
+ * entry has the result still on the result accounts: read as booked, Årets
+ * resultat shows whatever happens to sit on 2099 and the year's balance sheet
+ * is out by exactly the result. For the current year that is the user's to
+ * fix (book the closing) and the mapper warns. A comparison year is behind
+ * them, and its closing balance is what the next year has to open on
+ * (balanskontinuitet, ÅRL 2 kap. 4 § p. 7), result included. So its equity is
+ * derived here instead of demanded.
+ *
+ * Returns the derivation only when the books explain it to the öre:
+ *   1. the result still on the result accounts of the full trial balance IS
+ *      the income statement's result (nothing was closed, anywhere), and
+ *   2. that amount is exactly what the balance sheet is out by, and
+ *   3. the equity result account is empty, or holds a balance that was
+ *      carried in and not touched during the year. Such a balance is an
+ *      earlier year's result (2099 only ever holds the current year's result
+ *      and moves to 2098 at year start: swedish-year-end-closing), so it is
+ *      presented with 2098 under Balanserat resultat.
+ * Anything else (a result closed against another account, a balance on 2099
+ * that moved during the year, a difference that is not the result) returns
+ * null: the figures stay as booked and the checks after smoothing warn.
+ * Null too when the year is already consistent.
  */
-function isAretsResultatAccount(account: string): boolean {
-  return account >= '8990' && account <= '8999'
+function deriveUnclosedYearResult(
+  fullRows: TrialBalanceRowLike[],
+  rrExact: ConceptAmounts,
+  brExact: ConceptAmounts,
+  field: 'current' | 'previous',
+  resultMapping: PostMapping,
+): UnclosedYearDerivation | null {
+  const exact = computeTotals(rrExact, brExact)
+  const result = exact.aretsResultat[field]
+  const assets = exact.tillgangar[field]
+  const eqLiab = exact.egetKapitalSkulder[field]
+  const booked = brExact[ARETS_RESULTAT_EGET_KAPITAL]?.[field]
+  if (result === null || assets === null || eqLiab === null) return null
+  if (booked === null || booked === undefined) return null
+
+  const gap = roundOre(assets - eqLiab)
+  if (isZeroOre(gap) && equalOre(result, booked)) return null
+
+  const unclosed = sumOre(
+    fullRows
+      .filter((row) => isResultAccount(row.account_number))
+      .map((row) => netBalance(row, 'credit')),
+  )
+  if (!equalOre(unclosed, result) || !equalOre(gap, unclosed)) return null
+  if (isZeroOre(booked)) return { result, carriedIn: 0 }
+
+  const untouched = fullRows
+    .filter((row) => inRanges(row.account_number, resultMapping.ranges))
+    .every(
+      (row) =>
+        row.period_debit !== undefined &&
+        row.period_credit !== undefined &&
+        isZeroOre(row.period_debit) &&
+        isZeroOre(row.period_credit),
+    )
+  return untouched ? { result, carriedIn: booked } : null
+}
+
+/** Tells the reader which comparison figures were derived, and to check them. */
+function unclosedYearNotice(derivation: UnclosedYearDerivation, account: string): string {
+  const parts: string[] = []
+  if (!isZeroOre(derivation.result)) {
+    parts.push(
+      `Jämförelseåret avslutades aldrig i bokföringen: årets resultat (${roundWhole(derivation.result)} kr) står kvar på resultatkontona. Årets resultat i jämförelseårets balansräkning är därför hämtat från resultaträkningen.`,
+    )
+  }
+  if (!isZeroOre(derivation.carriedIn)) {
+    parts.push(
+      `Saldot på konto ${account} (${roundWhole(derivation.carriedIn)} kr) fanns redan vid jämförelseårets ingång och visas som Balanserat resultat.`,
+    )
+  }
+  parts.push('Stäm av jämförelsetalen mot föregående års fastställda årsredovisning.')
+  return parts.join(' ')
 }
 
 function exactSumForMapping(rows: TrialBalanceRowLike[], mapping: PostMapping): number {
@@ -841,6 +986,11 @@ function sumConcepts(
  * closing entry zeroes class 3-8); BR concepts come from the full TB (the
  * closing entry books 2099). See TrialBalancePair.
  *
+ * The current year must be closed in the books: an unbooked result is
+ * reported, never filled in. The comparison year is not the user's to close
+ * now, so when it never was, its Årets resultat is derived from its own
+ * income statement (deriveUnclosedYearResult) and a notice says so.
+ *
  * `previous = null` → first fiscal year (jämförelsesiffror omitted,
  * which kontrollera 3006/3007 accepts only for year one).
  */
@@ -875,6 +1025,32 @@ export function mapTrialBalancesToK2(
     brExact[mapping.concept] = exactAmount(mapping, current.full, previous?.full ?? null)
   }
   applySignReclassifications(brExact, current.full, previous?.full ?? null, warnings)
+
+  // A finished year (the comparison year, or a prior year mapped on its own
+  // for the flerårsöversikt) has its equity derived when it was never closed
+  // in these books. Done on the exact amounts, before the posts are rounded,
+  // so the rounding and residual smoothing below treat a derived Årets
+  // resultat exactly like a booked one.
+  const resultMapping = brMappings.find(
+    (mapping) => mapping.concept === ARETS_RESULTAT_EGET_KAPITAL,
+  )
+  const resultAccount = resultMapping?.ranges[0]?.start ?? ''
+  const unclosedYearNotices: string[] = []
+  const finishedYears: Array<['current' | 'previous', TrialBalanceRowLike[]]> = []
+  if (options.currentIsPriorYear) finishedYears.push(['current', current.full])
+  if (previous) finishedYears.push(['previous', previous.full])
+  for (const [field, fullRows] of finishedYears) {
+    if (!resultMapping) continue
+    const derivation = deriveUnclosedYearResult(fullRows, rrExact, brExact, field, resultMapping)
+    if (!derivation) continue
+    brExact[ARETS_RESULTAT_EGET_KAPITAL] = {
+      ...brExact[ARETS_RESULTAT_EGET_KAPITAL],
+      [field]: derivation.result,
+    }
+    adjustConcept(brExact, BALANSERAT_RESULTAT, field, derivation.carriedIn)
+    unclosedYearNotices.push(unclosedYearNotice(derivation, resultAccount))
+  }
+
   for (const mapping of brMappings) {
     const exact = brExact[mapping.concept]
     br[mapping.concept] = {
@@ -902,7 +1078,9 @@ export function mapTrialBalancesToK2(
       // A year imported already closed by another system carries the result
       // on 8999. The sweep used to report it as "beloppet saknas i
       // årsredovisningen" although the amount is exactly what the RR sum
-      // derives (feedback seq 345150): say so, and ask for nothing.
+      // derives (feedback seq 345150): say so, and ask for nothing. Årets
+      // resultat (8990-8999) is deliberately mapped to no K2 concept: the RR
+      // ranges stop at 8989 and computeTotals derives it from the RR sum.
       if (isAretsResultatAccount(row.account_number)) {
         if (!seenAretsResultat.has(row.account_number)) {
           seenAretsResultat.add(row.account_number)
@@ -970,6 +1148,24 @@ export function mapTrialBalancesToK2(
     warnings.push(
       `Balansräkningen balanserar inte: Summa tillgångar ${totals.tillgangar.current} kr ≠ Summa eget kapital och skulder ${totals.egetKapitalSkulder.current} kr (kontrollera-kod 3005).`,
     )
+  }
+
+  // The comparison year gets the same two checks. A year that was simply
+  // never closed has been derived above and passes them; what is left is a
+  // difference the books do not explain, and a comparison figure is never
+  // adjusted on a guess: the figures stay as booked and the reader is told.
+  warnings.push(...unclosedYearNotices)
+  if (previous) {
+    if (totals.aretsResultat.previous !== brResult.previous) {
+      warnings.push(
+        `Jämförelseårets resultat enligt resultaträkningen (${totals.aretsResultat.previous ?? 0} kr) stämmer inte med konto ${resultAccount} (${brResult.previous ?? 0} kr), och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.`,
+      )
+    }
+    if (totals.tillgangar.previous !== totals.egetKapitalSkulder.previous) {
+      warnings.push(
+        `Jämförelseårets balansräkning balanserar inte: Summa tillgångar ${totals.tillgangar.previous ?? 0} kr ≠ Summa eget kapital och skulder ${totals.egetKapitalSkulder.previous ?? 0} kr. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.`,
+      )
+    }
   }
 
   return { legalForm, rr, br, totals, warnings, unmappedAccounts }

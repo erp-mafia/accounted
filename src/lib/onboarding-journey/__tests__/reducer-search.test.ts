@@ -43,11 +43,36 @@ describe('journeyReducer: name search', () => {
     expect(s.searchHits).toEqual([])
   })
 
-  it('a single hit resolves exactly like a typed orgnr', () => {
+  // crm#1909: a made-up test company name matched one unrelated registered
+  // company by fuzzy name ranking, and the journey created that company. A
+  // name is not an identity: one hit waits for the user exactly like several.
+  it('a single hit waits for a pick instead of becoming the company', () => {
+    const s = run(
+      initJourney({ mode: 'add' }),
+      { type: 'SEARCH_SUBMITTED', query: 'FB Testbolag' },
+      {
+        type: 'SEARCH_RESULT',
+        outcome: {
+          status: 'found',
+          hits: [hit('8020000001', { companyName: 'Någon Annan Förening', legalEntityType: 'Ideell förening' })],
+        },
+      },
+    )
+    expect(s.step).toBe('orgnr')
+    expect(s.lookupPending).toBe(false)
+    expect(s.searchHits.map((h) => h.orgNumber)).toEqual(['8020000001'])
+    expect(s.settings.org_number).toBeUndefined()
+    expect(s.settings.company_name).toBeUndefined()
+    expect(s.ticLookup).toBeNull()
+    expect(s.lookupRan).toBe(false)
+  })
+
+  it('a picked single hit resolves exactly like a typed orgnr', () => {
     const viaSearch = run(
       initJourney(),
       { type: 'SEARCH_SUBMITTED', query: 'Testbrand' },
       { type: 'SEARCH_RESULT', outcome: { status: 'found', hits: [hit('5566778899')] } },
+      { type: 'SEARCH_HIT_PICKED', hit: hit('5566778899') },
     )
     const viaOrg = run(
       initJourney(),
@@ -59,6 +84,20 @@ describe('journeyReducer: name search', () => {
     expect(viaSearch.lookupRan).toBe(true)
     expect(viaSearch.searchHits).toEqual([])
     expect(viaSearch.lookupPending).toBe(false)
+  })
+
+  it('continuing without an org number from a waiting hit leaves the hit behind', () => {
+    const s = run(
+      initJourney({ mode: 'add' }),
+      { type: 'SEARCH_SUBMITTED', query: 'FB Testbolag' },
+      { type: 'SEARCH_RESULT', outcome: { status: 'found', hits: [hit('8020000001')] } },
+      { type: 'NO_ORG_CONTINUE' },
+    )
+    expect(s.step).toBe('form')
+    expect(s.searchHits).toEqual([])
+    expect(s.settings.org_number).toBeUndefined()
+    expect(s.settings.company_name).toBeUndefined()
+    expect(s.ticLookup).toBeNull()
   })
 
   it('several hits stay on the orgnr step and wait for a pick', () => {
@@ -118,14 +157,15 @@ describe('journeyReducer: name search', () => {
     expect(s.settings.org_number).toBe('2222222222')
   })
 
-  it('a hit without a mappable entity type goes to the form step', () => {
+  it('a picked hit without a mappable entity type goes to the form step', () => {
     const s = run(
       initJourney(),
       { type: 'SEARCH_SUBMITTED', query: 'Testbrand' },
       {
         type: 'SEARCH_RESULT',
-        outcome: { status: 'found', hits: [hit('1111111111', { legalEntityType: 'HB' })] },
+        outcome: { status: 'found', hits: [hit('1111111111', { legalEntityType: 'Gruvbolag' })] },
       },
+      { type: 'SEARCH_HIT_PICKED', hit: hit('1111111111', { legalEntityType: 'Gruvbolag' }) },
     )
     expect(s.step).toBe('form')
   })
@@ -135,6 +175,7 @@ describe('journeyReducer: name search', () => {
       initJourney(),
       { type: 'SEARCH_SUBMITTED', query: 'Testbrand' },
       { type: 'SEARCH_RESULT', outcome: { status: 'found', hits: [hit('1111111111')] } },
+      { type: 'SEARCH_HIT_PICKED', hit: hit('1111111111') },
     )
     expect(atFy.step).toBe('fy')
     const s = journeyReducer(atFy, { type: 'SEARCH_HIT_PICKED', hit: hit('2222222222') })

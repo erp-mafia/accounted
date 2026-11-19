@@ -26,7 +26,7 @@ describe('groupStrings', () => {
     const g = groupStrings([
       { id: 't1', original_description: 'ANTHROPIC* CLAUDE SUB', description: null, amount: -200, currency: 'SEK', merchant_name: null },
       { id: 't2', original_description: 'ANTHROPIC* CLAUDE SUB', description: 'renamed by user', amount: -220, currency: 'SEK', merchant_name: null },
-      { id: 't3', original_description: null, description: 'Lön Jakob Juni', amount: -20000, currency: 'SEK', merchant_name: null },
+      { id: 't3', original_description: null, description: 'Lön Anna Juni', amount: -20000, currency: 'SEK', merchant_name: null },
       { id: 't4', original_description: null, description: '', amount: -1, currency: 'SEK', merchant_name: null },
     ])
     expect(g.size).toBe(2)
@@ -69,7 +69,7 @@ describe('resolveCompanyCounterparts', () => {
       data: [
         { id: 't1', original_description: 'Kortköp 260828 KRONANS APOTEK AB', description: null, amount: -475, currency: 'SEK', merchant_name: null },
         { id: 't2', original_description: 'SQSP  WORKSP', description: null, amount: -92, currency: 'SEK', merchant_name: null },
-        { id: 't3', original_description: 'Lön Jakob Juni Överföring via internet', description: null, amount: -20654, currency: 'SEK', merchant_name: null },
+        { id: 't3', original_description: 'Lön Anna Juni Överföring via internet', description: null, amount: -20654, currency: 'SEK', merchant_name: null },
         { id: 't4', original_description: 'ALREADY DONE AB', description: null, amount: -10, currency: 'SEK', merchant_name: null },
       ],
     })
@@ -98,7 +98,7 @@ describe('resolveCompanyCounterparts', () => {
     const byName = Object.fromEntries(inserted.map((r) => [r.sample_text, r]))
     expect(byName['Kortköp 260828 KRONANS APOTEK AB']).toMatchObject({ source: 'directory', display_name: 'Kronans Apotek', band: 'link', company_id: COMPANY })
     expect(byName['SQSP  WORKSP']).toMatchObject({ source: 'directory', display_name: 'Squarespace', party_id: 'p-sq', band: 'link' })
-    expect(byName['Lön Jakob Juni Överföring via internet']).toMatchObject({ kind: 'payroll', band: 'nil', display_name: null })
+    expect(byName['Lön Anna Juni Överföring via internet']).toMatchObject({ kind: 'payroll', band: 'nil', display_name: null })
   })
 
   it('links a text the company booked before to its own party, without the model', async () => {
@@ -114,6 +114,23 @@ describe('resolveCompanyCounterparts', () => {
     expect(summary.modelLines).toBe(0)
     const inserted = mock.findCall('counterparty_aliases', 'insert')?.[0] as Array<Record<string, unknown>>
     expect(inserted[0]).toMatchObject({ party_id: 'p-k', display_name: 'Kontorsplatser i Stockholm AB', source: 'ledger', band: 'link' })
+  })
+
+  it('reads the whole register past the 1000-row page, so the 1001st party still links', async () => {
+    mock.enqueue({ data: [{ id: 't1', original_description: 'Kontorsplatser Oktober', description: 'Kontorsplatser Oktober', amount: -12000, currency: 'SEK', merchant_name: null }] })
+    mock.enqueue({ data: [] }) // live aliases
+    mock.enqueue({ data: [] }) // document hits
+    // register parties, first page: a full page of other parties
+    mock.enqueue({ data: Array.from({ length: 1000 }, (_, i) => ({ id: `p-${i}`, display_name: `Bolag ${i}`, alias_keys: [], status: 'confirmed' })) })
+    mock.enqueue({ data: [] }) // giro numbers, read in parallel with the register
+    // register parties, second page: the one the text was booked against
+    mock.enqueue({ data: [{ id: 'p-k', display_name: 'Kontorsplatser i Stockholm AB', alias_keys: [ledgerKey('Kontorsplatser Oktober')], status: 'confirmed' }] })
+    mock.enqueue({ data: [] }) // directory table
+    mock.enqueue({ data: null }) // insert
+    await resolveCompanyCounterparts(mock.supabase as unknown as SupabaseClient, COMPANY, { useModel: false })
+    expect(mock.findCalls('parties', 'range')).toEqual([[0, 999], [1000, 1999]])
+    const inserted = mock.findCall('counterparty_aliases', 'insert')?.[0] as Array<Record<string, unknown>>
+    expect(inserted[0]).toMatchObject({ party_id: 'p-k', source: 'ledger', band: 'link' })
   })
 
   it('returns early when every string already has a live alias', async () => {

@@ -3,6 +3,12 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
+import {
+  ChosenCompanyIdsSchema,
+  COMPANIES_OUTSIDE_TEAM_MESSAGE,
+  filterTeamClientCompanyIds,
+  MANAGERS_HAVE_ALL_COMPANIES_MESSAGE,
+} from '@/lib/company/member-company-access'
 
 /**
  * Kept verbatim from the pre-unfreeze hardcoded 403: personal teams remain
@@ -13,6 +19,14 @@ const PERSONAL_TEAM_MESSAGE = 'Team har bara en ägare och kan inte ändras.'
 const RoleSchema = z.object({
   role: z.enum(['owner', 'admin', 'member']),
 })
+
+// Which client companies a member reaches: null for every company of the
+// team (including new ones), else exactly the chosen ones.
+const CompaniesSchema = z.object({
+  companyIds: ChosenCompanyIdsSchema.nullable(),
+})
+
+const PatchSchema = z.union([RoleSchema, CompaniesSchema])
 
 interface TargetRow {
   id: string
@@ -82,8 +96,50 @@ async function countTeamOwners(
 }
 
 /**
+ * Body `{ companyIds }`: limit a member to chosen client companies, or give
+ * them every company again with null. Owners and admins always have every
+ * company, so only a member row can be limited. The write is one call to
+ * set_team_member_companies (migration 20261028110000), which moves only
+ * team-sourced company_members rows.
+ */
+async function updateCompanyAccess(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  target: TargetRow,
+  companyIds: string[] | null,
+): Promise<NextResponse> {
+  if (companyIds !== null) {
+    if (target.role !== 'member') {
+      return NextResponse.json({ error: MANAGERS_HAVE_ALL_COMPANIES_MESSAGE }, { status: 400 })
+    }
+    const onTeam = await filterTeamClientCompanyIds(serviceClient, target.team_id, companyIds)
+    if (onTeam.length !== companyIds.length) {
+      return NextResponse.json({ error: COMPANIES_OUTSIDE_TEAM_MESSAGE }, { status: 400 })
+    }
+  }
+
+  const { error } = await serviceClient.rpc('set_team_member_companies', {
+    p_team_member_id: target.id,
+    p_company_ids: companyIds,
+  })
+  if (error) {
+    return NextResponse.json({ error: 'Kunde inte ändra tillgången.' }, { status: 500 })
+  }
+
+  return NextResponse.json({
+    data: {
+      id: target.id,
+      user_id: target.user_id,
+      team_id: target.team_id,
+      all_companies: companyIds === null,
+      company_ids: companyIds ?? [],
+    },
+  })
+}
+
+/**
  * PATCH /api/team/members/[id]
- * Change a byrå team member's role (WL-08 gap fix: the last frozen surface).
+ * Change a byrå team member's role (WL-08 gap fix: the last frozen surface),
+ * or, with `{ companyIds }`, which client companies they reach.
  *
  * Gates, in order: authenticated + MFA (withRouteContext), the membership's
  * team is kind='byra' (personal teams keep the legacy 403 verbatim), caller
@@ -107,16 +163,21 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'team_members.update_role',
   async (request, ctx, { params }) => {
     const { id } = await params
-    const validation = await validateBody(request, RoleSchema, {
+    const validation = await validateBody(request, PatchSchema, {
       operation: 'team_members.update_role',
     })
     if (!validation.success) return validation.response
-    const { role: newRole } = validation.data
+    const body = validation.data
 
     const serviceClient = createServiceClient()
     const resolved = await resolveTargetAndCaller(serviceClient, id, ctx.user.id)
     if (resolved.error) return resolved.error
     const { target, callerRole } = resolved
+
+    if ('companyIds' in body) {
+      return updateCompanyAccess(serviceClient, target, body.companyIds)
+    }
+    const { role: newRole } = body
 
     // Owner role is only granted by an owner.
     if (newRole === 'owner' && callerRole !== 'owner') {

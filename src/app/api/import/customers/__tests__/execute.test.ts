@@ -166,6 +166,54 @@ describe('POST /api/import/customers/execute', () => {
     expect(payload).not.toHaveProperty('customer_number')
   })
 
+  describe('the terms', () => {
+    it('leaves the terms of a matched customer alone when the file has none', async () => {
+      mockFetchAllRows.mockResolvedValue([
+        { id: 'x', name: 'Acme AB', org_number: '5560217780', email: null, default_payment_terms: 14 },
+      ])
+      enqueue({ data: { id: 'x', name: 'Acme AB' } })
+
+      const res = await post({ rows: [row({ default_payment_terms: null })], update_duplicates: true })
+
+      expect((await parseJsonResponse(res)).status).toBe(200)
+      const [payload] = findCall('customers', 'update') as [Record<string, unknown>]
+      expect(payload).not.toHaveProperty('default_payment_terms')
+    })
+
+    it('merges 0 days from the file: betalning direkt is a term', async () => {
+      mockFetchAllRows.mockResolvedValue([
+        { id: 'x', name: 'Acme AB', org_number: '5560217780', email: null, default_payment_terms: 14 },
+      ])
+      enqueue({ data: { id: 'x', name: 'Acme AB' } })
+
+      const res = await post({ rows: [row({ default_payment_terms: 0 })], update_duplicates: true })
+
+      expect((await parseJsonResponse(res)).status).toBe(200)
+      const [payload] = findCall('customers', 'update') as [Record<string, unknown>]
+      expect(payload.default_payment_terms).toBe(0)
+    })
+
+    it('a new customer the file gives no terms takes the company default', async () => {
+      enqueue({ data: { invoice_default_days: 10 } }) // the company default
+      enqueue({ data: { id: 'c1', name: 'Acme AB' } })
+
+      const res = await post({ rows: [row({ default_payment_terms: null })], update_duplicates: false })
+
+      expect((await parseJsonResponse(res)).status).toBe(200)
+      const [payload] = findCall('customers', 'insert') as [Record<string, unknown>]
+      expect(payload.default_payment_terms).toBe(10)
+    })
+
+    it('a new customer the file gives 0 days keeps them', async () => {
+      enqueue({ data: { id: 'c1', name: 'Acme AB' } })
+
+      await post({ rows: [row({ default_payment_terms: 0 })], update_duplicates: false })
+
+      const [payload] = findCall('customers', 'insert') as [Record<string, unknown>]
+      expect(payload.default_payment_terms).toBe(0)
+    })
+  })
+
   it('skips a matched customer when update_duplicates is false', async () => {
     mockFetchAllRows.mockResolvedValue([
       { id: 'x', name: 'Acme AB', org_number: '5560217780', email: null, customer_number: null },
@@ -182,6 +230,36 @@ describe('POST /api/import/customers/execute', () => {
     expect(findCall('customers', 'update')).toBeUndefined()
     // Nothing created or changed: no run to undo.
     expect(findCall('register_import_runs', 'insert')).toBeUndefined()
+  })
+
+  it('writes a 12-digit row onto the card holding the number in 10 digits', async () => {
+    mockFetchAllRows.mockResolvedValue([
+      { id: 'stored', name: 'Acme AB', org_number: '5566778899', email: null, customer_number: null },
+    ])
+    enqueue({ data: { id: 'stored', name: 'Acme AB' } })
+
+    const res = await post({ rows: [row({ org_number: '165566778899' })], update_duplicates: true })
+    const { status, body } = await parseJsonResponse<ExecuteBody>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.updated).toBe(1)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+  })
+
+  it('never writes a row onto a card of another country with the same digits', async () => {
+    mockFetchAllRows.mockResolvedValue([
+      { id: 'belgian', name: 'Gamma SA', org_number: 'BE0123456789', email: null, customer_number: null },
+    ])
+    enqueue({ data: { id: 'french', name: 'Gamma SAS' } })
+
+    const res = await post({
+      rows: [row({ name: 'Gamma SAS', customer_type: 'eu_business', org_number: 'FR0123456789', country: 'FR', vat_number: 'FR12345678901' })],
+      update_duplicates: true,
+    })
+    const { body } = await parseJsonResponse<ExecuteBody>(res)
+
+    expect(body.data.updated).toBe(0)
+    expect(findCall('customers', 'insert')).toBeDefined()
   })
 
   it('matches on the customer number before the org number', async () => {

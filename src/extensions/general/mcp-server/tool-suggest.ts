@@ -2,9 +2,8 @@
  * "Did you mean" for an unknown tool name.
  *
  * Agents guess names by analogy with other APIs: gnubok_get_journal_entry,
- * gnubok_list_bank_accounts, gnubok_get_customer, gnubok_list_salary_runs
- * (prod telemetry, 30 days to 2026-09-23: 82 unknown_tool calls from 22
- * companies). The answer used to be the whole catalog as one comma list, about
+ * gnubok_list_bank_accounts, gnubok_get_customer, gnubok_list_salary_runs (seen in
+ * telemetry). The answer used to be the whole catalog as one comma list, about
  * 190 names with the useful ones nowhere near the top. Ranking the catalog by
  * the words in the guess puts the real tool first, so the next call is a pick,
  * not another guess.
@@ -44,7 +43,7 @@ export interface SuggestableTool {
   name: string
   description: string
   keywords?: readonly string[]
-  annotations?: { readOnlyHint?: boolean }
+  annotations?: { effect: 'read_only' | 'additive' | 'destructive' }
 }
 
 /**
@@ -69,7 +68,7 @@ export function suggestToolNames<T extends SuggestableTool>(
   return candidates
     .map((tool, idx) => {
       const nameWords = words(tool.name)
-      const read = tool.annotations?.readOnlyHint === true
+      const read = tool.annotations?.effect === 'read_only'
       const keywordText = (tool.keywords ?? []).join(' ').toLowerCase()
       const descriptionWords = new Set(words(tool.description))
       let hits = 0

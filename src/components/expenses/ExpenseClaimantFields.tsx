@@ -1,13 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { ownerFallbackName, type ExpensePayer } from '@/lib/expenses/payer'
+import { useEmployees } from '@/lib/reference-data/hooks'
+import { lastOwnerClaimantName, ownerFallbackName, type ClaimantHistoryRow, type ExpensePayer } from '@/lib/expenses/payer'
 
 interface EmployeeOption {
   id: string
@@ -21,6 +22,11 @@ interface EmployeeOption {
  * company's employees. Shared by the Underlag dialog and the supplier-invoice
  * form so both post the same claimant to the same claims writer. Employees
  * are fetched on first need; the host only sees the chosen id and name.
+ *
+ * The owner's name opens with the one the company's last owner claim used
+ * (lastOwnerClaimantName), once per mount and only into an empty field, so
+ * nobody retypes it per receipt and a person typing first is never
+ * overwritten (PH 101).
  */
 export function ExpenseClaimantFields({
   payer,
@@ -50,27 +56,17 @@ export function ExpenseClaimantFields({
   // The placeholder is the label the claim gets when the field stays empty,
   // so it must be the form's word for the person (Ägare, Medlem).
   const ownerPlaceholder = ownerFallbackName(useCompanyOptional()?.company?.entity_type)
-  const [employees, setEmployees] = useState<EmployeeOption[]>([])
-  const [employeesLoaded, setEmployeesLoaded] = useState(false)
-
+  // The roster from the session cache, fetched once the payer is an employee.
+  const { employees: roster, isLoading: rosterLoading } = useEmployees()
+  const employees: EmployeeOption[] = payer === 'employee' ? roster : []
+  const employeesLoaded = payer === 'employee' && !rosterLoading
+  const remembered = useRememberedOwnerName(payer === 'owner')
+  const prefilled = useRef(false)
   useEffect(() => {
-    if (payer !== 'employee' || employeesLoaded) return
-    let cancelled = false
-    fetch('/api/salary/employees')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (!cancelled) setEmployees((json?.data ?? []) as EmployeeOption[])
-      })
-      .catch(() => {
-        if (!cancelled) setEmployees([])
-      })
-      .finally(() => {
-        if (!cancelled) setEmployeesLoaded(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [payer, employeesLoaded])
+    if (prefilled.current || remembered === undefined) return
+    prefilled.current = true
+    if (remembered && !(ownerName ?? '').trim()) onOwnerNameChange(remembered)
+  }, [remembered, ownerName, onOwnerNameChange])
 
   if (payer === 'owner') {
     return (
@@ -118,4 +114,25 @@ export function ExpenseClaimantFields({
       </Select>
     </div>
   )
+}
+
+/**
+ * The owner name the company's claims were last registered under, read
+ * once while the owner field shows: undefined while unknown, null when
+ * there is none (or the read failed: the field then simply starts empty).
+ */
+function useRememberedOwnerName(wanted: boolean): string | null | undefined {
+  const [name, setName] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (!wanted || name !== undefined) return
+    const controller = new AbortController()
+    fetch('/api/expense-claims', { signal: controller.signal })
+      .then(async (res) => (res.ok ? ((await res.json()) as { data?: unknown }).data : null))
+      .then((rows) => setName(Array.isArray(rows) ? lastOwnerClaimantName(rows as ClaimantHistoryRow[]) : null))
+      .catch(() => {
+        if (!controller.signal.aborted) setName(null)
+      })
+    return () => controller.abort()
+  }, [wanted, name])
+  return name
 }

@@ -2,9 +2,6 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { closeFiscalPeriodExternally } from '@/lib/core/bookkeeping/fiscal-year-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 // "Klarmarkera": mark an imported historical year as closed in a previous
 // bookkeeping system. The rules live in period-service's

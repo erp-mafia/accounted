@@ -38,6 +38,21 @@ export class CloudTokenRefreshError extends Error {
   }
 }
 
+/**
+ * Thrown by a provider's storage calls when the grant lacks the scope the
+ * backup needs. Google's consent screen lets a person untick Drive and still
+ * approve, and every Drive call made with such a grant answers 403
+ * "insufficient authentication scopes". Retrying can never succeed: the user
+ * must reconnect and grant the scope, so `performSync` flags the connection
+ * instead of failing the same way every night.
+ */
+export class CloudScopeMissingError extends Error {
+  constructor(providerLabel: string, detail: string) {
+    super(`${providerLabel} grant lacks the storage scope: ${detail}`)
+    this.name = 'CloudScopeMissingError'
+  }
+}
+
 /** The three `extension_data` keys a provider owns for a company. */
 export interface CloudStorageKeys {
   connection: string
@@ -106,6 +121,10 @@ export interface CloudStorageProvider {
   /** False when this deployment has no OAuth credentials for the provider. */
   isConfigured(): boolean
   buildAuthorizationUrl(origin: string, state: string): string
+  /**
+   * Throws {@link CloudScopeMissingError} when the provider granted less than
+   * the backup needs; nothing may be stored for such a grant.
+   */
   exchangeCode(
     origin: string,
     code: string
@@ -117,11 +136,13 @@ export interface CloudStorageProvider {
   revoke(refreshToken: string, origin: string): Promise<void>
   /** Throws {@link CloudTokenRefreshError} on rejection. */
   refreshAccessToken(refreshToken: string, origin: string): Promise<string>
+  /** Throws {@link CloudScopeMissingError} when the grant lacks the scope. */
   prepareTarget(params: PrepareTargetParams): Promise<PreparedTarget>
   /**
    * Write one file into the target, replacing any existing file of that name.
    * Implementations verify the stored bytes against the provider's own
    * checksum: a silently corrupted backup is worse than a failed one.
+   * Throws {@link CloudScopeMissingError} when the grant lacks the scope.
    */
   putFile(params: PutFileParams): Promise<PutFileResult>
 }

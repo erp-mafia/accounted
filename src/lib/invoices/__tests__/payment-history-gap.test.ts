@@ -17,7 +17,7 @@ import {
   fetchInvoicePaymentVouchers,
   type PaymentVoucherRef,
 } from '../payment-history-gap'
-import { PAYMENT_VOUCHER_SOURCE_TYPES } from '../backfill-invoice-payment-rows'
+import { PAYMENT_VOUCHER_SOURCE_TYPES } from '../payment-row-invariant'
 
 const voucher: PaymentVoucherRef = {
   id: 'je-1',

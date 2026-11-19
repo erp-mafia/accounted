@@ -41,25 +41,40 @@ const CASH_ACCOUNT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 interface MockBuilder {
   select: ReturnType<typeof vi.fn>
   eq: ReturnType<typeof vi.fn>
+  or: ReturnType<typeof vi.fn>
+  limit: ReturnType<typeof vi.fn>
   single: ReturnType<typeof vi.fn>
   maybeSingle: ReturnType<typeof vi.fn>
 }
+
+const NO_ROWS = { data: [], error: null }
 
 function makeSupabase(handlers: {
   period: { data: unknown; error: unknown }
   settings: { data: unknown; error: unknown }
   cashAccount?: { data: unknown; error: unknown }
+  /** journal_entries with source_type 'import' in the period (id-only, limit 1). */
+  importedEntries?: { data: unknown; error: unknown }
+  /** Completed sie_imports for the period (id-only, limit 1). */
+  sieImports?: { data: unknown; error: unknown }
 }) {
   function makeBuilder(table: string): MockBuilder {
     const b: MockBuilder = {
       select: vi.fn(),
       eq: vi.fn(),
+      or: vi.fn(),
+      limit: vi.fn(),
       single: vi.fn(),
       maybeSingle: vi.fn(),
     }
     b.select.mockReturnValue(b)
     b.eq.mockReturnValue(b)
-    if (table === 'fiscal_periods') {
+    b.or.mockReturnValue(b)
+    if (table === 'journal_entries') {
+      b.limit.mockResolvedValue(handlers.importedEntries ?? NO_ROWS)
+    } else if (table === 'sie_imports') {
+      b.limit.mockResolvedValue(handlers.sieImports ?? NO_ROWS)
+    } else if (table === 'fiscal_periods') {
       b.single.mockResolvedValue(handlers.period)
     } else if (table === 'company_settings') {
       b.maybeSingle.mockResolvedValue(handlers.settings)
@@ -128,6 +143,7 @@ const RECON_CLEAN = {
 
 const AR_CLEAN = {
   ar_ledger_total: 0,
+  as_of_date: null,
   account_1510_balance: 0,
   difference: 0,
   is_reconciled: true,
@@ -136,6 +152,7 @@ const AR_CLEAN = {
 
 const AP_CLEAN = {
   supplier_ledger_total: 0,
+  as_of_date: null,
   account_2440_balance: 0,
   difference: 0,
   is_reconciled: true,
@@ -150,7 +167,7 @@ beforeEach(() => {
 })
 
 describe('buildBokslutReadinessReport', () => {
-  it('returns a ready report with the accruals reminder for AB', async () => {
+  it('returns a ready report without static reminders for AB', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const supabase = makeSupabase({
@@ -164,9 +181,11 @@ describe('buildBokslutReadinessReport', () => {
     expect(report.blockers).toEqual([])
     expect(report.blockerItems).toEqual([])
     expect(report.entityType).toBe('aktiebolag')
-    // Phase 3 handles depreciation + bolagsskatt + p-fond automatically: only
-    // the accruals reminder should remain (Phase 4 will replace it).
-    expect(report.reminders.map((r) => r.code)).toContain('accruals_manual')
+    // Reminders are this year's findings only: the static accruals guidance
+    // lives behind the Periodiseringar step's "?", and depreciation,
+    // bolagsskatt and p-fond have their own calculators. A clean year has none.
+    expect(report.reminders).toEqual([])
+    expect(report.reminders.map((r) => r.code)).not.toContain('accruals_manual')
     expect(report.reminders.map((r) => r.code)).not.toContain('depreciation_manual')
     expect(report.reminders.map((r) => r.code)).not.toContain('bolagsskatt_manual')
     expect(report.reminders.map((r) => r.code)).not.toContain('periodiseringsfond_manual')
@@ -208,13 +227,31 @@ describe('buildBokslutReadinessReport', () => {
     expect(vi.mocked(getReconciliationStatus)).not.toHaveBeenCalled()
   })
 
-  it('returns the EF-only reminder for enskild firma', async () => {
+  it('returns the kapitalunderlag reminder but no static NE reminder for enskild firma', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     vi.mocked(computeEfDeclarationPreview).mockResolvedValue({
       fiscalPeriod: PERIOD,
       bookedSurplus: 80_000,
       items: [],
+      pfondFonder: [],
+      rutor: {
+        R29: 80_000,
+        R30: 0,
+        R31: 0,
+        R32: 0,
+        R33: 80_000,
+        R34: 0,
+        R35: 80_000,
+        R36: 0,
+        R37: 0,
+        R40: 0,
+        R41: 0,
+        R42: 80_000,
+        R43: 20_000,
+      },
+      ovrigaUppgifter: [],
+      warnings: [],
     })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },
@@ -224,7 +261,9 @@ describe('buildBokslutReadinessReport', () => {
     const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
 
     expect(report.entityType).toBe('enskild_firma')
-    expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeDefined()
+    // The "beräknas i NE-bilagan, inte bokförs" text is static guidance: it
+    // lives behind the Dispositioner step's "?", not in every report.
+    expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeUndefined()
     // The preview runs for the NE filer with the form the aggregator resolved.
     expect(computeEfDeclarationPreview).toHaveBeenCalledWith(supabase, 'co-1', 'fp-1', {
       entityType: 'enskild_firma',
@@ -320,17 +359,34 @@ describe('buildBokslutReadinessReport', () => {
     expect(report.ready).toBe(true)
   })
 
-  it('throws when the fiscal period is missing', async () => {
+  it.each([
+    ['no row for this company', { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }],
+    ['an id that is no uuid', { code: '22P02', message: 'invalid input syntax for type uuid: "undefined"' }],
+  ])('refuses with PERIOD_NOT_FOUND when the fiscal period is missing: %s', async (_name, error) => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const supabase = makeSupabase({
-      period: { data: null, error: { message: 'not found' } },
+      period: { data: null, error },
       settings: { data: null, error: null },
     })
 
     await expect(
       buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-missing'),
-    ).rejects.toThrow(/not found/i)
+    ).rejects.toMatchObject({ code: 'PERIOD_NOT_FOUND', message: 'Fiscal period not found' })
+  })
+
+  it('a period read that failed is a failure, not a missing period', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+    const supabase = makeSupabase({
+      period: { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+      settings: { data: null, error: null },
+    })
+
+    const failure = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1').catch((err: unknown) => err)
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toMatch(/read failed.*statement timeout/)
+    expect((failure as { code?: string }).code).toBeUndefined()
   })
 
   it('falls back to companies.entity_type when company_settings is missing', async () => {
@@ -502,5 +558,83 @@ describe('bokslutsbilagor reminder', () => {
       'fp-1',
     )
     expect(failed.reminders.find((r) => r.code === 'bilagor_unsigned')).toBeUndefined()
+  })
+})
+
+describe('imported history (klarmarkera prompt)', () => {
+  const ab = { data: { entity_type: 'aktiebolag' }, error: null }
+
+  beforeEach(() => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+  })
+
+  it('is false for a year with no imported verifikat and no SIE import', async () => {
+    const supabase = makeSupabase({ period: { data: PERIOD, error: null }, settings: ab })
+
+    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+    expect(report.holdsImportedHistory).toBe(false)
+    // Both reads are scoped to this company and this period.
+    const from = vi.mocked(supabase.from)
+    const entriesBuilder = from.mock.results[from.mock.calls.findIndex(([t]) => t === 'journal_entries')]
+      .value as MockBuilder
+    expect(entriesBuilder.eq).toHaveBeenCalledWith('company_id', 'co-1')
+    expect(entriesBuilder.eq).toHaveBeenCalledWith('fiscal_period_id', 'fp-1')
+    expect(entriesBuilder.eq).toHaveBeenCalledWith('source_type', 'import')
+    expect(entriesBuilder.limit).toHaveBeenCalledWith(1)
+    const importsBuilder = from.mock.results[from.mock.calls.findIndex(([t]) => t === 'sie_imports')]
+      .value as MockBuilder
+    expect(importsBuilder.eq).toHaveBeenCalledWith('company_id', 'co-1')
+    expect(importsBuilder.eq).toHaveBeenCalledWith('fiscal_period_id', 'fp-1')
+    expect(importsBuilder.eq).toHaveBeenCalledWith('status', 'completed')
+    expect(importsBuilder.or).toHaveBeenCalledWith('job_state.is.null,and(job_state.eq.completed,job_kind.eq.import)')
+  })
+
+  it('is true when the period holds an imported verifikat', async () => {
+    const report = await buildBokslutReadinessReport(
+      makeSupabase({
+        period: { data: PERIOD, error: null },
+        settings: ab,
+        importedEntries: { data: [{ id: 'je-1' }], error: null },
+      }),
+      'co-1',
+      'user-1',
+      'fp-1',
+    )
+
+    expect(report.holdsImportedHistory).toBe(true)
+  })
+
+  it('is true for a balances-only SIE import with no verifikat', async () => {
+    const report = await buildBokslutReadinessReport(
+      makeSupabase({
+        period: { data: PERIOD, error: null },
+        settings: ab,
+        sieImports: { data: [{ id: 'imp-1' }], error: null },
+      }),
+      'co-1',
+      'user-1',
+      'fp-1',
+    )
+
+    expect(report.holdsImportedHistory).toBe(true)
+  })
+
+  it('degrades to false without failing the report when the reads fail', async () => {
+    const report = await buildBokslutReadinessReport(
+      makeSupabase({
+        period: { data: PERIOD, error: null },
+        settings: ab,
+        importedEntries: { data: null, error: { message: 'timeout' } },
+        sieImports: { data: null, error: { message: 'timeout' } },
+      }),
+      'co-1',
+      'user-1',
+      'fp-1',
+    )
+
+    expect(report.holdsImportedHistory).toBe(false)
+    expect(report.ready).toBe(true)
   })
 })

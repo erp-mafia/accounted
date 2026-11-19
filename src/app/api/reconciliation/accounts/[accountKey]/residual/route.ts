@@ -5,11 +5,6 @@ import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
-import { ensureInitialized } from '@/lib/init'
-
-// Booking a residual commits a verifikat; the engine emits journal_entry
-// events that extension handlers subscribe to.
-ensureInitialized()
 
 const ResidualBodySchema = z.object({
   external_ids: z.array(z.string().uuid()).min(1).max(50),

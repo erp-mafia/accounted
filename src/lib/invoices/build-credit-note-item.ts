@@ -1,27 +1,39 @@
 import type { InvoiceItem } from '@/types'
+import { creditedAmount } from './build-credit-note'
 
+/**
+ * One row of the kreditfaktura: the original's row with quantity, line total
+ * and moms negated by their sign (creditedAmount), the unit price and rate
+ * kept. Every row then reads as the original's turned around, a rabatt or
+ * öresavrundning row included (it comes back positive), so the rows add up to
+ * the credit note's header and the reversing verifikat (buildCreditNoteLines)
+ * books each one on the other side of the original's.
+ */
 export function buildCreditNoteItem(invoiceId: string, item: InvoiceItem) {
   return {
     invoice_id: invoiceId,
     sort_order: item.sort_order,
     line_type: item.line_type ?? 'product',
     description: item.description,
-    quantity: -Math.abs(item.quantity),
+    quantity: creditedAmount(item.quantity),
     unit: item.unit,
     unit_price: item.unit_price,
     // Carried so the kreditfaktura's face arithmetic still multiplies out
     // (antal x a-pris - rabatt = summa) and the PDF shows the same Rabatt
     // column the original did (ML 17 kap 24 §: prisnedsattningen ska framga).
     discount_percent: item.discount_percent ?? 0,
-    line_total: -Math.abs(item.line_total),
+    line_total: creditedAmount(item.line_total),
     vat_rate: item.vat_rate ?? 0,
-    vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
+    vat_amount: creditedAmount(item.vat_amount),
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
+    // The kreditfaktura prints the article number its original printed.
+    article_number: item.article_number ?? null,
     deduction_type: item.deduction_type ?? null,
     // Positive magnitude, unlike the negated amounts above: invoice_items has
-    // CHECK (deduction_amount >= 0), and the reversing verifikat recomputes
-    // the ROT/RUT amount from quantity/unit_price rather than reading this.
+    // CHECK (deduction_amount >= 0). The reversing verifikat books 1513 from
+    // this (generateRotRutLines), so the kreditfaktura reverses exactly the
+    // amount the original booked.
     deduction_amount: item.deduction_amount
       ? Math.abs(item.deduction_amount)
       : 0,

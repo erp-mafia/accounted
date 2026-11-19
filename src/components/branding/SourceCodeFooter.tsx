@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
  * inside client pages (login); next-intl supports useTranslations in both.
  */
 
-const SOURCE_REPO_URL = 'https://github.com/erp-mafia/gnubok'
+const SOURCE_REPO_URL = 'https://github.com/erp-mafia/accounted'
 
 export function SourceCodeFooter({ className }: { className?: string }) {
   const t = useTranslations('common')

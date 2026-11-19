@@ -23,10 +23,10 @@
  * page load.
  *
  * Security note: retention does not widen the token's authority. Its lifetime
- * is bounded server-side by `company_invitations.expires_at` (7 days) and by
- * the single-use `status` transition, both enforced on every POST in
- * app/api/team/accept/route.ts; the cookie's own `max-age` is set at write
- * time and is untouched here. Acceptance is re-authorized on every attempt
+ * is bounded server-side by the invitation's `expires_at` (INVITE_TTL_HOURS,
+ * lib/auth/invite-ttl.ts) and by the single-use `status` transition, both
+ * enforced on every POST in app/api/team/accept/route.ts; the cookie's own
+ * `max-age` is set at write time and is untouched here. Acceptance is re-authorized on every attempt
  * (`requireAuth()` plus an email equality check against the invitation), so a
  * surviving cookie confers nothing on its own.
  */

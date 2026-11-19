@@ -1,18 +1,24 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FormSubmitRow } from '@/components/common/FormSubmitRow'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Lock, X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useCompanySettings } from '@/components/settings/useSettings'
+import { AttnLine } from '@/components/ui/attn-line'
+import { lookupCreditorName, probeCreditorLookup, type CreditorLookupResult } from '@/components/payments/payments-client'
+import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getCountryOptions, normalizeCountryCode } from '@/lib/vat/country-codes'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
@@ -25,12 +31,22 @@ interface SupplierFormProps {
   onSubmit: (data: CreateSupplierInput) => Promise<void>
   isLoading: boolean
   initialData?: Partial<CreateSupplierInput>
+  /** Set by a host that owns the primary (a drawer's fixed footer): the form takes this id and renders no submit row of its own; the host's button submits it through the `form` attribute. */
+  formId?: string
 }
+
+type GiroField = 'bankgiro' | 'plusgiro'
+
+/** One check of a typed giro against Bankgirot's register: what was asked, and the answer once it came. */
+type GiroCheck = { field: GiroField; giro: string; state: 'checking' } | { field: GiroField; giro: string; state: 'done'; result: CreditorLookupResult }
+
+const CHECK_FAILED: CreditorLookupResult = { enabled: true, available: false, reason: 'provider_refused', creditor_name: null, ocr_valid: null, warnings: [] }
 
 export default function SupplierForm({
   onSubmit,
   isLoading,
   initialData,
+  formId,
 }: SupplierFormProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('form_supplier')
@@ -40,6 +56,10 @@ export default function SupplierForm({
   // konto combobox is populated on the first paint; without the chart it
   // still accepts a typed 4-digit number.
   const { accounts } = useAccounts()
+  // The default dimensions are offered where the company tags lines at all
+  // (company_settings.dimensions_enabled, the voucher form's gate).
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
 
   // The default account seeds expense lines on supplier invoices, so the
   // browsable list is cost classes 4-7. Any other 4-digit number can still be
@@ -81,6 +101,15 @@ export default function SupplierForm({
       .min(0, t('default_payment_terms_invalid'))
       .max(365, t('default_payment_terms_invalid')),
     default_currency: z.string().optional(),
+    // The self-billing agreement with the supplier (crm#1367): with one, a
+    // självfaktura can be issued to it from the supplier invoice form.
+    self_billing_agreement_ref: z.string().max(128, t('self_billing_agreement_invalid')).optional(),
+    // How the supplier is paid (crm#1463): by the company, or debited by the
+    // supplier itself (autogiro, account debit).
+    auto_debit: z.boolean(),
+    // Tags its new supplier invoices take (accounted#144); the invoice
+    // editor prefills them and they can be changed there.
+    default_dimensions: z.record(z.string(), z.string()),
     notes: z.string().optional(),
   }), [t])
 
@@ -120,6 +149,9 @@ export default function SupplierForm({
       // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
       default_payment_terms: initialData?.default_payment_terms ?? 30,
       default_currency: initialData?.default_currency || 'SEK',
+      self_billing_agreement_ref: initialData?.self_billing_agreement_ref || '',
+      auto_debit: initialData?.auto_debit ?? false,
+      default_dimensions: initialData?.default_dimensions ?? {},
       notes: initialData?.notes || '',
     },
   })
@@ -157,6 +189,60 @@ export default function SupplierForm({
     },
   })
 
+  // Bankgiro Lookup (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP on the
+  // server): a "Kontrollera" beside the giro fields shows the name Bankgirot
+  // has registered for the number, so a typo or a fraudulent card is caught
+  // when it is saved. The probe says whether the installation offers it.
+  const [giroLookupEnabled, setGiroLookupEnabled] = useState(false)
+  const [giroCheck, setGiroCheck] = useState<GiroCheck | null>(null)
+  useEffect(() => {
+    if (!canWrite) return
+    let cancelled = false
+    probeCreditorLookup()
+      .then((enabled) => {
+        if (!cancelled) setGiroLookupEnabled(enabled)
+      })
+      .catch(() => {
+        // Quiet: without the probe's answer the check is simply not offered.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canWrite])
+
+  async function checkGiro(field: GiroField) {
+    const giro = (getValues(field) ?? '').trim()
+    if (!giro) return
+    setGiroCheck({ field, giro, state: 'checking' })
+    try {
+      const result = await lookupCreditorName({ giro, type: field })
+      setGiroCheck({ field, giro, state: 'done', result })
+    } catch {
+      setGiroCheck({ field, giro, state: 'done', result: CHECK_FAILED })
+    }
+  }
+
+  const bankgiroValue = watch('bankgiro')
+  const plusgiroValue = watch('plusgiro')
+  const supplierName = watch('name')
+
+  /** The check's answer under its field, as long as the field still holds the number that was checked. */
+  function giroCheckLine(field: GiroField, current: string | undefined) {
+    if (!giroCheck || giroCheck.field !== field || giroCheck.giro !== (current ?? '').trim()) return null
+    if (giroCheck.state === 'checking') return <p className="text-xs text-muted-foreground">{t('check_giro_checking')}</p>
+    const result = giroCheck.result
+    if (!result.enabled) return null
+    if (!result.available || !result.creditor_name) {
+      const key = result.reason === 'not_found' ? 'giro_not_found' : result.reason === 'invalid_number' ? 'giro_invalid' : 'giro_check_unavailable'
+      return <p className="text-xs text-muted-foreground">{t(key)}</p>
+    }
+    const name = result.creditor_name
+    if (creditorNameMatches(name, supplierName ?? '')) {
+      return <p className="text-xs text-muted-foreground">{t(field === 'bankgiro' ? 'giro_registered_name_bankgiro' : 'giro_registered_name_plusgiro', { name })}</p>
+    }
+    return <AttnLine>{t('giro_registered_name_differs', { name, supplier: supplierName?.trim() || t('giro_no_supplier_name') })}</AttnLine>
+  }
+
   const countryValue = watch('country')
   // A stored value the picker does not list (an unmapped legacy name, or a
   // code outside the curated list) still has to be visible, or the field
@@ -166,12 +252,15 @@ export default function SupplierForm({
 
   // Empty strings go through as-is: the API schemas normalize them (dropped on
   // create, null on update so a cleared field actually clears the column).
+  // The default dimensions travel only while the form shows them, so a
+  // company that has dimensions off never rewrites a bag set elsewhere.
   const onFormSubmit = (data: FormData) => {
-    onSubmit(data)
+    const { default_dimensions: defaultDimensions, ...rest } = data
+    onSubmit(dimensionsEnabled ? { ...rest, default_dimensions: defaultDimensions } : rest)
   }
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form id={formId} onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
       {/* Supplier Type */}
       <div className="space-y-2">
         <Label>{t('type_label')}</Label>
@@ -230,7 +319,7 @@ export default function SupplierForm({
       {/* Contact */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="email">{t('email_label')}</Label>
+          <Label htmlFor="email" optional>{t('email_label')}</Label>
           <Input
             id="email"
             type="email"
@@ -242,7 +331,7 @@ export default function SupplierForm({
           )}
         </div>
         <div className="space-y-2">
-          <Label htmlFor="phone">{t('phone_label')}</Label>
+          <Label htmlFor="phone" optional>{t('phone_label')}</Label>
           <Input
             id="phone"
             placeholder="+46 8 123 45 67"
@@ -255,7 +344,7 @@ export default function SupplierForm({
       <div className="space-y-4 pt-4 border-t">
         <h3>{t('address_section')}</h3>
         <div className="space-y-2">
-          <Label htmlFor="address_line1">{t('street_label')}</Label>
+          <Label htmlFor="address_line1" optional>{t('street_label')}</Label>
           <Input
             id="address_line1"
             placeholder="Storgatan 1"
@@ -263,7 +352,7 @@ export default function SupplierForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="address_line2">{t('address_line2_label')}</Label>
+          <Label htmlFor="address_line2" optional>{t('address_line2_label')}</Label>
           <Input
             id="address_line2"
             placeholder={t('address_line2_placeholder')}
@@ -272,11 +361,11 @@ export default function SupplierForm({
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="postal_code">{t('postal_label')}</Label>
+            <Label htmlFor="postal_code" optional>{t('postal_label')}</Label>
             <Input id="postal_code" placeholder="123 45" {...register('postal_code')} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="city">{t('city_label')}</Label>
+            <Label htmlFor="city" optional>{t('city_label')}</Label>
             <Input id="city" placeholder="Stockholm" {...register('city')} />
           </div>
           <div className="space-y-2">
@@ -319,11 +408,27 @@ export default function SupplierForm({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
-            <Input id="bankgiro" placeholder={t('bankgiro_placeholder')} {...register('bankgiro')} />
+            <div className="flex items-center gap-2">
+              <Input id="bankgiro" placeholder={t('bankgiro_placeholder')} {...register('bankgiro')} />
+              {giroLookupEnabled && (
+                <Button type="button" variant="outline" onClick={() => checkGiro('bankgiro')} disabled={!bankgiroValue?.trim()}>
+                  {t('check_giro')}
+                </Button>
+              )}
+            </div>
+            {giroCheckLine('bankgiro', bankgiroValue)}
           </div>
           <div className="space-y-2">
             <Label htmlFor="plusgiro">{t('plusgiro_label')}</Label>
-            <Input id="plusgiro" placeholder="XXXXXXX-X" {...register('plusgiro')} />
+            <div className="flex items-center gap-2">
+              <Input id="plusgiro" placeholder="XXXXXXX-X" {...register('plusgiro')} />
+              {giroLookupEnabled && (
+                <Button type="button" variant="outline" onClick={() => checkGiro('plusgiro')} disabled={!plusgiroValue?.trim()}>
+                  {t('check_giro')}
+                </Button>
+              )}
+            </div>
+            {giroCheckLine('plusgiro', plusgiroValue)}
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -374,7 +479,7 @@ export default function SupplierForm({
                       aria-label={t('default_account_clear')}
                       onClick={() => field.onChange('')}
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </Button>
                   ) : null}
                 </div>
@@ -421,9 +526,70 @@ export default function SupplierForm({
         </div>
       </div>
 
+      {/* Förvalda dimensioner (accounted#144) */}
+      {dimensionsEnabled && (
+        <div className="space-y-2">
+          <Label>{t('default_dimensions_label')}</Label>
+          <Controller
+            name="default_dimensions"
+            control={control}
+            render={({ field }) => (
+              <LineDimensionFields
+                dimensions={field.value}
+                disabled={!canWrite}
+                onChange={(dimNo, code) => {
+                  const next = { ...field.value }
+                  const trimmed = code?.trim()
+                  if (trimmed) next[dimNo] = trimmed
+                  else delete next[dimNo]
+                  field.onChange(next)
+                }}
+              />
+            )}
+          />
+          <p className="text-xs text-muted-foreground">{t('default_dimensions_help')}</p>
+        </div>
+      )}
+
+      {/* Betalningssätt (crm#1463) */}
+      <div className="space-y-2">
+        <Label htmlFor="auto_debit">{t('payment_method_label')}</Label>
+        <Controller
+          name="auto_debit"
+          control={control}
+          render={({ field }) => (
+            <Select value={field.value ? 'auto_debit' : 'pay'} onValueChange={(v) => field.onChange(v === 'auto_debit')}>
+              <SelectTrigger id="auto_debit">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pay">{t('payment_method_pay')}</SelectItem>
+                <SelectItem value="auto_debit">{t('payment_method_auto_debit')}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+        <p className="text-xs text-muted-foreground">{t('payment_method_help')}</p>
+      </div>
+
+      {/* Självfaktureringsavtal (crm#1367) */}
+      <div className="space-y-2">
+        <Label htmlFor="self_billing_agreement_ref" optional>{t('self_billing_agreement_label')}</Label>
+        <Input
+          id="self_billing_agreement_ref"
+          placeholder={t('self_billing_agreement_placeholder')}
+          autoComplete="off"
+          {...register('self_billing_agreement_ref')}
+        />
+        <p className="text-xs text-muted-foreground">{t('self_billing_agreement_help')}</p>
+        {errors.self_billing_agreement_ref && (
+          <p className="text-sm text-destructive">{errors.self_billing_agreement_ref.message}</p>
+        )}
+      </div>
+
       {/* Notes */}
       <div className="space-y-2">
-        <Label htmlFor="notes">{t('notes_label')}</Label>
+        <Label htmlFor="notes" optional>{t('notes_label')}</Label>
         <Textarea
           id="notes"
           placeholder={t('notes_placeholder')}
@@ -431,26 +597,16 @@ export default function SupplierForm({
         />
       </div>
 
-      {/* Submit */}
-      <div className="flex justify-end gap-2">
-        <Button
-          type="submit"
-          disabled={!canWrite}
-          loading={isLoading}
-          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-        >
-          {isLoading ? (
-            t('submit_saving')
-          ) : !canWrite ? (
-            <>
-              <Lock className="mr-2 h-4 w-4" />
-              {t('submit_save')}
-            </>
-          ) : (
-            t('submit_save')
-          )}
-        </Button>
-      </div>
+      {/* Submit: the host's footer carries it when the form has an id. */}
+      {!formId && (
+        <FormSubmitRow
+          canWrite={canWrite}
+          isLoading={isLoading}
+          label={t('submit_save')}
+          savingLabel={t('submit_saving')}
+          viewerTitle={t('viewer_disabled_tooltip')}
+        />
+      )}
     </form>
   )
 }

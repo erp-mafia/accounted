@@ -15,7 +15,8 @@ import {
   mapSetupEntityType,
 } from '@/lib/company-lookup/entity-type-map'
 import { isEntityType, isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
-import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import { deriveSwedishVatNumber, vatRegisteredWithoutOrgNumber } from '@/lib/vat/vat-number'
+import { formSettledByOrgNumber } from './org-number-hint'
 
 /**
  * Pure state machine for the journey onboarding. The component renders `step`,
@@ -32,6 +33,10 @@ import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
  *   prefill without a successful lookup is the degraded ask-questions path.
  * - `vat_registered` is never silently defaulted: it is either lookup data
  *   (registration.vat === true) or an explicit answer (ML 17 kap 24 §).
+ *   A yes without an org number goes back to the orgnr step: the
+ *   momsregistreringsnummer derives from it (vatRegisteredWithoutOrgNumber).
+ * - The org number is optional: NO_ORG_CONTINUE starts the manual path
+ *   without one, for a company not registered yet or a test company.
  * - History stores each step's ENTRY snapshot, so Back rolls both answers
  *   and stations to how they were when the step began.
  */
@@ -81,6 +86,7 @@ export function stationOfStep(step: JourneyStep): JourneyStation {
 
 export type JourneyServerError =
   | 'org_number_invalid'
+  | 'vat_needs_org_number'
   | 'period_invalid'
   | 'generic'
   | null
@@ -141,6 +147,7 @@ export type JourneyAction =
   | { type: 'SEARCH_HIT_PICKED'; hit: CompanySearchHit }
   | { type: 'SUGGESTION_PICKED'; suggestion: CompanySuggestion }
   | { type: 'NOTFOUND_CONTINUE' }
+  | { type: 'NO_ORG_CONTINUE' }
   | { type: 'NOTFOUND_EDIT' }
   | { type: 'CEASED_CONTINUE' }
   | { type: 'CEASED_EDIT' }
@@ -175,6 +182,27 @@ function snapshotOf(s: JourneySnapshot): JourneySnapshot {
     nameConfirmedForEf: s.nameConfirmedForEf,
     plannedForm: s.plannedForm,
   }
+}
+
+/**
+ * What Tillbaka does once the browser entries the journey pushed itself are
+ * used up: a step back inside the journey, an exit from the first question
+ * to a page that renders (`exitHref`), or nothing, and then it is not shown.
+ *
+ * The done screen has nothing: the company exists, so no question is left to
+ * return to and the way on is the screen's own button. Tillbaka there used to
+ * open the app, which for a first company is the books act and for a second
+ * one skips it: back acted as continue.
+ */
+export type JourneyBack = { kind: 'step' } | { kind: 'exit'; href: string } | { kind: 'none' }
+
+export function journeyBack(
+  state: Pick<JourneyState, 'step' | 'history'>,
+  exitHref: string | null,
+): JourneyBack {
+  if (state.step === 'done') return { kind: 'none' }
+  if (state.history.length > 0) return { kind: 'step' }
+  return exitHref ? { kind: 'exit', href: exitHref } : { kind: 'none' }
 }
 
 export function initJourney(init: JourneyInit = {}): JourneyState {
@@ -242,11 +270,38 @@ function pickerStep(state: JourneyState): JourneyStep {
 }
 
 /**
+ * The manual path once the lookup gave no company (not found, failed, or
+ * off). A form already known keeps its questions; a personnummer settles
+ * the form on its own (formSettledByOrgNumber: it can only be an enskild
+ * firma), so the picker's one-answer question is skipped; anything else
+ * goes to the picker. The entry snapshot is untouched, so Back returns to
+ * the step before with the form unset.
+ *
+ * A form picked before the number arrived (a company started without one,
+ * then sent back for it by a VAT yes) gives way to the form a personnummer
+ * settles, taking the name and the answers it shaped with it, the same way
+ * an ENTITY_PICKED change wipes them.
+ */
+function continueManually(state: JourneyState): JourneyState {
+  const known = state.settings.entity_type
+  const settled = state.plannedForm ? null : formSettledByOrgNumber(state.settings.org_number)
+  if (known && (!settled || settled === known)) return go(state, nextCompanyStep(state))
+  if (!settled) return go(state, pickerStep(state))
+  const withForm = known
+    ? stay(state, {
+        settings: wipeDownstream({ ...state.settings, company_name: undefined, entity_type: settled }),
+        nameConfirmedForEf: false,
+      })
+    : stay(state, { settings: { ...state.settings, entity_type: settled } })
+  return go(withForm, nextCompanyStep(withForm))
+}
+
+/**
  * The Företaget station asks only what is still unknown, then hands over to
  * the fiscal-year station. Order: name → address → F-skatt.
  * - A company_name from the lookup (or BankID roles) skips the name
  *   question for every form: the orgnr answers it, Enter is the whole step
- *   (founder call 2026-09-11). A form whose org number is the owner's
+ *   (product call 2026-09-11). A form whose org number is the owner's
  *   personnummer (enskild firma) has no registered name, so without lookup
  *   data it still names its verksamhet; the name stays editable in Settings.
  * - Address is asked only when the lookup did not provide one.
@@ -294,14 +349,10 @@ function wipeDownstream(settings: Partial<CompanySettings>): Partial<CompanySett
   return next
 }
 
-function withOrgNumber(state: JourneyState, orgNumber: string): JourneyState {
-  return stay(state, { settings: { ...state.settings, org_number: orgNumber } })
-}
-
 /**
- * The single "TIC answered with data" transition, shared by a typed orgnr,
- * a one-hit name search and a picked hit: facts become settings, the step
- * advances past whatever the lookup already answered.
+ * The single "TIC answered with data" transition, shared by a typed orgnr
+ * and a picked name-search hit: facts become settings, the step advances
+ * past whatever the lookup already answered.
  */
 function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): JourneyState {
   // Only forms this deployment can create are prefilled; a flagged-off or
@@ -389,6 +440,8 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
     case 'SEARCH_SUBMITTED': {
       if (state.submitting) return state
       // A name search has no orgnr yet: it arrives with the picked hit.
+      // Sent here by a VAT yes, the user still owes the number until a pick
+      // or a typed one gives it, so that reason outlives the search.
       return stay(state, {
         settings: { ...state.settings, org_number: undefined },
         ticLookup: null,
@@ -396,7 +449,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         lookupNote: 'none',
         lookupPending: true,
         searchHits: [],
-        serverError: null,
+        serverError: state.serverError === 'vat_needs_org_number' ? state.serverError : null,
         plannedForm: null,
       })
     }
@@ -421,12 +474,9 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       const noted = stay(cleared, {
         lookupNote: outcome.status === 'error' ? ('error' as const) : ('none' as const),
       })
-      if (noted.settings.entity_type) {
-        // BankID prefill (or re-run after entity known): degraded ask-
-        // questions path; entity/name from CompanyRoles survive as prefill.
-        return go(noted, nextCompanyStep(noted))
-      }
-      return go(noted, pickerStep(noted))
+      // BankID prefill (or re-run after entity known): degraded ask-
+      // questions path; entity/name from CompanyRoles survive as prefill.
+      return continueManually(noted)
     }
 
     case 'SEARCH_RESULT': {
@@ -437,10 +487,9 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       if (outcome.status === 'aborted') return cleared
 
       if (outcome.status === 'found') {
-        // One hit resolves exactly like a typed orgnr; several wait for a pick.
-        if (outcome.hits.length === 1) {
-          return applyLookupFound(withOrgNumber(cleared, outcome.hits[0].orgNumber), outcome.hits[0].result)
-        }
+        // Every hit waits for a pick, a lone one included: name ranking is
+        // fuzzy, so a made-up or new company's name can match one unrelated
+        // registered company (crm#1909). Only a typed orgnr resolves directly.
         return stay(cleared, { searchHits: outcome.hits })
       }
 
@@ -454,7 +503,10 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
 
     case 'SEARCH_HIT_PICKED': {
       if (state.submitting || state.step !== 'orgnr') return state
-      return applyLookupFound(withOrgNumber(state, action.hit.orgNumber), action.hit.result)
+      return applyLookupFound(
+        stay(state, { settings: { ...state.settings, org_number: action.hit.orgNumber } }),
+        action.hit.result,
+      )
     }
 
     case 'SUGGESTION_PICKED': {
@@ -484,9 +536,27 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       })
     }
 
-    case 'NOTFOUND_CONTINUE': {
-      if (state.settings.entity_type) return go(state, nextCompanyStep(state))
-      return go(state, pickerStep(state))
+    case 'NOTFOUND_CONTINUE':
+      return continueManually(state)
+
+    case 'NO_ORG_CONTINUE': {
+      if (state.submitting || state.lookupPending || state.step !== 'orgnr') return state
+      // No number, so nothing to look up: the manual path starts from scratch
+      // and asks for the form, the name and the rest. Whatever the field
+      // held (a BankID prefill, a picked or looked-up company, answers kept
+      // after a refused submit) belonged to a number and goes with it.
+      return continueManually(
+        stay(state, {
+          settings: {},
+          ticLookup: null,
+          lookupRan: false,
+          lookupNote: 'none',
+          addressAsked: false,
+          nameConfirmedForEf: false,
+          plannedForm: null,
+          viaPrefill: false,
+        }),
+      )
     }
 
     case 'NOTFOUND_EDIT':
@@ -605,6 +675,10 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
     }
 
     case 'FY_START_PICKED': {
+      // The date picker sends its pick a moment after the tap. One that
+      // arrives after the user left the question (Tillbaka in that moment)
+      // must not move the journey forward again.
+      if (state.step !== 'fystart') return state
       const patched = stay(state, {
         settings: {
           ...state.settings,
@@ -636,6 +710,11 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
     }
 
     case 'VAT_ANSWERED': {
+      if (vatRegisteredWithoutOrgNumber(action.registered, state.settings.org_number)) {
+        // A VAT-registered company has an org number: back to the orgnr step
+        // to enter it, answers kept, the same way a refused number travels.
+        return go(state, 'orgnr', { serverError: 'vat_needs_org_number' })
+      }
       if (action.registered) {
         const patched = stay(state, {
           settings: {

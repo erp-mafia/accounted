@@ -33,7 +33,14 @@ vi.mock('@/lib/invoices/rot-rut-receivable', () => ({
   getPayoutOreRounding: (...args: unknown[]) => mockGetPayoutOreRounding(...args),
 }))
 
-import { settleRotRutPayoutRequest, settleRotRutPayoutRequestSet } from '../rot-rut-settle'
+// Which invoices take kontantmetoden's second step is pinned by
+// rot-rut-payout-recognition.test.ts; here only that the writer gets it.
+const mockGetPayoutRecognition = vi.fn()
+vi.mock('@/lib/invoices/rot-rut-payout-recognition', () => ({
+  getPayoutRecognition: (...args: unknown[]) => mockGetPayoutRecognition(...args),
+}))
+
+import { attachRotRutPayoutVoucher, settleRotRutPayoutRequest, settleRotRutPayoutRequestSet } from '../rot-rut-settle'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
@@ -61,6 +68,52 @@ beforeEach(() => {
   reset()
   mockCreatePayoutEntry.mockResolvedValue({ id: 'je-1' })
   mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0, invoiceCount: 0 })
+  mockGetPayoutRecognition.mockResolvedValue({ ok: true, recognition: null })
+})
+
+describe('kontantmetoden: the payout books the deduction share it recognises', () => {
+  const recognition = {
+    amount: 3000,
+    lines: [
+      { account_number: '3001', debit_amount: 0, credit_amount: 2400, line_description: 'Försäljning faktura 1042, ROT-avdrag' },
+      { account_number: '2611', debit_amount: 0, credit_amount: 600, line_description: 'Utgående moms 25% faktura 1042, ROT-avdrag' },
+    ],
+    invoices: [{ invoiceId: 'inv-1', paid: 3000 }],
+  }
+
+  it('hands the recognition to the voucher writer for the payment date', async () => {
+    mockGetPayoutRecognition.mockResolvedValue({ ok: true, recognition })
+    enqueue({ data: makeRequestRow() })
+    enqueue({ data: { ...makeRequestRow(), status: 'paid', settlement_journal_entry_id: 'je-1' } })
+    enqueue({ data: [] }) // items for the decided_amount mirror
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+    })
+    expect(outcome.ok).toBe(true)
+    expect(mockGetPayoutRecognition).toHaveBeenCalledWith(supabase, 'company-1', expect.objectContaining({ id: REQUEST_ID }), 3000, '2026-07-10')
+    expect(mockCreatePayoutEntry.mock.calls[0][3]).toMatchObject({ amount: 3000, recognition })
+  })
+
+  it('refuses before booking when the per-invoice split is unknown', async () => {
+    mockGetPayoutRecognition.mockResolvedValue({
+      ok: false,
+      code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN',
+      details: { request_id: REQUEST_ID },
+    })
+    enqueue({ data: makeRequestRow() })
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+    })
+    expect(outcome).toEqual({
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN',
+      details: { request_id: REQUEST_ID },
+    })
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
 })
 
 describe('settleRotRutPayoutRequest', () => {
@@ -197,6 +250,7 @@ describe('settleRotRutPayoutRequest', () => {
         paymentDate: '2026-07-10',
         bankAccount: '1920',
       }),
+      expect.any(Function),
     )
     const requestUpdate = findCall('rot_rut_payout_requests', 'update')?.[0] as Record<string, unknown>
     expect(requestUpdate).toMatchObject({
@@ -214,6 +268,37 @@ describe('settleRotRutPayoutRequest', () => {
       REQUEST_ID,
       { exceptTransactionId: null },
     )
+  })
+
+  it('refuses a date ahead of today typed by hand, before anything is read or booked', async () => {
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2099-01-01',
+      amount: 3000,
+    })
+
+    expect(outcome).toMatchObject({ ok: false, kind: 'code', code: 'PAYMENT_DATE_IN_FUTURE' })
+    expect(findCall('rot_rut_payout_requests', 'select')).toBeUndefined()
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
+  })
+
+  it('does not judge a bank row: its date is the bank\'s fact', async () => {
+    enqueue({ data: makeRequestRow() })
+    enqueue({
+      data: makeRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-1', decided_total: 3000 }),
+    })
+    enqueue({ data: [{ id: TX_ID }] }) // transactions CAS update
+    enqueue({ data: [] }) // items
+
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2099-01-01',
+      amount: 3000,
+      bankAccount: '1930',
+      transactionId: TX_ID,
+    })
+
+    expect(outcome.ok).toBe(true)
   })
 
   it('links the bank transaction to the settlement voucher and clears its hints', async () => {
@@ -243,6 +328,8 @@ describe('settleRotRutPayoutRequest', () => {
       potential_supplier_invoice_id: null,
       potential_rot_rut_payout_request_id: null,
       reconciliation_method: null,
+      link_basis: 'user_confirmed',
+      link_evidence: null,
     })
     // Optimistic lock: only a free row absorbs the link.
     expect(findCall('transactions', 'is')).toEqual(['journal_entry_id', null])
@@ -342,6 +429,7 @@ describe('settleRotRutPayoutRequest', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ amount: 671, oreRounding: 0.25, invoiceCount: 1 }),
+      expect.any(Function),
     )
   })
 
@@ -363,6 +451,7 @@ describe('settleRotRutPayoutRequest', () => {
       'company-1',
       'user-1',
       expect.objectContaining({ amount: 2500, oreRounding: 0 }),
+      expect.any(Function),
     )
   })
 
@@ -477,7 +566,7 @@ describe('settleRotRutPayoutRequestSet', () => {
         { requestId: REQUEST_ID, requestName: 'ROT 2026-07', deductionType: 'rot', amount: 3000, oreRounding: 0, invoiceCount: 0 },
         { requestId: REQUEST_ID_2, requestName: 'RUT 2026-07', deductionType: 'rut', amount: 2250, oreRounding: 0, invoiceCount: 0 },
       ],
-    })
+    }, expect.any(Function))
     // The single-request writer is never used for a bundle.
     expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
 
@@ -605,6 +694,7 @@ describe('settleRotRutPayoutRequestSet', () => {
           expect.objectContaining({ requestId: REQUEST_ID_2, amount: 2250 }),
         ],
       }),
+      expect.any(Function),
     )
     const requestUpdates = findCalls('rot_rut_payout_requests', 'update').map((c) => c[0])
     expect(requestUpdates).toEqual([
@@ -658,6 +748,7 @@ describe('settleRotRutPayoutRequestSet', () => {
           expect.objectContaining({ requestId: REQUEST_ID_2, amount: 2250, oreRounding: 0.75 }),
         ],
       }),
+      expect.any(Function),
     )
   })
 
@@ -667,5 +758,53 @@ describe('settleRotRutPayoutRequestSet', () => {
     const outcome = await settleRotRutPayoutRequestSet(supabase, 'user-1', 'company-1', setParams)
     expect(outcome).toMatchObject({ ok: false, kind: 'error', stage: 'book' })
     expect(findCalls('rot_rut_payout_requests', 'update')).toEqual([])
+  })
+})
+
+// Issue #93: a set-off on the skattekonto is the payout, booked by the
+// skattekonto booking with the payout's lines; this points the begäran at it
+// with the settle's own writes.
+describe('attachRotRutPayoutVoucher', () => {
+  it('settles the begäran on the verifikat with the CAS, mirrors a full payout and clears hints', async () => {
+    enqueue({ data: makeRequestRow() }) // request read
+    enqueue({ data: makeRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-skv' }) }) // CAS update
+    enqueue({ data: [{ id: 'item-1', requested_amount: 3000 }] }) // mirror read
+    enqueue({ data: null }) // mirror write
+
+    const outcome = await attachRotRutPayoutVoucher(supabase, 'company-1', {
+      requestId: REQUEST_ID,
+      journalEntryId: 'je-skv',
+      amount: 3000,
+    })
+
+    expect(outcome).toMatchObject({ ok: true, fullyPaid: true, request: { status: 'paid' } })
+    expect(findCall('rot_rut_payout_requests', 'update')?.[0]).toMatchObject({
+      settlement_journal_entry_id: 'je-skv',
+      status: 'paid',
+      decided_total: 3000,
+    })
+    expect(findCalls('rot_rut_payout_requests', 'is')).toContainEqual(['settlement_journal_entry_id', null])
+    expect(mockClearSuggestions).toHaveBeenCalledWith(supabase, 'company-1', 'rot_rut_payout_request', REQUEST_ID, {
+      exceptTransactionId: null,
+    })
+  })
+
+  it('refuses a begäran that is already settled or lost the CAS, and one not found', async () => {
+    enqueue({ data: makeRequestRow({ settlement_journal_entry_id: 'je-bank' }) })
+    expect(
+      await attachRotRutPayoutVoucher(supabase, 'company-1', { requestId: REQUEST_ID, journalEntryId: 'je-skv', amount: 3000 }),
+    ).toEqual({ ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_INVALID_STATE' })
+
+    enqueue({ data: makeRequestRow() })
+    enqueue({ data: null }) // CAS lost
+    expect(
+      await attachRotRutPayoutVoucher(supabase, 'company-1', { requestId: REQUEST_ID, journalEntryId: 'je-skv', amount: 3000 }),
+    ).toEqual({ ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_RACE' })
+
+    enqueue({ data: null })
+    expect(
+      await attachRotRutPayoutVoucher(supabase, 'company-1', { requestId: REQUEST_ID, journalEntryId: 'je-skv', amount: 3000 }),
+    ).toEqual({ ok: false, kind: 'code', code: 'ROT_RUT_REQUEST_NOT_FOUND' })
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
   })
 })

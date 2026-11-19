@@ -1535,6 +1535,10 @@
       "kind": "item",
       "sections": [
         "faststallelseintyg"
+      ],
+      "enumeration": [
+        "Årsstämman beslöt att godkänna styrelsens förslag till behandling av ansamlad förlust.",
+        "Årsstämman beslöt att godkänna styrelsens förslag till vinstdisposition."
       ]
     },
     "ArsstammaResultatDispositionIanspraktagandeBundenOverkursfond": {
@@ -1595,6 +1599,10 @@
       "kind": "item",
       "sections": [
         "faststallelseintyg"
+      ],
+      "enumeration": [
+        "Årsstämman beslöt att inte godkänna styrelsens förslag till vinstdisposition.",
+        "Årsstämman beslöt att inte godkänna styrelsens förslag till behandling av ansamlad förlust."
       ]
     },
     "AvkastningEgetKapital": {
@@ -2765,6 +2773,10 @@
       "kind": "item",
       "sections": [
         "faststallelseintyg"
+      ],
+      "enumeration": [
+        "Jag intygar att resultaträkningen och balansräkningen har fastställts på årsstämma",
+        "Jag intygar att balansräkningen har fastställts på årsstämma"
       ]
     },
     "FaststallelseResultatBalansrakningAbstract": {
@@ -2789,6 +2801,10 @@
       "kind": "item",
       "sections": [
         "faststallelseintyg"
+      ],
+      "enumeration": [
+        "Jag intygar att koncernens resultaträkningen och balansräkningen har fastställts på årsstämma",
+        "Jag intygar att koncernbalansräkningen har fastställts på årsstämma"
       ]
     },
     "FaststallelseResultatBalansrakningKoncernAbstract": {
@@ -7403,6 +7419,9 @@
       "kind": "item",
       "sections": [
         "faststallelseintyg"
+      ],
+      "enumeration": [
+        "Jag intygar att innehållet i dessa elektroniska handlingar överensstämmer med originalen och att originalen undertecknats av samtliga personer som enligt lag ska underteckna dessa."
       ]
     },
     "InventarierVerktygInstallationer": {
@@ -12533,6 +12552,9 @@
       "kind": "item",
       "sections": [
         "faststallelseintyg"
+      ],
+      "enumeration": [
+        "Elektroniskt underskriven av"
       ]
     },
     "UnderskriftFaststallelseintygForetradareEfternamn": {
@@ -12557,6 +12579,13 @@
       "kind": "item",
       "sections": [
         "faststallelseintyg"
+      ],
+      "enumeration": [
+        "Styrelseledamot",
+        "Styrelsesuppleant",
+        "Verkställande direktör",
+        "Likvidator",
+        "Likvidatorssuppleant"
       ]
     },
     "UnderskriftFaststallelseintygForetradareTilltalsnamn": {

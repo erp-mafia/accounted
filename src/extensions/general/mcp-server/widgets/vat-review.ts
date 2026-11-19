@@ -190,6 +190,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
   .copied.shown { opacity: 1; }
 
   .empty { text-align: center; padding: 32px; color: var(--text-muted); }
+  .ore-note { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
 </style>
 </head>
 <body>
@@ -275,10 +276,18 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
 
     periodEl.textContent = report.period_label || ''
     const r = report.rutor
-    const ruta49 = Number(r.ruta49 || 0)
-    const summaryClass = ruta49 > 0 ? 'pay' : ruta49 < 0 ? 'refund' : 'zero'
-    const summaryLabel = ruta49 > 0 ? 'Moms att betala' : ruta49 < 0 ? 'Moms att få tillbaka' : 'Noll i moms'
-    const summaryAmt = fmt(Math.abs(ruta49))
+    // The amount is the net as filed (net_filed: every ruta in whole kronor),
+    // the figure the app, the momsverifikat and the payment carry. The öre
+    // sum in ruta 49 is printed beside it, never as the amount. A result
+    // stored before net_filed existed has only the öre sum to show.
+    const oreSum = Number(r.ruta49 || 0)
+    const netFiled = typeof report.net_filed === 'number' ? report.net_filed : oreSum
+    const summaryClass = netFiled > 0 ? 'pay' : netFiled < 0 ? 'refund' : 'zero'
+    const summaryLabel = netFiled > 0 ? 'Moms att betala' : netFiled < 0 ? 'Moms att få tillbaka' : 'Noll i moms'
+    const summaryAmt = fmt(Math.abs(netFiled))
+    const oreNote = oreSum !== netFiled
+      ? 'Varje ruta lämnas i hela kronor (öretal faller bort) och ruta 49 är summan av dem. Exakt i ören: ' + fmt(Math.abs(oreSum)) + '.'
+      : ''
 
     let html = ''
 
@@ -321,9 +330,10 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
     html += '<tr class="section"><td colspan="3">Ingående moms</td></tr>'
     html += row('48', 'Ingående moms', '2641 + 2645 + 2647', r.ruta48)
 
-    html += '<tr class="total"><td class="ruta-code">49</td><td class="label">Att betala / återfå</td><td class="amount">' + fmt(ruta49) + '</td></tr>'
+    html += '<tr class="total"><td class="ruta-code">49</td><td class="label">Att betala / återfå</td><td class="amount">' + fmt(netFiled) + '</td></tr>'
 
     html += '</tbody></table>'
+    if (oreNote) html += '<p class="ore-note">' + esc(oreNote) + '</p>'
 
     html += '<div class="actions">'
     html += '<span class="copied" id="copied">Kopierat</span>'
@@ -350,7 +360,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
         'Ruta 39: ' + fmt(r.ruta39),
         'Ruta 40: ' + fmt(r.ruta40),
         'Ruta 48: ' + fmt(r.ruta48),
-        'Ruta 49: ' + fmt(r.ruta49) + '  (' + summaryLabel + ')',
+        'Ruta 49: ' + fmt(netFiled) + '  (' + summaryLabel + ')',
       ]
       copyToClipboard(lines.join('\\n'))
     })

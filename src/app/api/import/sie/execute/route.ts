@@ -9,12 +9,9 @@ import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { loadMappings } from '@/lib/import/sie-import'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 
 export const maxDuration = 300
 
@@ -25,7 +22,7 @@ export const POST = withRouteContext('sie_import.execute', async (request,ctx) =
     const form = await request.formData()
     const file = await readSIERequestFile(form,supabase,companyId)
     if (!(file instanceof File)) return errorResponseFromCode('SIE_PARSE_NO_FILE',log,{requestId})
-    if (!/\.(sie|se|si)$/i.test(file.name)) return errorResponseFromCode('SIE_PARSE_INVALID_TYPE',log,{requestId})
+    if (!hasSIEFileExtension(file.name)) return errorResponseFromCode('SIE_PARSE_INVALID_TYPE',log,{requestId})
     if (file.size > SIE_LIMITS.fileBytes) return errorResponseFromCode('SIE_PARSE_FILE_TOO_LARGE',log,{requestId})
     if (!file.size) return errorResponseFromCode('SIE_PARSE_EMPTY',log,{requestId})
     const options = SIEJobOptionsSchema.parse(JSON.parse(String(form.get('options') ?? '{}')))
@@ -49,8 +46,7 @@ export const POST = withRouteContext('sie_import.execute', async (request,ctx) =
       mappings = checked.data
     }
     else {
-      const stored = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => supabase.from('sie_account_mappings')
-        .select('*').eq('company_id',companyId).order('source_account').range(from,to))
+      const stored = await loadMappings(supabase,companyId!)
       // The upload's own decision (#3312): a stored 9xxx target for an account
       // with amounts would otherwise reach the job's class check and refuse.
       mappings = SIEJobMappingsSchema.parse(suggestSIEMappings(parseSIEFile(content),BAS_REFERENCE,stored).mappings)

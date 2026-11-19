@@ -36,6 +36,7 @@ const rule = {
   source: 'auto_learned',
   mode: 'propose',
   paused_at: null,
+  always_review: false,
   created_at: '2026-06-01T00:00:00Z',
   updated_at: '2026-09-04T00:00:00Z',
 }
@@ -53,14 +54,18 @@ describe('GET /api/rules', () => {
     expect(res.status).toBe(401)
   })
 
-  it('lists the company rules most used first', async () => {
+  it('lists the company rules most used first, with the one-click switch they are read under', async () => {
     enqueue({ data: [rule] })
-    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; mode: string }> }>(
+    enqueue({ data: { direct_booking_enabled: false } })
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; mode: string }>; direct_booking: { enabled: boolean } }>(
       await listRules(createMockRequest('/api/rules'), { params: Promise.resolve({}) }),
     )
     expect(status).toBe(200)
     expect(body.data).toEqual([rule])
+    expect(body.direct_booking).toEqual({ enabled: false })
     expect(findCalls('categorization_templates', 'order')[0]).toEqual(['occurrence_count', { ascending: false }])
+    expect(findCalls('categorization_templates', 'select')[0]?.[0]).toContain('always_review')
+    expect(findCalls('company_settings', 'eq')[0]).toEqual(['company_id', 'company-1'])
   })
 })
 
@@ -97,6 +102,45 @@ describe('PATCH /api/rules/[id]', () => {
     patchRule(createMockRequest(`/api/rules/${RULE_ID}`, { method: 'PATCH', body }), {
       params: Promise.resolve({ id: RULE_ID }),
     })
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({ error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) })
+    const res = await patch({ always_review: true })
+    expect(res.status).toBe(401)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('rejects a body that changes nothing, or an always_review that is not a boolean', async () => {
+    expect((await patch({})).status).toBe(400)
+    expect((await patch({ always_review: 'yes' })).status).toBe(400)
+    expect((await patch({ always_review: true, extra: 1 })).status).toBe(400)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('sets a rule to always ask for a review, scoped to the company, and nothing else', async () => {
+    enqueue({ data: { ...rule, always_review: true } })
+    const { status, body } = await parseJsonResponse<{ data: { always_review: boolean; mode: string } }>(await patch({ always_review: true }))
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ always_review: true, mode: 'propose' })
+    // Only the flag: the audit trigger logs it as a rule change, the ladder is untouched.
+    expect(findCalls('categorization_templates', 'update')[0]).toEqual([{ always_review: true }])
+    expect(findCalls('categorization_templates', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['id', RULE_ID],
+    ])
+  })
+
+  it('lets a rule book with one click again', async () => {
+    enqueue({ data: rule })
+    const res = await patch({ always_review: false })
+    expect(res.status).toBe(200)
+    expect(findCalls('categorization_templates', 'update')[0]).toEqual([{ always_review: false }])
+  })
+
+  it('returns 404 when the rule to set is not the company’s', async () => {
+    enqueue({ data: null })
+    expect((await patch({ always_review: true })).status).toBe(404)
+  })
 
   it('rejects an unknown mode', async () => {
     const res = await patch({ mode: 'sideways' })

@@ -4,8 +4,8 @@
  * The Tier-2 selector emits a raw combined confidence in [0,1], but raw model/
  * ensemble scores are NOT calibrated: "0.9" does not mean "right 90% of the
  * time" until you fit it against real outcomes. This module turns a corpus of
- * (confidence, was_correct) samples — collected as users book or edit the
- * proposals — into a monotonic calibrator (isotonic regression), and decides
+ * (confidence, was_correct) samples - collected as users book or edit the
+ * proposals - into a monotonic calibrator (isotonic regression), and decides
  * the auto-book / suggest / review band from the CALIBRATED probability.
  *
  * Until a calibrator is fitted (not enough data yet), `bandFor` runs in

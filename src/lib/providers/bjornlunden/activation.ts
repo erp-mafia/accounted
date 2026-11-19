@@ -11,11 +11,10 @@
  *   https://lundify.com/activate-integration/{integrationActivationKey}/{encodedRedirectUrl}?extra={state}
  *   -> {redirectUrl}?publicKey={userKey}&extra={state}
  *
- * The activation key is issued by BL once per service provider (ours arrived
- * 2026-09-07). It is not a secret in the credential sense: it is embedded in a
- * URL the customer's browser visits. It still lives in an env var so
- * self-hosted installs without a BL listing simply keep the manual User-Key
- * field.
+ * The activation key is issued by BL once per service provider. It is not a
+ * secret in the credential sense: it is embedded in a URL the customer's
+ * browser visits. It still lives in an env var so self-hosted installs
+ * without a BL listing simply keep the manual User-Key field.
  */
 
 export const LUNDIFY_ACTIVATION_BASE_URL = 'https://lundify.com/activate-integration';

@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import {
   amountToOre,
+  BANK_REDATE_MAX_DAYS,
+  bankFeedIbanOf,
   buildStableExternalIds,
   contentBucketKey,
   descriptionsBridge,
+  dropRepeatedBankRows,
   normalizeImportedDescription,
   reconcileStableExternalIds,
-  shiftIsoDate,
   FALLBACK_DESCRIPTION,
+  idsProveDistinctBookings,
+  BOOKING_DATE_ID_SOURCES,
+  PROVIDER_BOOKING_ID_SOURCES,
 } from '../external-id'
 
 describe('amountToOre', () => {
@@ -211,27 +216,6 @@ describe('normalizeImportedDescription', () => {
   })
 })
 
-describe('shiftIsoDate', () => {
-  it('shifts a date forward and backward by whole days', () => {
-    expect(shiftIsoDate('2024-06-15', 1)).toBe('2024-06-16')
-    expect(shiftIsoDate('2024-06-15', -1)).toBe('2024-06-14')
-    expect(shiftIsoDate('2024-06-15', 0)).toBe('2024-06-15')
-  })
-
-  it('crosses month and year boundaries', () => {
-    expect(shiftIsoDate('2024-06-30', 1)).toBe('2024-07-01')
-    expect(shiftIsoDate('2024-07-01', -1)).toBe('2024-06-30')
-    expect(shiftIsoDate('2025-12-31', 1)).toBe('2026-01-01')
-    expect(shiftIsoDate('2026-01-01', -1)).toBe('2025-12-31')
-  })
-
-  it('handles the leap day deterministically (no wall-clock dependency)', () => {
-    expect(shiftIsoDate('2024-02-28', 1)).toBe('2024-02-29') // 2024 is a leap year
-    expect(shiftIsoDate('2024-03-01', -1)).toBe('2024-02-29')
-    expect(shiftIsoDate('2025-02-28', 1)).toBe('2025-03-01') // 2025 is not
-  })
-})
-
 describe('reconcileStableExternalIds', () => {
   const id = (n: number) => `eb_SE47_2026-09-21_20000_${n}`
   const stored = [
@@ -292,5 +276,387 @@ describe('reconcileStableExternalIds', () => {
       [...stored, { externalId: 'csv_lunar_ab12cd34', desc: 'other' }],
     )
     expect(ids).toEqual(['csv_lunar_ab12cd34', 'eb_SE47_2026-09-22_20000_0'])
+  })
+})
+
+describe('reconcileStableExternalIds: the bank\'s own id (crm#2024)', () => {
+  const SCOPE = 'eb_SE0000000000000000000001'
+  const feedId = (date: string, ore: number, n: number) => `${SCOPE}_${date}_${ore}_${n}`
+  const ref = (ptid: string | null, over: Record<string, unknown> = {}) => ({
+    source: 'open_payments',
+    bankConnectionId: 'bc-1',
+    providerTransactionId: ptid,
+    ...over,
+  })
+  const incomingRow = (date: string, ore: number, n: number, ptid: string | null, description = 'Fee', over: Record<string, unknown> = {}) =>
+    ({ external_id: feedId(date, ore, n), description, ...ref(ptid, over) })
+  const storedRow = (date: string, ore: number, n: number, ptid: string | null, desc = 'fee', over: Record<string, unknown> = {}) =>
+    ({ externalId: feedId(date, ore, n), desc, ...ref(ptid, over) })
+
+  // The observed shape: three fees and a payment stored on the 15th; a later
+  // read dates one fee and the payment on the 16th under the same bank ids,
+  // next to a new fee of the 16th.
+  const storedDay15 = [
+    storedRow('2026-11-15', -99, 0, 'fee-1'),
+    storedRow('2026-11-15', -125000, 0, 'pay-1', 'överföring'),
+    storedRow('2026-11-15', -99, 1, 'fee-2'),
+    storedRow('2026-11-15', -99, 2, 'fee-3'),
+  ]
+  const reread = [
+    incomingRow('2026-11-16', -99, 0, 'fee-4'),
+    incomingRow('2026-11-16', -99, 1, 'fee-1'),
+    incomingRow('2026-11-16', -125000, 0, 'pay-1', 'Överföring'),
+    incomingRow('2026-11-15', -99, 0, 'fee-2'),
+    incomingRow('2026-11-15', -99, 1, 'fee-3'),
+  ]
+
+  it('pairs an entry the bank re-dated by a day with its stored row, and each same-day fee with its own', () => {
+    expect(reconcileStableExternalIds(reread, storedDay15)).toEqual([
+      feedId('2026-11-16', -99, 0), // new
+      feedId('2026-11-15', -99, 0), // fee-1, stored on the 15th
+      feedId('2026-11-15', -125000, 0), // pay-1, stored on the 15th
+      feedId('2026-11-15', -99, 1), // fee-2
+      feedId('2026-11-15', -99, 2), // fee-3
+    ])
+  })
+
+  it('without bank ids, keeps the occurrence pairing it had (the re-dated rows stay new)', () => {
+    const bare = reread.map((row) => ({ ...row, providerTransactionId: null }))
+    expect(reconcileStableExternalIds(bare, storedDay15)).toEqual([
+      feedId('2026-11-16', -99, 0),
+      feedId('2026-11-16', -99, 1),
+      feedId('2026-11-16', -125000, 0),
+      feedId('2026-11-15', -99, 0),
+      feedId('2026-11-15', -99, 1),
+    ])
+  })
+
+  it('pairs same-day rows by bank id before the occurrence index', () => {
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -99, 0, 'fee-2'), incomingRow('2026-11-15', -99, 1, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1'), storedRow('2026-11-15', -99, 1, 'fee-2')],
+    )).toEqual([feedId('2026-11-15', -99, 1), feedId('2026-11-15', -99, 0)])
+  })
+
+  it('never takes a stored row across days while a row of its own day could still be it', () => {
+    // A bank that hands its ids out by position: the stored fee comes back on
+    // its own day under a new id, and a new fee of the 16th takes the old id.
+    const ids = reconcileStableExternalIds(
+      [incomingRow('2026-11-16', -99, 0, 'id-1'), incomingRow('2026-11-15', -99, 0, 'id-2')],
+      [storedRow('2026-11-15', -99, 0, 'id-1')],
+    )
+    expect(ids).toEqual([feedId('2026-11-16', -99, 0), feedId('2026-11-15', -99, 0)])
+  })
+
+  it('leaves the row new when the read does not cover the stored row\'s day', () => {
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-16', -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-16', -99, 0)])
+  })
+
+  it('leaves the row new past BANK_REDATE_MAX_DAYS, when the text changed, or under another amount', () => {
+    const far = `2026-11-${String(15 + BANK_REDATE_MAX_DAYS + 1)}`
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -1, 0, 'other'), incomingRow(far, -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-15', -1, 0), feedId(far, -99, 0)])
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -1, 0, 'other'), incomingRow('2026-11-16', -99, 0, 'fee-1', 'Ränta')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-15', -1, 0), feedId('2026-11-16', -99, 0)])
+    expect(reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -1, 0, 'other'), incomingRow('2026-11-16', -98, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([feedId('2026-11-15', -1, 0), feedId('2026-11-16', -98, 0)])
+  })
+
+  it('trusts no bank id the read repeats or two stored rows share', () => {
+    const covering = incomingRow('2026-11-15', -1, 0, 'other')
+    expect(reconcileStableExternalIds(
+      [covering, incomingRow('2026-11-16', -99, 0, 'fee-1'), incomingRow('2026-11-16', -99, 1, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )).toEqual([covering.external_id, feedId('2026-11-16', -99, 0), feedId('2026-11-16', -99, 1)])
+    expect(reconcileStableExternalIds(
+      [covering, incomingRow('2026-11-16', -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1'), storedRow('2026-11-14', -99, 0, 'fee-1')],
+    )).toEqual([covering.external_id, feedId('2026-11-16', -99, 0)])
+  })
+
+  it('pairs only within one feed, one connection and one account scope', () => {
+    const covering = incomingRow('2026-11-15', -1, 0, 'other')
+    const stored = [storedRow('2026-11-15', -99, 0, 'fee-1')]
+    for (const over of [{ bankConnectionId: 'bc-2' }, { source: 'enable_banking' }, { source: 'csv_lunar' }]) {
+      expect(reconcileStableExternalIds([covering, incomingRow('2026-11-16', -99, 0, 'fee-1', 'Fee', over)], stored))
+        .toEqual([covering.external_id, feedId('2026-11-16', -99, 0)])
+    }
+    expect(reconcileStableExternalIds(
+      [covering, { ...incomingRow('2026-11-16', -99, 0, 'fee-1'), external_id: 'eb_SE99_2026-11-16_-99_0' }],
+      stored,
+    )).toEqual([covering.external_id, 'eb_SE99_2026-11-16_-99_0'])
+  })
+
+  it('keeps one row per entry when the stored day also gets a new look-alike', () => {
+    // fee-1 moved to the 16th and a fee with a bank id never seen lands on
+    // the 15th: from the ids alone it could be fee-1 under a new id. The move
+    // is refused; the 15th's row stands for the stored one by its index and
+    // the 16th's is stored: two rows for two entries, on the days the bank
+    // now states, and nothing swallowed.
+    const ids = reconcileStableExternalIds(
+      [incomingRow('2026-11-15', -99, 0, 'fee-9'), incomingRow('2026-11-16', -99, 0, 'fee-1')],
+      [storedRow('2026-11-15', -99, 0, 'fee-1')],
+    )
+    expect(ids).toEqual([feedId('2026-11-15', -99, 0), feedId('2026-11-16', -99, 0)])
+  })
+})
+
+describe('dropRepeatedBankRows (crm#1295)', () => {
+  type Row = { ptid?: string | null; date: string; amount: number | string; description: string }
+  const swish = (ptid: string | null, description = `Swish ${ptid}`, amount: number | string = 250): Row =>
+    ({ ptid, date: '2026-06-15', amount, description })
+  const drop = (rows: Row[]) => dropRepeatedBankRows(rows, (r) => ({
+    providerTransactionId: r.ptid, date: r.date, amount: r.amount, description: r.description,
+  }))
+
+  it('drops a bank entry the response served twice, keeping the first copy in place', () => {
+    const rows = [swish('P1'), swish('P2'), swish('P1'), swish('P3'), swish('P2')]
+    expect(drop(rows)).toEqual([rows[0], rows[1], rows[3]])
+  })
+
+  it('keeps two equal payments on the same day: different bank ids are different entries', () => {
+    const rows = [swish('P1', 'Swish'), swish('P2', 'Swish')]
+    expect(drop(rows)).toEqual(rows)
+  })
+
+  it('never drops rows without a bank id, however alike', () => {
+    const rows = [swish(null, 'Kaffe'), swish(null, 'Kaffe'), swish('', 'Kaffe'), swish('  ', 'Kaffe')]
+    expect(drop(rows)).toEqual(rows)
+  })
+
+  it('keeps rows that share a bank id but differ in date, amount or description', () => {
+    const rows: Row[] = [
+      swish('2026-06-15.0', 'ICA'),
+      { ...swish('2026-06-15.0', 'ICA'), date: '2026-06-16' },
+      swish('2026-06-15.0', 'ICA', 500),
+      swish('2026-06-15.0', 'Coop'),
+    ]
+    expect(drop(rows)).toEqual(rows)
+  })
+
+  it('compares amounts in öre, so a numeric string and a number are the same amount', () => {
+    expect(drop([swish('P1', 'Swish', 250), swish('P1', 'Swish', '250.00')])).toHaveLength(1)
+  })
+
+  // The crm#1295 sequence on a small scale. Fetch 1 pages unstably: it serves
+  // 4 and 3 twice and leaves out 7 and 6. Fetch 2 is complete. Each fetch is
+  // mapped the way the bank syncs map it, the first one is stored, and the
+  // second one is re-keyed against it the way ingest does.
+  describe('a repeating fetch followed by a complete one', () => {
+    const entry = (n: number): Row => swish(`P${n}`, `Swish ref-${n}`)
+    const fetch1 = [8, 5, 4, 3, 4, 3, 2, 1].map(entry)
+    const fetch2 = [8, 7, 6, 5, 4, 3, 2, 1].map(entry)
+    const idsOf = (rows: Row[]) => buildStableExternalIds('eb', 'SE00', rows.map((r) => ({ date: r.date, amount: r.amount })))
+    const secondSync = (dropRepeats: boolean) => {
+      const first = dropRepeats ? drop(fetch1) : fetch1
+      const stored = idsOf(first).map((externalId, i) => ({ externalId, desc: first[i].description }))
+      const second = dropRepeats ? drop(fetch2) : fetch2
+      const incoming = idsOf(second).map((external_id, i) => ({ external_id, description: second[i].description }))
+      return { stored, ids: reconcileStableExternalIds(incoming, stored) }
+    }
+
+    it('stores each entry once and imports both rows the first fetch left out', () => {
+      const { stored, ids } = secondSync(true)
+      expect(stored).toHaveLength(6)
+      const storedIds = new Set(stored.map((s) => s.externalId))
+      const storedIdOf = (n: number) => stored.find((s) => s.desc === `Swish ref-${n}`)!.externalId
+      // 7 and 6 (positions 1 and 2) are new: ids no stored row holds.
+      expect(storedIds.has(ids[1])).toBe(false)
+      expect(storedIds.has(ids[2])).toBe(false)
+      expect(ids[1]).not.toBe(ids[2])
+      // Every other row is re-keyed onto its own stored row: a Layer-1 duplicate.
+      for (const [position, n] of [[0, 8], [3, 5], [4, 4], [5, 3], [6, 2], [7, 1]]) {
+        expect(ids[position]).toBe(storedIdOf(n))
+      }
+    })
+
+    it('without the drop, a stored copy swallows a row the first fetch left out', () => {
+      const { stored, ids } = secondSync(false)
+      expect(stored).toHaveLength(8)
+      // Row 6 takes the id of the second copy of 4 and Layer 1 would skip it.
+      expect(new Set(stored.map((s) => s.externalId)).has(ids[2])).toBe(true)
+    })
+  })
+})
+
+describe('idsProveDistinctBookings (crm#1271)', () => {
+  const stripe = (external_id: string | null, over: Record<string, unknown> = {}) => ({
+    external_id,
+    import_source: 'stripe',
+    bank_connection_id: null,
+    ...over,
+  })
+
+  it('lists only feeds whose stored ids are the provider\'s own per-booking references', () => {
+    expect([...PROVIDER_BOOKING_ID_SOURCES]).toEqual(['stripe'])
+  })
+
+  it('proves two Stripe rows with different balance-transaction ids distinct', () => {
+    expect(idsProveDistinctBookings(
+      stripe('stripe_acct_A_txn_1_fee'),
+      stripe('stripe_acct_A_txn_2_fee'),
+    )).toBe(true)
+  })
+
+  it('does not prove anything for the same id', () => {
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe('stripe_acct_A_txn_1'))).toBe(false)
+  })
+
+  it('does not prove anything when either id is missing', () => {
+    expect(idsProveDistinctBookings(stripe(null), stripe('stripe_acct_A_txn_1'))).toBe(false)
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe(null))).toBe(false)
+    expect(idsProveDistinctBookings({}, stripe('stripe_acct_A_txn_1'))).toBe(false)
+  })
+
+  it('does not prove anything across two channels (Stripe vs a hand-entered or file row)', () => {
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe('x', { import_source: 'mcp' }))).toBe(false)
+    expect(idsProveDistinctBookings(stripe('stripe_acct_A_txn_1'), stripe('y', { import_source: 'csv_generic_csv' }))).toBe(false)
+  })
+
+  it('does not prove anything across two bank connections of the same feed', () => {
+    expect(idsProveDistinctBookings(
+      stripe('stripe_acct_A_txn_1', { bank_connection_id: 'bc-1' }),
+      stripe('stripe_acct_A_txn_2', { bank_connection_id: 'bc-2' }),
+    )).toBe(false)
+  })
+
+  it('never trusts derived ids: bank feeds and file imports dedup on content', () => {
+    // buildStableExternalIds' occurrence index and bank-file row hashes can
+    // change for the same booking, so two different values prove nothing.
+    expect(idsProveDistinctBookings(
+      { external_id: 'eb_SE00_2026-10-01_-443_0', import_source: 'enable_banking', bank_connection_id: 'bc-1' },
+      { external_id: 'eb_SE00_2026-10-01_-443_1', import_source: 'enable_banking', bank_connection_id: 'bc-1' },
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      { external_id: 'eb_SE00_2026-10-01_-443_0', import_source: 'open_payments', bank_connection_id: null },
+      { external_id: 'eb_SE00_2026-10-01_-443_1', import_source: 'open_payments', bank_connection_id: null },
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      { external_id: 'generic_csv_aaaa', import_source: 'csv_generic_csv' },
+      { external_id: 'generic_csv_bbbb', import_source: 'csv_generic_csv' },
+    )).toBe(false)
+  })
+})
+
+describe('idsProveDistinctBookings: bank feeds and bank files (crm#1312)', () => {
+  const feed = (external_id: string | null, over: Record<string, unknown> = {}) => ({
+    external_id,
+    import_source: 'enable_banking',
+    bank_connection_id: 'bc-1',
+    provider_transaction_id: null as string | null,
+    ...over,
+  })
+
+  it('lists the feeds whose ids carry the booking date', () => {
+    expect([...BOOKING_DATE_ID_SOURCES].sort()).toEqual(['enable_banking', 'open_payments'])
+  })
+
+  it('proves two rows of one feed booked on different days distinct (a second Swish batch of the same price)', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_3'),
+      feed('eb_SE00_2026-10-14_39500_3'),
+    )).toBe(true)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0', { import_source: 'open_payments' }),
+      feed('eb_SE00_2026-10-16_39500_0', { import_source: 'open_payments' }),
+    )).toBe(true)
+  })
+
+  it('proves two same-day rows of one amount distinct when both carry a bank id and the ids differ', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_140', { provider_transaction_id: 'ref-b' }),
+      feed('eb_SE00_2026-10-14_39500_2', { provider_transaction_id: 'ref-a' }),
+    )).toBe(true)
+  })
+
+  it('still calls a page the bank served twice a copy: same day, same bank id (crm#1295)', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_7', { provider_transaction_id: 'ref-a' }),
+      feed('eb_SE00_2026-10-14_39500_2', { provider_transaction_id: ' ref-a ' }),
+    )).toBe(false)
+  })
+
+  it('proves nothing for two rows under one bank id, whatever their dates (a re-dated entry, crm#2024)', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-11-15_-125000_0', { import_source: 'open_payments', provider_transaction_id: 'pay-1' }),
+      feed('eb_SE00_2026-11-16_-125000_0', { import_source: 'open_payments', provider_transaction_id: ' pay-1' }),
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-11-15_-125000_0', { import_source: 'open_payments', provider_transaction_id: 'pay-1' }),
+      feed('eb_SE00_2026-11-16_-125000_0', { import_source: 'open_payments', provider_transaction_id: 'pay-2' }),
+    )).toBe(true)
+  })
+
+  it('proves nothing for same-day rows of one amount without two bank ids', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_1', { provider_transaction_id: 'ref-a' }),
+      feed('eb_SE00_2026-10-14_39500_0'),
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_1', { provider_transaction_id: '' }),
+      feed('eb_SE00_2026-10-14_39500_0', { provider_transaction_id: 'ref-a' }),
+    )).toBe(false)
+  })
+
+  it('proves nothing across a reconnect, another account scope, another feed or an old id format', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_SE00_2026-10-14_39500_0', { bank_connection_id: 'bc-2' }),
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_SE99_2026-10-14_39500_0'),
+    )).toBe(false)
+    // Enable Banking and Open Payments share the 'eb' namespace: an account
+    // that moved between them is one account seen through two feeds.
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_SE00_2026-10-14_39500_0', { import_source: 'open_payments' }),
+    )).toBe(false)
+    // The pre-June-2026 scheme keyed on the bank's id: a re-sync under the
+    // new scheme stored the same movement again.
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_acct-uid_8c2f0d'),
+    )).toBe(false)
+  })
+
+  it('proves two rows of one uploaded bank file distinct, never two uploads', () => {
+    const file = (external_id: string, bank_file_import_id: string | null) => ({
+      external_id, import_source: 'csv_nordea_business', bank_connection_id: null, bank_file_import_id,
+    })
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', 'bfi-1'))).toBe(true)
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', 'bfi-2'))).toBe(false)
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', null))).toBe(false)
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_aaaa', 'bfi-1'))).toBe(false)
+  })
+})
+
+describe('bankFeedIbanOf (crm#1498)', () => {
+  it('reads the IBAN scope back from an id buildStableExternalIds built', () => {
+    const [id] = buildStableExternalIds('eb', 'SE4550000000058398257466', [{ date: '2026-10-01', amount: -399 }])
+    expect(bankFeedIbanOf(id)).toBe('SE4550000000058398257466')
+    const [credit] = buildStableExternalIds('eb', 'SE4550000000058398257466', [{ date: '2026-10-12', amount: 266.15 }])
+    expect(bankFeedIbanOf(credit)).toBe('SE4550000000058398257466')
+  })
+
+  it('answers null when the origin is unknown', () => {
+    // A provider-uid scope (account without an IBAN).
+    const [uidScoped] = buildStableExternalIds('eb', '484e1c7e-0b5f-4b47-ade4-4a868eefaf7d', [{ date: '2026-10-01', amount: 1 }])
+    expect(bankFeedIbanOf(uidScoped)).toBeNull()
+    // Bank files and other sources.
+    expect(bankFeedIbanOf('seb_2026-10-01_-39900_0')).toBeNull()
+    expect(bankFeedIbanOf('lansforsakringar_abc')).toBeNull()
+    expect(bankFeedIbanOf(null)).toBeNull()
+    expect(bankFeedIbanOf(undefined)).toBeNull()
   })
 })

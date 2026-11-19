@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { getVatEskdFile } from '@/lib/reports/filing-report-service'
 import type { VatPeriodType } from '@/types'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * Momsdeklaration eSKDUpload (v6.0) XML file for filing at skatteverket.se via
@@ -54,10 +51,8 @@ export const GET = withRouteContext(
     if (outcome.dryRun) return NextResponse.json({ error: 'unexpected preview' }, { status: 500 })
 
     const file = outcome.data
-    return new Response(new Uint8Array(file.bytes), {
-      headers: {
-        'Content-Type': file.contentType,
-        'Content-Disposition': contentDisposition('attachment', file.filename),
-      },
+    return fileResponse(new Uint8Array(file.bytes), {
+      filename: file.filename,
+      contentType: file.contentType,
     })
   }, { requireCompleteLedger: true })

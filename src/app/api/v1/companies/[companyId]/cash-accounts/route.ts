@@ -27,7 +27,7 @@ const CashAccount = z.object({
   iban: z.string().nullable(),
   is_primary: z.boolean(),
   enabled: z.boolean(),
-  source: z.enum(['enable_banking', 'manual', 'sie_import']),
+  source: z.enum(['enable_banking', 'open_payments', 'manual', 'sie_import']),
   balance: z.number().nullable(),
   available_balance: z.number().nullable(),
   balance_updated_at: z.string().nullable(),

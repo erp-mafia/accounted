@@ -27,6 +27,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -86,6 +87,8 @@ export interface AttachSettlementParams {
   journalEntryId: string
   notes?: string | null
   dryRun?: boolean
+  /** Why the pair is linked, on a door no person chose it on. Left out: a person named the pair. */
+  linkBasis?: ScopeFreeLinkBasis
 }
 
 export async function attachSupplierInvoiceSettlementVoucher(
@@ -99,6 +102,7 @@ export async function attachSupplierInvoiceSettlementVoucher(
     p_company_id: params.companyId,
     p_notes: params.notes ?? null,
     p_dry_run: params.dryRun ?? false,
+    ...(params.linkBasis ? { p_link_basis: params.linkBasis } : {}),
   })
 
   if (error) {

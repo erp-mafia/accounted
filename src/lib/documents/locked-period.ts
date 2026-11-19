@@ -9,16 +9,19 @@ const log = createLogger('documents/locked-period')
  * enforce_period_lock_documents (migration 20240101000017, never changed)
  * refuses every update of a document whose entry sits in a closed or locked
  * fiscal period, not only a change of the link. So two things never land on
- * such a row (prod 2026-09-26: 5 736 documents in 64 companies): the read
+ * such a row: the read
  * stamp after its pages were stored, and the type a person or the model set.
  * The pages and the classification are stored beside the row, so readers look
  * there, the way document_integrity_checks keeps the integrity stamp beside
  * the row for the same reason (20260901130000). The folder functions do the
- * same in SQL (arkiv_effective_doc_type), so a folder and its rows agree.
+ * same in SQL (arkiv_document_rows), so a folder and its rows agree.
  */
 
-/** The trigger's own words: the one refusal that is not an error for a read stamp or a type. */
-export const isPeriodLockRefusal = (message: string | null | undefined): boolean => !!message && message.includes('locked/closed fiscal period')
+/**
+ * The lock refusal: the one that is not an error for a read stamp or a type.
+ * Read from the database's own refusal table (lib/errors/get-structured-error.ts).
+ */
+export { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 
 export const isBookedRow = (d: { journal_entry_id?: string | null; journal_entry_line_id?: string | null }): boolean => !!(d.journal_entry_id || d.journal_entry_line_id)
 

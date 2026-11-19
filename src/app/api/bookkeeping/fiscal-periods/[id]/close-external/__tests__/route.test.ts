@@ -26,6 +26,8 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 }))
 
 import { markPeriodClosedExternally } from '@/lib/core/bookkeeping/period-service'
+import { codedRefusal } from '@/lib/errors/refusal'
+import { userFacing } from '@/lib/errors/user-facing'
 import { POST } from '../route'
 
 const mockMark = vi.mocked(markPeriodClosedExternally)
@@ -61,7 +63,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/close-external', () => {
   // The refusal answers a registry code in the canonical envelope (it used
   // to be a bare { error: string } 400 for every refusal).
   it('maps a service refusal to its registry code', async () => {
-    mockMark.mockRejectedValue(new Error('Period is already closed'))
+    mockMark.mockRejectedValue(codedRefusal('FISCAL_PERIOD_CLOSE_EXTERNAL_ALREADY_CLOSED', 'Period is already closed'))
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await POST(createMockRequest('/x', { method: 'POST', body: {} }), idParams)
     )
@@ -72,7 +74,10 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/close-external', () => {
 
   it('passes the Swedish unbooked-transactions sentence through', async () => {
     mockMark.mockRejectedValue(
-      new Error('Kan inte klarmarkera period: 2 banktransaktion(er) i perioden saknar bokföring (2 ej hanterade).')
+      userFacing(
+        new Error('Kan inte klarmarkera period: 2 banktransaktion(er) i perioden saknar bokföring (2 ej hanterade).'),
+        'PERIOD_HAS_UNBOOKED_TRANSACTIONS',
+      ),
     )
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await POST(createMockRequest('/x', { method: 'POST', body: {} }), idParams)

@@ -4,10 +4,12 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NOTICE_PRIORITY, type Notice } from './types'
 import {
   detectBackupFailing,
+  detectBankSwitchNotices,
   detectBrokenBankConnections,
   detectExpiringBankConnections,
   detectNoFiscalYear,
   detectOtherAccountHint,
+  detectPosConnectionAction,
   detectSkvDisconnected,
   detectSkvUnexplained,
 } from './categories'
@@ -51,19 +53,25 @@ export async function getCompanyNotices(
     Promise.all([
       detectNoFiscalYear(supabase, companyId),
       detectBrokenBankConnections(supabase, companyId),
+      // Both switch notices from one read of the campaign state.
+      detectBankSwitchNotices(supabase, companyId, now),
       // Service role: the refresh-token presence check reads a column end-user
       // roles cannot. userId and companyId are the authenticated caller's.
       detectSkvDisconnected(createServiceClient(), userId, companyId, now),
+      detectPosConnectionAction(supabase, companyId),
       detectBackupFailing(supabase, companyId),
       detectExpiringBankConnections(supabase, companyId, now),
       detectSkvUnexplained(supabase, companyId),
-      detectOtherAccountHint(supabase, companyId),
+      detectOtherAccountHint(supabase, companyId, userId),
     ]),
     fetchDismissedIds(supabase, companyId, userId),
   ])
 
   const byCategory = new Map(
-    candidates.filter((n): n is Notice => n !== null).map((n) => [n.category, n]),
+    candidates
+      .flat()
+      .filter((n): n is Notice => n !== null)
+      .map((n) => [n.category, n]),
   )
 
   // Stale = dismissed under a category (id prefix 'category:') that is

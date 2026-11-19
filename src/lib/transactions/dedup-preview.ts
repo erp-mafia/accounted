@@ -1,44 +1,108 @@
 /**
- * Read-only duplicate PREVIEW for the bank-file import wizard.
+ * Read-only preview of the ingest dedup decision: "which of these rows will
+ * ingest skip as already stored, and why?", answered BEFORE anything is
+ * written.
  *
- * Answers "which of these parsed rows will ingest skip as duplicates?" BEFORE
- * the user confirms the import, reusing the real execute-side machinery:
+ * It does not re-implement the decision. It runs the same preparation and the
+ * same per-row function the commit loop runs (`lib/transactions/ingest.ts`:
+ * buildExistingTransactionMaps, rekeyIncomingExternalIds,
+ * fetchStoredExternalIds, readBatchCashAccount, buildIngestDedupState,
+ * decideIngestRow), over the same rows in the same order. Given the same
+ * stored state, the same rows and the same options, the preview and the commit
+ * therefore agree row by row: Layer 1 (external_id), the content bridge with
+ * its account and currency guards, both mirrors, counting semantics and id
+ * re-keying.
  *
- * - Layer 1: exact `external_id` collisions, against ids prefetched with the
- *   same chunked `.in()` pattern `ingestTransactions` uses.
- * - Layer 2: the content bridge, against the SAME stored-row maps ingest
- *   builds (`buildExistingTransactionMaps`), matched with the same
- *   (date, öre) bucketing (`contentBucketKey`), the same prefix-containment
- *   (`descriptionsBridge`), the same currency guard, and the same COUNTING
- *   semantics (each stored twin is consumed once, so two identical incoming
- *   rows against one stored row flag exactly one).
+ * What a preview cannot know:
+ * - Rows another writer stores between the preview and the commit.
+ * - Anything the caller leaves out. The bank-file wizard asks before the user
+ *   has picked the settlement account, so unless the file's own account
+ *   already is a cash account (crm#1204, the wizard then sends that ledger)
+ *   its account guard runs with a null batch account and never rejects: a
+ *   same-(date, öre, description) row on a DIFFERENT bank account of the same
+ *   company is flagged there although execute inserts it once the account is
+ *   known. The wizard copy therefore never promises an exact final number.
  *
- * Deliberate differences from execute (both make the preview ADVISORY, never
- * authoritative; `ingestTransactions`' own result.duplicates remains the
- * truth):
- *
- * - No cross-channel / hand-entered mirrors: they need the batch settlement
- *   account and import source, neither of which is known at preview time.
- *   Skipping them can only UNDER-count (execute may skip more than previewed),
- *   which the UI copy accounts for by never promising an exact final number.
- * - No settlement account means the cash-account guard runs with a null batch
- *   account, i.e. it never rejects. A same-(date, öre, description) row on a
- *   DIFFERENT bank account of the same company is therefore flagged here even
- *   though execute could insert it once both accounts are known. Rare today
- *   (CSV rows store cash_account_id NULL for the default 1930) and safe: the
- *   warning is advisory.
- * - Nothing is written: no inserts, no hand-mirror adoption stamps.
+ * Nothing is written: no inserts, no account re-enable, no hand-mirror
+ * adoption stamps.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildExistingTransactionMaps, consumeByExternalId, type DescBucket } from '@/lib/transactions/ingest'
+import type { IngestSkipReason } from '@/types'
 import {
-  contentBucketKey,
-  descriptionsBridge,
-  normalizeImportedDescription,
-} from '@/lib/transactions/external-id'
+  buildExistingTransactionMaps,
+  buildIngestDedupState,
+  decideIngestRow,
+  fetchStoredExternalIds,
+  readBatchCashAccount,
+  rekeyIncomingExternalIds,
+  type DedupRow,
+} from '@/lib/transactions/ingest'
+import { normalizeImportedDescription } from '@/lib/transactions/external-id'
 
-/** Minimal per-row input: what the two dedup layers actually read. */
+/** The options of an ingest call that change which rows are skipped. */
+export interface IngestDedupPreviewOptions {
+  /** IngestOptions.settlementAccount: the ledger account the batch settles on. */
+  settlementAccount?: string
+  /** IngestOptions.stableExternalIds: the batch's ids identify bookings. */
+  stableExternalIds?: boolean
+}
+
+/** What the commit will do with one row, in input order. */
+export interface IngestDedupPreviewRow {
+  /** The external_id the caller sent. */
+  external_id: string
+  would_skip: boolean
+  skip_reason: IngestSkipReason | null
+  /** external_id of the stored row that stands for this one (null when not skipped). */
+  matched_external_id: string | null
+  /** id of that stored row. */
+  matched_transaction_id: string | null
+}
+
+/**
+ * Predict, row by row, what `ingestTransactions` will do with `rows` under
+ * the same options. One entry per input row, in input order.
+ */
+export async function previewIngestDedup(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: DedupRow[],
+  options?: IngestDedupPreviewOptions,
+): Promise<IngestDedupPreviewRow[]> {
+  if (rows.length === 0) return []
+
+  // The same stored-row universe, in the same read order, as the commit.
+  const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rows)
+  const rekeyed = rekeyIncomingExternalIds(rows, existingMaps, options?.stableExternalIds)
+  const storedExternalIds = await fetchStoredExternalIds(
+    supabase,
+    companyId,
+    rekeyed.map((row) => row.external_id),
+  )
+  const account = await readBatchCashAccount(supabase, companyId, options?.settlementAccount)
+  const state = buildIngestDedupState({
+    rows: rekeyed,
+    existingMaps,
+    storedExternalIds,
+    cashAccountId: account.cashAccountId,
+    physicalKeyById: account.physicalKeyById,
+    stableExternalIds: options?.stableExternalIds,
+  })
+
+  return rekeyed.map((row, index) => {
+    const decision = decideIngestRow(state, row, normalizeImportedDescription(row.description))
+    return {
+      external_id: rows[index].external_id,
+      would_skip: decision.skip,
+      skip_reason: decision.skip ? decision.reason : null,
+      matched_external_id: decision.skip ? decision.matchedExternalId : null,
+      matched_transaction_id: decision.skip ? decision.matchedTransactionId : null,
+    }
+  })
+}
+
+/** Minimal per-row input for the bank-file wizard's preview. */
 export interface PreviewTransaction {
   date: string
   amount: number
@@ -46,6 +110,12 @@ export interface PreviewTransaction {
   /** Must be derived EXACTLY like execute derives it (generateExternalId). */
   external_id: string
   currency?: string | null
+  /**
+   * Must be the import_source execute will stamp ('camt053' / 'csv_<format>').
+   * It identifies the batch's channel, which the cross-channel and
+   * hand-entered mirrors are gated on.
+   */
+  import_source?: string | null
 }
 
 export interface DuplicatePreviewResult {
@@ -55,95 +125,35 @@ export interface DuplicatePreviewResult {
   by_reason: {
     /** Exact `external_id` collision (Layer 1). */
     external_id: number
-    /** Content bridge: same (date, öre), bridging description (Layer 2). */
+    /** Content bridge: same (date, öre) and a bridging description or a mirror (Layer 2). */
     content_bridge: number
   }
 }
 
+/**
+ * The bank-file import wizard's duplicate preview: which parsed rows execute
+ * will skip. ADVISORY while the settlement account is not known (see the
+ * module note); `ingestTransactions`' own result stays the truth. The wizard
+ * passes the settlement account when the file's own account already is a
+ * cash account (crm#1204), and the preview then guards accounts as execute does.
+ */
 export async function previewDuplicates(
   supabase: SupabaseClient,
   companyId: string,
   raws: PreviewTransaction[],
+  options?: Pick<IngestDedupPreviewOptions, 'settlementAccount'>,
 ): Promise<DuplicatePreviewResult> {
   const result: DuplicatePreviewResult = {
     duplicate_row_indexes: [],
     duplicate_count: 0,
     by_reason: { external_id: 0, content_bridge: 0 },
   }
-  if (raws.length === 0) return result
-
-  // The same stored-row universe execute-side ingest dedups against.
-  const existingMaps = await buildExistingTransactionMaps(supabase, companyId, raws)
-
-  // Layer-1 prefetch: chunked to stay clear of URL length limits, same shape
-  // as ingestTransactions.
-  const existingExternalIds = new Set<string>()
-  const externalIds = raws.map((t) => t.external_id)
-  for (let i = 0; i < externalIds.length; i += 500) {
-    const chunk = externalIds.slice(i, i + 500)
-    const { data } = await supabase
-      .from('transactions')
-      .select('external_id')
-      .eq('company_id', companyId)
-      .in('external_id', chunk)
-    data?.forEach((r) => existingExternalIds.add(r.external_id))
-  }
-  // Reserve every stored row an incoming id names before the loop, as ingest does.
-  for (const raw of raws) {
-    if (existingExternalIds.has(raw.external_id)) consumeByExternalId(existingMaps, raw.external_id)
-  }
-
-  const flag = (index: number, reason: 'external_id' | 'content_bridge') => {
+  const rows = await previewIngestDedup(supabase, companyId, raws, options)
+  rows.forEach((row, index) => {
+    if (!row.would_skip) return
     result.duplicate_row_indexes.push(index)
     result.duplicate_count++
-    result.by_reason[reason]++
-  }
-
-  for (let index = 0; index < raws.length; index++) {
-    const raw = raws[index]
-
-    // Layer 1: exact id collision, identical to ingest's first check.
-    if (existingExternalIds.has(raw.external_id)) {
-      flag(index, 'external_id')
-      continue
-    }
-
-    // Layer 2: text bridge with counting semantics. Booked map first, then
-    // unbooked imports, mirroring ingest's consume order. LONGEST bridging
-    // description wins so a more-specific twin is consumed before a generic
-    // one, exactly like consumeBridgingTwin in ingest.ts.
-    const description = normalizeImportedDescription(raw.description)
-    const bucketKey = contentBucketKey(raw.date, raw.amount)
-    const rawCurrency = raw.currency ?? null
-    const consumeTextBridgeTwin = (bucket: DescBucket): boolean => {
-      const entries = bucket.get(bucketKey)
-      if (!entries || entries.length === 0) return false
-      let bestIdx = -1
-      let bestLen = -1
-      for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i]
-        // Currency guard, same null-tolerance as ingest: the bucket key
-        // carries no currency, so 250,00 SEK and 250,00 EUR on one date share
-        // a bucket; a known mismatch means two different movements.
-        const sameCurrency =
-          entry.currency === null || rawCurrency === null || entry.currency === rawCurrency
-        if (!sameCurrency) continue
-        if (descriptionsBridge(description, entry.desc) && entry.desc.length > bestLen) {
-          bestIdx = i
-          bestLen = entry.desc.length
-        }
-      }
-      if (bestIdx === -1) return false
-      entries.splice(bestIdx, 1)
-      return true
-    }
-    if (
-      consumeTextBridgeTwin(existingMaps.booked) ||
-      consumeTextBridgeTwin(existingMaps.unbookedImported)
-    ) {
-      flag(index, 'content_bridge')
-    }
-  }
-
+    result.by_reason[row.skip_reason === 'external_id_match' ? 'external_id' : 'content_bridge']++
+  })
   return result
 }

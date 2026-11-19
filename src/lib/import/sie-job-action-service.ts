@@ -1,29 +1,35 @@
 /**
  * Undo or resume a durable SIE import, as an operation outcome: the service
  * behind the v1 operations imports.sie.undo and imports.sie.resume
- * (lib/operations/imports.ts). The dashboard routes
- * (/api/import/sie/[id]/undo, /action, /replace) and the MCP tool
- * gnubok_undo_sie_import call requestSIEJobAction directly, which this
- * wraps, so every door runs the same RPCs.
+ * (lib/operations/imports.ts), whose undo is also the staged MCP tool
+ * gnubok_undo_sie_import. The dashboard routes (/api/import/sie/[id]/undo,
+ * /action, /replace) call requestSIEJobAction directly, which this wraps, so
+ * every door runs the same RPCs.
  *
  * Undo NEVER deletes a posted verifikat: request_sie_import_undo (migration
  * 20260911150200) queues a BATCH STORNO that the SIE worker carries out: every
  * entry the import posted gets a reversing entry and the originals stay in
  * the ledger (BFL 5 kap 5 §). The RPC refuses while another SIE run is
  * active, while a reversal of an imported voucher is already in progress,
- * while an imported voucher has a live correction, and when the period is
- * closed or locked. Owner/admin only.
+ * while an imported voucher has a live correction, and when a date a storno
+ * must carry is locked: a closed or locked fiscal year, or the company lock
+ * date (SIE_IMPORT_PERIOD_LOCKED, migration 20261005193558). Owner/admin only.
  *
  * Resume re-queues an interrupted (paused / failed-chunk) run from where it
- * stopped; allowed to the user who ran it and to owners/admins.
+ * stopped; allowed to the user who ran it and to owners/admins. Resuming an
+ * undo refuses the same locked range, so an undo that a lock date stopped
+ * continues once the user moves the lock date back.
  *
  * Both are asynchronous: the answer is the job with its new state, and the
  * worker (kicked right after the request, and by the worker cron) does the
- * ledger work. A dry run reads and checks; it never calls the RPC.
+ * ledger work. A dry run reads and checks; it never calls a mutating RPC
+ * (sie_undo_lock_refusal, the database's own lock answer, is read-only).
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { requestSIEJobAction } from './sie-jobs'
+import { userFacingCode } from '@/lib/errors/user-facing'
+import { readSIEUndoLockRefusal } from './sie-period-read'
 import type { SIEJob } from './sie-job-contract'
 
 export type SIEJobActionKind = 'undo' | 'resume'
@@ -48,6 +54,9 @@ interface JobRow {
   user_id: string
   execution_actor_id: string | null
   fiscal_period_id: string | null
+  filename: string | null
+  fiscal_year_start: string | null
+  fiscal_year_end: string | null
 }
 
 export async function requestSIEImportAction(
@@ -60,7 +69,7 @@ export async function requestSIEImportAction(
 
   const { data: found, error: lookupError } = await supabase
     .from('sie_imports')
-    .select('id, job_state, job_kind, job_phase, user_id, execution_actor_id, fiscal_period_id')
+    .select('id, job_state, job_kind, job_phase, user_id, execution_actor_id, fiscal_period_id, filename, fiscal_year_start, fiscal_year_end')
     .eq('company_id', companyId)
     .eq('id', importId)
     .maybeSingle()
@@ -93,8 +102,17 @@ export async function requestSIEImportAction(
     if (code === 'DB_PERMISSION_DENIED') {
       return { ok: false, code: 'FORBIDDEN', messageSv: ADMIN_MESSAGE, details: { required_roles: ['owner', 'admin'] } }
     }
+    // The database's own sentence: the locked range and what to unlock.
+    if (code === 'SIE_IMPORT_PERIOD_LOCKED') return { ok: false, code, messageSv: (err as Error).message }
     if (code === 'CONFLICT') {
       return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: (err as Error).message } }
+    }
+    // A live correction of an imported verifikat (PH 223): the same code as
+    // before, with the sentence that names the verifikat and what to do.
+    if (code === 'SIE_IMPORT_HAS_LIVE_CORRECTION') {
+      return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT',
+        ...(userFacingCode(err) ? { messageSv: (err as Error).message } : {}),
+        details: { reason: 'SIE undo requires review: an imported voucher has a live correction' } }
     }
     // A lock held by another writer (55P03): the same request succeeds on retry.
     if (code === 'TRANSIENT_ERROR') return { ok: false, code }
@@ -115,6 +133,24 @@ export async function requestSIEImportAction(
   }
 }
 
+/**
+ * The lock refusal the undo RPCs raise, asked read-only: a closed or locked
+ * fiscal year, or a company lock date on or after the first date a storno
+ * would carry. Null when nothing is locked.
+ */
+async function undoLockRefusal(
+  ctx: OperationContext,
+  importId: string,
+): Promise<Extract<OperationOutcome<SIEJobActionResult>, { ok: false }> | null> {
+  let refusal: string | null
+  try {
+    refusal = await readSIEUndoLockRefusal(ctx.supabase, ctx.companyId, importId)
+  } catch (error) {
+    return { ok: false, code: 'UNKNOWN_ERROR', error }
+  }
+  return refusal ? { ok: false, code: 'SIE_IMPORT_PERIOD_LOCKED', messageSv: refusal } : null
+}
+
 /** The RPC's refusals that reads can answer, then what would happen. */
 async function previewAction(
   ctx: OperationContext,
@@ -125,6 +161,11 @@ async function previewAction(
   const state = job.job_state!
 
   if (action === 'resume') {
+    // Resuming an undo writes stornos: the same locked range refuses it.
+    if (!TERMINAL.has(state) && job.job_kind === 'import' && job.job_phase === 'undo') {
+      const locked = await undoLockRefusal(ctx, job.id)
+      if (locked) return locked
+    }
     return {
       ok: true,
       dryRun: true,
@@ -141,8 +182,10 @@ async function previewAction(
   if (job.job_kind && job.job_kind !== 'import') {
     return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'A reviewed repair run is stopped through its own review action.' } }
   }
+  // Which file and year, for the approver of a staged undo.
+  const subject = { filename: job.filename, fiscal_year_start: job.fiscal_year_start, fiscal_year_end: job.fiscal_year_end }
   if (state === 'undone' || state === 'failed') {
-    return { ok: true, dryRun: true, preview: { import_id: job.id, action, current_state: state, would_change: false } }
+    return { ok: true, dryRun: true, preview: { import_id: job.id, ...subject, action, current_state: state, would_change: false } }
   }
 
   const { data: others, error: othersError } = await supabase
@@ -159,17 +202,20 @@ async function previewAction(
     return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'Another SIE execution must finish before undo.' } }
   }
 
+  const locked = await undoLockRefusal(ctx, job.id)
+  if (locked) return locked
+
   if (job.fiscal_period_id) {
     const { data: period, error: periodError } = await supabase
       .from('fiscal_periods')
-      .select('id, is_closed, locked_at, import_hold')
+      .select('id, import_hold')
       .eq('company_id', companyId)
       .eq('id', job.fiscal_period_id)
       .maybeSingle()
     if (periodError) return { ok: false, code: 'UNKNOWN_ERROR', error: periodError }
-    const p = period as { is_closed: boolean | null; locked_at: string | null; import_hold: string | null } | null
-    if (p && (p.is_closed || p.locked_at || (p.import_hold && p.import_hold !== job.id))) {
-      return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'The period is closed or locked, or has another execution.' } }
+    const p = period as { import_hold: string | null } | null
+    if (p?.import_hold && p.import_hold !== job.id) {
+      return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'The period has another execution.' } }
     }
   }
 
@@ -186,6 +232,7 @@ async function previewAction(
     dryRun: true,
     preview: {
       import_id: job.id,
+      ...subject,
       action,
       current_state: state,
       would_change: true,

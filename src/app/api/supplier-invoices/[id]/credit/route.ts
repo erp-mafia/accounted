@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
-
-ensureInitialized()
 
 /**
  * "Kreditera": credit a supplier invoice with a kreditfaktura. Rules live in

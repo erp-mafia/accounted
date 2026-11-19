@@ -32,6 +32,7 @@ export const TEMPLATE = {
   m3Linked: 'm3_linked',
   m4Ack: 'm4_ack',
   m4AckEmpty: 'm4_ack_empty',
+  m4AckUnread: 'm4_ack_unread',
   m4Duplicate: 'm4_duplicate',
   m5BurstAck: 'm5_burst_ack',
   m6CompanyQuestion: 'm6_company_question',
@@ -101,6 +102,11 @@ const SV = {
 
   m4AckEmpty: () =>
     '*Mottaget.* Inget belopp att läsa av, så jag läser dokumentet och lägger det där det hör hemma: kvitton i Underlag, annat i Arkiv.',
+
+  // The reading was skipped: nothing will fill the fields in, so say so
+  // instead of promising a reading or asking for the file again (crm#1779).
+  m4AckUnread: () =>
+    '*Mottaget.* Det ligger i Underlag men lästes inte av automatiskt, så fyll i belopp och datum i appen när du bokför det.',
 
   m4Duplicate: () => 'Det kvittot finns redan i Underlag.',
 
@@ -265,6 +271,9 @@ const EN: typeof SV = {
 
   m4AckEmpty: () =>
     '*Received.* No amount to read, so I am reading the document and filing it where it belongs: receipts under Underlag, the rest in Arkiv.',
+
+  m4AckUnread: () =>
+    '*Received.* It is in Underlag but was not read automatically, so fill in the amount and date in the app when you book it.',
 
   m4Duplicate: () => 'That receipt is already in Underlag.',
 

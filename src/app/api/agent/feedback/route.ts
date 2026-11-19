@@ -2,14 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
-
-// The event bus is a module-level singleton and extension handlers are wired
-// by this call. Without it at module level the emit below goes nowhere and the
-// vote is silently dropped, which is exactly the failure this route exists to
-// fix.
-ensureInitialized()
 
 // POST /api/agent/feedback
 //

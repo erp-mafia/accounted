@@ -1,15 +1,13 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import {
   runReconciliation,
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
 } from '@/lib/reconciliation/bank-reconciliation'
 import { runUnattendedReconciliationSweep } from '@/lib/reconciliation/unattended-sweep'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from '@/lib/reconciliation/cash-account-scope'
 import { validateBody } from '@/lib/api/validate'
 import { RunReconciliationSchema } from '@/lib/api/schemas'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'reconciliation.bank.run',
@@ -71,7 +69,7 @@ export const POST = withRouteContext(
       })
     }
 
-    const accountNumber = account_number ?? '1930'
+    const accountNumber = account_number ?? DEFAULT_SETTLEMENT_ACCOUNT
 
     // Defense-in-depth: reject a non-default account the company hasn't
     // registered as a cash account. The default '1930' is exempt: when no
@@ -86,7 +84,7 @@ export const POST = withRouteContext(
       .eq('ledger_account', accountNumber)
       .maybeSingle()
 
-    if (!cashAccount && accountNumber !== '1930') {
+    if (!cashAccount && accountNumber !== DEFAULT_SETTLEMENT_ACCOUNT) {
       return NextResponse.json(
         { error: 'Okänt kassakonto för det här företaget' },
         { status: 400 },

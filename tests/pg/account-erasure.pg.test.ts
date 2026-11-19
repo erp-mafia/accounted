@@ -32,13 +32,13 @@ const ERASED = new Set([
   // Identity
   'bankid_enrichment.user_id',
   'bankid_identities.user_id',
+  'payment_signers.user_id',
   'profiles.id',
   'whatsapp_link_codes.user_id',
   'whatsapp_phone_links.user_id',
   // Personal settings and per-user operational state
   'agent_rate_counters.user_id',
   'email_change_requests.user_id',
-  'extension_toggles.user_id',
   'idempotency_keys.user_id',
   'mcp_tasks.user_id',
   'notice_dismissals.user_id',
@@ -66,14 +66,76 @@ const RETAINED = new Set([
   // Bookkeeping, documents and their processing history
   'account_reconciliation_attachments.removed_by',
   'account_reconciliation_attachments.uploaded_by',
+  'account_reconciliation_settlements.settled_by',
+  'account_reconciliation_settlements.undone_by',
   'account_reconciliations.reopened_by',
   'account_reconciliations.signed_by',
   'accrual_schedule_installments.user_id',
   'accrual_schedules.user_id',
   'assets.user_id',
+  'asset_components.user_id', // Who registered a K3 component; the anläggningsregister is the company's.
+  'asset_value_adjustments.user_id', // Who posted a nedskrivning; räkenskapsinformation tied to its verifikat.
+  'deferred_tax_assessments.updated_by', // Who last edited the deferred tax inputs of a fiscal year (SET NULL on a hard delete).
+  'k3_transitions.created_by', // Who started the company's transition to K3 (SET NULL on a hard delete).
+  'finance_leases.user_id', // Who registered a finansiellt leasingavtal; part of the books (K3 kapitel 20), the company keeps it.
+  'budgets.user_id', // Who created a budget version; company planning data, the company keeps it.
+  'agreements.created_by', // Who registered an agreement by hand (Avtal och åtaganden); the company keeps the record.
+  'securities_and_contingencies.user_id', // Who registered a ställd säkerhet or eventualförpliktelse; underlag for the årsredovisning notes, the company keeps it.
+  'company_group_links.user_id', // Who registered a group link; underlag for the koncernförhållanden note, the company keeps it.
+  'inventory_counts.user_id', // Who made an inventeringslista (LIV 1955:257); räkenskapsinformation the company keeps.
   'bank_file_imports.user_id',
+  'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
+  'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.
+  'signing_requests.created_by', // Who sent a document for BankID signing; the company keeps the record with the signatures.
+  'share_register_events.created_by', // Who entered an aktiebok entry; the aktiebok is kept 10 years after dissolution (ABL 5:3).
+  'company_roles.created_by', // Who registered a role; the company keeps the roles over time.
+  'company_signatory_rules.created_by', // Who registered the firmateckning; the company keeps it over time.
+  'beneficial_owner_assessments.assessed_by', // Who made the LRVH 2:1 assessment; kept five years after a change.
+  'dividends.created_by', // Who recorded a dividend decision; part of the books (the verifikat it posted), the company keeps it.
+  'shareholder_contributions.created_by', // Who registered an aktieägartillskott; part of the books, the company keeps it.
+  'capital_changes.created_by', // Who recorded a change of aktiekapital; the company keeps it with its registration.
+  'ku31_filings.famansforetag_confirmed_by', // Who confirmed the fåmansföretag answer a KU31 filing rests on; the company keeps the record.
+  'ku31_filings.last_generated_by', // Who last made the KU31 file; the company keeps the record of its filing.
+  'k10_owner_inputs.updated_by', // Who last entered an owner's K10 figures; the company keeps the record behind the underlag.
+  'owner_loans.created_by', // Who registered an owner loan; the company keeps the register (the ABL 21:10 list ten years).
+  'owner_loan_interest.updated_by', // Who entered a year's interest on an owner loan; the company keeps the record KU20 rests on.
+  'corporate_meetings.created_by', // Who recorded a meeting; the minutes are kept (ABL 7:49, 8:26 "betryggande sätt").
+  'corporate_decisions.created_by', // Who recorded a decision in the minutes; kept with them.
+  'signing_request_signers.user_id', // The member asked to sign; a signature is evidence the company keeps.
+  'company_attest_policies.updated_by', // Who last changed the attest policy; the company keeps the record.
+  'company_attest_limits.user_id', // The attester a limit is for; company configuration, a departed member stops counting.
+  'company_attest_limits.updated_by', // Who last changed an attest limit; the company keeps the record.
+  'company_attest_substitutes.user_id', // The attester a substitute stands in for; company configuration, a departed member stops counting.
+  'company_attest_substitutes.substitute_user_id', // Who stands in; a departed member's attest stops counting.
+  'company_attest_substitutes.created_by', // Who named the substitute; the company keeps the record.
+  'company_capability_config.decided_by', // Who approved a package switch (a processing-rule change); the company keeps the record.
+  'legal_acceptances.user_id', // Which document version a person accepted and when: the evidence of the agreement outlives the account.
+  'company_grants.accepted_by', // Who accepted a rule for automatic booking (a dated processing rule); the company keeps the record.
+  'company_grants.revoked_by', // Who revoked or superseded that rule; the company keeps the record.
+  'company_grant_uses.reviewed_by', // Who reviewed a posting a rule let through; the company keeps the record.
+  'company_grant_settings.decided_by', // Who paused or resumed the company's rules; the company keeps the record.
+  'booking_review_rules.created_by', // Who set a booking review rule (a dated processing rule); the company keeps the record.
+  'booking_review_rules.revoked_by', // Who archived or superseded that rule; the company keeps the record.
+  'booking_review_stamps.reviewed_by', // Who reviewed and booked a verifikat a booking review rule matched; the company keeps the record.
+  'supplier_invoice_attestations.user_id', // Who attested or rejected a supplier invoice; the company keeps the record.
+  'supplier_invoice_attestations.on_behalf_of', // The attester a substitute decided for; the company keeps the record.
+  'supplier_invoice_attest_links.attester_user_id', // The attester an attest link speaks for; the link refuses anyone no longer a member.
+  'supplier_invoice_attest_batches.attester_user_id', // The attester a batched attest link speaks for; the link refuses anyone no longer a member.
+  'supplier_invoices.approved_by', // Who gave the attest; the company keeps the record.
+  'company_payment_verifications.started_by', // Who created the payment provider's verification form link; the company keeps the record.
+  'supplier_payee_confirmations.decided_by', // Who confirmed or rejected a supplier account; the company keeps the payment control record.
+  'vat_check_reviews.actor', // Who accepted or withdrew a VAT warning for a period; the company keeps the review record.
+  'vat_momsredovisning_marks.actor', // Who marked a verifikat as a correction, not a momsredovisning, or withdrew it; it decides what the declaration read, the company keeps it.
+  'cash_forecast_rows.created_by', // Who added a row to the liquidity forecast; company planning data, the company keeps it.
+  'company_portals.created_by', // Who added a supplier portal link; company configuration, the company keeps it.
+  'bank_payment_allowance_requests.requested_by', // Who asked for more included bank payments a month; the company keeps the request.
+  'company_bank_payment_allowances.granted_by', // The operator who set a company's monthly bank payment allowance; the company keeps the record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
+  'contract_revenue_contracts.user_id',
+  'contract_revenue_settings.user_id',
+  'forenklat_arsbokslut_inputs.eligibility_confirmed_by', // Who confirmed the förening may close with a förenklat årsbokslut; the company keeps the record.
+  'forenklat_arsbokslut_inputs.updated_by',
   'chart_of_accounts.user_id',
   'depreciation_schedules.user_id',
   'document_attachments.uploaded_by',
@@ -85,6 +147,8 @@ const RETAINED = new Set([
   'arkiv_findings.resolved_by_user_id', // Who closed a lint finding.
   'event_log.user_id',
   'fiscal_period_tax_adjustments.user_id',
+  'ink3_underlag_inputs.updated_by', // Who last saved a förening's INK3 inputs; the company keeps the record.
+  'tax_loss_carryforwards.updated_by', // Who last saved a year of the underskottsregister; the company keeps the record.
   'fiscal_periods.user_id',
   'journal_entries.user_id',
   'journal_entry_no_doc_required.user_id',
@@ -96,6 +160,7 @@ const RETAINED = new Set([
   'sie_imports.user_id',
   'sie_imports.execution_actor_id',
   'migration_jobs.user_id', // Company import provenance and recovery.
+  'migration_jobs.review_accepted_by', // Who accepted an import with records left for review.
   'register_import_runs.user_id', // Who ran a customer/supplier/article import.
   'register_import_runs.undone_by', // Who undid it.
   'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.
@@ -104,6 +169,7 @@ const RETAINED = new Set([
   'sie_import_chunks.user_id', // Import provenance and resumable accounting work.
   'sie_duplicate_repair_items.user_id', // Reviewed corrections and their immutable receipts.
   'skattekonto_file_imports.user_id',
+  'suggestion_log.resolved_by', // Who decided on a booking suggestion.
   'transaction_voucher_links.user_id',
   'transactions.user_id',
   'voucher_gap_explanations.user_id',
@@ -116,6 +182,13 @@ const RETAINED = new Set([
   'invoice_payments.user_id',
   'invoice_reminders.user_id',
   'invoices.user_id',
+  'payment_order_batches.signer_user_id',
+  'payment_order_batches.user_id',
+  'payment_order_events.actor_user_id',
+  'payment_orders.approved_by',
+  'payment_orders.cancelled_by',
+  'payment_orders.submitted_by',
+  'payment_orders.user_id',
   'peppol_access.requested_by',
   'peppol_deliveries.user_id',
   'peppol_registrations.user_id',
@@ -127,6 +200,7 @@ const RETAINED = new Set([
   'supplier_payment_batches.cancelled_by',
   'supplier_payment_batches.user_id',
   'suppliers.user_id',
+  'pos_sales_days.booked_by',
   'webshop_orders.manually_booked_by',
   'webshop_orders.user_id',
   // Payroll, expenses and filings
@@ -154,6 +228,7 @@ const RETAINED = new Set([
   'annual_report_validation_runs.user_id',
   'annual_report_versions.finalized_by',
   'annual_report_versions.user_id',
+  'fiscal_period_frameworks.user_id', // Who chose a räkenskapsår's K2/K3 framework (a change of accounting principle); the company keeps the record.
   'arsredovisning_narratives.user_id',
   'arsredovisning_signature_requests.evidence_recorded_by',
   'arsredovisning_signature_requests.user_id',
@@ -166,6 +241,17 @@ const RETAINED = new Set([
   'company_skills.created_by',
   'community_feedback.user_id', // An upvote on a shared item: one count among others, no personal content.
   'api_keys.sod_acknowledged_by',
+  // Who sponsored, created and revoked a company's service account: the
+  // behandlingshistorik names them for every write the account made. An
+  // erased sponsor is no longer a member, so the account is suspended.
+  'service_accounts.created_by',
+  'service_accounts.revoked_by',
+  'service_accounts.sponsor_user_id',
+  // Who an agent acted for and who last paused it: attribution of every write
+  // its keys made names the sponsor. Erasure deletes the keys themselves, so
+  // an erased sponsor's agents can no longer act.
+  'agent_identities.paused_by',
+  'agent_identities.sponsor_user_id',
   'booking_template_hidden.hidden_by',
   'booking_template_library.created_by',
   'brand_signup_allowlist.created_by',
@@ -174,7 +260,6 @@ const RETAINED = new Set([
   'company_invitations.invited_by',
   'company_members.invited_by',
   'company_settings.user_id',
-  'cost_centers.user_id',
   'counterparty_aliases.user_id',
   'deadlines.user_id',
   'extension_data.user_id',
@@ -183,10 +268,65 @@ const RETAINED = new Set([
   'party_decisions.user_id',
   'party_facts.user_id',
   'party_identities.user_id',
-  'projects.user_id',
   'team_invitations.invited_by',
   'teams.created_by',
+  // Collections connection: who consented to the provider's terms, accepted
+  // them, chose the reminder batch, ended it or last changed its rules. The
+  // company's record of its agreement with the provider and of its posting
+  // rules (behandlingshistorik).
+  'collection_connection_events.actor_user_id',
+  'collection_connections.consented_by',
+  'collection_connections.ended_by',
+  'collection_connections.ladder_enabled_by',
+  'collection_connections.terms_accepted_by',
+  'collection_connections.user_id',
+  // Digital mailboxes (Kivra, Billo): who connected the company's mailbox,
+  // who made the company a sender and who sent each invoice to a mailbox.
+  // The company's record of its own mail and of how an invoice reached the
+  // customer.
+  'digital_mailbox_connections.receive_connected_by',
+  'digital_mailbox_connections.send_activated_by',
+  'digital_mailbox_dispatches.sent_by',
+  // Priced usage: who asked for use above what is included, who opened its
+  // charge and who turned it off. The company's record of what it pays for.
+  'usage_consents.accepted_by',
+  'usage_consents.revoked_by',
+  'usage_requests.requested_by',
+  // Autogiro: who wrote each file for Bankgirot or read each report. The
+  // company's record of which debits it asked its bank for, and on whose word.
+  'autogiro_files.created_by',
+  // Collection cases: who handed the invoice over and who decided each step
+  // (pause, withdraw, approve). The company's record of what it demanded of
+  // its customer and on whose word.
+  'collection_case_events.actor_user_id',
+  'collection_cases.opened_by',
+  // Payment forwards: who marked a failed or partly ignored report to the
+  // provider as handled. The company's record of who closed that question.
+  'collection_payment_forwards.attention_resolved_by',
+  // Bank sweep: who said a bank row that may have paid an invoice under
+  // collection pays something else. The company's record of why the case
+  // went on.
+  'collection_sweep_hits.resolved_by',
+  // Collected payments and payouts: who booked each, and who chose the
+  // account for a payout line the ledger could not place. The company's
+  // record of who decided a posting.
+  'collection_collected_payments.booked_by',
+  'collection_settlement_lines.account_chosen_by',
+  'collection_settlements.booked_by',
+  // ...and who confirmed a payout is not a duplicate of a voucher booked by
+  // hand, or marked it handled elsewhere: the company's record of why a
+  // payout was booked or left out.
+  'collection_settlements.duplicate_cleared_by',
+  'collection_settlements.ignored_by',
+  // Kundförlust: who decided that a claim is doubtful, lost or recovered.
+  // The company's record of why a receivable left its books (BFL 5 kap 6 §).
+  'invoice_write_offs.decided_by',
+  // Kvittning: who set a customer invoice off against a supplier invoice.
+  // The company's record of why both invoices were settled (BFL 5 kap 7 §).
+  'counterparty_setoffs.user_id',
   // Company integrations: the company's accounts, not the person's
+  'pos_connections.created_by',
+  'pos_connections.ended_by',
   'shopify_connections.user_id',
   'skatteverket_company_connections.created_by',
   'stripe_connections.user_id',
@@ -206,7 +346,6 @@ const DELETED_FOR_USER = [
   'chat_sessions',
   'company_members',
   'email_change_requests',
-  'extension_toggles',
   'idempotency_keys',
   'mcp_tasks',
   'notice_dismissals',
@@ -408,10 +547,6 @@ describe('account erasure (pg)', () => {
         companyId,
         userId,
       ])
-      await client.query(
-        `INSERT INTO public.extension_toggles (user_id, sector_slug, extension_slug) VALUES ($1, 'general', 'tic')`,
-        [userId],
-      )
       await client.query(`INSERT INTO public.sandbox_seed_attempts (user_id, status) VALUES ($1, 'complete')`, [
         userId,
       ])
@@ -526,6 +661,61 @@ describe('account erasure (pg)', () => {
       expect(again[0]!.status).toBe('revoked')
     })
   })
+  it('erases the PSU-IDs kept for the person\'s connections and signings, and keeps everyone else\'s', async () => {
+    // bank_connection_psus and payment_batch_psus have no key to auth.users:
+    // their rows go with their connection or signing (ON DELETE CASCADE), and
+    // erasure deletes those of the connections the person owns and of the
+    // signings they submitted or signed (the connections are revoked anyway).
+    const userId = await insertAuthUser()
+    const otherId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: otherId, name: 'PSU Erasure AB' })
+    await insertCompanyMember({ companyId, userId: otherId, role: 'owner' })
+    await insertCompanyMember({ companyId, userId, role: 'member' })
+
+    await withUserContext(userId, async (client) => {
+      await client.query('RESET ROLE')
+      const connection = async (owner: string) => {
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO public.bank_connections (user_id, company_id, provider, status, session_id)
+           VALUES ($1, $2, 'seb-se', 'active', $3) RETURNING id`,
+          [owner, companyId, randomUUID()],
+        )
+        await client.query(
+          `INSERT INTO public.bank_connection_psus (connection_id, company_id, psu_id_enc, source) VALUES ($1, $2, '\\xc0ffee', 'typed')`,
+          [rows[0]!.id, companyId],
+        )
+        return rows[0]!.id
+      }
+      const signing = async (submittedBy: string, signedBy: string | null) => {
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO public.payment_order_batches (company_id, user_id, signer_user_id, provider, signing_target, order_count, total_amount, currency)
+           VALUES ($1, $2, $3, 'open_payments', 'payment', 1, 1000, 'SEK') RETURNING id`,
+          [companyId, submittedBy, signedBy],
+        )
+        await client.query(`INSERT INTO public.payment_batch_psus (batch_id, company_id, psu_id_enc) VALUES ($1, $2, '\\xc0ffee')`, [rows[0]!.id, companyId])
+        return rows[0]!.id
+      }
+      const own = await connection(userId)
+      const others = await connection(otherId)
+      const submitted = await signing(userId, null)
+      const signed = await signing(otherId, userId)
+      const unrelated = await signing(otherId, otherId)
+
+      await client.query('SELECT public.erase_user_personal_data($1)', [userId])
+
+      const left = async (table: string, key: string, id: string) =>
+        (await client.query<{ n: number }>(`SELECT count(*)::int AS n FROM public.${table} WHERE ${key} = $1`, [id])).rows[0]!.n
+      expect(await left('bank_connection_psus', 'connection_id', own)).toBe(0)
+      expect(await left('bank_connection_psus', 'connection_id', others)).toBe(1)
+      expect(await left('payment_batch_psus', 'batch_id', submitted)).toBe(0)
+      expect(await left('payment_batch_psus', 'batch_id', signed)).toBe(0)
+      expect(await left('payment_batch_psus', 'batch_id', unrelated)).toBe(1)
+      // The connection and the signings themselves stay: the company's records.
+      expect(await left('bank_connections', 'id', own)).toBe(1)
+      expect(await left('payment_order_batches', 'id', submitted)).toBe(1)
+    })
+  })
+
   it('revokes a bank consent in a migration-reset source company and keeps the archive otherwise immutable', async () => {
     const userId = await insertAuthUser()
     const sourceCompanyId = await insertCompany({ createdBy: userId, name: 'Reset Source AB' })

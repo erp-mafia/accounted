@@ -1,6 +1,6 @@
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { vatTreatmentForRegistration } from '@/lib/bookkeeping/vat-registration'
-import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { getVatTreatmentForRate } from '@/lib/bookkeeping/invoice-line-vat-treatment'
 import { roundOre } from '@/lib/money'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 
@@ -145,6 +145,14 @@ export interface TransactionUnderlag {
   document: { id: string; file_name: string | null; mime_type: string | null } | null
   inbox_item_id: string | null
   facts: UnderlagFacts | null
+  /**
+   * The bank row itself, for a reader that holds only its id: the review of a
+   * samlingsverifikat names its rows by id and states each one beside its
+   * file (crm#1977). `text` is the counterparty the bank named, else the
+   * row's title. The route always answers it; an answer written into the
+   * cache ahead of the route's own (review-underlag.ts) has none.
+   */
+  row?: { date: string | null; text: string | null; amount: number | null; currency: string }
 }
 
 /**

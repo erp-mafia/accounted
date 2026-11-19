@@ -20,6 +20,10 @@ describe('isPaymentConfirmationEligible', () => {
     ).toBe(false)
   })
 
+  it('refuses a credit note an import left paid without a link', () => {
+    expect(isPaymentConfirmationEligible(makeInvoice({ status: 'paid', total: -500 }))).toBe(false)
+  })
+
   it.each(['proforma', 'delivery_note'] as const)('refuses document type %s', (document_type) => {
     expect(isPaymentConfirmationEligible(makeInvoice({ status: 'paid', document_type }))).toBe(false)
   })

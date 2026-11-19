@@ -10,7 +10,7 @@ export interface ResolvedAccount {
  *
  * Resolution order:
  * 1. cash_account_id is set → return that cash account's ledger_account.
- * 2. Exactly one enabled account for the transaction currency → return it.
+ * 2. Exactly one enabled bank account (not a card) for the transaction currency → return it.
  * 3. Give up → return '1930' with fallback=true.
  */
 export function resolveAccount(
@@ -25,7 +25,9 @@ export function resolveAccount(
     if (bound) return { account: bound.ledger_account, fallback: false }
     return { account: '1930', fallback: true }
   }
-  const sameCurrency = cashAccounts.filter((a) => a.enabled && a.currency === currency)
+  // Banks only, as resolveSettlementAccount: a company card never claims an
+  // unbound row, and never makes the only bank account ambiguous.
+  const sameCurrency = cashAccounts.filter((a) => a.enabled && (a.kind ?? 'bank') === 'bank' && a.currency === currency)
   if (sameCurrency.length === 1) return { account: sameCurrency[0].ledger_account, fallback: false }
   return { account: '1930', fallback: true }
 }

@@ -483,7 +483,8 @@ describe('undo_register_import (pg)', () => {
   it('links a restored org number back to its own party', async () => {
     const { userId, companyId } = await seedCompany()
     const { rows: created } = await getPool().query<{ id: string; party_id: string }>(
-      `INSERT INTO public.customers (company_id, user_id, name, org_number) VALUES ($1, $2, 'Kund AB', '5564300142')
+      `INSERT INTO public.customers (company_id, user_id, name, customer_type, org_number)
+       VALUES ($1, $2, 'Kund AB', 'swedish_business', '5564300142')
        RETURNING id, party_id`,
       [companyId, userId],
     )

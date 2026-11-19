@@ -11,7 +11,12 @@ import {
   buildInvoiceWriteData,
   type InvoiceWriteInput,
 } from '@/lib/invoices/build-invoice-write'
-import { EU_GOODS_SUPPLY_NOTICE, EXPORT_NOTICE_SV, type InvoiceVatOverride } from '@/lib/invoices/vat-rules'
+import {
+  DOMESTIC_REVERSE_CHARGE_NOTICE,
+  EU_GOODS_SUPPLY_NOTICE,
+  EXPORT_NOTICE_SV,
+  type InvoiceVatOverride,
+} from '@/lib/invoices/vat-rules'
 import type { Customer, InvoiceDocumentType } from '@/types'
 
 const header = {
@@ -216,6 +221,103 @@ describe('buildInvoiceWriteData: per-invoice VAT treatment', () => {
     it('re-validates a kept statement: lines at 25 % cannot stay on a goods export', async () => {
       const result = await build(swedishBuyer, { items: [{ ...goodsLine, vat_rate: 25 }] }, { existingVatOverride: storedExport })
       expect(result).toMatchObject({ ok: false, code: 'INVOICE_CREATE_VAT_RULE_VIOLATION' })
+    })
+  })
+})
+
+describe('buildInvoiceWriteData: domestic reverse charge for construction services (crm#1007)', () => {
+  const workLine = { description: 'Snickeriarbete, kök', quantity: 10, unit: 'tim', unit_price: 1000 }
+
+  it('a Swedish buyer with a VAT number: 0 % lines, ruta 41, the notice, stored statement', async () => {
+    const result = await build(swedishBuyer, {
+      vat_treatment: 'reverse_charge_domestic',
+      items: [{ ...workLine }],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields).toMatchObject({
+      vat_treatment: 'reverse_charge_domestic',
+      vat_rate: 0,
+      moms_ruta: '41',
+      reverse_charge_text: DOMESTIC_REVERSE_CHARGE_NOTICE,
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      vat_treatment_override: 'reverse_charge_domestic',
+      delivery_country: null,
+    })
+    // A line without vat_rate takes the treatment's 0 %, never the customer's 25 %.
+    expect(result.items[0]).toMatchObject({ vat_rate: 0, vat_amount: 0 })
+    expect(result.warnings).toEqual([])
+  })
+
+  it('refuses a Swedish rate on the invoice: the buyer accounts for all of the VAT', async () => {
+    const result = await build(swedishBuyer, {
+      vat_treatment: 'reverse_charge_domestic',
+      items: [{ ...workLine, vat_rate: 25 }],
+    })
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_CREATE_VAT_RULE_VIOLATION',
+      details: { attemptedRate: 25, allowedRates: [0] },
+    })
+  })
+
+  it('refuses a buyer without a Swedish VAT number, and a private person', async () => {
+    const noVatNumber = makeCustomer({ customer_type: 'swedish_business', country: 'SE', vat_number: null })
+    await expect(
+      build(noVatNumber, { vat_treatment: 'reverse_charge_domestic', items: [{ ...workLine }] }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED',
+      details: { reason: 'missing' },
+    })
+    const consumer = makeCustomer({ customer_type: 'individual', country: 'SE', vat_number: null })
+    await expect(
+      build(consumer, { vat_treatment: 'reverse_charge_domestic', items: [{ ...workLine }] }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'INVOICE_VAT_TREATMENT_DOMESTIC_BUYER_REQUIRED',
+      details: { reason: 'private_person' },
+    })
+  })
+
+  it('refuses it for a seller outside the VAT register', async () => {
+    const result = await build(
+      swedishBuyer,
+      { vat_treatment: 'reverse_charge_domestic', items: [{ ...workLine }] },
+      { vatRegistered: false },
+    )
+    expect(result).toMatchObject({ ok: false, code: 'INVOICE_VAT_TREATMENT_NOT_VAT_REGISTERED' })
+  })
+
+  it('refuses periodisering (ruta 41 must carry the full sale in its period)', async () => {
+    const result = await build(swedishBuyer, {
+      vat_treatment: 'reverse_charge_domestic',
+      items: [{ ...workLine, vat_rate: 0, accrual_period_start: '2026-10-01', accrual_period_end: '2027-03-31' }],
+    })
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_CREATE_ACCRUAL_INVALID',
+      details: { reason: 'vat_treatment', vatTreatment: 'reverse_charge_domestic' },
+    })
+  })
+
+  it('a draft edit that does not mention it keeps it; null clears it back to Swedish VAT', async () => {
+    const stored: InvoiceVatOverride = { vat_treatment: 'reverse_charge_domestic', delivery_country: null }
+    const kept = await build(swedishBuyer, { items: [{ ...workLine }] }, { existingVatOverride: stored })
+    expect(kept).toMatchObject({
+      ok: true,
+      invoiceFields: { vat_treatment: 'reverse_charge_domestic', moms_ruta: '41', vat_treatment_override: 'reverse_charge_domestic' },
+    })
+    const cleared = await build(
+      swedishBuyer,
+      { vat_treatment: null, items: [{ ...workLine, vat_rate: 25 }] },
+      { existingVatOverride: stored },
+    )
+    expect(cleared).toMatchObject({
+      ok: true,
+      invoiceFields: { vat_treatment: 'standard_25', moms_ruta: '05', reverse_charge_text: null, vat_treatment_override: null },
     })
   })
 })

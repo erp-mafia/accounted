@@ -8,10 +8,11 @@
  *
  *   1. byrå team membership (teams.kind = 'byra')
  *   2. client companies (companies.team_id = byrå team)
- *   3. display names/org numbers (company_settings)
+ *   3. display names/org numbers (company_settings) and the byrå's own
+ *      customer numbers (companies.byra_client_number)
  *   4. unbooked transactions (canonical lib/worklist book_transaction predicate)
- *   5. unconsumed inbox documents (lib/worklist inbox_document predicate,
- *      including the document_attachments backstop)
+ *   5. the documents of the open inbox items (lib/documents/inbox-item-state.ts), as the
+ *      worklist counts them
  *   6. open deadlines (status-engine semantics)
  *   7. latest posted verifikat per company (embedded order+limit, one query)
  *
@@ -22,9 +23,17 @@
  */
 
 import { chunk as chunked } from '@/lib/utils'
+import { effectiveOrgNumber } from '@/lib/company/org-number'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { INBOX_ITEM_DOCUMENT_HOLD, isOpenInboxItem, whereInboxItemOpen, withDocumentHold, type DocumentHoldRow } from '@/lib/documents/inbox-item-state'
+import { createLogger } from '@/lib/logger'
+import { switchCampaign, switchStatesForCompanies } from '@/lib/bank-feed/switch-campaign'
+import { loadAttestQueues } from '@/lib/supplier-invoices/attest-queues'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
 import {
+  clientBankSwitchFrom,
   countByCompany,
   groupDeadlinesByCompany,
   pickNextDeadlines,
@@ -54,10 +63,24 @@ export interface OverviewRowsOptions {
    * exactly what it was; the portfolio deadline-kind filter needs it.
    */
   includeDeadlines?: boolean
+  /**
+   * Also return each row's state in the bank connection switch campaign
+   * (`bankSwitch`), when the campaign is on. The byrå cockpit asks for it;
+   * the portfolio reads keep their payload.
+   */
+  includeBankSwitch?: boolean
+  /**
+   * Also return each row's attest queues (`attest`): waiting for the
+   * client's attest and ready to pay. The byrå client list asks for it; the
+   * portfolio reads and the byrå home keep their payload.
+   */
+  includeAttest?: boolean
 }
 
 /** Max ids per PostgREST .in() filter (mirrors lib/worklist IN_CLAUSE_CHUNK). */
 const IN_CLAUSE_CHUNK = 150
+
+const log = createLogger('clients/fetch-client-overview')
 
 interface ByraMembershipRow {
   team_id: string
@@ -100,6 +123,7 @@ export async function getByraMembership(
 export async function fetchClientOverview(
   supabase: SupabaseClient,
   userId: string,
+  options: Pick<OverviewRowsOptions, 'includeAttest'> = {},
 ): Promise<ClientOverview | null> {
   const membership = await getByraMembership(supabase, userId)
   if (!membership) return null
@@ -128,7 +152,7 @@ export async function fetchClientOverview(
   return {
     team: { id: membership.teamId, name: membership.teamName },
     role: membership.role,
-    clients: await fetchOverviewRowsForCompanies(supabase, companies),
+    clients: await fetchOverviewRowsForCompanies(supabase, companies, { includeBankSwitch: true, includeAttest: options.includeAttest }),
   }
 }
 
@@ -164,6 +188,26 @@ export async function fetchOverviewRowsForCompanies(
   }
   const settingsByCompany = new Map(settingsRows.map((s) => [s.company_id, s]))
 
+  // The byrå's own customer number per client (crm#1279). Read here rather
+  // than from the caller's company list so the cockpit and the portfolio
+  // doors (v1, MCP client_overview) carry it alike. Best-effort, like the
+  // bank switch column: a failed read leaves the numbers empty rather than
+  // failing the whole overview.
+  const clientNumberByCompany = new Map<string, string>()
+  for (const chunk of idChunks) {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('id, byra_client_number')
+      .in('id', chunk)
+    if (error) {
+      log.warn('client number lookup failed', { error: error.message })
+      break
+    }
+    for (const row of (data ?? []) as Array<{ id: string; byra_client_number: string | null }>) {
+      if (row.byra_client_number) clientNumberByCompany.set(row.id, row.byra_client_number)
+    }
+  }
+
   // 4. Unbooked transactions: the canonical predicate (is_business IS NULL
   // AND is_ignored = false; see lib/worklist/types.ts book_transaction).
   const unbookedRows: Array<{ company_id: string }> = []
@@ -182,56 +226,36 @@ export async function fetchOverviewRowsForCompanies(
   }
   const unbookedByCompany = countByCompany(unbookedRows)
 
-  // 5. Unconsumed inbox documents (lib/worklist inbox_document): items with a
-  // file that became nothing yet, whose document is still unlinked.
-  const inboxRows: Array<{ company_id: string; document_id: string | null }> = []
+  // 5. The documents of the open inbox items, each once, as the worklist
+  // counts them (lib/worklist inbox_document).
+  const openDocuments = new Map<string, { company_id: string }>()
   for (const chunk of idChunks) {
-    const rows = await fetchAllRows<{
-      id: string
-      company_id: string
-      document_id: string | null
-    }>(({ from, to }) =>
-      supabase
-        .from('invoice_inbox_items')
-        .select('id, company_id, document_id')
-        .in('company_id', chunk)
-        .not('document_id', 'is', null)
-        .is('created_supplier_invoice_id', null)
-        .is('created_journal_entry_id', null)
-        .is('matched_transaction_id', null)
+    const rows = await fetchAllRows<DocumentHoldRow & { id: string; company_id: string; document_id: string }>(({ from, to }) =>
+      whereInboxItemOpen(
+        supabase
+          .from('invoice_inbox_items')
+          .select(`id, company_id, document_id, ${INBOX_ITEM_DOCUMENT_HOLD}`)
+          .in('company_id', chunk)
+          .not('document_id', 'is', null),
+      )
         .order('id', { ascending: true })
         .range(from, to),
     )
-    inboxRows.push(...rows)
+    for (const row of rows.map(withDocumentHold).filter(isOpenInboxItem)) openDocuments.set(row.document_id, row)
   }
-
-  const docIds = [
-    ...new Set(inboxRows.map((r) => r.document_id).filter((id): id is string => !!id)),
-  ]
-  const unlinkedDocRows: Array<{ company_id: string }> = []
-  for (const chunk of chunked(docIds, IN_CLAUSE_CHUNK)) {
-    const { data, error } = await supabase
-      .from('document_attachments')
-      .select('id, company_id')
-      .in('id', chunk)
-      .is('journal_entry_id', null)
-      .eq('is_current_version', true)
-    if (error) throw new Error(error.message)
-    unlinkedDocRows.push(...(data ?? []))
-  }
-  const inboxByCompany = countByCompany(unlinkedDocRows)
+  const inboxByCompany = countByCompany([...openDocuments.values()])
 
   // 6. Open deadlines across all clients, then the earliest per company with
   // the 14-day ACTION_NEEDED semantics (lib/deadlines/status-engine.ts).
   const deadlineRows: DeadlineRowInput[] = []
   for (const chunk of idChunks) {
     const rows = await fetchAllRows<DeadlineRowInput & { id: string }>(({ from, to }) =>
-      supabase
-        .from('deadlines')
-        .select('id, company_id, title, due_date, tax_deadline_type, status')
-        .in('company_id', chunk)
-        .eq('is_completed', false)
-        .is('dismissed_at', null)
+      filterOpenDeadlines(
+        supabase
+          .from('deadlines')
+          .select('id, company_id, title, due_date, tax_deadline_type, status')
+          .in('company_id', chunk),
+      )
         .in('status', ['upcoming', 'action_needed', 'in_progress', 'overdue'])
         .order('id', { ascending: true })
         .range(from, to),
@@ -265,18 +289,41 @@ export async function fetchOverviewRowsForCompanies(
     }
   }
 
+  // 8. The bank connection switch campaign, when it is on: one grouped read
+  // of the clients' live bank connections plus the door for the batch
+  // (lib/bank-feed/switch-campaign.ts). Best-effort: a failed read leaves
+  // the column empty rather than failing the cockpit.
+  let switchStates: Awaited<ReturnType<typeof switchStatesForCompanies>> | null = null
+  if (options.includeBankSwitch && switchCampaign().on) {
+    switchStates = await switchStatesForCompanies(supabase, companyIds).catch(() => null)
+  }
+
+  // 9. The attest queues (lib/supplier-invoices/attest-queues.ts), the same
+  // definition as the client company's own Att göra row. Best-effort, like
+  // the bank switch column: a failed read leaves the columns empty.
+  let attestQueues: Awaited<ReturnType<typeof loadAttestQueues>> | null = null
+  if (options.includeAttest) {
+    attestQueues = await loadAttestQueues(supabase, companyIds, todayIsoStockholm()).catch((error) => {
+      log.warn('attest queues lookup failed', { error: error instanceof Error ? error.message : String(error) })
+      return null
+    })
+  }
+
   const rows: ClientOverviewRow[] = companies.map((company) => {
     const settings = settingsByCompany.get(company.id)
     const row: ClientOverviewRow = {
       companyId: company.id,
       name: settings?.company_name || company.name,
-      orgNumber: company.org_number ?? settings?.org_number ?? null,
+      orgNumber: effectiveOrgNumber(settings?.org_number, company.org_number),
+      clientNumber: clientNumberByCompany.get(company.id) ?? null,
       unbookedCount: unbookedByCompany.get(company.id) ?? 0,
       inboxCount: inboxByCompany.get(company.id) ?? 0,
       nextDeadline: nextDeadlineByCompany.get(company.id) ?? null,
       lastBookedDate: lastBookedByCompany.get(company.id) ?? null,
     }
     if (deadlinesByCompany) row.deadlines = deadlinesByCompany.get(company.id) ?? []
+    if (switchStates) row.bankSwitch = clientBankSwitchFrom(switchStates.get(company.id))
+    if (attestQueues) row.attest = attestQueues.get(company.id) ?? null
     return row
   })
 

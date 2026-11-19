@@ -1,10 +1,12 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState, useCallback, useRef, type ChangeEvent } from 'react'
-import { Loader2, Trash2, Upload } from 'lucide-react'
+import { ArrowUpTrayIcon, SpinnerIcon, TrashIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
@@ -15,7 +17,7 @@ import {
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
 import { INVOICE_FONT_FAMILIES } from '@/lib/invoices/branding-constants'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import { INVOICE_QR_MODES, type CompanySettings, type InvoiceFontFamily, type InvoiceQrMode } from '@/types'
 
@@ -31,6 +33,7 @@ type PdfToggleField =
   | 'invoice_show_plusgiro'
   | 'invoice_show_swish'
   | 'invoice_show_logo'
+  | 'invoice_show_article_number'
 
 /** Compact switch row for the show/hide grid: small label, "?", Switch. */
 function PdfToggleRow({
@@ -46,15 +49,16 @@ function PdfToggleRow({
   checked: boolean
   onCheckedChange: (value: boolean) => void
 }) {
+  const { canWrite, lockedTitle } = useViewerLock()
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border px-1 py-3">
+    <div className="flex items-center justify-between gap-3 border-b-hairline px-1 py-3">
       <span className="flex min-w-0 items-center gap-2">
         <label htmlFor={id} className="truncate text-sm">
           {label}
         </label>
         {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
       </span>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={!canWrite} title={lockedTitle} />
     </div>
   )
 }
@@ -104,7 +108,7 @@ export function QrModeRadioGroup<T extends string = InvoiceQrMode>({
             </span>
             <span className="min-w-0">
               <span className="block text-[13px] text-foreground">{option.label}</span>
-              <span className="block text-[12.5px] text-muted-foreground">{option.hint}</span>
+              <span className="block text-xs text-muted-foreground">{option.hint}</span>
             </span>
           </button>
         )
@@ -115,77 +119,52 @@ export function QrModeRadioGroup<T extends string = InvoiceQrMode>({
 
 export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) {
   const t = useTranslations('settings_pdf_print')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const [lateFeeText, setLateFeeText] = useState(settings.invoice_late_fee_text || '')
   const [creditTermsText, setCreditTermsText] = useState(settings.invoice_credit_terms_text || '')
+  const [lateFeeTextEn, setLateFeeTextEn] = useState(settings.invoice_late_fee_text_en || '')
+  const [creditTermsTextEn, setCreditTermsTextEn] = useState(settings.invoice_credit_terms_text_en || '')
   const [isSavingFont, setIsSavingFont] = useState(false)
   const [isUploadingFont, setIsUploadingFont] = useState(false)
   const [isDeletingFont, setIsDeletingFont] = useState(false)
   const fontInputRef = useRef<HTMLInputElement>(null)
 
+  // Every save shows the server's reason on a refusal (useSaveSettings);
+  // these used to show a bare "could not save", and the font save rendered
+  // the error envelope as "[object Object]".
+  const failedTitle = t('toast_save_failed')
   const saveToggle = useCallback(async (field: string, value: boolean) => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ [field]: value } as Partial<CompanySettings>)
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
+    const update = { [field]: value } as Partial<CompanySettings>
+    if (await saveSettings(update, { failedTitle })) onUpdate(update)
+  }, [onUpdate, saveSettings, failedTitle])
 
   const saveQrMode = useCallback(async (mode: InvoiceQrMode) => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_qr_mode: mode }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ invoice_qr_mode: mode })
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
+    if (await saveSettings({ invoice_qr_mode: mode }, { failedTitle })) onUpdate({ invoice_qr_mode: mode })
+  }, [onUpdate, saveSettings, failedTitle])
 
   const saveText = useCallback(async (field: string, value: string) => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value || null }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ [field]: value || null } as Partial<CompanySettings>)
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
+    const update = { [field]: value || null } as Partial<CompanySettings>
+    if (await saveSettings(update, { failedTitle })) onUpdate(update)
+  }, [onUpdate, saveSettings, failedTitle])
+
+  // The English fine print saves only a change, so tabbing through an
+  // empty field writes nothing (crm#1735).
+  const saveEnglishText = useCallback(
+    (field: 'invoice_late_fee_text_en' | 'invoice_credit_terms_text_en', value: string) => {
+      if (value !== (settings[field] ?? '')) void saveText(field, value)
+    },
+    [settings, saveText],
+  )
 
   const saveFont = useCallback(async (fontFamily: InvoiceFontFamily) => {
     setIsSavingFont(true)
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_font_family: fontFamily }),
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || t('toast_save_failed'))
+    if (await saveSettings({ invoice_font_family: fontFamily }, { failedTitle })) {
       onUpdate({ invoice_font_family: fontFamily })
-    } catch (error) {
-      toast({
-        title: t('toast_save_failed'),
-        description: error instanceof Error ? getUserErrorMessage(error) : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setIsSavingFont(false)
     }
-  }, [onUpdate, toast, t])
+    setIsSavingFont(false)
+  }, [onUpdate, saveSettings, failedTitle])
 
   async function uploadFont(file: File) {
     setIsUploadingFont(true)
@@ -197,7 +176,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         body: formData,
       })
       const result = await response.json()
-      if (!response.ok) throw new Error(result.error || t('font_upload_failed'))
+      if (!response.ok) throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('font_upload_failed') }))
       onUpdate(result.data as Partial<CompanySettings>)
     } catch (error) {
       toast({
@@ -216,7 +195,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     try {
       const response = await fetch('/api/settings/invoice-font', { method: 'DELETE' })
       const result = await response.json()
-      if (!response.ok) throw new Error(result.error || t('font_delete_failed'))
+      if (!response.ok) throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('font_delete_failed') }))
       onUpdate(result.data as Partial<CompanySettings>)
     } catch (error) {
       toast({
@@ -250,6 +229,12 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     { field: 'invoice_show_plusgiro', label: t('show_plusgiro_label'), help: t('show_plusgiro_help'), defaultOn: true },
     { field: 'invoice_show_swish', label: t('show_swish_label'), help: t('show_swish_help'), defaultOn: false },
     { field: 'invoice_show_logo', label: t('show_logo_label'), help: t('show_logo_help'), defaultOn: true },
+    {
+      field: 'invoice_show_article_number',
+      label: t('show_article_number_label'),
+      help: t('show_article_number_help'),
+      defaultOn: false,
+    },
     // No company-name switch or placement: the fixed layout always prints the
     // legal name in Från and the footer (and in the logo slot without a
     // logo). The columns stay for API compatibility (DECISIONS 2026-10-02).
@@ -302,9 +287,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
             className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isUploadingFont ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Upload className="h-3.5 w-3.5" />
+              <ArrowUpTrayIcon className="h-3.5 w-3.5" />
             )}
             {settings.invoice_custom_font_path ? t('font_replace') : t('font_upload')}
           </button>
@@ -316,9 +301,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
               className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isDeletingFont ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Trash2 className="h-3.5 w-3.5" />
+                <TrashIcon className="h-3.5 w-3.5" />
               )}
               {t('font_remove')}
             </button>
@@ -367,6 +352,21 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         />
       </SettingsRow>
       <SettingsRow
+        label={t('late_fee_en_label')}
+        htmlFor="invoice_late_fee_text_en"
+        help={t('fine_print_en_help')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice_late_fee_text_en"
+          rows={2}
+          placeholder={t('fine_print_en_placeholder')}
+          value={lateFeeTextEn}
+          onChange={(e) => setLateFeeTextEn(e.target.value)}
+          onBlur={() => saveEnglishText('invoice_late_fee_text_en', lateFeeTextEn)}
+        />
+      </SettingsRow>
+      <SettingsRow
         label={t('credit_terms_label')}
         htmlFor="invoice_credit_terms_text"
         align="baseline"
@@ -378,6 +378,21 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           value={creditTermsText}
           onChange={(e) => setCreditTermsText(e.target.value)}
           onBlur={() => saveText('invoice_credit_terms_text', creditTermsText)}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('credit_terms_en_label')}
+        htmlFor="invoice_credit_terms_text_en"
+        help={t('fine_print_en_help')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice_credit_terms_text_en"
+          rows={2}
+          placeholder={t('fine_print_en_placeholder')}
+          value={creditTermsTextEn}
+          onChange={(e) => setCreditTermsTextEn(e.target.value)}
+          onBlur={() => saveEnglishText('invoice_credit_terms_text_en', creditTermsTextEn)}
         />
       </SettingsRow>
     </SettingsGroup>

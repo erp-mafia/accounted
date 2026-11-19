@@ -4,8 +4,10 @@ import { generateResultatrapport } from '@/lib/reports/resultatrapport'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { parseBudgetParam, ReportBudgetError } from '@/lib/budgets/report-budget'
 
-export const GET = withRouteContext('report.resultatrapport', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('report.resultatrapport', async (request, { supabase, companyId, log, requestId }) => {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
 
@@ -34,13 +36,20 @@ export const GET = withRouteContext('report.resultatrapport', async (request, { 
     return NextResponse.json({ error: dimFilter.error }, { status: 400 })
   }
 
+  const budgetParam = parseBudgetParam(searchParams)
+  if (!budgetParam.ok) {
+    return NextResponse.json({ error: budgetParam.error }, { status: 400 })
+  }
+
   try {
     const result = await generateResultatrapport(supabase, companyId, periodId, {
       ...range,
       dimensions: dimFilter.dimensions,
+      budgetId: budgetParam.budgetId,
     })
     return NextResponse.json({ data: result })
   } catch (err) {
+    if (err instanceof ReportBudgetError) return errorResponseFromCode(err.code, log, { requestId })
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to generate resultatrapport' },
       { status: 500 }

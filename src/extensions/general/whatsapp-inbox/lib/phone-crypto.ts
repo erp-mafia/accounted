@@ -15,8 +15,8 @@
  */
 
 import crypto from 'crypto'
+import { openAesGcm, sealAesGcm } from '@/lib/crypto/aes-gcm'
 
-const ALGORITHM = 'aes-256-gcm'
 
 /** Meta sends wa_id / from as E.164 digits without '+'. Normalize to digits only. */
 export function normalizePhone(raw: string): string {
@@ -53,24 +53,12 @@ export function hashSecret(value: string): string {
 
 /** AES-256-GCM encrypt a phone number. Returns hex(iv | tag | ciphertext) for a text column. */
 export function encryptPhone(rawPhone: string): string {
-  const key = getEncryptionKey()
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
-  const encrypted = Buffer.concat([cipher.update(normalizePhone(rawPhone), 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
-  return Buffer.concat([iv, tag, encrypted]).toString('hex')
+  return sealAesGcm(getEncryptionKey(), normalizePhone(rawPhone)).toString('hex')
 }
 
 /** Decrypt a stored hex(iv | tag | ciphertext) value back to the digit string. */
 export function decryptPhone(stored: string): string {
-  const key = getEncryptionKey()
-  const raw = Buffer.from(stored, 'hex')
-  const iv = raw.subarray(0, 12)
-  const tag = raw.subarray(12, 28)
-  const encrypted = raw.subarray(28)
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
-  decipher.setAuthTag(tag)
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+  return openAesGcm(getEncryptionKey(), Buffer.from(stored, 'hex'))
 }
 
 /**

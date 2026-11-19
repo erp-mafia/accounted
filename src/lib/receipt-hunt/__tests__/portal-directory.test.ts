@@ -13,8 +13,8 @@ describe('lookupPortal', () => {
     expect(lookupPortal('Kortköp 260228 HETZNER ONLINE GMBH')?.vendor).toBe('Hetzner')
   })
 
-  it('prefers the longer alias, so a cloud bill is not sent to Workspace', () => {
-    expect(lookupPortal('GOOGLE CLOUD 6ZZS77')?.vendor).toBe('Google Cloud')
+  it('never sends a cloud bill to Workspace', () => {
+    expect(lookupPortal('GOOGLE CLOUD 6ZZS77')?.vendor).not.toBe('Google Workspace')
     expect(lookupPortal('GOOGLE WORKSPACE REDOV')?.vendor).toBe('Google Workspace')
   })
 
@@ -33,6 +33,27 @@ describe('lookupPortal', () => {
     expect(lookupPortal('ANTHROPIC* CLAUDE SUB SAN FRANCISCO')).toBeNull()
     expect(lookupPortal('Vercel Jul Överföring via internet')).toBeNull()
     expect(lookupPortal('SUPABASE PRO SUBSCRIPTION')).toBeNull()
+    // Google Cloud mails "Payment received" with the amount for every card
+    // charge (crm#1783).
+    expect(lookupPortal('GOOGLE CLOUD 6ZZS77')).toBeNull()
+    expect(lookupPortal('GOOGLE*CLOUD QTHJ4S')).toBeNull()
+  })
+
+  it('knows the Swedish and ads vendors whose invoice waits behind a login', () => {
+    // Bank texts as they read on production rows, 2026-10-20.
+    expect(lookupPortal('GOOGLE *ADS8555')?.vendor).toBe('Google Ads')
+    expect(lookupPortal('Kortköp 251226 CLOUDFLARE')?.vendor).toBe('Cloudflare')
+    expect(lookupPortal('AMAZON PRIME')?.vendor).toBe('Amazon')
+    expect(lookupPortal('AMZN Mktp FR NF0L50L24')?.vendor).toBe('Amazon')
+    expect(lookupPortal('HALLON')?.vendor).toBe('Hallon')
+    expect(lookupPortal('3 HI3G ACCESS AB')?.vendor).toBe('Tre')
+    expect(lookupPortal('TELENOR SVERIGE AB')?.vendor).toBe('Telenor')
+    expect(lookupPortal('TELIA SVERIGE AB')?.vendor).toBe('Telia')
+    expect(lookupPortal('TELE2 SV AB FÖRETAG ATTN')?.vendor).toBe('Tele2')
+  })
+
+  it('keeps an AWS bill on AWS, not on Amazon', () => {
+    expect(lookupPortal('AMAZON WEB SERVICES EMEA SARL')?.vendor).toBe('Amazon Web Services')
   })
 
   it('says nothing about a supplier it does not know', () => {

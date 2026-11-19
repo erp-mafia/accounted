@@ -24,15 +24,22 @@ export interface ApiKeyRow {
   read_only_company_ids?: string[] | null
   /** The caller's own key: only the owner may change its companies. */
   is_own?: boolean
+  /** Whose key a colleague's row is (full name, else e-mail); null for the caller's own. */
+  owner_name?: string | null
+  /** The service account the key belongs to; null for a person's key. */
+  service_account?: { id: string; name: string } | null
 }
 
 /**
  * The active company's live API keys, shared by the connections list and the
  * developer section so a key created or revoked in one shows in the other.
+ * With `mine` (the byrå cockpit), the caller's own keys in every company
+ * instead: the cockpit sits above the clients, and a connection reaches the
+ * companies picked when it was made, not the one left open.
  * `companies` is the caller's company list for the company pickers (the
  * route's `meta.companies`); a picker only appears when it holds two or more.
  */
-export function useApiKeys() {
+export function useApiKeys({ mine = false }: { mine?: boolean } = {}) {
   const t = useTranslations('settings_api_keys')
   const { toast } = useToast()
   const [keys, setKeys] = useState<ApiKeyRow[]>([])
@@ -41,7 +48,7 @@ export function useApiKeys() {
 
   const refetch = useCallback(async () => {
     try {
-      const res = await fetch('/api/settings/api-keys')
+      const res = await fetch(mine ? '/api/settings/api-keys?scope=mine' : '/api/settings/api-keys')
       const json = await res.json()
       if (json.data) {
         setKeys(json.data.filter((k: ApiKeyRow) => !k.revoked_at))
@@ -52,7 +59,7 @@ export function useApiKeys() {
     } finally {
       setIsLoading(false)
     }
-  }, [toast, t])
+  }, [toast, t, mine])
 
   useEffect(() => {
     refetch()

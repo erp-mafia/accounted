@@ -52,12 +52,13 @@ import { createOAuthState } from '../lib/crypto'
 import { GMAIL_READONLY_SCOPE, exchangeCodeForTokens, revokeGoogleToken } from '../lib/google-oauth'
 import { getMailboxAddress } from '../lib/gmail-client'
 import { saveConnection } from '../lib/connections'
+import { testRoutes } from '@/tests/helpers'
 
 const APP_URL = 'https://app.example'
 const CALLBACK_PATH = '/api/extensions/ext/mail/oauth/callback'
 
 const callbackRoute = () =>
-  mailExtension.apiRoutes!.find((r) => r.method === 'GET' && r.path === '/oauth/callback')!
+  testRoutes(mailExtension).find((r) => r.method === 'GET' && r.path === '/oauth/callback')!
 
 /** The browser completing the callback is signed in as `userId` (or nobody). */
 /**

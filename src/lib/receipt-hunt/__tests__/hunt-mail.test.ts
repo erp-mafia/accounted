@@ -29,7 +29,7 @@ function mockSupabase(tables: Record<string, Row[]>) {
       let from = 0
       let to = Number.MAX_SAFE_INTEGER
       const chain: Record<string, unknown> = {}
-      for (const m of ['select', 'eq', 'is', 'not', 'in', 'lte', 'gte', 'order', 'limit']) chain[m] = vi.fn(() => chain)
+      for (const m of ['select', 'eq', 'is', 'not', 'in', 'lt', 'lte', 'gte', 'or', 'order', 'limit']) chain[m] = vi.fn(() => chain)
       chain.range = vi.fn((f: number, t: number) => {
         from = f
         to = t
@@ -64,7 +64,7 @@ beforeEach(() => {
 describe('huntCompany mail leg: searchable and searched', () => {
   it('leaves salary and tax runs out of what can be searched, and searches the largest first', async () => {
     const supabase = mockSupabase({
-      transactions: [
+      open_bank_rows: [
         purchase('salary', 'LÖN SEPTEMBER', -45000),
         purchase('tax', 'Skatteverket 16556', -30000),
         purchase('big', 'CLAS OHLSON', -2400),
@@ -85,7 +85,7 @@ describe('huntCompany mail leg: searchable and searched', () => {
 
   it('reports nothing searchable when every purchase is a salary or tax run', async () => {
     const supabase = mockSupabase({
-      transactions: [purchase('salary', 'LÖN SEPTEMBER', -45000)],
+      open_bank_rows: [purchase('salary', 'LÖN SEPTEMBER', -45000)],
       company_members: [{ user_id: 'user-1', role: 'owner' }],
     })
 

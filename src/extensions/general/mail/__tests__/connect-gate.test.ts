@@ -27,11 +27,12 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(), createServiceCl
 import { mailExtension } from '../index'
 import { isMailConnectEnabled } from '../lib/connect-gate'
 import { listConnections } from '../lib/connections'
+import { testRoutes } from '@/tests/helpers'
 
 const COMPANY = 'company-1'
 
 const route = (method: 'GET' | 'POST', path: string) =>
-  mailExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  testRoutes(mailExtension).find((r) => r.method === method && r.path === path)!
 
 // The signed-in member is an owner: connecting is not for a viewer.
 const membership: Record<string, unknown> = {}

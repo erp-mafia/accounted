@@ -65,6 +65,37 @@ export async function fetchPaymentsAsOf(
 }
 
 /**
+ * The payment facts a ledger's population read attaches to each invoice
+ * (get_ar_ledger_invoices, get_supplier_ledger_invoices): whether it has
+ * payment rows at all, and the amounts of those dated on or before the as-of
+ * date, in id order.
+ */
+export interface InvoicePaymentFacts {
+  id: string
+  has_payment_rows: boolean
+  payment_amounts: readonly (number | string)[] | null
+}
+
+/**
+ * fetchPaymentsAsOf's aggregate from a population read's payment facts: the
+ * same running öre sum over the same rows in the same order.
+ */
+export function paymentsAsOfFromFacts(rows: readonly InvoicePaymentFacts[]): PaymentsAsOf {
+  const paidThrough = new Map<string, number>()
+  const hasRows = new Set<string>()
+  for (const row of rows) {
+    if (!row.has_payment_rows) continue
+    hasRows.add(row.id)
+    const amounts = row.payment_amounts ?? []
+    if (amounts.length === 0) continue
+    let paid = 0
+    for (const amount of amounts) paid = roundOre(paid + (Number(amount) || 0))
+    paidThrough.set(row.id, paid)
+  }
+  return { paidThrough, hasRows }
+}
+
+/**
  * The invoices of one ledger that a kreditfaktura dated AFTER `asOfDate`
  * credited (`credited_invoice_id`). A credit settles its original on its own
  * date, so on the as-of date those invoices were still open: dated settlement
@@ -162,12 +193,3 @@ export function outstandingAsOf(
   return resolveOutstandingAsOf(invoice, total, liveOutstanding, payments, asOfDate).outstanding
 }
 
-/** Local calendar date (YYYY-MM-DD) used to decide whether an as-of date needs
- * historical reconstruction at all. */
-export function todayIsoDate(): string {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}

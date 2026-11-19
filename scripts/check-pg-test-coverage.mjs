@@ -4,7 +4,7 @@
  * function/RPC, RLS policy, or DEFERRABLE constraint must also add or extend
  * a *.pg.test.ts.
  *
- * This enforces the rule documented in .claude/rules/database.md ("pg-real
+ * This enforces the rule in CLAUDE.md's Definition of Done ("pg-real
  * tests: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend
  * a *.pg.test.ts"): previously instruction-only, which means it got skipped.
  *
@@ -14,6 +14,11 @@
  * Both are visible in review and greppable later. Use them sparingly:
  * "covered-by" when an existing test already exercises the changed object,
  * "skip" when the change is genuinely untestable (e.g. a NOTIFY-only fixup).
+ *
+ * A migration that differs from the base version in SQL comments only is
+ * not a change to a trigger, function or policy and is left out: the file
+ * with its comments taken out (scripts/checks/sql-without-comments.mjs, which
+ * keeps strings and function bodies byte for byte) must equal the base's.
  *
  * Scope: the gate is PR-level, not per-migration: ANY *.pg.test.ts change
  * satisfies it. With multiple risky migrations in one PR, reviewers must
@@ -25,6 +30,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
+import { sqlWithoutComments } from './checks/sql-without-comments.mjs'
 
 const base = process.env.PG_GATE_BASE || 'origin/main'
 
@@ -52,7 +58,7 @@ const migrations = changed.filter(
 )
 const pgTests = changed.filter((f) => f.endsWith('.pg.test.ts'))
 
-// DDL that the database.md rule classifies as requiring real-Postgres coverage.
+// DDL that the pg-real rule classifies as requiring real-Postgres coverage.
 const RISKY_DDL = [
   { kind: 'trigger', re: /\bCREATE\s+(OR\s+REPLACE\s+)?(CONSTRAINT\s+)?TRIGGER\b/i },
   { kind: 'function/RPC', re: /\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b/i },
@@ -63,10 +69,38 @@ const RISKY_DDL = [
 
 const ESCAPE_HATCH = /^\s*--\s*pg-test:\s*(covered-by\s+\S+|skip\b.*)$/im
 
+// The commit the three-dot diff above compares against.
+let mergeBase = null
+try {
+  mergeBase = execFileSync('git', ['merge-base', base, 'HEAD'], { encoding: 'utf8' }).trim()
+} catch {
+  // No common commit: every migration is read as changed.
+}
+
+/** The file as it is at the merge base, or null when it is new there. */
+function baseVersion(file) {
+  if (!mergeBase) return null
+  try {
+    return execFileSync('git', ['show', `${mergeBase}:${file}`], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+  } catch {
+    return null
+  }
+}
+
 const flagged = []
+const commentOnly = []
 for (const file of migrations) {
   if (!existsSync(file)) continue
   const raw = readFileSync(file, 'utf8')
+  const before = baseVersion(file)
+  if (before !== null && sqlWithoutComments(before) === sqlWithoutComments(raw)) {
+    commentOnly.push(file)
+    continue
+  }
   if (ESCAPE_HATCH.test(raw)) continue
   // Strip SQL line comments so prose mentioning "CREATE POLICY" doesn't trip the gate.
   const sql = raw.replace(/--.*$/gm, '')
@@ -74,11 +108,20 @@ for (const file of migrations) {
   if (kinds.length > 0) flagged.push({ file, kinds })
 }
 
+if (commentOnly.length > 0) {
+  console.log(
+    `check-pg-test-coverage: ${commentOnly.length} migration(s) differ from the base in comments only and are left out.`,
+  )
+}
+
 if (flagged.length === 0) {
+  const changedSql = migrations.length - commentOnly.length
   console.log(
     migrations.length === 0
       ? 'check-pg-test-coverage: no migrations in this diff.'
-      : `check-pg-test-coverage: ${migrations.length} migration(s) changed, none touch trigger/RPC/RLS/DEFERRABLE.`,
+      : changedSql === 0
+        ? 'check-pg-test-coverage: no migration changes its SQL.'
+        : `check-pg-test-coverage: ${changedSql} migration(s) changed, none touch trigger/RPC/RLS/DEFERRABLE.`,
   )
   process.exit(0)
 }
@@ -99,7 +142,7 @@ for (const { file, kinds } of flagged) {
   console.error(`  ${file}  (${kinds.join(', ')})`)
 }
 console.error(`
-The repo rule (.claude/rules/database.md) requires real-Postgres coverage for
+The repo rule (CLAUDE.md, Definition of Done) requires real-Postgres coverage for
 these objects: mocked Supabase tests cannot exercise them.
 
 Fix one of:

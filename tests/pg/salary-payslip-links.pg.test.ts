@@ -5,7 +5,7 @@
  *   - table exists with RLS enabled
  *   - select/insert/update policies exist, DELETE policy does NOT (links are
  *     revoked, never deleted)
- *   - UNIQUE (salary_run_id, employee_id) — one live link per employee/run
+ *   - UNIQUE (salary_run_id, employee_id) - one live link per employee/run
  *   - UNIQUE token_hash
  */
 import { describe, it, expect } from 'vitest'

@@ -40,6 +40,13 @@ const ExpenseClaimOut = z.object({
   status: z.enum(['registered', 'paid']),
   journal_entry_id: z.string().uuid().nullable().describe('The verifikat that booked the claim.'),
   payout_batch_id: z.string().uuid().nullable().describe('The payout that repaid it, once paid.'),
+  salary_run_id: z
+    .string()
+    .uuid()
+    .nullable()
+    .describe(
+      'The salary run whose payslip repays the claim, while its status is registered: it is paid with that salary, and a separate payout is refused. null: a registered claim still waits for a payout.',
+    ),
   created_at: z.string(),
 })
 
@@ -62,6 +69,7 @@ const EXAMPLE_CLAIM = {
   status: 'registered',
   journal_entry_id: '9c1e…',
   payout_batch_id: null,
+  salary_run_id: null,
   created_at: '2026-09-01T09:12:00Z',
 }
 
@@ -74,12 +82,13 @@ export const expenseClaimsList = defineOperation({
   docs: {
     summary: 'List expense claims (utlägg): what the company owes owners and employees for private purchases.',
     description:
-      'Returns the utlägg register newest first: each claim\'s claimant, SEK amount, VAT, cost and liability account, status (registered = still owed, paid = repaid) and the verifikat that booked it. Filter by status or employee_id. Cursor pagination: pass next_cursor back as cursor; next_cursor is null on the last page.',
+      'Returns the utlägg register newest first: each claim\'s claimant, SEK amount, VAT, cost and liability account, status (registered = still owed, paid = repaid), the salary run that repays it when it is on a payslip (salary_run_id) and the verifikat that booked it. Filter by status or employee_id. Cursor pagination: pass next_cursor back as cursor; next_cursor is null on the last page.',
     useWhen:
       'You need the open claims before paying someone back or matching a bank transfer, or you are reconciling 2893/2820/2890 against who is owed what.',
     doNotUseFor:
-      'Supplier invoices (GET /supplier-invoices) or salary (the payroll endpoints); an utlägg put on a payslip is still listed here as registered until the salary run is booked.',
+      'Supplier invoices (GET /supplier-invoices) or salary (the payroll endpoints).',
     pitfalls: [
+      'A registered claim waits for a payout only while salary_run_id is null. One put on a payslip stays registered until the salary run is booked, with salary_run_id naming the run: it is paid with that salary, so never pay it out or match a bank transfer to it (409 EXPENSE_PAYOUT_ON_PAYSLIP).',
       'amount_sek is gross incl. VAT: the amount owed, not the cost.',
       'A claim on 2018 (enskild firma owner) is an egen insättning, not a debt; it is listed but is not normally paid back.',
       'The page is in data.expense_claims with data.next_cursor; a cursor that no longer decodes starts from the first page.',
@@ -103,7 +112,7 @@ export const expenseClaimsList = defineOperation({
     name: 'gnubok_list_expense_claims',
     title: 'List Expense Claims',
     description:
-      'List utlägg (private purchases the company owes an owner or employee for), newest first, with status registered (owed) or paid, amounts in SEK and the liability account. Filter by status or employee_id; paginate with cursor.',
+      'List utlägg (private purchases the company owes an owner or employee for), newest first, with status registered (owed) or paid, amounts in SEK and the liability account. A claim with salary_run_id is repaid with that salary. Filter by status or employee_id; paginate with cursor.',
     keywords: ['utlägg', 'utläggsregister', 'privat betalt', 'skuld till ägare', 'skuld till anställd', 'kvitto privat kort'],
   },
   run: (ctx, input) => listExpenseClaimsPage(ctx, input),
@@ -118,7 +127,7 @@ export const expenseClaimsGet = defineOperation({
   docs: {
     summary: 'Read one expense claim (utlägg).',
     description:
-      'Returns one claim: who is owed, the SEK amount and VAT, the cost and liability accounts, its status and the verifikat that booked it (journal_entry_id) and, once paid, the payout batch.',
+      'Returns one claim: who is owed, the SEK amount and VAT, the cost and liability accounts, its status, the salary run that repays it while it is on a payslip (salary_run_id), the verifikat that booked it (journal_entry_id) and, once paid, the payout batch.',
     useWhen: 'You hold an expense_claim_id (from the list or a create) and need its current status.',
     doNotUseFor: 'Finding claims: list them with GET /expense-claims?status=registered.',
     pitfalls: ['An id from another company answers 404 EXPENSE_CLAIM_NOT_FOUND.'],
@@ -132,6 +141,13 @@ export const expenseClaimsGet = defineOperation({
     path: '/api/v1/companies/:companyId/expense-claims/:id',
     pathParams: { id: 'expense_claim_id' },
   },
+  mcp: {
+    name: 'gnubok_get_expense_claim',
+    title: 'Get Expense Claim',
+    description:
+      'Read one expense claim (utlägg) by expense_claim_id: who is owed, the SEK amount and VAT, the cost and liability accounts, its status, the verifikat that booked it and, once paid, the payout batch.',
+    keywords: ['utlägg', 'ett utlägg', 'visa utlägg', 'utläggsstatus'],
+  },
   run: (ctx, { expense_claim_id }) => getExpenseClaim(ctx, expense_claim_id),
 })
 
@@ -144,17 +160,19 @@ export const expenseClaimsCreate = defineOperation({
   docs: {
     summary: 'Register an expense claim (utlägg) and post its verifikat.',
     description:
-      'Books a business cost someone paid privately: Debit the cost account (net), Debit 2641 (vat_amount), Credit the person\'s liability account (gross), in one verifikat posted immediately. The liability account follows the claimant: employee_id books 2820; otherwise the owner\'s account for the legal form (2893 aktiebolag, 2018 enskild firma as egen insättning, 2890 förening member) with claimant_name. Foreign currency converts at exchange_rate or Riksbanken\'s rate for expense_date. lines replaces the generated rows (reverse charge, templates) and must credit the liability account with exactly amount. dimensions ({sie_dim_no: code}, kostnadsställe/projekt) tags the cost line, or with lines every class 3-8 line, where a line\'s own dimensions win per key. document_id attaches the receipt to the verifikat; inbox_item_id marks the inbox item booked. Idempotent. Dry-runnable.',
+      'Books a business cost someone paid privately: Debit the cost account (net), Debit 2641 (vat_amount), Credit the person\'s liability account (gross), in one verifikat posted immediately. The liability account follows the claimant: employee_id books 2820; otherwise the owner\'s account for the legal form (2893 aktiebolag, 2018 enskild firma as egen insättning, 2890 förening member) with claimant_name. Foreign currency converts at exchange_rate or Riksbanken\'s rate for expense_date. reverse_charge (eu_services or non_eu_services) books omvänd skattskyldighet for a service under huvudregeln (SaaS, licences, ads, consulting) from a seller abroad that charged no VAT: the fiktiv moms 2645/2614 and the 4535|4531/4598 basis pair join the generated rows. lines replaces the generated rows (templates, hand-built rows) and must credit the liability account with exactly amount. dimensions ({sie_dim_no: code}, kostnadsställe/projekt) tags the cost line, or with lines every class 3-8 line, where a line\'s own dimensions win per key. document_id attaches the receipt to the verifikat; inbox_item_id marks the inbox item booked and attaches its own document as the receipt, so document_id is then not needed. Idempotent. Dry-runnable.',
     useWhen:
       'A receipt was paid with a private card or cash: the answer to "Vem betalade?" is the owner or an employee, not the company account.',
     doNotUseFor:
       'A purchase the company paid itself (categorize the bank transaction or register a supplier invoice), an unpaid supplier invoice (POST /supplier-invoices) or mileage (körjournal).',
     pitfalls: [
-      'amount is gross incl. VAT and vat_amount must be below it; foreign VAT is not deductible on 2641, so send vat_amount 0 for a foreign receipt.',
+      'amount is gross incl. VAT and vat_amount must be below it. Foreign VAT is not deductible on 2641: for a receipt from a seller abroad send vat_amount 0. Add reverse_charge only for a service under huvudregeln (SaaS, licences, ads, consulting) bought from a seller abroad that charged no VAT. Hotel, restaurant, taxi, passenger transport and event admission abroad are taxed where performed, and a VAT-exempt service (e.g. a bank fee) carries none: no reverse_charge, the whole amount is cost.',
+      'With reverse_charge, an expense_account that reports a momsruta of its own that does not match the kind (4512, 4545-4547, 4531 with eu_services, a kontoplan momskod for another purchase, a reverse-charge momskod without a 25/12/6 % rate) or is 4598 answers 400 EXPENSE_CLAIM_INVALID_LINES: book on an ordinary cost account.',
       'The verifikat is posted at once and is immutable: undo it with DELETE /expense-claims/{id}, which posts a storno.',
       'employee_id wins over claimant_name: the employee\'s own name is stored.',
       'A date in a locked period or behind the company lock date returns 400 PERIOD_LOCKED; no open fiscal year returns EXPENSE_CLAIM_NO_FISCAL_PERIOD.',
       'expense_account is a STRING in class 4-8 ("5410"), never a number.',
+      'A dry run answers the would-be verifikat in preview.verifikat.lines (account_number, debit_amount, credit_amount) and refuses what the commit refuses: a line account that is deactivated or not in BAS 2026 returns 400 ACCOUNTS_NOT_IN_CHART. A BAS account merely missing from the chart passes; the commit adds it.',
     ],
     example: {
       request: {
@@ -170,6 +188,7 @@ export const expenseClaimsCreate = defineOperation({
   },
   input: CreateExpenseClaimSchema,
   output: ExpenseClaimOut,
+  stageOnErrorCodes: ['BOOKING_REVIEW_REQUIRED'],
   errorCodes: [
     'PERIOD_LOCKED',
     'EMPLOYEE_NOT_FOUND',
@@ -180,13 +199,15 @@ export const expenseClaimsCreate = defineOperation({
     'EXPENSE_CLAIM_NO_FISCAL_PERIOD',
     'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND',
     'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND',
+    'INBOX_ITEM_ALREADY_BOOKED',
+    'ACCOUNTS_NOT_IN_CHART',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/expense-claims' },
   mcp: {
     name: 'gnubok_create_expense_claim',
     title: 'Create Expense Claim',
     description:
-      'Stage an utlägg: a cost the owner or an employee paid privately. Approval posts the verifikat (cost + 2641 against 2893/2018/2890 owner or 2820 employee) and opens the claim. Pass document_id to attach the receipt.',
+      'Stage an utlägg: a cost the owner or an employee paid privately. Approval posts the verifikat (cost + 2641 against 2893/2018/2890 owner or 2820 employee). Pass document_id to attach the receipt. reverse_charge: a SaaS-like service from abroad without VAT, never travel or meals.',
     keywords: ['utlägg', 'registrera utlägg', 'privat betalt', 'betalade privat', 'eget kort', 'kvitto privat', 'vem betalade'],
     stage: {
       pendingType: 'create_expense_claim',
@@ -363,6 +384,8 @@ export const transactionsMatchExpensePayout = defineOperation({
     'EXPENSE_PAYOUT_MATCH_NOT_EXPENSE',
     'EXPENSE_PAYOUT_MATCH_CURRENCY',
     'EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED',
+    'BANK_ROW_IGNORED',
+    'BANK_ROW_READ_FAILED',
     'EXPENSE_PAYOUT_MATCH_AMOUNT',
     'EXPENSE_PAYOUT_ALREADY_PAID',
     'EXPENSE_PAYOUT_MIXED_CLAIMANTS',

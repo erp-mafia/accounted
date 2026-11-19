@@ -70,16 +70,16 @@
         "previous": 20701
       },
       "AndraLangfristigaVardepappersinnehav": {
-        "current": 49000,
-        "previous": 44100
+        "current": 24000,
+        "previous": 21600
       },
       "LanDelagareNarstaende": {
-        "current": 26001,
-        "previous": 23401
+        "current": 25000,
+        "previous": 22500
       },
       "AndraLangfristigaFordringar": {
-        "current": 55000,
-        "previous": 49500
+        "current": 81001,
+        "previous": 72901
       },
       "LagerRavarorFornodenheter": {
         "current": 29001,
@@ -546,20 +546,20 @@
         },
         {
           "label": "Andra långfristiga värdepappersinnehav",
-          "current": 49000,
-          "previous": 44100,
+          "current": 24000,
+          "previous": 21600,
           "indent": 2
         },
         {
           "label": "Lån till delägare eller närstående",
-          "current": 26001,
-          "previous": 23401,
+          "current": 25000,
+          "previous": 22500,
           "indent": 2
         },
         {
           "label": "Andra långfristiga fordringar",
-          "current": 55000,
-          "previous": 49500,
+          "current": 81001,
+          "previous": 72901,
           "indent": 2
         },
         {
@@ -1219,16 +1219,16 @@
         "previous": 20701
       },
       "AndraLangfristigaVardepappersinnehav": {
-        "current": 49000,
-        "previous": 44100
+        "current": 24000,
+        "previous": 21600
       },
       "LanDelagareNarstaende": {
-        "current": 26001,
-        "previous": 23401
+        "current": 25000,
+        "previous": 22500
       },
       "AndraLangfristigaFordringar": {
-        "current": 55000,
-        "previous": 49500
+        "current": 81001,
+        "previous": 72901
       },
       "LagerRavarorFornodenheter": {
         "current": 29001,
@@ -1686,20 +1686,20 @@
         },
         {
           "label": "Andra långfristiga värdepappersinnehav",
-          "current": 49000,
-          "previous": 44100,
+          "current": 24000,
+          "previous": 21600,
           "indent": 2
         },
         {
           "label": "Lån till delägare eller närstående",
-          "current": 26001,
-          "previous": 23401,
+          "current": 25000,
+          "previous": 22500,
           "indent": 2
         },
         {
           "label": "Andra långfristiga fordringar",
-          "current": 55000,
-          "previous": 49500,
+          "current": 81001,
+          "previous": 72901,
           "indent": 2
         },
         {

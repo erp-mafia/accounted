@@ -1,31 +1,20 @@
 import { NextResponse } from 'next/server'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
-import {
-  creditNoteNeedsJournalEntry,
-  issueCreditNote,
-  type CreditNoteOriginalInvoice,
-} from '@/lib/invoices/issue-credit-note'
-import {
-  archiveIssuedInvoicePdf,
-  issueAndBookInvoice,
-  type IssuePartialFailure,
-} from '@/lib/invoices/issue-and-book-invoice'
-import { ensureInitialized } from '@/lib/init'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
+import { issueAndBookInvoice } from '@/lib/invoices/issue-and-book-invoice'
+import { issueCreditNoteDraft } from '@/lib/invoices/credit-invoice'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
-import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
-import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { hasRequiredInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
+import { paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
+import { MarkInvoiceSentPaidAtIssueSchema } from '@/lib/api/schemas'
+import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import type {
-  AccountingMethod,
   CompanySettings,
   CreditNote,
-  EntityType,
   Invoice,
 } from '@/types'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/mark-sent
@@ -34,12 +23,21 @@ ensureInitialized()
  * Under faktureringsmetoden (accrual): creates the journal entry (Debit 1510, Credit 30xx/26xx).
  * Under kontantmetoden (cash): no journal entry; booking happens at payment.
  *
+ * Body `paid_at_issue: { account_number }` (crm#1281, the kontantfaktura):
+ * the invoice is issued already paid, on its fakturadatum, to that 19xx
+ * account. In either method it books one verifikat, Debit 19xx, Credit
+ * 30xx/26xx, with no 1510 leg, and the invoice ends paid. Refused for
+ * anything but a plain faktura (paidAtIssueBlockReason) and together with
+ * custom issuance lines, by issueAndBookInvoice: v1 mark-sent and the MCP
+ * mark_invoice_sent approval issue it through that same function.
+ *
  * The non-credit-note core lives in lib/invoices/issue-and-book-invoice.ts,
- * shared with POST /api/invoices/bulk-book; credit notes stay inline here.
+ * shared with POST /api/invoices/bulk-book; the credit-note issue step in
+ * lib/invoices/credit-invoice.ts, shared with the v1 and MCP credit doors.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.mark_sent',
-  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, user, companyId, role, log, requestId }, { params }) => {
   const { id } = await params
 
   // Optional body. Backwards-compat: callers may POST with no body. Read it
@@ -96,6 +94,37 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   }
   const customLines = linesResult.lines
 
+  const paidAtIssueResult = MarkInvoiceSentPaidAtIssueSchema.safeParse(rawBody ?? {})
+  if (!paidAtIssueResult.success) {
+    log.warn('mark-sent paid_at_issue validation failed', { invoiceId: id })
+    return NextResponse.json(
+      { error: 'Ogiltig förfrågan', details: paidAtIssueResult.error.flatten() },
+      { status: 400 },
+    )
+  }
+  const paidAtIssue = paidAtIssueResult.data.paid_at_issue
+  // The invoicing-only role issues an invoice here as it does by sending it
+  // (lib/auth/invoicer-role.ts). Issuing it paid also registers the payment
+  // on a 19xx account, which the role cannot do anywhere else (mark-paid is
+  // outside its routes), so it is refused here too.
+  if (paidAtIssue && isInvoicerRole(role)) {
+    return errorResponseFromCode('FORBIDDEN', log, {
+      requestId,
+      messageSv: 'Rollen Fakturering kan inte registrera en faktura som betald.',
+      messageEn: 'The Invoicing role cannot register an invoice as paid.',
+      details: { code: 'INVOICER_PAID_AT_ISSUE_NOT_ALLOWED' },
+    })
+  }
+  // issueAndBookInvoice refuses every document it cannot issue paid, for
+  // every door; a kreditfaktura never reaches it, so it is refused here by
+  // the same rule.
+  if (paidAtIssue && isCreditNote) {
+    return errorResponseFromCode('INVOICE_PAID_AT_ISSUE_NOT_ALLOWED', log, {
+      requestId,
+      details: { reason: paidAtIssueBlockReason(invoice, { customLines }) },
+    })
+  }
+
   // Fetch full company settings for PDF rendering and accounting method
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -116,19 +145,26 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       settings: settings as CompanySettings,
       log,
       customLines,
+      paidAtIssue: paidAtIssue ? { settlementAccountNumber: paidAtIssue.account_number } : null,
     })
 
     if (!result.ok) {
+      // The engine's own refusal (a locked period, an account outside the
+      // chart) says what to fix, as on the send route.
+      if (isBookkeepingError(result.bookingError)) {
+        return errorResponse(result.bookingError, log, { requestId })
+      }
       return errorResponseFromCode(result.errorCode, log, {
         requestId,
         ...(result.details ? { details: result.details } : {}),
+        ...(result.messageSv ? { messageSv: result.messageSv, messageEn: result.messageEn } : {}),
       })
     }
 
     return NextResponse.json(
       {
         success: true,
-        status: 'sent',
+        status: paidAtIssue ? 'paid' : 'sent',
         journal_entry_id: result.journalEntryId,
         ...(result.partialFailures.length > 0
           ? { partial: true, partial_failures: result.partialFailures }
@@ -153,61 +189,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
     log.error('failed to assign invoice number on mark-sent', err as Error)
-    return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
-  }
-
-  const accountingMethod = (settings.accounting_method || 'accrual') as AccountingMethod
-  const entityType = await resolveCompanyEntityType(supabase, companyId, settings.entity_type)
-
-  const { data: original } = await supabase
-    .from('invoices')
-    .select('id, invoice_number, external_invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
-    .eq('id', invoice.credited_invoice_id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!original) {
-    return errorResponseFromCode('INVOICE_CREDIT_ORIGINAL_NOT_FOUND', log, { requestId })
-  }
-
-  const originalInvoice = original as CreditNoteOriginalInvoice
-  // Self-billed originals carry their number in external_invoice_number
-  // (invoice_number is null by design); without the fallback the credit-note
-  // PDF loses its ML 17 kap 22 reference to the original (issue #1820).
-  const originalInvoiceNumber =
-    original.invoice_number ?? original.external_invoice_number ?? undefined
-
-  const journalEntryRequired = creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
-  const isRecovery = invoice.status === 'sent'
-
-  if (
-    isRecovery &&
-    originalInvoice.status === 'credited' &&
-    (!journalEntryRequired || !!invoice.journal_entry_id)
-  ) {
-    return errorResponseFromCode('INVOICE_CREDIT_ALREADY_ISSUED', log, { requestId })
-  }
-
-  // Compare-and-set prevents two concurrent requests from posting two journal
-  // entries for the same draft.
-  let statusFlipped = false
-  if (!isRecovery) {
-    const { data: updatedRows, error: updateError } = await supabase
-      .from('invoices')
-      .update({ status: 'sent' })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .eq('status', 'draft')
-      .select('id')
-
-    if (updateError) {
-      log.error('invoice mark-sent status update failed', updateError)
-      return errorResponseFromCode('INVOICE_MARK_SENT_STATUS_FAILED', log, { requestId })
-    }
-    if (!updatedRows || updatedRows.length === 0) {
-      return errorResponseFromCode('INVOICE_MARK_SENT_RACE', log, { requestId })
-    }
-    statusFlipped = true
+    const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+    return errorResponseFromCode(failure.code, log, {
+      requestId,
+      messageSv: failure.messageSv,
+      messageEn: failure.messageEn,
+      details: failure.details,
+    })
   }
 
   // Custom lines never apply to credit notes; log the mismatch so it stays
@@ -220,85 +208,33 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
-  const partialFailures: IssuePartialFailure[] = []
-
-  const issueResult = await issueCreditNote({
+  // The issue step every credit door shares (lib/invoices/credit-invoice.ts):
+  // compare-and-set to sent, the reversing verifikat and the original's flip,
+  // the draft restored when no verifikat could be posted, the PDF archived.
+  const issued = await issueCreditNoteDraft({
     supabase,
     companyId,
     userId: user.id,
     creditNote: invoice as CreditNote,
-    originalInvoice,
-    entityType,
-    accountingMethod,
+    settings: settings as CompanySettings,
     log,
+    recordDelivery: true,
   })
-  const journalEntryId = issueResult.journalEntryId
-  partialFailures.push(...issueResult.failures)
-
-  if (!issueResult.complete) {
-    // If no immutable entry was created, restoring the draft is safe and
-    // lets the user fix the period/account issue before trying again.
-    if (statusFlipped && issueResult.journalEntryRequired && !issueResult.journalEntryId) {
-      await supabase
-        .from('invoices')
-        .update({ status: 'draft' })
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .eq('status', 'sent')
-        .is('journal_entry_id', null)
-    }
-    return errorResponseFromCode(
-      issueResult.repairRequired
-        ? 'INVOICE_CREDIT_REPAIR_REQUIRED'
-        : 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
-      log,
-      {
-        requestId,
-        details: { failure_steps: issueResult.failures.map((failure) => failure.step) },
-      },
-    )
-  }
-
-  // Render and archive the PDF as underlag so it remains retrievable even if
-  // the invoice row is later cancelled. Credit notes are real invoices
-  // (document_type 'invoice'), so this mirrors the non-credit path.
-  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
-  if (isRealInvoice) {
-    const pdfFailure = await archiveIssuedInvoicePdf({
-      supabase,
-      companyId,
-      userId: user.id,
-      invoice: invoice as Invoice,
-      settings: settings as CompanySettings,
-      journalEntryId,
-      originalInvoiceNumber,
-      log,
+  if (!issued.ok) {
+    return errorResponseFromCode(issued.code, log, {
+      requestId,
+      ...(issued.details ? { details: issued.details } : {}),
     })
-    if (pdfFailure) partialFailures.push(pdfFailure)
   }
-
-  if (statusFlipped) {
-    try {
-      await recordManualInvoiceDelivery({
-        supabase,
-        companyId,
-        userId: user.id,
-        invoiceId: id,
-      })
-    } catch (err) {
-      log.error('failed to record manual invoice delivery', err as Error)
-      partialFailures.push({
-        step: 'delivery_history',
-        reason: 'Utskicket kunde inte sparas i fakturans historik.',
-      })
-    }
-  }
+  const { journalEntryId, partialFailures, originalJournalEntryId } = issued
 
   return NextResponse.json(
     {
       success: true,
       status: 'sent',
       journal_entry_id: journalEntryId,
+      // accounted#45: the deferred original was booked first, on its own date.
+      ...(originalJournalEntryId ? { original_journal_entry_id: originalJournalEntryId } : {}),
       ...(partialFailures.length > 0
         ? { partial: true, partial_failures: partialFailures }
         : {}),

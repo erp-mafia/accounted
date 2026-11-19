@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,9 +21,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ArrowLeft, ArrowRight, Columns3 } from 'lucide-react'
-import { formatCurrency } from '@/lib/utils'
-import { getCSVPreview, normalizeMinusSign, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
+import { ArrowLeftIcon, ArrowRightIcon } from '@/components/icons'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
+import { genericDecimalMark, getCSVPreview, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
+import { parseSwedishAmount } from '@/lib/money'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 
 const HEADER_KEYWORDS = [
@@ -56,6 +58,7 @@ export default function BankFileColumnMappingStep({
   onConfirm,
   onBack,
 }: BankFileColumnMappingStepProps) {
+  const t = useTranslations('transactions')
   const [dateCol, setDateCol] = useState<number>(-1)
   const [descCol, setDescCol] = useState<number>(-1)
   const [amountCol, setAmountCol] = useState<number>(-1)
@@ -76,7 +79,9 @@ export default function BankFileColumnMappingStep({
   }, [rawFileContent])
 
   const [delimiter, setDelimiter] = useState<string>(detectedDelimiter)
-  const [decimalSep, setDecimalSep] = useState<',' | '.'>(',')
+  // Null until someone chooses: the file settles the mark, and when it cannot
+  // the step asks instead of a default deciding the amounts (see below).
+  const [decimalSep, setDecimalSep] = useState<',' | '.' | null>(null)
   const [dateFormat, setDateFormat] = useState<string>('YYYY-MM-DD')
 
   // Re-parse headers and preview whenever delimiter or file content changes.
@@ -154,7 +159,22 @@ export default function BankFileColumnMappingStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataRows, hasHeader, columnHeaders])
 
-  const isValid = dateCol >= 0 && descCol >= 0 && amountCol >= 0
+  // What the import will read, over the whole file: the preview below shows it,
+  // and an amount two marks read a thousand apart is asked about, never guessed.
+  const amountReading = useMemo(
+    () => amountCol < 0
+      ? { mark: decimalSep, undecided: null }
+      : genericDecimalMark(rawFileContent, {
+          amount: amountCol,
+          ...(balanceCol >= 0 && { balance: balanceCol }),
+          decimal_separator: decimalSep,
+          delimiter,
+          skip_rows: skipRows,
+        }),
+    [rawFileContent, amountCol, balanceCol, decimalSep, delimiter, skipRows],
+  )
+
+  const isValid = dateCol >= 0 && descCol >= 0 && amountCol >= 0 && !amountReading.undecided
 
   const handleConfirm = () => {
     const mapping: GenericCSVColumnMapping = {
@@ -178,17 +198,13 @@ export default function BankFileColumnMappingStep({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Columns3 className="h-5 w-5" />
-            Kolumnmappning
-          </CardTitle>
           <CardDescription>
             Vi kunde inte identifiera bankformatet automatiskt. Mappa kolumnerna manuellt.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Header row toggle */}
-          <div className="flex items-center justify-between rounded-lg border p-4">
+          <div className="flex items-center justify-between rounded-lg p-4 bg-control shadow-raised">
             <div className="space-y-0.5">
               <Label htmlFor="has-header">Har filen rubrikrad?</Label>
               <p className="text-xs text-muted-foreground">
@@ -199,6 +215,16 @@ export default function BankFileColumnMappingStep({
             </div>
             <Switch id="has-header" checked={hasHeader} onCheckedChange={setHasHeaderOverride} />
           </div>
+
+          {amountReading.undecided && (
+            <p role="alert" className="text-sm text-destructive">
+              {t('bank_file_decimal_mark_undecided', {
+                cell: amountReading.undecided.cell,
+                dot: formatCurrency(parseSwedishAmount(amountReading.undecided.cell, '.') ?? 0),
+                comma: formatCurrency(parseSwedishAmount(amountReading.undecided.cell, ',') ?? 0),
+              })}
+            </p>
+          )}
 
           {/* Delimiter, decimal, and date format settings */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -217,9 +243,9 @@ export default function BankFileColumnMappingStep({
             </div>
             <div className="space-y-2">
               <Label>Decimalavgränsare</Label>
-              <Select value={decimalSep} onValueChange={(v) => { if (v) setDecimalSep(v as ',' | '.') }}>
+              <Select value={decimalSep ?? amountReading.mark ?? ''} onValueChange={(v) => { if (v) setDecimalSep(v as ',' | '.') }}>
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder={t('bank_file_decimal_mark_placeholder')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value=",">Komma (1 234,56)</SelectItem>
@@ -384,7 +410,7 @@ export default function BankFileColumnMappingStep({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="rounded-lg border max-h-64 overflow-x-auto overflow-y-auto">
+            <div className="max-h-64 overflow-x-auto overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -396,10 +422,9 @@ export default function BankFileColumnMappingStep({
                 <TableBody>
                     {dataRows.slice(0, 5).map((row, i) => {
                     const amountStr = row[amountCol] || '0'
-                    const normalizedAmountStr = normalizeMinusSign(amountStr)
-                    const amount = decimalSep === ','
-                      ? parseFloat(normalizedAmountStr.replace(/\s/g, '').replace(',', '.'))
-                      : parseFloat(normalizedAmountStr.replace(/\s/g, ''))
+                    const amount = amountReading.undecided
+                      ? null
+                      : parseSwedishAmount(amountStr, amountReading.mark ?? undefined)
 
                     return (
                       <TableRow key={i}>
@@ -407,13 +432,13 @@ export default function BankFileColumnMappingStep({
                         <TableCell className="text-sm">{row[descCol] || '-'}</TableCell>
                         <TableCell
                           className={`text-right font-mono text-sm ${
-                            !isNaN(amount) && amount >= 0 ? 'text-success' : 'text-destructive'
+                            amount !== null && amount >= 0 ? 'text-success' : 'text-destructive'
                           }`}
                         >
                           {/* SEK is safe here ONLY because generic-csv hardcodes
                               currency: 'SEK' (formats/generic-csv.ts). If the
                               mapper ever gains a currency column, pass it. */}
-                          {!isNaN(amount) ? formatCurrency(amount) : amountStr}
+                          {amount !== null ? formatRowAmount(amount) : amountStr}
                         </TableCell>
                       </TableRow>
                     )
@@ -428,12 +453,12 @@ export default function BankFileColumnMappingStep({
       {/* Navigation */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           Tillbaka
         </Button>
         <Button onClick={handleConfirm} disabled={!isValid}>
           Fortsätt
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>

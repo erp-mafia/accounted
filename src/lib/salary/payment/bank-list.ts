@@ -29,7 +29,16 @@ export const SalaryBankListQuery = z.object({ format: z.enum(SALARY_PAYMENT_FILE
 
 export type SalaryBankList = Pick<
   SalaryPaymentFileOk,
-  'format' | 'filename' | 'paymentDate' | 'periodLabel' | 'employeeCount' | 'totalAmount' | 'payees' | 'payer' | 'warnings'
+  | 'format'
+  | 'filename'
+  | 'paymentDate'
+  | 'periodLabel'
+  | 'employeeCount'
+  | 'totalAmount'
+  | 'payees'
+  | 'payer'
+  | 'warnings'
+  | 'correction'
 >
 
 export type SalaryBankListResult = { ok: true; list: SalaryBankList } | SalaryPaymentFileError
@@ -40,10 +49,10 @@ export async function buildSalaryBankList(
 ): Promise<SalaryBankListResult> {
   const result = await buildSalaryPaymentFile(supabase, { ...input, dryRun: true })
   if (!result.ok) return result
-  const { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings } = result
+  const { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings, correction } = result
   return {
     ok: true,
-    list: { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings },
+    list: { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings, correction },
   }
 }
 
@@ -55,8 +64,9 @@ export function salaryBankListFileName(list: Pick<SalaryBankList, 'periodLabel' 
 /**
  * The structured error for a refused bank list. The catalogue codes are the
  * ones the v1 payment-file endpoint answers (salaryPaymentFileRefusal); where
- * the builder wrote a sentence naming the affected employees, that sentence
- * is the message, since it says who to fix.
+ * the builder wrote a sentence naming the affected employees, the paying
+ * account or the missing Swedbank ids, that sentence is the message, since it
+ * says what to fix.
  */
 export function salaryBankListErrorResponse(
   result: SalaryPaymentFileError,
@@ -66,15 +76,24 @@ export function salaryBankListErrorResponse(
   const refusal = salaryPaymentFileRefusal(result)
   if (!refusal) return errorResponse(result.cause, log, { requestId })
   const named =
-    (result.code === 'EMPLOYEE_BANK_INVALID' || result.code === 'GENERATOR_FAILED') &&
+    (result.code === 'EMPLOYEE_BANK_INVALID' ||
+      result.code === 'GENERATOR_FAILED' ||
+      result.code === 'SWEDBANK_IDS_MISSING' ||
+      result.code === 'NORDEA_SIGNER_ID_MISSING' ||
+      result.code === 'NORDEA_AGREEMENT_ID_MISSING' ||
+      result.code === 'IBAN_MISSING' ||
+      result.code === 'BIC_MISSING') &&
     typeof result.details.message === 'string' &&
     result.details.message
       ? result.details.message
       : undefined
+  // The paying account's refusal says it in English too (paying-account.ts).
+  const namedEn = named && typeof result.details.message_en === 'string' ? result.details.message_en : undefined
   return errorResponseFromCode(refusal.code, log, {
     requestId,
     ...(refusal.reason !== undefined ? { reason: refusal.reason } : {}),
     ...(refusal.details ? { details: refusal.details } : {}),
     ...(named ? { messageSv: named } : {}),
+    ...(namedEn ? { messageEn: namedEn } : {}),
   })
 }

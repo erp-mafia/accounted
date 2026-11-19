@@ -1,7 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { signOutAndNavigate } from '@/lib/auth/session-client'
 import NoticeLines from '@/components/dashboard/NoticeLines'
 import type { Notice } from '@/lib/notices/types'
 
@@ -12,12 +11,8 @@ import type { Notice } from '@/lib/notices/types'
  * section, so the shell above it never waits for the notice detectors.
  */
 export function HemNotices({ notices }: { notices: Notice[] }) {
-  const router = useRouter()
-
   async function handleSwitchAccount() {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/login')
+    await signOutAndNavigate('/login')
   }
 
   return <NoticeLines notices={notices} actionOverrides={{ other_account_hint: handleSwitchAccount }} />

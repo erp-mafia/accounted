@@ -4,19 +4,32 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
-import { classifyProviderError } from '@/lib/providers/with-provider-call'
-import { fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
-import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
+import { classifyProviderError, providerRefusalReason } from '@/lib/providers/with-provider-call'
+import { readProviderRefusal } from '@/lib/providers/read-refusal'
+import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
+import { fetchMigrationPage, hydrateCustomers, hydrateSalesInvoices, hydrateSupplierInvoices, hydrateSuppliers, type HydrationReport, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
+import { migrationRetrySeconds, type MigrationJobScope, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
 import type { CreditedInvoiceRefDto, CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
-import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput } from '@/lib/invoices/link-migrated-registration-vouchers'
+import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput, type RegistrationLinkReport } from '@/lib/invoices/link-migrated-registration-vouchers'
 import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
-import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
+import { findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
+import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex, proposedExpenseAccount } from './entity-mapper'
 import { bokioSupplierSource } from './bokio-supplier-source'
-import { invoiceWithinScope } from './invoice-scope'
+import { fiscalYearScopeFromImports, invoiceScopeNow, invoiceWithinScope } from './invoice-scope'
+import { adoptExistingCustomers, customerRegisterFacts, salesInvoicePartyFacts, type PartyCandidate } from './customer-match'
+import {
+  buildCustomerMetadataEnrichment,
+  buildSupplierEnrichment,
+  writeCustomerEnrichment,
+  writeSupplierEnrichment,
+  type ExistingCustomerMetadata,
+  type ExistingSupplierDetails,
+} from './customer-metadata'
 
 const log = createLogger('provider-migration-worker')
 const BATCH_SIZE = 10
@@ -85,25 +98,117 @@ export function invoicePartySourceId(provider: string, resource: MigrationResour
 
 function mappedParty(job: ProviderMigrationJob, resource: MigrationResource, dto: InvoiceDto): Record<string, unknown> {
   const party: PartyDto = resource === 'salesInvoices' ? (dto as SalesInvoiceDto).customer : (dto as SupplierInvoiceDto).supplier
+  // No `type`: the invoice does not say private or company, so a
+  // personnummer-shaped number makes the stub a privatperson with the number
+  // encrypted, never plaintext in org_number (isUntypedPrivatePerson).
   if (resource === 'salesInvoices') return mapCustomer({ id: '', customerNumber: '', active: true, party }, job.user_id, job.company_id)
   return mapSupplier({ id: '', supplierNumber: '', active: true, party }, job.user_id, job.company_id)
 }
 
+/**
+ * The listed customer in its detail form where the provider lists a short one
+ * (Fortnox, see hydrateCustomers; crm#1245). A customer is never saved from
+ * the short list, which has no type, active flag, VAT number, country or
+ * terms: a privatperson saved from it became a company with its personnummer
+ * as org number (crm#1436). One whose detail cannot be read is a record to
+ * retry, and running out of time leaves it pending.
+ */
+async function customerWithDetail(job: ProviderMigrationJob, listed: CustomerDto,
+  connection: ResolvedConsent, deadline: number): Promise<CustomerDto> {
+  const budget = Math.min(MAX_DETAIL_BUDGET_MS, Math.max(0, deadline - Date.now() - 5000))
+  const hydrated = await hydrateCustomers(job.provider as ProviderName, connection.accessToken,
+    connection.providerCompanyId, [listed], budget)
+  if (!hydrated.unhydratedIds.has(listed.id)) return hydrated.customers[0]
+  return partyWithoutDetail(hydrated, budget, job, connection, deadline)
+}
+
+/**
+ * The supplier twin of customerWithDetail: Fortnox's supplier list leaves out
+ * the country and the VAT number (hydrateSuppliers; crm#1436).
+ */
+async function supplierWithDetail(job: ProviderMigrationJob, listed: SupplierDto,
+  connection: ResolvedConsent, deadline: number): Promise<SupplierDto> {
+  const budget = Math.min(MAX_DETAIL_BUDGET_MS, Math.max(0, deadline - Date.now() - 5000))
+  const hydrated = await hydrateSuppliers(job.provider as ProviderName, connection.accessToken,
+    connection.providerCompanyId, [listed], budget)
+  if (!hydrated.unhydratedIds.has(listed.id)) return hydrated.suppliers[0]
+  return partyWithoutDetail(hydrated, budget, job, connection, deadline)
+}
+
+/**
+ * A party the detail pass did not reach: pending when only this invocation
+ * ran out of time, the provider's refusal when it refused the token, and
+ * otherwise a record to retry, never its list form.
+ */
+async function partyWithoutDetail(hydrated: { hydration: HydrationReport; authError?: unknown },
+  budget: number, job: ProviderMigrationJob, connection: ResolvedConsent, deadline: number): Promise<never> {
+  if (hydrated.hydration.abortedBy === 'budget' && budget < MAX_DETAIL_BUDGET_MS) throw new Error('MIGRATION_DEADLINE')
+  if (hydrated.hydration.abortedBy === 'auth') {
+    throw await readMigrationRefusal(hydrated.authError ?? new Error('PROVIDER_AUTH_EXPIRED'), job, connection, deadline)
+  }
+  throw new Error('MIGRATION_DETAIL_RETRY')
+}
+
+/** The accounts among `numbers` the company's chart holds active. */
+type ActiveAccounts = (numbers: string[]) => Promise<ReadonlySet<string>>
+
+/**
+ * Reads, for one batch, which accounts the company's chart holds active, by
+ * the engine's own rule (findMissingActiveAccounts), each account once: a
+ * supplier's proposed default account is kept only when it is (crm#1744). A
+ * failed read fails the record like any other read here, for a retry, rather
+ * than importing the supplier without the default it has.
+ */
+function activeAccountsOf(supabase: SupabaseClient, job: ProviderMigrationJob, deadline: number): ActiveAccounts {
+  const known = new Map<string, boolean>()
+  return async (numbers) => {
+    const unread = [...new Set(numbers)].filter((n) => !known.has(n))
+    if (unread.length > 0) {
+      const missing = new Set(await withinMigrationDeadline(findMissingActiveAccounts(supabase, job.company_id, unread), deadline))
+      for (const n of unread) known.set(n, !missing.has(n))
+    }
+    return new Set(numbers.filter((n) => known.get(n)))
+  }
+}
+
+/**
+ * `parties` collects the source customer behind each prepared record, keyed by
+ * chunk id, for adoptExistingCustomers to match before the commit. `scope` is
+ * the one an invoice is judged by (importedInvoiceScope).
+ */
 async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob, c: MigrationChunk,
-  connection: ResolvedConsent, deadline: number): Promise<Record<string, unknown>> {
+  connection: ResolvedConsent, deadline: number, parties: Map<string, PartyCandidate>,
+  activeAccounts: ActiveAccounts, scope: MigrationJobScope | null): Promise<Record<string, unknown>> {
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
+  // Asked twice: on the list form, to spare an inactive record its detail
+  // request, and on the detail form, because Fortnox's customer list carries
+  // no Active at all and every listed customer read as active (crm#1436).
   if (c.resource === 'customers') {
     if (!(dto as CustomerDto).active) return { id: c.id, skip: 'inactive' }
-    return { id: c.id, row: mapCustomer(dto as CustomerDto, job.user_id, job.company_id) }
+    const customer = await customerWithDetail(job, dto as CustomerDto, connection, deadline)
+    if (!customer.active) return { id: c.id, skip: 'inactive' }
+    parties.set(c.id, { sourceId: c.source_id, facts: customerRegisterFacts(job.provider, customer) })
+    return { id: c.id, row: mapCustomer(customer, job.user_id, job.company_id, job.provider) }
   }
   if (c.resource === 'suppliers') {
     if (!(dto as SupplierDto).active) return { id: c.id, skip: 'inactive' }
-    return { id: c.id, row: mapSupplier(dto as SupplierDto, job.user_id, job.company_id) }
+    const supplier = await supplierWithDetail(job, dto as SupplierDto, connection, deadline)
+    if (!supplier.active) return { id: c.id, skip: 'inactive' }
+    const proposed = proposedExpenseAccount(supplier)
+    const active = proposed ? await activeAccounts([proposed]) : undefined
+    return { id: c.id, row: mapSupplier(supplier, job.user_id, job.company_id, active) }
   }
   const listed = dto as InvoiceDto
-  if (!invoiceWithinScope(listed, job.fiscal_year_scope)) return { id: c.id, skip: 'outsideFiscalYears' }
+  // A supplier invoice cancelled (makulerad) in Fortnox was never a payable,
+  // and the supplier-invoice register has no cancelled state: it would land
+  // as credited. The default listing leaves it out (fortnoxSupplierInvoiceNotOpen);
+  // the whole register, listed on request (crm#1114), keeps it.
+  if (c.resource === 'supplierInvoices' && job.provider === 'fortnox' && listed.status === 'cancelled') {
+    return { id: c.id, skip: 'cancelled' }
+  }
+  if (!invoiceWithinScope(listed, scope)) return { id: c.id, skip: 'outsideFiscalYears' }
   const provider = job.provider as ProviderName
   const budget = Math.min(MAX_DETAIL_BUDGET_MS, Math.max(0, deadline - Date.now() - 5000))
   if (budget < 1000) throw new Error('MIGRATION_DEADLINE')
@@ -114,9 +219,14 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     // A shortened detail budget means this invocation ran out of time,
     // not that the invoice exhausted a full attempt. Leave it pending.
     if (hydrated.hydration.abortedBy === 'budget' && budget < MAX_DETAIL_BUDGET_MS) throw new Error('MIGRATION_DEADLINE')
+    // The provider refused the token or this detail: say which, so the job
+    // stops with a code the user can act on (see readMigrationRefusal).
+    if (hydrated.hydration.abortedBy === 'auth') {
+      throw await readMigrationRefusal(hydrated.authError ?? new Error('PROVIDER_AUTH_EXPIRED'), job, connection, deadline)
+    }
     // The provider client already retries transient errors. Isolate exhausted
     // detail failures so healthy records continue; the user can retry them.
-    throw new Error(hydrated.hydration.abortedBy === 'auth' ? 'PROVIDER_AUTH_EXPIRED' : 'MIGRATION_DETAIL_RETRY')
+    throw new Error('MIGRATION_DETAIL_RETRY')
   }
   const invoice = hydrated.invoices[0]
   if (invoice.id !== listed.id) throw new Error('MIGRATION_SOURCE_ID_CHANGED')
@@ -130,20 +240,38 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   if (c.resource === 'supplierInvoices' && !invoice.legalMonetaryTotal.payableAmount.value && !invoice.lines.length) {
     return { id: c.id, skip: 'zeroTotal' }
   }
+  // Keep the legacy stand-in number on the row, so the commit adopts the
+  // stored invoice by it (and checks its header) instead of inserting it again.
+  if (c.resource === 'salesInvoices' && !mapped.invoice.invoice_number && invoice.id
+    && await storedUnderSourceId(supabase, job, invoice.id, deadline)) {
+    mapped.invoice.invoice_number = invoice.id
+  }
   if (c.resource === 'supplierInvoices' && mapped.invoice.is_credit_note
     && await hasPreNormalisationCreditNote(supabase, job, mapped.invoice, deadline)) {
     return { id: c.id, skip: 'creditNoteInOldShape' }
   }
+  // A supplier invoice without a number (Bokio requires none) goes on to the
+  // commit, which stores it with a NULL number (20261005225009, crm#1039).
   // The supplier mapper holds its rows to the header whether or not VAT was
   // established, and hands back none when they disagree: the same refusal as
   // the check below, which a supplier invoice with no established VAT used to
   // pass with the voucher's own 2440 row among its items.
   if (mapped.rowsMismatch) return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
+  // A sales invoice that arrives with no rows at all (its detail form has
+  // none, or the provider serves no detail form) is imported as its header,
+  // the shape the register import and the completion pass already handle:
+  // the invoice belongs in the customer register, nothing is fabricated, and
+  // the hourly completion pass fills rows the provider can still serve (one
+  // it cannot is its noLinesAtProvider). It used to be refused as missing
+  // lines, and every retry refused it again (PH 145). A row set the mapper
+  // dropped is still refused below.
+  const rowlessAtSource = c.resource === 'salesInvoices' && invoice.lines.length === 0
   // Bokio preview rows may be absent, carry no account (Bokio sends none), or
   // lack a defensible VAT allocation. Keep the invoice and let completion
   // revisit it without fabricating rows. Another provider's row set dropped
   // for a row with no account is refused here as missing lines.
-  if (!mapped.items.length && !(c.resource === 'supplierInvoices' && (invoice as SupplierInvoiceDto).supplierEvidence)) {
+  if (!mapped.items.length && !rowlessAtSource
+    && !(c.resource === 'supplierInvoices' && (invoice as SupplierInvoiceDto).supplierEvidence)) {
     return { id: c.id, error: 'MIGRATION_SOURCE_LINES_MISSING' }
   }
   // Use the same tolerance as the existing completion pass. Store no row set
@@ -155,9 +283,13 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
       return { id: c.id, error: 'MIGRATION_ROWS_MISMATCH' }
     }
   }
+  const partySourceId = invoicePartySourceId(job.provider, c.resource, invoice)
+  if (c.resource === 'salesInvoices') {
+    parties.set(c.id, { sourceId: partySourceId, facts: salesInvoicePartyFacts(job.provider, invoice as SalesInvoiceDto) })
+  }
   return {
     id: c.id, row: mapped.invoice, items: mapped.items,
-    party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),
+    party_source_id: partySourceId, party: mappedParty(job, c.resource, invoice),
     link: { ...(provider === 'bokio' && c.resource === 'supplierInvoices'
       ? { bokioSource: bokioSupplierSource(invoice as SupplierInvoiceDto, placeholder) } : {}), kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
       ...((invoice as SupplierInvoiceDto).supplierEvidence?.voucherKind === 'cash_purchase'
@@ -175,7 +307,8 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     // cannot resolve is counted too, by provider_migration_counts, from the
     // row itself: credited_invoice_id still NULL once the link phase has run.
     warnings: { fxUnresolved: !!mapped.fxUnresolved, vatUnresolved: mapped.vatUnresolved,
-      creditNoteUnlinked: mapped.creditNoteUnlinked && !mapped.creditedInvoiceRef },
+      creditNoteUnlinked: mapped.creditNoteUnlinked && !mapped.creditedInvoiceRef,
+      ...(rowlessAtSource ? { linesMissing: true } : {}) },
   }
 }
 
@@ -206,6 +339,21 @@ async function hasPreNormalisationCreditNote(supabase: SupabaseClient, job: Prov
   if (!data?.length) return false
   log.warn('supplier credit note already imported in the pre-normalisation shape: left as is', { jobId: job.id, targetId: (data[0] as { id: string }).id })
   return true
+}
+
+/**
+ * Is a number-less sales document already stored under its source id? Imports
+ * before crm#1084 put Bokio's record id in invoice_number when a draft had no
+ * number. The commit adopts a stored invoice by its number, and a number-less
+ * record only by its source map, so such a draft imported by the wizard (no
+ * source map) would otherwise be inserted a second time.
+ */
+async function storedUnderSourceId(supabase: SupabaseClient, job: ProviderMigrationJob,
+  sourceId: string, deadline: number): Promise<boolean> {
+  const { data, error } = await withinMigrationDeadline(supabase.from('invoices').select('id')
+    .eq('company_id', job.company_id).eq('invoice_number', sourceId).limit(1), deadline)
+  if (error) throw new Error(error.message)
+  return !!data?.length
 }
 
 /** Where each register keeps a credit note's pointer at the invoice it credits. */
@@ -241,6 +389,10 @@ const CREDIT_PAIRING = {
  * invoices only, and the wizard shows none for supplier invoices yet: a
  * supplier credit note left unpaired here is logged, and carries the number
  * the provider named in its notes.
+ *
+ * Fortnox names the credited supplier invoice by its löpnummer, which the
+ * company's invoices keep in fortnox_number (crm#1157); only a row imported
+ * before that column holds the löpnummer as its supplier number instead.
  */
 export async function pairMigratedCreditNotes(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[], deadline: number): Promise<void> {
   for (const c of chunks) {
@@ -260,10 +412,18 @@ export async function pairMigratedCreditNotes(supabase: SupabaseClient, job: Pro
       if (error) throw new Error(error.message)
       target = (data as { target_id?: string | null } | null)?.target_id ?? null
     }
+    const fortnoxSupplier = own !== null && job.provider === 'fortnox'
+    if (!target && fortnoxSupplier && ref.id) {
+      const { data, error } = await withinMigrationDeadline(supabase.from('supplier_invoices').select('id')
+        .eq('company_id', job.company_id).eq('fortnox_number', ref.id).neq('id', c.target_id).limit(1), deadline)
+      if (error) throw new Error(error.message)
+      target = (data as { id: string }[] | null)?.[0]?.id ?? null
+    }
     if (!target && ref.invoiceNumber) {
       let query = supabase.from(table).select('id')
         .eq('company_id', job.company_id).eq(numberColumn, ref.invoiceNumber).neq('id', c.target_id)
       if (own) query = query.eq('supplier_id', own.supplier_id).eq('is_credit_note', false)
+      if (fortnoxSupplier) query = query.is('fortnox_number', null)
       const { data, error } = await withinMigrationDeadline(query.limit(2), deadline)
       if (error) throw new Error(error.message)
       const rows = (data ?? []) as { id: string }[]
@@ -305,20 +465,130 @@ async function supplierPairingFacts(supabase: SupabaseClient, job: ProviderMigra
   return (data as SupplierPairingFacts | null) ?? null
 }
 
+type PartyResource = 'customers' | 'suppliers'
+type CustomerCardDetails = ExistingCustomerMetadata & { id: string }
+type SupplierCardDetails = ExistingSupplierDetails & { id: string }
+
+/**
+ * Fill in what a register record knows and the card it was committed onto
+ * lacks (crm#1436). The commit resolves a record onto a card that already
+ * existed (an invoice stub, an earlier import, a hand-made card) without
+ * writing the record to it, so such a card kept none of the phone, e-mail
+ * and address a new card gets. Only a column the card has as NULL is filled
+ * (buildCustomerMetadataEnrichment); a value it has is never replaced, so a
+ * re-run moves nothing. The records are committed already: a failure here
+ * is logged and leaves the cards as they were.
+ */
+export async function enrichCommittedParties(supabase: SupabaseClient, job: ProviderMigrationJob,
+  records: Record<string, unknown>[], partyChunkIds: ReadonlyMap<string, PartyResource>, deadline: number): Promise<void> {
+  const rows = new Map<string, Record<string, unknown>>()
+  for (const record of records) {
+    if (record.row && partyChunkIds.has(record.id as string)) rows.set(record.id as string, record.row as Record<string, unknown>)
+  }
+  if (rows.size === 0) return
+  let filled = 0
+  let changed = 0
+  const dbError = (error: { message: string; code?: string }) => Object.assign(new Error(error.message), { code: error.code })
+  try {
+    const { data, error } = await withinMigrationDeadline(supabase.from('migration_job_chunks').select('id, target_id')
+      .eq('job_id', job.id).eq('state', 'done').in('id', [...rows.keys()]), deadline)
+    if (error) throw dbError(error)
+    const targets = new Map<string, string>()
+    for (const chunk of (data ?? []) as { id: string; target_id: string | null }[]) {
+      if (chunk.target_id && rows.has(chunk.id)) targets.set(chunk.id, chunk.target_id)
+    }
+    const idsOf = (resource: PartyResource) => [...new Set([...targets].filter(([id]) => partyChunkIds.get(id) === resource).map(([, target]) => target))]
+    const customerIds = idsOf('customers')
+    const supplierIds = idsOf('suppliers')
+    const customers = new Map<string, CustomerCardDetails>()
+    const suppliers = new Map<string, SupplierCardDetails>()
+    if (customerIds.length > 0) {
+      const read = await withinMigrationDeadline(supabase.from('customers')
+        .select('id, org_number, customer_type, customer_number, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, notes')
+        .eq('company_id', job.company_id).in('id', customerIds), deadline)
+      if (read.error) throw dbError(read.error)
+      for (const card of (read.data ?? []) as CustomerCardDetails[]) customers.set(card.id, card)
+    }
+    if (supplierIds.length > 0) {
+      const read = await withinMigrationDeadline(supabase.from('suppliers')
+        .select('id, org_number, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, notes')
+        .eq('company_id', job.company_id).in('id', supplierIds), deadline)
+      if (read.error) throw dbError(read.error)
+      for (const card of (read.data ?? []) as SupplierCardDetails[]) suppliers.set(card.id, card)
+    }
+    // Two records committed onto one card in a batch: the first one fills it.
+    const seen = new Set<string>()
+    for (const [chunkId, target] of targets) {
+      if (seen.has(target)) continue
+      seen.add(target)
+      const row = rows.get(chunkId)!
+      let outcome: Awaited<ReturnType<typeof writeCustomerEnrichment>> | null = null
+      if (partyChunkIds.get(chunkId) === 'customers') {
+        const card = customers.get(target)
+        const changes = card ? buildCustomerMetadataEnrichment(card, row) : null
+        if (changes) outcome = await withinMigrationDeadline(writeCustomerEnrichment(supabase, job.company_id, target, changes), deadline)
+      } else {
+        const card = suppliers.get(target)
+        const changes = card ? buildSupplierEnrichment(card, row) : null
+        if (changes) outcome = await withinMigrationDeadline(writeSupplierEnrichment(supabase, job.company_id, target, changes), deadline)
+      }
+      if (outcome?.error) throw dbError(outcome.error)
+      if (outcome?.data) filled++
+      else if (outcome) changed++
+    }
+  } catch (error) {
+    log.warn('matched cards left without the register details', { jobId: job.id, filled, changed,
+      code: failureCode(error), ...failureDetails(error) })
+    return
+  }
+  if (filled > 0 || changed > 0) log.info('matched cards filled from the register', { jobId: job.id, filled, changed })
+}
+
+/**
+ * The scope this batch's invoices are judged by: the fiscal years the company
+ * has imported as they stand now (invoiceScopeNow). A job created after the
+ * first years of a migration judged every later invoice by those years, and
+ * declined the invoices of the years imported next as outside them (crm#2002).
+ * A failed read fails the batch for a retry, like any other read here.
+ */
+async function importedInvoiceScope(supabase: SupabaseClient, job: ProviderMigrationJob,
+  deadline: number): Promise<MigrationJobScope | null> {
+  const { data, error } = await withinMigrationDeadline(whereSieImportInPlace(supabase.from('sie_imports')
+    .select('fiscal_year_start,fiscal_year_end').eq('company_id', job.company_id)), deadline)
+  if (error) throw new Error(error.message)
+  return invoiceScopeNow(job.fiscal_year_scope, fiscalYearScopeFromImports(data))
+}
+
 async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[],
-  connection: ResolvedConsent, deadline: number): Promise<void> {
+  connection: ResolvedConsent, deadline: number, onCommit: () => void): Promise<void> {
   let batch: Record<string, unknown>[] = []
   let bytes = 0
+  const parties = new Map<string, PartyCandidate>()
+  const activeAccounts = activeAccountsOf(supabase, job, deadline)
+  const scope = chunks.some(c => c.resource === 'salesInvoices' || c.resource === 'supplierInvoices')
+    ? await importedInvoiceScope(supabase, job, deadline) : job.fiscal_year_scope
+  const partyChunkIds = new Map<string, PartyResource>()
+  for (const c of chunks) if (c.resource === 'customers' || c.resource === 'suppliers') partyChunkIds.set(c.id, c.resource)
   const commit = async () => {
     if (!batch.length) return
+    // A customer the company already has a card for is mapped onto that card
+    // first, so the commit reuses it instead of creating a stub (crm#1294).
+    const written = batch.flatMap(record => {
+      const party = record.row ? parties.get(record.id as string) : undefined
+      return party ? [party] : []
+    })
+    await adoptExistingCustomers(supabase, job, written, promise => withinMigrationDeadline(promise, deadline))
     await migrationRpc(supabase, job, 'commit_provider_migration_records', { p_records: batch }, deadline)
+    onCommit()
+    const committed = batch
     batch = []; bytes = 0
+    await enrichCommittedParties(supabase, job, committed, partyChunkIds, deadline)
   }
   try {
     for (const c of chunks) {
       if (Date.now() >= deadline - 5000) break
       let record: Record<string, unknown>
-      try { record = await prepareRecord(supabase, job, c, connection, deadline) }
+      try { record = await prepareRecord(supabase, job, c, connection, deadline, parties, activeAccounts, scope) }
       catch (error) {
         const code = failureCode(error)
         if (['MIGRATION_DEADLINE', 'PROVIDER_AUTH_EXPIRED'].includes(code)
@@ -348,15 +618,54 @@ async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob
       const report = linked.reports.find(r => r.invoiceId === c.target_id)
       if (!report) return { id: c.id, error: 'MIGRATION_LINK_RESULT_MISSING' }
       return { id: c.id, report, journal_entry_id: report.outcome === 'linked' ? report.journalEntryId : null,
-        ...(['ambiguous', 'amountMismatch'].includes(report.outcome) ? { error: 'MIGRATION_REGISTRATION_REVIEW' } : {}) }
+        // The review keeps what was found (receipt.review), so the wizard can
+        // say why the voucher was not linked instead of only that it was not.
+        ...(['ambiguous', 'amountMismatch'].includes(report.outcome) ? { error: 'MIGRATION_REGISTRATION_REVIEW',
+          review: { kind: 'registration', outcome: report.outcome,
+            bookedSek: report.bookedSek ?? null, expectedSek: report.expectedSek ?? null } } : {}) }
     })
   } else if (job.phase === 'reconcile') {
     const result = await reconcileSupplierInvoiceVouchers({ supabase, companyId: job.company_id, userId: job.user_id,
       dryRun: true, invoiceIds: chunks.map(c => c.target_id!), maxInvoices: BATCH_SIZE })
-    records = chunks.map(c => ({ id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
-      ...(result.review.some(review => review.supplier_invoice_id === c.target_id) ? { error: 'MIGRATION_PAYMENT_REVIEW' } : {}) }))
+    records = chunks.map(c => {
+      const review = result.review.find(item => item.supplier_invoice_id === c.target_id)
+      return { id: c.id, payment: result.links.find(link => link.supplier_invoice_id === c.target_id) ?? null,
+        ...(review ? { error: 'MIGRATION_PAYMENT_REVIEW', review: { kind: 'payment', reason: review.reason } } : {}) }
+    })
   } else records = chunks.map(c => ({ id: c.id }))
-  await migrationRpc(supabase, job, 'commit_provider_migration_followup', { p_records: records }, deadline)
+  await commitFollowup(supabase, job, records, deadline)
+}
+
+/**
+ * A link batch in which a foreign-currency invoice takes the SEK amount its
+ * verifikat books (report.sourceRate, crm#1039) commits through
+ * commit_provider_migration_source_rate_links: the followup itself, then that
+ * amount onto each invoice the followup linked, in one transaction. Until
+ * migration 20261005230200 is applied the function is missing (PGRST202):
+ * such an invoice then stops for review as it did before, and a retry links
+ * it once the function exists.
+ *
+ * Silent like the SIE import it follows: the settle phase reaches
+ * link_supplier_invoice_to_voucher inside SQL, and a kursdifferens verifikat
+ * it posts there emits no journal_entry.committed. A migration brings in
+ * history whose own vouchers were never announced.
+ */
+async function commitFollowup(supabase: SupabaseClient, job: ProviderMigrationJob, records: Record<string, unknown>[],
+  deadline: number): Promise<void> {
+  const atSourceRate = (r: Record<string, unknown>) => !!(r.report as RegistrationLinkReport | undefined)?.sourceRate
+  if (job.phase !== 'link' || !records.some(atSourceRate)) {
+    await migrationRpc(supabase, job, 'commit_provider_migration_followup', { p_records: records }, deadline)
+    return
+  }
+  try {
+    await migrationRpc(supabase, job, 'commit_provider_migration_source_rate_links', { p_records: records }, deadline)
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== 'PGRST202') throw error
+    log.warn('source-rate links left for review: commit_provider_migration_source_rate_links is not deployed', { jobId: job.id })
+    await migrationRpc(supabase, job, 'commit_provider_migration_followup', {
+      p_records: records.map(r => atSourceRate(r) ? { id: r.id, error: 'MIGRATION_REGISTRATION_REVIEW' } : r),
+    }, deadline)
+  }
 }
 
 export function failureCode(error: unknown): string {
@@ -377,17 +686,66 @@ export function failureCode(error: unknown): string {
 /**
  * Structured facts only. A raw message can quote the row a database error
  * rejected, so it stays out of the log; the class, SQLSTATE or PostgREST
- * code and HTTP status say which layer failed and how.
+ * code, HTTP status and the provider's numeric error code say which layer
+ * failed and how. The provider code tells a missing Fortnox licence (2001101)
+ * from a missing permission (2000663) apart, which the status alone does not.
  */
-function failureDetails(error: unknown): { errorName: string; dbCode?: string; httpStatus?: number } {
+function failureDetails(error: unknown): { errorName: string; dbCode?: string; httpStatus?: number; providerCode?: string } {
   // The consent resolver throws plain objects with a status, not Errors.
   const { code, statusCode, status } = (typeof error === 'object' && error !== null ? error : {}) as
     { code?: unknown; statusCode?: unknown; status?: unknown }
   const http = typeof statusCode === 'number' ? statusCode : typeof status === 'number' ? status : undefined
+  const providerCode = fortnoxApiErrorCode(error)
   return {
     errorName: error instanceof Error ? error.name : typeof error,
     ...(typeof code === 'string' && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(code) ? { dbCode: code } : {}),
     ...(http !== undefined && Number.isInteger(http) && http >= 100 && http <= 599 ? { httpStatus: http } : {}),
+    ...(providerCode ? { providerCode } : {}),
+  }
+}
+
+/**
+ * Reads only a 403 that classifyProviderError would call a dead grant
+ * (PROVIDER_AUTH_EXPIRED): a job spans invocations and reconnects, so the
+ * token is asked instead of a run's history (crm#1081). Running out of time
+ * defers the step.
+ */
+async function readMigrationRefusal(error: unknown, job: ProviderMigrationJob, connection: ResolvedConsent,
+  deadline: number): Promise<unknown> {
+  if (failureCode(error) !== 'PROVIDER_AUTH_EXPIRED') return error
+  return withinMigrationDeadline(readProviderRefusal(error, job.provider as ProviderName, connection, deadline), deadline)
+}
+
+/**
+ * One page of a register, or null when the provider refused the register.
+ *
+ * A refusal is the provider's verdict on the register, not a fault: Fortnox
+ * answers 2001101 when the company's plan lacks the module (customers and
+ * invoices need Kundfaktura or Order) and 2000663 or a 403 when the user who
+ * connected lacks the right. Every retry gets the same answer, so the job
+ * records the register with why and moves on to the next one: the others
+ * still import, and the wizard names the refused one with its remedy. Pages
+ * of the register already saved stay and import.
+ */
+async function fetchRegisterPage(supabase: SupabaseClient, job: ProviderMigrationJob, connection: ResolvedConsent,
+  resource: MigrationResource, deadline: number): Promise<Awaited<ReturnType<typeof fetchMigrationPage>> | null> {
+  try {
+    // The budget scope reaches the provider client, its rate limiter and
+    // withRetry: at the deadline the request aborts and no retry starts.
+    // The outer race alone only stops waiting, and left up to three 60 s
+    // attempts running on in a long-lived (self-hosted) process.
+    return await withinMigrationDeadline(withExecutionDeadline(deadline, 'migration-list',
+      () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
+        connection.providerCompanyId, resource, job.next_page,
+        { allSupplierInvoices: job.fiscal_year_scope?.allSupplierInvoices === true })), deadline)
+  } catch (error) {
+    if (failureCode(await readMigrationRefusal(error, job, connection, deadline)) !== 'PROVIDER_RESOURCE_FORBIDDEN') throw error
+    const reason = providerRefusalReason(error)
+    await migrationRpc(supabase, job, 'skip_provider_migration_resource',
+      { p_resource: resource, p_page: job.next_page, p_reason: reason }, deadline)
+    log.warn('migration register refused by the provider: skipped', { jobId: job.id, resource, page: job.next_page,
+      reason, ...failureDetails(error) })
+    return null
   }
 }
 
@@ -409,8 +767,24 @@ export async function runProviderMigrationWorker(options: {
     if (error) throw new Error(error.message)
     if (!data?.id) break
     let job = data as ProviderMigrationJob
+    if (job.state !== 'running') {
+      // The claim found the job's lease lapsed for the fifth run in a row
+      // with nothing moved, and parked it instead of handing it out
+      // (20261112192901): its worker is ended every time, which no release
+      // ever recorded. Reported here, once, because the runs that died could
+      // not; the person sees "Importen behöver ses över" with Fortsätt.
+      log.error('migration job parked: its worker was ended five runs in a row without moving it', {
+        jobId: job.id, companyId: job.company_id, provider: job.provider, phase: job.phase,
+        resource: job.resources[job.resource_index - 1], page: job.next_page, failures: job.failures, code: job.error_code })
+      if (options.jobId) break
+      continue
+    }
     jobs++
     let started = Date.now()
+    // This claim moved the job: a checkpoint, or records an import batch
+    // committed before the deadline cut it short. Running out of time is a
+    // deferral only then (see the catch).
+    let moved = false
     try {
       if (!job.consent_id) throw new Error('PROVIDER_AUTH_EXPIRED')
       const connection = await withinMigrationDeadline(resolveConsent(job.company_id, job.consent_id), deadline - 5000)
@@ -423,33 +797,30 @@ export async function runProviderMigrationWorker(options: {
         log.info('migration phase started', { jobId: job.id, phase: job.phase, resource: job.resources[job.resource_index - 1], page: job.next_page })
         if (job.phase === 'discover') {
           const resource = job.resources[job.resource_index - 1]
-          // The budget scope reaches the provider client, its rate limiter and
-          // withRetry: at the deadline the request aborts and no retry starts.
-          // The outer race alone only stops waiting, and left up to three 60 s
-          // attempts running on in a long-lived (self-hosted) process.
-          const page = await withinMigrationDeadline(withExecutionDeadline(deadline - 5000, 'migration-list',
-            () => fetchMigrationPage(job.provider as ProviderName, connection.accessToken,
-              connection.providerCompanyId, resource, job.next_page)), deadline - 5000)
-          const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
-            ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
-              ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
-          // Persist bounded segments even when an unpaged upstream returns its
-          // entire register. Only the final segment advances the page cursor.
-          let segment: typeof records = []; let bytes = 0
-          for (const record of records) {
-            const size = Buffer.byteLength(JSON.stringify(record))
-            if (segment.length >= 250 || bytes + size > MAX_BATCH_BYTES) {
-              if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
-              await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
-                p_records: segment, p_next_page: 0 }, deadline - 5000)
-              segment = []; bytes = 0
+          const page = await fetchRegisterPage(supabase, job, connection, resource, deadline - 5000)
+          if (page) {
+            const records = page.items.map((dto, i) => ({ source_id: dto.id || `missing:${job.next_page}:${i}`,
+              ...sealMigrationPayload(Buffer.byteLength(JSON.stringify(dto)) > MAX_BATCH_BYTES / 2
+                ? { id: dto.id, migrationError: 'MIGRATION_INVOICE_TOO_LARGE' } : dto) }))
+            // Persist bounded segments even when an unpaged upstream returns its
+            // entire register. Only the final segment advances the page cursor.
+            let segment: typeof records = []; let bytes = 0
+            for (const record of records) {
+              const size = Buffer.byteLength(JSON.stringify(record))
+              if (segment.length >= 250 || bytes + size > MAX_BATCH_BYTES) {
+                if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
+                await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
+                  p_records: segment, p_next_page: 0 }, deadline - 5000)
+                segment = []; bytes = 0
+              }
+              segment.push(record); bytes += size
             }
-            segment.push(record); bytes += size
+            if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
+            await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
+              p_records: segment, p_next_page: page.nextPage }, deadline - 5000)
+            log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total,
+              ...(page.declined ? { declined: page.declined } : {}) })
           }
-          if (Date.now() >= deadline - 5000) throw new Error('MIGRATION_DEADLINE')
-          await migrationRpc(supabase, job, 'save_provider_migration_page', { p_resource: resource, p_page: job.next_page,
-            p_records: segment, p_next_page: page.nextPage }, deadline - 5000)
-          log.info('migration page persisted', { jobId: job.id, resource, page: job.next_page, rows: records.length, total: page.total })
         } else {
           const state = { import: 'pending', link: 'imported', reconcile: 'linked', settle: 'planned', completed: 'done' }[job.phase]
           const { data: rows, error: readError } = await withinMigrationDeadline(supabase.from('migration_job_chunks')
@@ -457,11 +828,14 @@ export async function runProviderMigrationWorker(options: {
             .eq('state', state).order('resource_order').order('id').limit(BATCH_SIZE), deadline - 5000)
           if (readError) throw new Error(readError.message)
           const chunks = (rows ?? []) as MigrationChunk[]
-          if (!chunks.length) await migrationRpc(supabase, job, 'advance_provider_migration_job', {}, deadline - 5000)
-          else if (job.phase === 'import') await importBatch(supabase, job, chunks, connection, deadline - 5000)
+          if (!chunks.length) {
+            await migrationRpc(supabase, job, 'advance_provider_migration_job', {}, deadline - 5000)
+          }
+          else if (job.phase === 'import') await importBatch(supabase, job, chunks, connection, deadline - 5000, () => { moved = true })
           else await withinMigrationDeadline(followupBatch(supabase, job, chunks, deadline - 5000), deadline - 5000)
         }
         batches++
+        moved = true
         log.info('migration phase checkpointed', { jobId: job.id, phase: job.phase, elapsedMs: Date.now() - started })
         const { data: current, error: currentError } = await withinMigrationDeadline(supabase.from('migration_jobs').select('*')
           .eq('id', job.id).eq('company_id', job.company_id)
@@ -470,13 +844,22 @@ export async function runProviderMigrationWorker(options: {
         if (!current) return { jobs, batches }
         job = current as ProviderMigrationJob
       }
-      if (job.state === 'running') await migrationRpc(supabase, job, 'release_provider_migration_job', {}, deadline)
+      if (job.state === 'running') {
+        if (!moved) throw new Error('MIGRATION_STALLED')
+        await migrationRpc(supabase, job, 'release_provider_migration_job', {}, deadline)
+      }
     } catch (error) {
       const failedAt = Date.now()
-      const code = failureCode(error)
+      // Out of time after moving the job is a deferral: the next claim resumes
+      // where this one stopped. Out of time with nothing moved is a stall and
+      // counts like a failure. A release without a code resets the streak, so
+      // a step that always overran the budget looped as "running" every
+      // minute and never asked the user to act (#115).
+      const failed = failureCode(error)
+      const code = failed === 'MIGRATION_DEADLINE' && !moved ? 'MIGRATION_STALLED' : failed
       const deferred = code === 'MIGRATION_DEADLINE'
-      const attention = !deferred && (['PROVIDER_AUTH_EXPIRED','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
-        'MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4)
+      const attention = !deferred && (['PROVIDER_AUTH_EXPIRED','PROVIDER_RESOURCE_FORBIDDEN','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
+        'BOKIO_PLAN_NO_API','MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4)
       await migrationRpc(supabase, job, 'release_provider_migration_job', {
         p_error_code: deferred ? null : code,
         p_retry_seconds: deferred ? 0 : attention ? -1 : migrationRetrySeconds(job.failures + 1),
@@ -487,7 +870,9 @@ export async function runProviderMigrationWorker(options: {
       })
       // The code alone hid a 15 s timeout behind MIGRATION_RETRY for hours:
       // name the step and the error so the next one reads itself.
-      log.warn('migration yielded', { jobId: job.id, code, needsAttention: attention, phase: job.phase,
+      // A stall that parks the job reaches error tracking; the user sees the retry card.
+      const report = code === 'MIGRATION_STALLED' && attention ? log.error : log.warn
+      report('migration yielded', { jobId: job.id, code, needsAttention: attention, phase: job.phase,
         resource: job.resources[job.resource_index - 1], page: job.next_page, elapsedMs: failedAt - started,
         ...failureDetails(error) })
       break

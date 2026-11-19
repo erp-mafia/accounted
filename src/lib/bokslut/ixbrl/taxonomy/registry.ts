@@ -6,12 +6,13 @@
  * staleness via `npm run taxonomy:check`.
  *
  * Taxonomy versions are data, not code: each version is its own generated
- * file selected through lib/bokslut/ixbrl/taxonomy/entry-points.ts, so the
- * September 2026 generation (dimensions instead of tuples) can ship as a new
- * registry + emitter without touching the K2 2024-09-12 path.
+ * file selected through lib/bokslut/ixbrl/taxonomy/entry-points.ts, so a new
+ * generation (dimensions instead of tuples) can ship as a new registry +
+ * emitter without touching the K2 2024-09-12 or K3 2021-10-31 paths.
  */
 
 import k2Ab20240912 from './generated/k2-ab-2024-09-12.json'
+import k3Ab20211031 from './generated/k3-ab-2021-10-31.json'
 
 export interface TaxonomyConcept {
   /** Namespace prefix (e.g. "se-gen-base"); URI resolved per entry point. */
@@ -24,6 +25,9 @@ export interface TaxonomyConcept {
   periodType: 'duration' | 'instant' | null
   kind: 'item' | 'tuple'
   sections: string[]
+  /** Allowed values when the schema restricts the string to an enumeration
+   *  (fastställelseintyg sentences, företrädarroll). */
+  enumeration?: string[]
 }
 
 export interface TaxonomyTupleMember {
@@ -37,6 +41,8 @@ export interface TaxonomyRegistry {
     taxonomy: string
     version: string
     revision: string
+    /** Package registries: the forms whose presentation defines membership. */
+    forms?: string[]
     conceptCount: number
     tupleCount: number
   }
@@ -46,6 +52,9 @@ export interface TaxonomyRegistry {
 
 const REGISTRIES: Record<string, TaxonomyRegistry> = {
   'k2-ab-2024-09-12': k2Ab20240912 as unknown as TaxonomyRegistry,
+  // K3 AB 2021-10-31 as revised 2026-08-31, generated from the taxonomy
+  // package: only concepts of the forms the risbs entry point imports.
+  'k3-ab-2021-10-31': k3Ab20211031 as unknown as TaxonomyRegistry,
 }
 
 export function getRegistry(id: string): TaxonomyRegistry {

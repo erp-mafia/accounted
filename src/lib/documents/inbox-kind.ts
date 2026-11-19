@@ -47,6 +47,8 @@ export interface InboxKindSource {
   kind_hint?: string | null
   extracted_data?: {
     documentKind?: string | null
+    sellerIsOwnCompany?: boolean | null
+    supplier?: { name?: string | null } | null
     totals?: { subtotal?: unknown; vatAmount?: unknown; total?: unknown } | null
   } | null
 }
@@ -74,8 +76,36 @@ export function readsAsCredit(
   return options.labelled && isNegative(totals.total)
 }
 
+/**
+ * Whether the reading is of the company's own sales invoice: the reader found
+ * the company itself as the seller of an invoice or a credit note
+ * (stripOwnCompanyAsSupplier, crm#1830). Not a purchase: no supplier invoice,
+ * no cost category, no one-click booking. It stops counting the moment a
+ * person says otherwise, by naming a seller on it or by typing the document
+ * (either write moves documentKind off 'other' or fills the name), so a
+ * reading that took the buyer's block for the seller is put right by hand.
+ */
+export function isOwnIssuedInvoice(extracted: InboxKindSource['extracted_data'] | Record<string, unknown>): boolean {
+  const data = (extracted ?? null) as InboxKindSource['extracted_data']
+  if (!data || data.sellerIsOwnCompany !== true || data.documentKind !== 'other') return false
+  const name = data.supplier?.name
+  return !(typeof name === 'string' && name.trim() !== '')
+}
+
+/** The label key of an item's kind: the company's own invoice says so, everything else is its kind. */
+export function inboxKindLabelKey(
+  kind: InboxDocumentKind | null,
+  extracted: InboxKindSource['extracted_data'] | Record<string, unknown>,
+): `doc_kind_${InboxDocumentKind | 'own_invoice'}` | null {
+  if (isOwnIssuedInvoice(extracted)) return 'doc_kind_own_invoice'
+  return kind ? `doc_kind_${kind}` : null
+}
+
 /** The kind to show for an item: the declared hint first, then the AI's. */
 export function resolveInboxKind(item: InboxKindSource): InboxDocumentKind | null {
+  // The company's own invoice is no supplier's document, whatever address it
+  // was mailed to: a +lev or +ver tag says where it was sent, not who issued it.
+  if (isOwnIssuedInvoice(item.extracted_data)) return 'other'
   const hint = isInboxDocumentKind(item.kind_hint) ? item.kind_hint : null
   if (hint === 'receipt') return hint
   const aiKind = item.extracted_data?.documentKind

@@ -1,5 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
-import { pdfNumberText } from '@/lib/pdf/number-text'
+import { swedishMonthName } from '@/lib/dates/swedish-months'
+import { pdfAmount } from '@/lib/pdf/number-text'
 import { getBranding } from '@/lib/branding/service'
 import type { SalaryRunUnderlagData } from '@/lib/salary/run-underlag'
 
@@ -10,7 +11,8 @@ import type { SalaryRunUnderlagData } from '@/lib/salary/run-underlag'
  * BFL 7 kap). Swedish in both locales, like the payslip. Contents:
  * - Company, period, payment date, status (rättelse / korrigerad)
  * - Per employee: brutto, skatt, netto, arbetsgivaravgifter,
- *   semesterlöneskuld with its avgifter, total cost; totals row
+ *   semesterlöneskuld with its avgifter, total cost; totals row, and under
+ *   it the whole-krona avgift the AGI declares when it differs
  * - The posted verifikat with voucher number, account, account name,
  *   debit and credit, and per-verifikat sums
  */
@@ -99,6 +101,7 @@ const styles = StyleSheet.create({
   },
   colName: { flex: 3 },
   colPnr: { flex: 1 },
+  colNameAndPnr: { flex: 4 },
   colAmount: { flex: 1.6, textAlign: 'right' as const },
   colAccount: { flex: 0.8 },
   colAccountName: { flex: 3 },
@@ -118,26 +121,13 @@ const styles = StyleSheet.create({
   },
 })
 
-function fmt(amount: number): string {
-  // pdfNumberText: Intl writes negatives with U+2212, which the bundled
-  // Helvetica cannot draw (issue #1982).
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount),
-  )
-}
-
 /** Debit/credit cells stay blank for a zero, as on a printed verifikat. */
 function fmtOrBlank(amount: number): string {
-  return amount === 0 ? '' : fmt(amount)
+  return amount === 0 ? '' : pdfAmount(amount)
 }
 
-const MONTH_NAMES = [
-  'januari', 'februari', 'mars', 'april', 'maj', 'juni',
-  'juli', 'augusti', 'september', 'oktober', 'november', 'december',
-]
-
 export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) {
-  const periodLabel = `${MONTH_NAMES[data.periodMonth - 1]} ${data.periodYear}`
+  const periodLabel = `${swedishMonthName(data.periodMonth)} ${data.periodYear}`
   const generatedDate = data.generatedAt.slice(0, 10)
   const vouchers = data.entries.map((e) => e.voucher).filter((v): v is string => !!v)
 
@@ -187,26 +177,42 @@ export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) 
             <View key={`${row.employeeId}-${i}`} style={i % 2 === 1 ? styles.rowAlt : styles.row} wrap={false}>
               <Text style={styles.colName}>{row.employeeName}</Text>
               <Text style={styles.colPnr}>{row.personnummerLast4}</Text>
-              <Text style={styles.colAmount}>{fmt(row.grossSalary)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.taxWithheld)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.netSalary)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.avgifterAmount)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.vacationAccrual)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.vacationAccrualAvgifter)}</Text>
-              <Text style={styles.colAmount}>{fmt(row.totalEmployerCost)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.grossSalary)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.taxWithheld)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.netSalary)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.avgifterAmount)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.vacationAccrual)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.vacationAccrualAvgifter)}</Text>
+              <Text style={styles.colAmount}>{pdfAmount(row.totalEmployerCost)}</Text>
             </View>
           ))}
           <View style={styles.totalRow} wrap={false}>
             <Text style={styles.colName}>Summa ({data.rows.length} anställda)</Text>
             <Text style={styles.colPnr}></Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.grossSalary)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.taxWithheld)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.netSalary)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.avgifterAmount)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.vacationAccrual)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.vacationAccrualAvgifter)}</Text>
-            <Text style={styles.colAmount}>{fmt(data.totals.totalEmployerCost)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.grossSalary)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.taxWithheld)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.netSalary)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.avgifterAmount)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.vacationAccrual)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.vacationAccrualAvgifter)}</Text>
+            <Text style={styles.colAmount}>{pdfAmount(data.totals.totalEmployerCost)}</Text>
           </View>
+          {/* AGI amounts are whole kronor and Skatteverket computes the avgift
+              on whole-krona underlag with öretal dropped, so the declared
+              amount sits under the öre-exact total it differs from (crm#1149). */}
+          {data.declaredAvgifter !== null && (
+            <View style={styles.row} wrap={false}>
+              {/* Spans the name and pnr columns so the label stays on one line. */}
+              <Text style={styles.colNameAndPnr}>Deklarerad avgift i AGI (hela kronor)</Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}>{pdfAmount(data.declaredAvgifter)}</Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+            </View>
+          )}
         </View>
 
         {/* Posted verifikat */}
@@ -241,8 +247,8 @@ export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) 
                   <Text style={styles.colAccount}></Text>
                   <Text style={styles.colAccountName}>Summa</Text>
                   <Text style={styles.colLineDesc}></Text>
-                  <Text style={styles.colAmount}>{fmt(entry.totalDebit)}</Text>
-                  <Text style={styles.colAmount}>{fmt(entry.totalCredit)}</Text>
+                  <Text style={styles.colAmount}>{pdfAmount(entry.totalDebit)}</Text>
+                  <Text style={styles.colAmount}>{pdfAmount(entry.totalCredit)}</Text>
                 </View>
               </View>
             ))

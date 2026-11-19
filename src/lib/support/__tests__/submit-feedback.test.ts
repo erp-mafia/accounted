@@ -16,6 +16,29 @@ vi.mock('posthog-js', () => ({
   },
 }))
 
+// Whether the person consented, so PostHog was started (lib/analytics/
+// client.ts). With consent the gate is the deployment's own switch, as
+// before consent existed; without it PostHog never runs.
+let consented = true
+vi.mock('@/lib/analytics/client', async () => {
+  const { isAnalyticsEnabled } = await import('@/lib/analytics/enabled')
+  const { default: sdk } = await import('posthog-js')
+  const active = () => consented && isAnalyticsEnabled()
+  return {
+    isAnalyticsActive: active,
+    loadedAnalytics: () => (active() ? sdk : null),
+    // As client.ts: only when analytics runs, and never throws into the caller.
+    captureAnalyticsEvent: (event: string, properties?: Record<string, unknown>) => {
+      if (!active()) return
+      try {
+        sdk.capture(event, properties)
+      } catch {
+        // The real helper swallows a throwing SDK the same way.
+      }
+    },
+  }
+})
+
 describe('submitFeedback', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
@@ -25,6 +48,7 @@ describe('submitFeedback', () => {
     sendMessageMock.mockReset()
     sendMessageMock.mockResolvedValue({ ticket_id: 't1' })
     isAvailableMock.mockReturnValue(true)
+    consented = true
     // Analytics on by default so the breadcrumb path is exercised.
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
     vi.stubEnv('NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN', 'phc_test')
@@ -48,6 +72,18 @@ describe('submitFeedback', () => {
 
     expect(result).toEqual({ ok: true, channels: ['ticket'] })
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('delivers over email, and sends nothing to PostHog, for a person who did not consent to analytics', async () => {
+    consented = false
+    const fetchSpy = stubFetchOk()
+
+    const result = await submitFeedback({ subject: 'Hjälpsida', message: 'Hjälp tack' })
+
+    expect(result).toEqual({ ok: true, channels: ['email'] })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/support/contact', expect.objectContaining({ method: 'POST' }))
+    expect(sendMessageMock).not.toHaveBeenCalled()
+    expect(captureMock).not.toHaveBeenCalled()
   })
 
   it('delivers over email when conversations are unavailable', async () => {
@@ -178,7 +214,7 @@ describe('submitFeedback', () => {
       expect(result).toEqual({ ok: true, channels: ['email'] })
     })
 
-    // Since 2026-09-14 the founders answer in PostHog and the reply shows in
+    // Since 2026-09-14 the operators answer in PostHog and the reply shows in
     // the app, so the ticket IS the delivery; email is not even attempted.
     it('reports success on the ticket alone and leaves email untouched', async () => {
       const fetchSpy = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'down' }) })
@@ -372,6 +408,44 @@ describe('submitFeedback', () => {
 
       expect(result.ok).toBe(false)
       expect(result.error).toBe('Du kan bifoga max 5 filer')
+    })
+
+    // The dialog says where the answer comes (accounted#55): the address the
+    // route set as the mail's Reply-To.
+    it('carries the reply address the route reports for a mailed message', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ data: { sent: true, reply_to: 'user@example.test' } }),
+        })
+      )
+
+      const result = await submitFeedback({
+        message: 'Se bilagan',
+        files: [new File(['x'], 'a.png', { type: 'image/png' })],
+      })
+
+      expect(result).toEqual({ ok: true, channels: ['email'], replyTo: 'user@example.test' })
+    })
+
+    it('still counts the mail as sent when the response body is unreadable', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => {
+            throw new SyntaxError('Unexpected end of JSON input')
+          },
+        })
+      )
+
+      const result = await submitFeedback({
+        message: 'Se bilagan',
+        files: [new File(['x'], 'a.png', { type: 'image/png' })],
+      })
+
+      expect(result).toStrictEqual({ ok: true, channels: ['email'] })
     })
   })
 })

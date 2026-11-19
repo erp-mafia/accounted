@@ -7,11 +7,12 @@ vi.mock('../lib/submission-service', async (importOriginal) => {
   return {
     ...actual,
     submitArsredovisning: vi.fn(),
+    submitRevisionsberattelse: vi.fn(),
   }
 })
 
 import { bolagsverketExtension } from '../index'
-import { BolagsverketSubmissionError, submitArsredovisning } from '../lib/submission-service'
+import { BolagsverketSubmissionError, submitArsredovisning, submitRevisionsberattelse } from '../lib/submission-service'
 
 function route(method: string, path: string) {
   const found = bolagsverketExtension.apiRoutes?.find(
@@ -30,7 +31,6 @@ function makeCtx(supabase: unknown): ExtensionContext {
     supabase,
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn(), clear: vi.fn() },
-    storage: {},
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     services: {},
   } as unknown as ExtensionContext
@@ -144,6 +144,7 @@ describe('POST /submissions: environment validation + ceiling', () => {
     vi.mocked(submitArsredovisning).mockResolvedValue({
       outcome: 'uploaded',
       submissionId: 'sub-1',
+      handlingTyp: 'arsredovisning_komplett',
       idnummer: '49679',
       sha256: 'sha',
       url: 'https://ext.bolagsverket.se/eu/49679',
@@ -221,6 +222,25 @@ describe('POST /submissions: config + error mapping', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(submitArsredovisning).not.toHaveBeenCalled()
   })
+
+  // Each is a 12-digit real-looking number, so only the named rule rejects it.
+  it.each([
+    ['a wrong check digit', '198001019870'],
+    ['a birth year after this year', '209901019878'],
+    ['a samordningsnummer (day + 60)', '198001619876'],
+  ])('rejects a personnummer with %s', async (_label, pnr) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'member' }, error: null })
+
+    const res = await route('POST', '/submissions').handler(
+      makePost('/submissions', { ...validBody, avsandare_pnr: pnr }),
+      makeCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(submitArsredovisning).not.toHaveBeenCalled()
+  })
 })
 
 describe('GET /status', () => {
@@ -240,5 +260,104 @@ describe('GET /status', () => {
     expect(body.data.environment_ceiling).toBe('test')
     // No BOLAGSVERKET_CLIENT_CERT/_KEY in the test env.
     expect(body.data.has_certificate).toBe(false)
+  })
+})
+
+describe('POST /revisionsberattelse', () => {
+  const RB = '<html><ix:header>revisionsberättelse</ix:header></html>'
+  const rbBody = {
+    fiscal_period_id: '123e4567-e89b-12d3-a456-426614174000',
+    avsandare_pnr: '198001019879',
+    undertecknare: { pnr: '198001019879', fornamn: 'Rita', efternamn: 'Revisor', epost: 'rita@revisor.se' },
+    fil: Buffer.from(RB, 'utf8').toString('base64'),
+    notifiering_epost: ['anna@example.com'],
+  }
+
+  it('is closed while the filing release gate is closed (503)', async () => {
+    process.env.BOLAGSVERKET_FILING_ENABLED = 'false'
+    const { supabase } = createQueuedMockSupabase()
+    const res = await route('POST', '/revisionsberattelse').handler(makePost('/revisionsberattelse', rbBody), makeCtx(supabase))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
+    expect(status).toBe(503)
+    expect(body.error.code).toBe('BOLAGSVERKET_NOT_RELEASED')
+    expect(submitRevisionsberattelse).not.toHaveBeenCalled()
+  })
+
+  it('rejects viewer members with 403', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'viewer' }, error: null })
+    const res = await route('POST', '/revisionsberattelse').handler(makePost('/revisionsberattelse', rbBody), makeCtx(supabase))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('BOLAGSVERKET_FORBIDDEN')
+  })
+
+  it('rejects a file that is not base64 with 400', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'member' }, error: null })
+    const res = await route('POST', '/revisionsberattelse').handler(
+      makePost('/revisionsberattelse', { ...rbBody, fil: '<html>not base64</html>' }),
+      makeCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(submitRevisionsberattelse).not.toHaveBeenCalled()
+  })
+
+  it('maps a missing kompletteras årsredovisning to 409', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'member' }, error: null })
+    enqueue({ data: { value: { environment: 'test' } }, error: null })
+    vi.mocked(submitRevisionsberattelse).mockRejectedValue(
+      new BolagsverketSubmissionError('BOLAGSVERKET_RB_NO_ARSREDOVISNING', 'none'),
+    )
+    const res = await route('POST', '/revisionsberattelse').handler(makePost('/revisionsberattelse', rbBody), makeCtx(supabase))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BOLAGSVERKET_RB_NO_ARSREDOVISNING')
+  })
+
+  it('decodes the file, passes the revisor as undertecknare and hides the idnummer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'owner' }, error: null })
+    enqueue({ data: { value: { environment: 'test' } }, error: null })
+    vi.mocked(submitRevisionsberattelse).mockResolvedValue({
+      outcome: 'uploaded',
+      submissionId: 'sub-rb',
+      handlingTyp: 'revisionsberattelse',
+      idnummer: '49680',
+      sha256: 'sha',
+      url: 'https://ext.bolagsverket.se/eu/49680',
+      utfall: [],
+    })
+    const res = await route('POST', '/revisionsberattelse').handler(makePost('/revisionsberattelse', rbBody), makeCtx(supabase))
+    const { status, body } = await parseJsonResponse<{ data: { outcome: string; idnummer?: string } }>(res as Response)
+    expect(status).toBe(200)
+    expect(body.data.outcome).toBe('uploaded')
+    expect(body.data.idnummer).toBeUndefined()
+    const [, params] = vi.mocked(submitRevisionsberattelse).mock.calls[0]
+    expect(params).toMatchObject({
+      companyId: 'company-1',
+      fiscalPeriodId: rbBody.fiscal_period_id,
+      xhtml: RB,
+      undertecknare: { pnr: '198001019879', fornamn: 'Rita', efternamn: 'Revisor', epost: 'rita@revisor.se' },
+      notifieringEpost: ['anna@example.com'],
+    })
+  })
+})
+
+describe('POST /submissions: notifieringEpostadresser', () => {
+  it('passes the revisor address on to the filing service', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'member' }, error: null })
+    enqueue({ data: { value: { environment: 'test' } }, error: null })
+    vi.mocked(submitArsredovisning).mockResolvedValue({ outcome: 'avtal_required', avtalstext: 'x', avtalstextAndrad: '2017-12-06' })
+    const res = await route('POST', '/submissions').handler(
+      makePost('/submissions', { ...validBody, notifiering_epost: ['rita@revisor.se'] }),
+      makeCtx(supabase),
+    )
+    expect((res as Response).status).toBe(200)
+    expect(vi.mocked(submitArsredovisning).mock.calls[0][1].notifieringEpost).toEqual(['rita@revisor.se'])
   })
 })

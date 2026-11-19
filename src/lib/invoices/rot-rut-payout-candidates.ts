@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import {
   OPEN_ROT_RUT_PAYOUT_STATUSES,
   type RotRutPayoutRequestCandidate,
@@ -9,11 +9,11 @@ import {
  * matching Skatteverkets utbetalning against a bank row.
  *
  * Own module so import-time callers (bank ingest, the batch re-suggest route)
- * can be unit-tested with the pool mocked, the same way getBestInvoiceMatch
+ * can be unit-tested with the pool mocked, the same way loadInvoiceMatchPool
  * is. Non-fatal: any error yields an empty pool and matching is skipped.
  */
 export async function loadOpenRotRutPayoutRequests(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<RotRutPayoutRequestCandidate[]> {
   try {

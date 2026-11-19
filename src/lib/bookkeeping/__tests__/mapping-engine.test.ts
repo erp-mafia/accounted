@@ -4,14 +4,18 @@ import { createMockSupabase, makeTransaction } from '@/tests/helpers'
 // Mock Supabase
 const { supabase: mockSupabase, mockResult } = createMockSupabase()
 
-// Mock booking-templates (needed by evaluateMappingRules)
-vi.mock('../booking-templates', () => ({
+// Mock booking-templates (needed by evaluateMappingRules). The bank-noise
+// strip stays real: namesCounterparty reads it.
+vi.mock('../booking-templates', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../booking-templates')>()),
   findMatchingTemplates: vi.fn().mockReturnValue([]),
   buildMappingResultFromTemplate: vi.fn(),
 }))
 
-// Mock counterparty-templates (needed by evaluateMappingRules)
-vi.mock('../counterparty-templates', () => ({
+// Mock counterparty-templates (needed by evaluateMappingRules). The
+// names-a-counterparty guards stay real (crm#1707).
+vi.mock('../counterparty-templates', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../counterparty-templates')>()),
   findCounterpartyTemplate: vi.fn().mockResolvedValue(null),
   buildMappingResultFromCounterpartyTemplate: vi.fn(),
 }))
@@ -74,6 +78,41 @@ describe('mapping-engine', () => {
 
       expect(mockSupabase.from).toHaveBeenCalledWith('mapping_rules')
     })
+
+    // A text that only says how the money moved names no one: the next row
+    // with it is someone else, so no rule is learned from it (crm#1707).
+    it.each(['INSÄTTNING', 'KORTKÖP', 'ÖVERFÖRING', 'BG-BETALNING', 'Insättning 4455-1234', 'Överföring via internet'])(
+      'saves no rule for the generic bank text %j',
+      async (text) => {
+        const { saveUserMappingRule } = await import('../mapping-engine')
+        mockResult({ data: null, error: null })
+
+        await saveUserMappingRule(mockSupabase as never, 'company-1', text, '1930', '2081', false)
+
+        expect(mockSupabase.from).not.toHaveBeenCalled()
+      },
+    )
+
+    it('saves no described rule for a generic bank text either', async () => {
+      const { saveUserMappingRule } = await import('../mapping-engine')
+      mockResult({ data: null, error: null })
+
+      await saveUserMappingRule(mockSupabase as never, 'company-1', 'INSÄTTNING', '1930', '2081', false, 'aktiekapital', 'share_capital_deposit')
+
+      expect(mockSupabase.from).not.toHaveBeenCalled()
+    })
+
+    it.each(['KORTKÖP 260612 ICA MAXI', 'Överföring Telia', 'INSÄTTNING STRIPE'])(
+      'still saves a rule for the mixed text %j, which names a counterparty',
+      async (text) => {
+        const { saveUserMappingRule } = await import('../mapping-engine')
+        mockResult({ data: null, error: null })
+
+        await saveUserMappingRule(mockSupabase as never, 'company-1', text, '5410', '1930', false)
+
+        expect(mockSupabase.from).toHaveBeenCalledWith('mapping_rules')
+      },
+    )
   })
 
   describe('evaluateMappingRules', () => {
@@ -140,12 +179,68 @@ describe('mapping-engine', () => {
         original_description: 'SPOTIFY AB Kortköp',
       })
       mockResult({
-        data: [makeRule({ rule_type: 'merchant_name', merchant_pattern: 'Kortköp' })],
+        data: [makeRule({ rule_type: 'merchant_name', merchant_pattern: 'SPOTIFY AB Kortköp' })],
         error: null,
       })
 
       const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
       expect(result.debit_account).toBe('6540')
+    })
+
+    describe('a stored rule learned from a generic bank text (crm#1707)', () => {
+      // What saveUserMappingRule wrote before it refused generic texts: the
+      // first deposit was share capital, so every later "INSÄTTNING" (a card
+      // payout, a customer payment) was offered 2081.
+      const learned = (merchant_pattern: string) =>
+        makeRule({
+          rule_name: `Learned: ${merchant_pattern}`,
+          rule_type: 'merchant_name',
+          priority: 10,
+          merchant_pattern,
+          debit_account: '1930',
+          credit_account: '2081',
+          risk_level: 'NONE',
+          confidence_score: 0.95,
+          source: 'auto',
+        })
+
+      it.each([
+        ['INSÄTTNING', 'INSÄTTNING', 'STRIPE Shopi'],
+        ['KORTKÖP', 'KORTKÖP', 'KORTKÖP 1234'],
+        ['ÖVERFÖRING', 'ÖVERFÖRING', 'Överföring 5541'],
+        ['BG-BETALNING', 'BG-BETALNING', 'BG-BETALNING 5050-1055'],
+      ])('the rule %j no longer applies to an unrelated row', async (pattern, merchant, description) => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        const tx = makeTransaction({ amount: 14000, merchant_name: merchant, description, original_description: description })
+        mockResult({ data: [learned(pattern)], error: null })
+
+        const result = await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'aktiebolag')
+
+        expect(result.rule).toBeNull()
+        expect(result.credit_account).not.toBe('2081')
+      })
+
+      it('a rule on a real merchant still applies', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        const tx = makeTransaction({ amount: -100, merchant_name: 'ICA Maxi', description: 'ICA Maxi' })
+        mockResult({ data: [makeRule({ rule_type: 'merchant_name', merchant_pattern: 'ICA Maxi', source: 'auto' })], error: null })
+
+        const result = await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'aktiebolag')
+
+        expect(result.rule?.id).toBe('rule-1')
+        expect(result.debit_account).toBe('6540')
+      })
+
+      it('a rule on a mixed text (bank wording plus a merchant) still applies, escaped as stored', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        const tx = makeTransaction({ amount: -100, merchant_name: 'KORTKÖP ICA (MAXI)', description: 'KORTKÖP ICA (MAXI)' })
+        mockResult({ data: [makeRule({ rule_type: 'merchant_name', merchant_pattern: 'KORTKÖP ICA \\(MAXI\\)', source: 'auto' })], error: null })
+
+        const result = await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'aktiebolag')
+
+        expect(result.rule?.id).toBe('rule-1')
+        expect(result.debit_account).toBe('6540')
+      })
     })
 
     it('invalid-regex substring fallback also scans original_description', async () => {
@@ -558,6 +653,61 @@ describe('mapping-engine', () => {
       expect(result.vat_lines).toHaveLength(2)
       expect(result.vat_lines[0].account_number).toBe('2645')
       expect(result.vat_lines[1].account_number).toBe('2614')
+    })
+
+    // crm#1096: the rule's account decides with the company's momskoder, as
+    // every booking door settles it (reconcileRcBasisWithChart). Ingestion and
+    // the inbox suggestion book or show what evaluateMappingRules returns.
+    describe('reverse-charge rule on an account with its own momskod (crm#1096)', () => {
+      const rcRule = (debitAccount: string) => ({
+        id: 'rule-rc-momskod', user_id: 'user-1', rule_name: 'SaaS reverse charge', rule_type: 'merchant_name',
+        priority: 10, mcc_codes: null, merchant_pattern: 'AWS', description_pattern: null,
+        amount_min: null, amount_max: null, debit_account: debitAccount, credit_account: '1930',
+        vat_treatment: 'reverse_charge', vat_debit_account: null, vat_credit_account: null,
+        risk_level: 'LOW', default_private: false, requires_review: false, confidence_score: 0.9,
+        capitalization_threshold: null, capitalized_debit_account: null, is_active: true, source: 'user',
+        user_description: null, template_id: null, created_at: '2024-01-01', updated_at: '2024-01-01',
+      })
+      const momskoder = (account: string, treatment: string, rate: number | null = null) =>
+        vi.fn(async () => new Map([[account, { default_vat_treatment: treatment, default_vat_rate: rate }]]))
+      const shape = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+        lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+      const tx = () => makeTransaction({ amount: -1000, merchant_name: 'AWS' })
+
+      it('books no basis pair on an account whose momskod reports ruta 20-24', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        mockResult({ data: [rcRule('6540')], error: null })
+        const loadChart = momskoder('6540', 'reverse_charge_eu_services')
+
+        const result = await evaluateMappingRules(mockSupabase as never, 'company-1', tx(), 'enskild_firma', undefined, undefined, loadChart)
+
+        expect(shape(result.vat_lines)).toEqual([['2645', 250, 0], ['2614', 0, 250]])
+        expect(loadChart).toHaveBeenCalledTimes(1)
+      })
+
+      it('self-assesses at the momssats of the account, 12 %', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        mockResult({ data: [rcRule('4057')], error: null })
+
+        const result = await evaluateMappingRules(
+          mockSupabase as never, 'company-1', tx(), 'enskild_firma', undefined, undefined,
+          momskoder('4057', 'reverse_charge_eu_goods', 0.12),
+        )
+
+        expect(shape(result.vat_lines)).toEqual([['2645', 120, 0], ['2624', 0, 120]])
+      })
+
+      it('keeps the pair on an ordinary account', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        mockResult({ data: [rcRule('6541')], error: null })
+
+        const result = await evaluateMappingRules(
+          mockSupabase as never, 'company-1', tx(), 'enskild_firma', undefined, undefined,
+          momskoder('6540', 'reverse_charge_eu_services'),
+        )
+
+        expect(result.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4535', '4598'])
+      })
     })
 
     // Journal entry lines are SEK; VAT from a rule match must be derived from
@@ -1004,7 +1154,8 @@ describe('mapping-engine', () => {
 
         await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'enskild_firma', undefined, false)
 
-        expect(templates.buildMappingResultFromTemplate).toHaveBeenCalledWith(template, tx, 'enskild_firma', false)
+        // No skattekonto account: the template names no 1630.
+        expect(templates.buildMappingResultFromTemplate).toHaveBeenCalledWith(template, tx, 'enskild_firma', false, undefined)
       })
     })
   })

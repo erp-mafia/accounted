@@ -22,11 +22,6 @@ export const zettleExtension: Extension = {
   version: '1.0.0',
   sector: 'general',
 
-  settingsPanel: {
-    label: 'Zettle',
-    path: '/import?mode=zettle',
-  },
-
   apiRoutes: zettleApiRoutes,
 }
 

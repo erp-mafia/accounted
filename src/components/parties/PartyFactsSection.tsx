@@ -4,15 +4,16 @@ import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import type { Dossier } from '@/lib/parties/register'
 import type { RegistrySummary } from '@/lib/parties/registry-summary'
 import { sameName } from '@/lib/parties/registry-name'
-import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
+import { isLegalPersonOrgNumber } from '@/lib/invariants/org-number'
 import type { ScbCandidate } from '@/lib/parties/scb/client'
 import { formatDate } from '@/lib/utils'
 import { ScbPickerDialog } from './ScbPickerDialog'
-import { regionName } from './SuggestionQueue'
+import { regionName } from './region-name'
 
 /**
  * "Företagsuppgifter" on a supplier or customer page: what only the register
@@ -21,7 +22,9 @@ import { regionName } from './SuggestionQueue'
  * gave land on the row itself, so this block does not repeat them. It
  * carries the status line (legal form, active or not, registrations, and a
  * Bolagsverket warning when there is one), industry, seat, size, and one
- * action: fetch by org number, or find the company in the register.
+ * action: fetch by org number, or find the company in the register. With
+ * nothing from the register yet, the section is that action alone, one
+ * quiet line, and nothing at all when the action is not offered.
  */
 export function PartyFactsSection({
   partyId,
@@ -110,68 +113,83 @@ export function PartyFactsSection({
     ? [registry.legal_form, registry.status?.label].filter(Boolean).join(' · ')
     : null
   const attention = !!registry && (registry.warning !== null || registry.status?.active === false)
+  // Nothing the register said and nothing else to state: no section that only says so.
+  const empty = !registry && !legalDiffers && !foreign
+
+  const body = empty ? (
+    canFetch || canFind ? (
+      <p className="text-xs text-muted-foreground">
+        <button
+          type="button"
+          className={QUIET_LINK_CLASS}
+          disabled={busy}
+          onClick={canFetch ? () => void fetchRegistry() : () => setPicker(true)}
+        >
+          {busy ? t('fetching_registry') : canFetch ? t('facts_empty_fetch') : t('facts_empty_find')}
+        </button>
+      </p>
+    ) : null
+  ) : (
+        <DetailSection
+          kicker={t('facts_section_title')}
+          aside={
+            canFetch ? (
+              <Button type="button" variant="outline" onClick={() => void fetchRegistry()} disabled={busy}>
+                {busy ? t('fetching_registry') : registry ? t('facts_refresh') : t('fetch_registry')}
+              </Button>
+            ) : canFind ? (
+              <Button type="button" variant="outline" onClick={() => setPicker(true)} disabled={busy}>
+                {t('pick_registry')}
+              </Button>
+            ) : undefined
+          }
+        >
+          {legalDiffers ? <DefRow label={t('fact_legal_name')}>{p.legalName}</DefRow> : null}
+          {country && (foreign || !registry) ? <DefRow label={t('fact_country')}>{regionName(country, locale)}</DefRow> : null}
+          {registry ? (
+            <>
+              <DefRow label={t('facts_status')}>
+                <span className={attention ? 'text-warning' : undefined}>
+                  {registry.warning ? [statusLine, registry.warning].filter(Boolean).join(' · ') : statusLine}
+                </span>
+                {registrations.length > 0 ? (
+                  <span className="block text-xs text-muted-foreground">{t('facts_registered_for', { items: registrations.join(', ') })}</span>
+                ) : registry.registrations.f_tax === false && registry.registrations.vat === false ? (
+                  <span className="block text-xs text-warning">{t('facts_not_registered')}</span>
+                ) : null}
+              </DefRow>
+              {registry.industry ? <DefRow label={t('facts_industry')}>{registry.industry.label}</DefRow> : null}
+              {registry.seat || registry.registered_at ? (
+                <DefRow label={t('facts_seat')}>
+                  {registry.seat && registry.registered_at
+                    ? t('facts_seat_registered', { seat: registry.seat, date: formatDate(registry.registered_at) })
+                    : (registry.seat ?? formatDate(registry.registered_at as string))}
+                </DefRow>
+              ) : null}
+              {registry.employees_band || registry.turnover || registry.workplaces ? (
+                <DefRow label={t('facts_size')}>
+                  {[
+                    registry.employees_band,
+                    registry.turnover ? (registry.turnover.year ? `${registry.turnover.band} (${registry.turnover.year})` : registry.turnover.band) : null,
+                    registry.workplaces && registry.workplaces > 1 ? t('facts_workplaces', { count: registry.workplaces }) : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </DefRow>
+              ) : null}
+            </>
+          ) : null}
+          {registry?.fetched_at ? (
+            <p className="pt-2 text-xs text-muted-foreground">{t('registry_group', { date: formatDate(registry.fetched_at) })}</p>
+          ) : foreign ? (
+            <p className="pt-2 text-xs text-muted-foreground">{t('facts_foreign', { country: regionName(country as string, locale) })}</p>
+          ) : null}
+        </DetailSection>
+  )
 
   return (
     <>
-      <DetailSection
-        kicker={t('facts_section_title')}
-        aside={
-          canFetch ? (
-            <Button type="button" size="sm" variant="outline" onClick={() => void fetchRegistry()} disabled={busy}>
-              {busy ? t('fetching_registry') : registry ? t('facts_refresh') : t('fetch_registry')}
-            </Button>
-          ) : canFind ? (
-            <Button type="button" size="sm" variant="outline" onClick={() => setPicker(true)} disabled={busy}>
-              {t('pick_registry')}
-            </Button>
-          ) : undefined
-        }
-      >
-        {legalDiffers ? <DefRow label={t('fact_legal_name')}>{p.legalName}</DefRow> : null}
-        {country && (foreign || !registry) ? <DefRow label={t('fact_country')}>{regionName(country, locale)}</DefRow> : null}
-        {registry ? (
-          <>
-            <DefRow label={t('facts_status')}>
-              <span className={attention ? 'text-warning' : undefined}>
-                {registry.warning ? [statusLine, registry.warning].filter(Boolean).join(' · ') : statusLine}
-              </span>
-              {registrations.length > 0 ? (
-                <span className="block text-xs text-muted-foreground">{t('facts_registered_for', { items: registrations.join(', ') })}</span>
-              ) : registry.registrations.f_tax === false && registry.registrations.vat === false ? (
-                <span className="block text-xs text-warning">{t('facts_not_registered')}</span>
-              ) : null}
-            </DefRow>
-            {registry.industry ? <DefRow label={t('facts_industry')}>{registry.industry.label}</DefRow> : null}
-            {registry.seat || registry.registered_at ? (
-              <DefRow label={t('facts_seat')}>
-                {registry.seat && registry.registered_at
-                  ? t('facts_seat_registered', { seat: registry.seat, date: formatDate(registry.registered_at) })
-                  : (registry.seat ?? formatDate(registry.registered_at as string))}
-              </DefRow>
-            ) : null}
-            {registry.employees_band || registry.turnover || registry.workplaces ? (
-              <DefRow label={t('facts_size')}>
-                {[
-                  registry.employees_band,
-                  registry.turnover ? (registry.turnover.year ? `${registry.turnover.band} (${registry.turnover.year})` : registry.turnover.band) : null,
-                  registry.workplaces && registry.workplaces > 1 ? t('facts_workplaces', { count: registry.workplaces }) : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </DefRow>
-            ) : null}
-          </>
-        ) : null}
-        <p className="pt-2 text-xs text-muted-foreground">
-          {registry?.fetched_at
-            ? t('registry_group', { date: formatDate(registry.fetched_at) })
-            : foreign
-              ? t('facts_foreign', { country: regionName(country as string, locale) })
-              : p.orgNumber
-                ? t('facts_none_org')
-                : t('facts_none')}
-        </p>
-      </DetailSection>
+      {body}
 
       {picker ? (
         <ScbPickerDialog

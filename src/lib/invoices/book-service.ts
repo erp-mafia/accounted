@@ -2,7 +2,9 @@
  * The deferred "Bokför" step for customer invoices (#967), one implementation
  * behind every door: the dashboard routes (POST /api/invoices/[id]/book,
  * POST /api/invoices/bulk-book), the v1 operations invoices.book and
- * invoices.bulk-book, and their MCP tools (lib/operations/invoice-booking.ts).
+ * invoices.bulk-book, their MCP tools (lib/operations/invoice-booking.ts),
+ * and every settlement of a still unbooked invoice, which books it here first
+ * (sale-first.ts).
  *
  * Companies with company_settings.defer_invoice_booking=true send invoices
  * without a verifikat; ekonomi books the revenue entry here once the kontering
@@ -12,7 +14,14 @@
  * Rules, in order, for one invoice:
  *   - it exists in the company, is a real invoice (not a quote, proforma,
  *     delivery note or credit note) and is not booked yet;
- *   - status sent or overdue (paid invoices were booked by their payment);
+ *   - status sent or overdue. A settlement never reaches an unbooked invoice
+ *     of a deferring company first: every door that settles one books its
+ *     sale through this function beforehand (sale-first.ts). So a paid or
+ *     partially paid invoice without a verifikat is either a kontantmetoden
+ *     payment that booked the whole sale (a later switch to
+ *     faktureringsmetoden would double-post it here) or a payment made before
+ *     that rule (2026-10-17) that booked only the 1510 clearing, which needs
+ *     a rättelse, not this step;
  *   - faktureringsmetoden: under kontantmetoden the sale books at payment;
  *   - the invoice date is not in a locked or closed period, nor on or before
  *     the company lock date: PERIOD_LOCKED, checked before anything is
@@ -26,14 +35,14 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { toEntryPreview, type EntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { ACCRUAL_RELEASE_FAILED_WARNING } from '@/lib/bookkeeping/accruals/from-invoices'
 import { buildInvoiceJournalEntryInput } from '@/lib/bookkeeping/invoice-entries'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { bookInvoiceDeferred, INVOICE_BOOKABLE_STATUSES } from '@/lib/invoices/book-invoice-deferred'
-import { issueAndBookInvoice, type IssuableInvoice } from '@/lib/invoices/issue-and-book-invoice'
-import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
-import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
+import { issuable, issueAndBookInvoice, type IssuableInvoice } from '@/lib/invoices/issue-and-book-invoice'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { CompanySettings, EntityType, Invoice } from '@/types'
 import { roundOre } from '@/lib/money'
@@ -50,8 +59,14 @@ const WARNING_EN: Record<string, string> = {
     'The invoice was booked, but one or more accrual schedules (periodiseringar) could not be created. Check Bokföring > Periodiseringar.',
 }
 
+/** The English twin; the release warning's own text is read when it occurs. */
+function warningEn(code: string): string | undefined {
+  if (code === 'ACCRUAL_RELEASE_FAILED') return ACCRUAL_RELEASE_FAILED_WARNING.message_en
+  return WARNING_EN[code]
+}
+
 export function toOperationWarnings(warnings: Array<{ code: string; message: string }>): OperationWarning[] {
-  return warnings.map((w) => ({ code: w.code, message_sv: w.message, message_en: WARNING_EN[w.code] ?? w.message }))
+  return warnings.map((w) => ({ code: w.code, message_sv: w.message, message_en: warningEn(w.code) ?? w.message }))
 }
 
 /** A failure in the generator: a typed bookkeeping error passes through, anything else is fallbackCode. */
@@ -128,7 +143,7 @@ export async function bookInvoice(
 
   if (!invoice) return { ok: false, code: 'INVOICE_NOT_FOUND' }
   if (invoice.journal_entry_id) return { ok: false, code: 'INVOICE_BOOK_ALREADY_BOOKED' }
-  if (!isRealInvoice(invoice) || invoice.credited_invoice_id) {
+  if (!isRealInvoice(invoice) || isCreditNoteDocument(invoice)) {
     return { ok: false, code: 'INVOICE_BOOK_NOT_BOOKABLE' }
   }
   if (!INVOICE_BOOKABLE_STATUSES.includes(invoice.status)) {
@@ -319,7 +334,7 @@ export async function bulkBookInvoices(
       push(failItem(id, 'INVOICE_NOT_FOUND'))
       continue
     }
-    if (!isRealInvoice(invoice) || invoice.credited_invoice_id) {
+    if (!isRealInvoice(invoice) || isCreditNoteDocument(invoice)) {
       push(failItem(id, 'INVOICE_BOOK_NOT_BOOKABLE'))
       continue
     }
@@ -359,12 +374,9 @@ export async function bulkBookInvoices(
     if (options.dryRun) {
       // The issuance guards that need no write; the payee snapshot (which
       // writes the frozen payee onto the draft) runs at commit only.
-      if (action === 'issue_and_book' && !hasRequiredInvoicePaymentAccount(settings, invoice as Invoice)) {
-        push(failItem(id, 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'))
-        continue
-      }
-      if (action === 'issue_and_book' && !hasRequiredSellerVatNumber(settings, invoice as Invoice)) {
-        push(failItem(id, 'INVOICE_SEND_VAT_NUMBER_MISSING'))
+      const refused = action === 'issue_and_book' ? issuable(invoice as Invoice, settings) : null
+      if (refused) {
+        push(failItem(id, refused.code))
         continue
       }
       const preview = await previewInvoiceEntry(ctx, invoice, entityType)

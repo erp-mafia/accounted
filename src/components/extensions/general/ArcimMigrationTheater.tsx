@@ -135,7 +135,7 @@ export default function ArcimMigrationTheater({
 
   return (
     <Card>
-      <CardContent className="p-6">
+      <CardContent>
         <div className="grid gap-6 md:grid-cols-[280px_1fr]">
           <div>
             <p className="text-sm font-medium">Migrering pågår</p>
@@ -150,7 +150,7 @@ export default function ArcimMigrationTheater({
                 return (
                   <li
                     key={line.id}
-                    className="border-b border-border py-2.5 last:border-b-0"
+                    className="border-b-hairline py-2.5 last:border-b-0"
                   >
                     <p className={`text-sm ${active ? '' : 'text-muted-foreground'}`}>
                       {line.text}

@@ -289,6 +289,11 @@ export function createStyles(branding?: InvoiceBranding) {
       borderBottomWidth: TABLE_ROW_RULE_PT,
       borderBottomColor: HAIRLINE,
     },
+    // Printed first when invoice_show_article_number is on and a row has one.
+    colArticleNumber: {
+      flex: 1.1,
+      paddingRight: 6,
+    },
     colDescription: {
       flex: 4.6,
       paddingRight: 8,
@@ -512,6 +517,12 @@ export function createStyles(branding?: InvoiceBranding) {
       fontSize: 8.5,
       textAlign: 'right',
     },
+    // The payment link reads as a value like the others, in the ink colour,
+    // underlined to show it can be clicked (not react-pdf's default web blue).
+    areaRowLink: {
+      color: INK,
+      textDecoration: 'underline',
+    },
     areaRowValueStrong: {
       flex: 1,
       fontSize: 8.5,
@@ -526,6 +537,10 @@ export function createStyles(branding?: InvoiceBranding) {
       fontSize: 8,
       color: b.accentColor,
       marginTop: 4,
+    },
+    /** The rows under a status heading (the Autogiro payer number). */
+    areaStatusRows: {
+      marginTop: 6,
     },
     areaSlot: {
       width: PAYMENT_QR_PT,

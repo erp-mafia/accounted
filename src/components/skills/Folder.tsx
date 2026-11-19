@@ -5,7 +5,7 @@ import styles from './skills.module.css'
  * three papers inside. Closed it rests with the papers tucked in; hovering
  * its card (or `open`) lifts the front flap and fans the papers out. On the
  * item's page it stands open and the papers drift a little. Plain CSS, drawn
- * for Accounted (the look follows the founder's folder reference; no code is
+ * for Accounted (the look follows the operator's folder reference; no code is
  * taken from it).
  */
 export function Folder({ hue, size = 64, open = false, drift = false }: { hue: number; size?: number; open?: boolean; drift?: boolean }) {

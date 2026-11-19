@@ -15,12 +15,14 @@ import {
   JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
   MandatoryDimensionMissingError,
+  TransactionMissingSekValueError,
   accountsNotInChartResponse,
   bookkeepingErrorResponse,
   isAccountsNotInChartError,
   isBookkeepingError,
 } from '../errors'
 import { formatDimensionValidationIssues } from '../dimension-errors'
+import { errorResponse, getStructuredError } from '@/lib/errors/get-structured-error'
 
 describe('Typed bookkeeping errors', () => {
   it('AccountsNotInChartError carries sorted, deduped account numbers', () => {
@@ -421,5 +423,42 @@ describe('bookkeepingErrorResponse', () => {
     expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
     expect(body.error.details).toEqual({ operation: 'commit_entry' })
     expect(body.error.message).toContain('constraint violation')
+  })
+})
+
+// Agent feedback seq 887729: booking a foreign row with no SEK value is refused
+// with a registered code whose remediation names the rate refresh.
+describe('TransactionMissingSekValueError', () => {
+  const err = () => new TransactionMissingSekValueError('tx-1', 'CAD', '2026-09-30')
+
+  it('is a typed bookkeeping error carrying the row facts', () => {
+    expect(err().code).toBe('TX_MISSING_SEK_VALUE')
+    expect(err().name).toBe('TransactionMissingSekValueError')
+    expect(isBookkeepingError(err())).toBe(true)
+  })
+
+  it('answers 400 with the row facts through bookkeepingErrorResponse', async () => {
+    const response = bookkeepingErrorResponse(err())!
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(body.error.details).toEqual({ transactionId: 'tx-1', currency: 'CAD', date: '2026-09-30' })
+  })
+
+  it('reaches agents as the registered code with Swedish text and the refresh remediation', () => {
+    const structured = getStructuredError(err())
+    expect(structured.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(structured.message_sv).toMatch(/saknar SEK-belopp och växelkurs/)
+    expect(structured.retryable).toBe(false)
+    expect(structured.remediation?.description).toContain('refresh-exchange-rate')
+  })
+
+  it('answers 400 with details through the route error dispatch', async () => {
+    const log = { warn: () => {}, error: () => {} }
+    const response = errorResponse(err(), log)
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(body.error.details).toMatchObject({ currency: 'CAD' })
   })
 })

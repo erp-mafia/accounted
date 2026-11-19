@@ -47,14 +47,6 @@ describe('checked shared-session attachment route', () => {
     serviceRpc.mockResolvedValue({ data: null, error: { code, message: 'Attachment refused' } })
     const ctx = setup(); expect((await route.handler(request(), ctx)).status).toBe(status); expect(ctx.emit).not.toHaveBeenCalled()
   })
-  it('returns 401 before any business read when anonymous', async () => {
-    expect((await route.handler(request(), setup(false))).status).toBe(401)
-    expect(capability).not.toHaveBeenCalled(); expect(serviceRpc).not.toHaveBeenCalled()
-  })
-  it('requires company context', async () => {
-    const ctx = setup(); ctx.companyId = ''
-    expect((await route.handler(request(), ctx)).status).toBe(400); expect(serviceRpc).not.toHaveBeenCalled()
-  })
   it.each([{}, null, { connection_id: 1 }, { connection_id: 'invalid' }])('rejects invalid input %j', async body => {
     expect((await route.handler(request(body), setup())).status).toBe(400); expect(serviceRpc).not.toHaveBeenCalled()
   })

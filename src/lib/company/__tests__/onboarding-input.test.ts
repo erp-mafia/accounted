@@ -209,7 +209,7 @@ describe('CompanySetupSchema: ideell_forening', () => {
     const result = CompanySetupSchema.safeParse({
       name: 'SS Testklubb',
       entity_type: 'ideell_forening',
-      org_number: '8144009464',
+      org_number: '8144334458',
       vat_registered: false,
       f_skatt: false,
     })
@@ -224,7 +224,7 @@ describe('CompanySetupSchema: ideell_forening', () => {
     const setup = CompanySetupSchema.parse({
       name: 'SS Testklubb',
       entity_type: 'ideell_forening',
-      org_number: '8144009464',
+      org_number: '8144334458',
       vat_registered: false,
       f_skatt: false,
       fiscal_year_start_month: 7,

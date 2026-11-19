@@ -18,7 +18,9 @@ import {
   createSupplierInvoiceCashEntry,
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import type { SupplierPaymentPostingContext } from '@/lib/bookkeeping/supplier-invoice-business-events'
 import type { SupplierBankMatchBooking } from '@/lib/invoices/apply-supplier-payment'
+import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import type {
   CreateJournalEntryLineInput,
   JournalEntry,
@@ -45,6 +47,8 @@ function clearingSupplierName(
 /**
  * Book the payment verifikat of a supplier bank match. Returns null when no
  * open period covers the transaction date (the routes check that first).
+ * `posting` is the door's side of the purchase.paid event (posting port,
+ * step 2e), read only while POSTING_EVENTS is on.
  */
 export async function createSupplierBankMatchEntry(
   supabase: SupabaseClient,
@@ -55,9 +59,10 @@ export async function createSupplierBankMatchEntry(
     booking: SupplierBankMatchBooking
     paymentAccount: string
     transaction: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
+    posting?: () => SupplierPaymentPostingContext
   },
 ): Promise<JournalEntry | null> {
-  const { invoice, booking, paymentAccount, transaction } = args
+  const { invoice, booking, paymentAccount, transaction, posting } = args
   if (booking.kind === 'cash') {
     return createSupplierInvoiceCashEntry(
       supabase, companyId, userId, invoice,
@@ -69,6 +74,7 @@ export async function createSupplierBankMatchEntry(
       booking.settledBankSek,
       transaction,
       booking.bankFeeSek,
+      posting,
     )
   }
   return createSupplierInvoicePaymentEntry(
@@ -81,27 +87,33 @@ export async function createSupplierBankMatchEntry(
     transaction,
     booking.bankFeeSek,
     booking.sekClearingDebt,
+    posting,
+    booking.apInInvoiceCurrency,
   )
 }
 
 /**
  * The lines createSupplierBankMatchEntry books for the same plan, without
- * booking them. Throws SupplierInvoiceFxRateMissingError (code
- * SI_FX_RATE_MISSING) for a kontantmetoden foreign invoice with no usable rate,
- * as the booking does.
+ * booking them, with the verifikat header text the booking writes. Throws
+ * SupplierInvoiceFxRateMissingError (code SI_FX_RATE_MISSING) for a
+ * kontantmetoden foreign invoice with no usable rate, as the booking does.
+ * `chartVatTreatments` are the company's momskoder, which the booking reads
+ * for a reverse-charge invoice (fetchChartVatTreatments).
  */
 export function buildSupplierBankMatchLines(
   invoice: SupplierInvoice,
   booking: SupplierBankMatchBooking,
   paymentAccount: string,
-): { lines: CreateJournalEntryLineInput[]; oreDiffSek: number } {
+  chartVatTreatments?: ChartVatTreatments,
+): { description: string; lines: CreateJournalEntryLineInput[]; oreDiffSek: number } {
   if (booking.kind === 'cash') {
     const built = buildSupplierInvoiceCashLines(invoice, invoice.items ?? [], supplierType(invoice), {
       paymentAccount,
       settledBankSek: booking.settledBankSek,
       bankFeeSek: booking.bankFeeSek,
+      chartVatTreatments,
     })
-    return { lines: built.lines, oreDiffSek: built.oreDiffSek }
+    return { description: built.description, lines: built.lines, oreDiffSek: built.oreDiffSek }
   }
   const built = buildSupplierInvoicePaymentLines(invoice, {
     paymentAmount: booking.paymentAmount,
@@ -110,6 +122,7 @@ export function buildSupplierBankMatchLines(
     paymentAccount,
     bankFeeSek: booking.bankFeeSek,
     sekClearingDebt: booking.sekClearingDebt,
+    apInInvoiceCurrency: booking.apInInvoiceCurrency,
   })
-  return { lines: built.lines, oreDiffSek: built.oreDiffSek }
+  return { description: built.description, lines: built.lines, oreDiffSek: built.oreDiffSek }
 }

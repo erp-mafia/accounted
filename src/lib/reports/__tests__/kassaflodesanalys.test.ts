@@ -25,6 +25,8 @@ function makeSupabase(period: { period_start: string; period_end: string } | nul
   )
   return {
     from: vi.fn().mockReturnValue(builder),
+    // result_closing_entry_ids: no resultatavslut in these periods.
+    rpc: vi.fn().mockResolvedValue({ data: [], error: null }),
   } as unknown as Parameters<typeof generateKassaflodesanalys>[0]
 }
 

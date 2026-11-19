@@ -38,6 +38,24 @@ export function oreSettlementResidual(owedSek: number, bankSek: number): number 
 }
 
 /**
+ * The öresavrundning a SEK customer invoice's own verifikat already booked:
+ * what the reskontra says is still owed less what 1510 carries for it, when
+ * that gap is inside the öre band. It is there when the issue verifikat put
+ * 1510 at the rounded "Att betala" and the öre on 3740 (an issuance edited by
+ * hand, the way Fortnox books it). A settlement of that invoice clears what
+ * 1510 carries and books only the rest of the öre: otherwise the rounding
+ * lands on 3740 twice and 1510 keeps the öre.
+ *
+ *   > 0: 1510 carries LESS than owed (the issue verifikat debited 3740)
+ *   < 0: 1510 carries MORE than owed (the issue verifikat credited 3740)
+ *   0:   1510 carries the remainder, the ledger cannot say (null), or the
+ *        gap is a krona or more, which is never rounding
+ */
+export function bookedOreRounding(remainingSek: number, carriedSek: number | null | undefined): number {
+  return carriedSek == null ? 0 : oreSettlementResidual(remainingSek, carriedSek)
+}
+
+/**
  * Which ledger the settlement clears. It decides the 3740 side:
  *
  *   customer (1510 or revenue credited, bank debited):
@@ -62,4 +80,28 @@ export function oreRoundingLine(
     credit_amount: debit ? 0 : amount,
     line_description: 'Öresavrundning',
   }
+}
+
+/** 3960 Valutakursvinster. */
+export const FX_GAIN_ACCOUNT = '3960'
+/** 7960 Valutakursförluster. */
+export const FX_LOSS_ACCOUNT = '7960'
+
+/**
+ * The kursdiff leg of a cross-currency settlement or revaluation: a gain
+ * (gainSek > 0) credits 3960, a loss (gainSek <= 0) debits 7960, with the
+ * amount öre-rounded (roundOre). The leg every generator builds the same way;
+ * only the texts differ, so they are the one option (the defaults are the
+ * realised texts, currency-revaluation passes the orealiserade ones).
+ *
+ * Callers decide whether there is a difference at all before asking.
+ */
+export function fxDifferenceLine(
+  gainSek: number,
+  texts: { gain: string; loss: string } = { gain: 'Valutakursvinst', loss: 'Valutakursförlust' },
+): CreateJournalEntryLineInput {
+  const amount = roundOre(Math.abs(gainSek))
+  return gainSek > 0
+    ? { account_number: FX_GAIN_ACCOUNT, debit_amount: 0, credit_amount: amount, line_description: texts.gain }
+    : { account_number: FX_LOSS_ACCOUNT, debit_amount: amount, credit_amount: 0, line_description: texts.loss }
 }

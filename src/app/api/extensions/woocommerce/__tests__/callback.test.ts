@@ -5,7 +5,6 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() } }))
 vi.mock('@/extensions/general/woocommerce/lib/api-client', async (importOriginal) => {
   const actual =
@@ -17,7 +16,11 @@ import { POST } from '../callback/route'
 import { createServiceClient } from '@/lib/supabase/server'
 import { eventBus } from '@/lib/events/bus'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
+import {
+  STORE_FIREWALL_CODE,
+  WooCommerceApiError,
+  testConnectionAndFetchStoreInfo,
+} from '@/extensions/general/woocommerce/lib/api-client'
 import { decryptCredential } from '@/extensions/general/woocommerce/lib/credentials'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
@@ -67,8 +70,8 @@ describe('POST /api/extensions/woocommerce/callback', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubEnv('WOOCOMMERCE_CREDENTIALS_ENCRYPTION_KEY', 'test-key')
-    vi.mocked(extensionRegistry.get).mockReturnValue(
-      { id: 'woocommerce' } as ReturnType<typeof extensionRegistry.get>,
+    vi.mocked(extensionRegistry.get).mockResolvedValue(
+      { id: 'woocommerce' } as Awaited<ReturnType<typeof extensionRegistry.get>>,
     )
   })
 
@@ -77,7 +80,7 @@ describe('POST /api/extensions/woocommerce/callback', () => {
   })
 
   it('refuses with 503 when the extension is disabled', async () => {
-    vi.mocked(extensionRegistry.get).mockReturnValue(undefined)
+    vi.mocked(extensionRegistry.get).mockResolvedValue(undefined)
     const res = await POST(makeCallbackRequest(VALID_BODY))
     expect(res.status).toBe(503)
     const body = await res.json()
@@ -132,6 +135,22 @@ describe('POST /api/extensions/woocommerce/callback', () => {
       storeUrl: 'https://shop.example.se',
       consumerKey: 'ck_new',
     })
+  })
+
+  it('stores a firewall refusal as the reason the merchant can act on (crm#1669)', async () => {
+    const { enqueue, findCall } = mockServiceClient()
+    enqueue({ data: PENDING_ROW })
+    enqueue({ data: null }) // markError update
+    vi.mocked(testConnectionAndFetchStoreInfo).mockRejectedValue(
+      new WooCommerceApiError('WooCommerce API 403', 403, STORE_FIREWALL_CODE, { bodyKind: 'html' }),
+    )
+
+    const res = await POST(makeCallbackRequest(VALID_BODY))
+    expect(res.status).toBe(502)
+    const errorUpdate = findCall('woocommerce_connections', 'update')?.[0] as Record<string, unknown>
+    expect(errorUpdate.status).toBe('error')
+    expect(errorUpdate.error_message).toMatch(/brandvägg/)
+    expect(errorUpdate.consumer_key_encrypted).toBeNull()
   })
 
   it('stages the verified keys but leaves the row pending until the browser confirms', async () => {

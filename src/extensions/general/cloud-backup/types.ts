@@ -9,6 +9,17 @@
 export type CloudProviderId = 'google_drive' | 'dropbox'
 
 /**
+ * Why a connection needs reconnecting.
+ * - `token_revoked`: the provider rejected the refresh token (400
+ *   invalid_grant): it expired or the user removed the app's access.
+ * - `missing_scope`: the grant works but lacks the storage scope, because
+ *   Google's consent screen lets a person untick Drive and still approve.
+ * Records flagged before this field existed carry none: read as
+ * `token_revoked`, the only reason that existed then.
+ */
+export type CloudReauthReason = 'token_revoked' | 'missing_scope'
+
+/**
  * Connection stored per company + provider in extension_data (key
  * `google_drive_connection` / `dropbox_connection`). The refresh token is
  * AES-256-GCM encrypted (see lib/crypto.ts): never store it in plaintext.
@@ -31,14 +42,17 @@ export interface CloudConnection {
    */
   company_folder_path?: string | null
   /**
-   * Connection health. `needs_reauth` means the provider rejected the refresh
-   * token permanently (400 invalid_grant): the cron skips the connection
-   * and the UI asks the user to reconnect. Absent/undefined means active
+   * Connection health. `needs_reauth` means retrying can never succeed: the
+   * provider rejected the refresh token permanently (400 invalid_grant), or
+   * the grant lacks the storage scope. The cron skips the connection and the
+   * UI asks the user to reconnect. Absent/undefined means active
    * (records created before this field existed).
    */
   status?: 'active' | 'needs_reauth'
   /** ISO timestamp of when the dead refresh token was detected. */
   needs_reauth_at?: string
+  /** Set together with `status: 'needs_reauth'`. */
+  needs_reauth_reason?: CloudReauthReason
 }
 
 /**
@@ -93,6 +107,12 @@ export interface CloudLastSync {
    * reconstructs from `folder_id`.
    */
   web_view_link?: string
+  /**
+   * The account the files were written to. Together with `folder_id` it says
+   * where `files` live: a Dropbox folder path is the same in every account.
+   * Absent on records from before it was written.
+   */
+  account_email?: string
   files?: CloudFileState[]
   total_size_bytes?: number
   // Legacy single-file layout fields.
@@ -123,6 +143,12 @@ export interface CloudSchedule {
    * put across DST transitions. Absent on records from before this field.
    */
   hour_local?: number
+  /**
+   * ISO timestamp of when automatic backup was last switched from off to on
+   * (PUT /schedule). The card's "nothing saved for two days" warning counts
+   * from it. Absent on schedules never switched on by hand since it existed.
+   */
+  enabled_at?: string | null
   /** ISO timestamp of the last auto-sync attempt (success or failure). */
   last_auto_sync_at: string | null
   /** Outcome of the last auto-sync attempt. */
@@ -136,6 +162,36 @@ export interface CloudSchedule {
   consecutive_failures?: number
   /** ISO timestamp of the last failure-alert email (throttle anchor). */
   last_alert_at?: string | null
+  /**
+   * The run claim (lib/run-claim.ts): ISO timestamp of when a run, the cron's
+   * or a person's, started working on this destination; null or absent when
+   * none does. Taken by compare-and-set and cleared when the run ends, so one
+   * still set long after is a run the platform ended mid-company.
+   */
+  sync_started_at?: string | null
+  /**
+   * Who holds the claim: the hourly cron, or a run a person started ("Synka
+   * nu", the first backup after connecting). Only a cron claim nobody
+   * released is a nightly backup that died; absent on a claim reads as cron.
+   */
+  sync_started_by?: 'cron' | 'manual' | null
+  /**
+   * ISO timestamp of when the cron last ran out of time on this destination
+   * with files still to upload. The schedule stays due; this only sends it to
+   * the back of the next run's queue.
+   */
+  deferred_at?: string | null
+  /**
+   * Due runs in a row that ended at the time budget before reaching this
+   * destination. The claim sets it back to 0: it counts waiting, not the
+   * runs a large backup needs.
+   */
+  left_over_runs?: number
+  /**
+   * ISO timestamp of when the cron last found this destination's claim
+   * abandoned and counted the run as failed. One such retry per night.
+   */
+  interrupted_at?: string | null
 }
 
 /** Per-provider status block returned to the UI. */
@@ -148,8 +204,10 @@ export interface CloudProviderStatus {
    */
   configured: boolean
   connected: boolean
-  /** True when the stored refresh token is dead and the user must reconnect. */
+  /** True when the stored grant cannot work and the user must reconnect. */
   needs_reauth: boolean
+  /** Why, when `needs_reauth`; null otherwise. */
+  reauth_reason: CloudReauthReason | null
   account_email: string | null
   connected_at: string | null
   last_sync: CloudLastSync | null

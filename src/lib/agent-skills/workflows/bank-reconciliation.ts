@@ -20,17 +20,20 @@ you already have in hand. Decide along two axes (**what you're connecting** and
 | You have… | …and the entry is | Use |
 |---|---|---|
 | One bank tx + one customer invoice | not yet booked | \`gnubok_match_transaction_to_invoice\` |
-| One bank receipt covering many invoices (customer **or** supplier) | not yet booked | \`gnubok_match_batch_allocate\` (samlingsbetalning, BFL 5 kap 6§) |
+| One bank receipt in SEK covering many invoices (customer **or** supplier) | not yet booked | \`gnubok_match_batch_allocate\` (samlingsbetalning, BFL 5 kap 6§) |
 | A whole period of unmatched income to clear | not yet booked | \`gnubok_auto_match_period\` (run \`dry_run=true\` first) |
 | One bank tx whose affärshändelse you already posted manually | already booked | \`gnubok_link_transaction_to_journal_entry\` |
 | A customer invoice you know is paid, payment already in a verifikat | already booked | \`gnubok_find_voucher_candidates_for_invoice\` → \`gnubok_link_invoice_to_voucher\` |
 | A supplier invoice paid, payment already in a verifikat | already booked | \`gnubok_find_voucher_candidates_for_supplier_invoice\` → \`gnubok_link_supplier_invoice_to_voucher\` |
+| One supplier payment that covered several debts, booked as ONE verifikat | already booked | \`gnubok_link_supplier_invoice_to_voucher\` once per invoice, with \`amount\` = that invoice's share (the candidate's \`link_amount\`). The rest stays on the verifikat; a debt with no invoice here (e.g. part of an SIE opening balance on 2440) is left unlinked. Never storno a correct verifikat to split it |
 | A receipt/document to file against a tx (no new bokföring) | n/a | \`gnubok_attach_document_to_transaction\` |
 | Income you're sure is paid but with no bank line to point at | not yet booked | \`gnubok_mark_invoice_as_paid\` |
 
 Rule of thumb: **match_\*** creates the payment bokföring; **link_\*** attaches to
 bokföring that already exists (no new verifikat). Every one of these stages a
-pending operation: the user approves before anything posts.
+pending operation: the user approves before anything posts. A bank row in a
+foreign currency is matched to one invoice at a time: the batch refuses it
+(\`BATCH_FOREIGN_CURRENCY\`).
 
 ### Kontantmetoden vs faktureringsmetoden
 
@@ -42,7 +45,11 @@ kontantmetoden; null defaults to accrual):
   kundfordran **1510**. Payment **credits 1510** and debits the bank (19xx). The
   link/match tools settle 1510.
 - **Kontantmetoden (cash):** no receivable was raised at invoice time. Payment
-  **debits 19xx** and books the revenue + moms now.
+  **debits 19xx** and books the revenue + moms now. Exception: an invoice still
+  open at a year end is carried over it (årsomföring) and linked to that
+  verifikat; its payment credits 1510 (or debits 2440) with no moms, exactly
+  like faktureringsmetoden. A 1510 clearing in the preview of such an invoice is
+  correct, revenue and moms would declare the moms twice.
 
 You usually don't pass the method explicitly: the tools resolve it from company
 settings, but knowing it lets you sanity-check the staged preview's accounts

@@ -1,4 +1,4 @@
-# `lib/invariants`
+# `src/lib/invariants`
 
 Shared **product contracts**: the formats and bounds that more than one consumer
 must agree on, with the reason for each rule recorded next to it.
@@ -9,16 +9,16 @@ A rule belongs here only when consumers **outside the owning module** need the
 identical invariant to validate input or to generate compatible output.
 
 Our consumers are the web app, the public `/api/v1` surface, the MCP server, the
-SIE importer and exporter, and the Skatteverket-bound generators (AGI, KU10,
-SRU, iXBRL). When two of those disagree about what a valid value looks like, the
+SIE importer and exporter, and the Skatteverket-bound generators (AGI, SRU,
+iXBRL). When two of those disagree about what a valid value looks like, the
 disagreement is invisible until a customer's filing fails.
 
 ## What does not belong here
 
 - **Rules specific to one module.** They stay in that module.
-- **General helpers.** `lib/utils.ts`, `lib/money.ts`.
+- **General helpers.** `src/lib/utils.ts`, `src/lib/money.ts`.
 - **Database questions.** "Is this account in the company's chart?" is
-  `lib/bookkeeping/account-validation.ts`, not a format rule.
+  `src/lib/bookkeeping/account-validation.ts`, not a format rule.
 - **Business rules.** "Is this fiscal year open?" is a period question.
 
 ## Naming
@@ -32,10 +32,12 @@ names are the only thing keeping a call site honest, so they carry the weight.
 
 | File | Owns |
 |---|---|
-| `org-number.ts` | Swedish organisationsnummer / personnummer: canonical 10-digit form, Luhn, Skatteverket 12-digit conversion |
+| `org-number.ts` | Swedish organisationsnummer / personnummer: the one 10-digit key, Luhn, whose number it is (legal or natural person), when two numbers are one, Skatteverket 12-digit conversion |
+| `personal-number-shape.ts` | A personnummer or samordningsnummer where an organisationsnummer belongs: where it may be stored, where it is masked |
 | `account-number.ts` | BAS account number format (4 digits, always a string) |
 | `iso-date.ts` | `YYYY-MM-DD` shape, plus a real-calendar-date check |
 | `fiscal-year.ts` | Four-digit räkenskapsår key |
+| `vat-number.ts` | EU VAT number format per member state (VIES prefix): the VIES pre-check and the readers of a seller's VAT number off a document |
 | `zod.ts` | Zod primitives built from the rules above, for API schemas |
 
 `zod.ts` is separate so that consumers which do not use Zod (the MCP server,

@@ -4,7 +4,8 @@ import { getPool } from '@/tests/pg/setup'
 import { seedCompany } from '@/tests/pg/fixtures'
 
 /**
- * Migration 20260927223000 (#2906): the per-invoice VAT treatment columns.
+ * Migration 20260927223000 (#2906): the per-invoice VAT treatment columns,
+ * widened with reverse_charge_domestic by 20261005220322 (crm#1007).
  * The rules live in resolveInvoiceVatRules; the database only refuses values
  * no code path may write, so a hand-crafted row cannot claim a treatment the
  * booking does not know or a country that is not a code.
@@ -51,11 +52,15 @@ describe('invoices.vat_treatment_override / delivery_country', () => {
     }
   })
 
+  it('accepts reverse_charge_domestic, the construction services treatment (crm#1007)', async () => {
+    await expect(insertInvoice({ vatTreatmentOverride: 'reverse_charge_domestic' })).resolves.toBeTruthy()
+  })
+
   it('refuses a treatment the booking does not know', async () => {
     await expect(insertInvoice({ vatTreatmentOverride: 'standard_25' })).rejects.toThrow(
       /invoices_vat_treatment_override_check/,
     )
-    await expect(insertInvoice({ vatTreatmentOverride: 'reverse_charge_domestic' })).rejects.toThrow(
+    await expect(insertInvoice({ vatTreatmentOverride: 'domestic' })).rejects.toThrow(
       /invoices_vat_treatment_override_check/,
     )
   })

@@ -9,9 +9,17 @@ const EXTERNAL_LEDGER_REPORTS = new Set([
   'gnubok_vat_declaration_validate',
   // Filing reports served by the operation registry (lib/operations/filing-reports.ts,
   // vat-settlement.ts): the v1 doors hold the lease by their reports.* id.
-  'gnubok_get_ink2_declaration','gnubok_get_ne_bilaga','gnubok_get_periodisk_sammanstallning',
+  'gnubok_get_ink2_declaration','gnubok_get_ink3_underlag','gnubok_get_ne_bilaga','gnubok_get_periodisk_sammanstallning',
   'gnubok_get_cash_flow_statement','gnubok_get_bokslutsbilagor','gnubok_get_behandlingshistorik',
   'gnubok_get_vat_settlement_proposal',
+  'gnubok_get_forenklat_arsbokslut',
+  // Defined measures (lib/operations/measures.ts) read the same ledger: the
+  // MCP tools by name, the v1 doors by operation id. The list reads nothing.
+  'gnubok_get_measure','gnubok_explain_measure','measures.get','measures.explain',
+  // The unexplained queue (lib/operations/unexplained.ts): every door runs the
+  // checks over the ledger, the list included.
+  'gnubok_list_unexplained','gnubok_get_unexplained','gnubok_explain_unexplained',
+  'unexplained.list','unexplained.get','unexplained.explain',
 ])
 
 /** An external report has no persistent dashboard banner. Hold the complete
@@ -22,6 +30,24 @@ export function withSIEExternalReport<T>(supabase:SupabaseClient,companyId:strin
   operation:string,read:()=>Promise<T>):Promise<T> {
   return companyId && (operation.startsWith('reports.') || EXTERNAL_LEDGER_REPORTS.has(operation))
     ? withSIEPeriodRead(supabase,companyId,'report_export',read) : read()
+}
+
+/**
+ * Why an SIE import cannot be undone right now because of a lock, read-only
+ * (sie_undo_lock_refusal, migration 20261005193558, crm#1022): each storno is
+ * dated like the voucher it reverses, so a closed or locked fiscal year, or a
+ * company lock date on or after the first imported voucher, refuses the undo.
+ * The answer is the Swedish sentence request_sie_import_undo would raise,
+ * naming the locked range and what to unlock, or null when nothing is locked.
+ * For previews and stage-time checks; the undo RPC asks the same question
+ * itself when it runs.
+ */
+export async function readSIEUndoLockRefusal(supabase: SupabaseClient, companyId: string,
+  importId: string,
+): Promise<string | null> {
+  const {data,error} = await supabase.rpc('sie_undo_lock_refusal',{p_company_id:companyId,p_import_id:importId})
+  if (error) throw Object.assign(new Error(error.message), { code: error.code })
+  return typeof data === 'string' && data ? data : null
 }
 
 /** Keep a multi-request export/filing outside unfinished imports. */

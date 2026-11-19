@@ -4,8 +4,10 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { yearEndAccrualBusinessEvent } from '@/lib/bookkeeping/accruals/business-events'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import {
   buildAccrualsProposal,
   proposeAccruedInterest,
@@ -20,9 +22,6 @@ import { detectPeriodisering } from '@/lib/bokslut/accruals/auto-detect'
 import type { PeriodiseringEntityType } from '@/lib/bokslut/accruals/auto-detect'
 import type { AccrualProposal } from '@/lib/bokslut/accruals/types'
 import type { JournalEntry } from '@/types'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'period.accruals_preview',
@@ -259,13 +258,31 @@ export const POST = withRouteContext(
         const description = proposal.reverses_on
           ? `Periodisering: ${proposal.label} (vänds ${proposal.reverses_on})`
           : `Bokslutsjustering: ${proposal.label}`
-        const entry = await createJournalEntry(supabase, companyId, user.id, {
-          fiscal_period_id: id,
-          entry_date: period.period_end,
-          description,
-          source_type: 'manual',
-          voucher_series: 'A',
-          lines: tagResultLines(proposal.lines, 'dimensions' in item ? item.dimensions : undefined),
+        // Posting port (step 2g): the engine gets the input unchanged; while
+        // POSTING_EVENTS is on, the periodisering's event (ledger.accrual, or
+        // payroll.vacation_liability_adjusted) is recorded first and linked
+        // to the draft before a number is drawn.
+        const booked = proposal
+        const entry = await postingPort.postJournalEntry({
+          supabase,
+          companyId,
+          userId: user.id,
+          event: () =>
+            yearEndAccrualBusinessEvent({
+              accrual: item.kind,
+              fiscalPeriodId: id,
+              periodEnd: period.period_end,
+              amount: booked.amount,
+              linkBasis: linkBasisColumns('user_created'),
+            }),
+          input: {
+            fiscal_period_id: id,
+            entry_date: period.period_end,
+            description,
+            source_type: 'manual',
+            voucher_series: 'A',
+            lines: tagResultLines(proposal.lines, 'dimensions' in item ? item.dimensions : undefined),
+          },
         })
 
         created.push({ kind: item.kind, entry, reverses_on: proposal.reverses_on })

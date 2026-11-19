@@ -3,7 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
 /**
@@ -60,7 +60,7 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
           {t('matcher_title', { count: matches.length })}
         </p>
         {strong.length > 0 && (
-          <Button size="sm" onClick={() => onApply(strong, true)} disabled={busy}>
+          <Button onClick={() => onApply(strong, true)} disabled={busy}>
             {t('matcher_apply_strong', { count: strong.length })}
           </Button>
         )}
@@ -68,7 +68,7 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
           {t('matcher_close')}
         </button>
       </div>
-      <div className="-mx-4 overflow-x-auto sm:mx-0">
+      <div className="-mx-2 overflow-x-auto sm:mx-0">
         <table className="w-full text-[13px]">
           <thead>
             <tr>
@@ -82,7 +82,7 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
           <tbody className="stagger-enter">
             {matches.map((m) => (
               <tr key={`${m.transaction_id}:${m.journal_entry_id}`} className="group">
-                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+                <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
                   {formatDate(m.transaction_date)}
                 </td>
                 <td className={cn(TD_CLASS, 'max-w-0')}>
@@ -91,17 +91,17 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
                   </span>
                 </td>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-                  {formatCurrency(m.transaction_amount, currency)}
+                  {formatRowAmount(m.transaction_amount, currency)}
                 </td>
-                <td className={cn(TD_CLASS, 'max-w-0')}>
+                <td className={cn(TD_CLASS, 'max-w-0 date-figures')}>
                   <span className="flex items-center gap-2">
                     <span className="tabular-nums" data-ph-mask>
                       {formatVoucher({ voucher_series: m.voucher_series, voucher_number: m.voucher_number })}
                     </span>
-                    <span className="text-[11px] tabular-nums text-muted-foreground">{formatDate(m.entry_date)}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">{formatDate(m.entry_date)}</span>
                     <span
                       className={cn(
-                        'whitespace-nowrap rounded-full px-1.5 py-px text-[11px]',
+                        'whitespace-nowrap rounded-md px-1.5 py-px text-xs',
                         m.confidence >= STRONG_CONFIDENCE
                           ? 'bg-success/10 text-success'
                           : 'bg-muted text-muted-foreground',
@@ -112,12 +112,12 @@ export function MatcherPreview({ matches, currency, busy, onApply, onClose }: Ma
                         : t('confidence', { percent: Math.round(m.confidence * 100) })}
                     </span>
                   </span>
-                  <span className="block truncate text-[12.5px] text-muted-foreground" data-ph-mask>
+                  <span className="block truncate text-xs text-muted-foreground" data-ph-mask>
                     {m.entry_description}
                   </span>
                 </td>
                 <td className={cn(TD_CLASS, 'text-right')}>
-                  <Button size="sm" variant="outline" onClick={() => onApply([m], false)} disabled={busy}>
+                  <Button variant="outline" onClick={() => onApply([m], false)} disabled={busy}>
                     {t('row_match')}
                   </Button>
                 </td>

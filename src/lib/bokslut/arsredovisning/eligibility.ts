@@ -5,12 +5,14 @@ import {
   supportsAccountingFramework,
   supportsIxbrl,
 } from '@/lib/company/entity-type'
+import { k3IxbrlEnabled } from '@/lib/bokslut/ixbrl/k3-release'
 import type {
   AnnualReportComplianceIssue,
   AnnualReportEligibilityResult,
   AnnualReportProfile,
   AnnualReportSizeMetrics,
 } from './compliance-types'
+import type { K3FirstYearStatus } from './disclosures/types'
 
 const LARGE_COMPANY_THRESHOLDS = {
   employees: 50,
@@ -96,6 +98,15 @@ function usesNewK2Restrictions(periodStart: string, periodEnd: string): boolean 
   return periodStart > '2025-06-30' && periodEnd >= '2026-12-31'
 }
 
+/** What the K3 scope checks read from the books and the framework records (model.ts). */
+export interface K3ScopeInput {
+  firstYear: K3FirstYearStatus
+  /** Deferred tax recorded in the books (facts.ts temporaryDifferenceSignals().booked). */
+  deferredTaxBooked: readonly string[]
+  /** Assets that often carry temporary differences (temporaryDifferenceSignals().hints). */
+  temporaryDifferenceHints: readonly string[]
+}
+
 export interface EvaluateAnnualReportEligibilityInput {
   entityType: string
   framework: 'k2' | 'k3'
@@ -103,6 +114,91 @@ export interface EvaluateAnnualReportEligibilityInput {
   periodEnd: string
   profile: AnnualReportProfile
   metrics: AnnualReportSizeMetrics
+  /** K3 only; absent means nothing is known, so the K3 checks fail closed. */
+  k3?: K3ScopeInput
+}
+
+/**
+ * The scope Accounted's K3 document covers: a mindre aktiebolag (K3 for
+ * större företag is not built), a year that is not the first K3 year after
+ * K2 (K3 kapitel 35: the transition is not built), and no temporary
+ * differences beyond obeskattade reserver (K3 kapitel 29: deferred tax is
+ * not built). Everything outside it fails closed with a stable code; an
+ * unanswered question is a blocker, never a no.
+ */
+function k3ScopeIssues(
+  issues: AnnualReportComplianceIssue[],
+  profile: AnnualReportProfile,
+  size: AnnualReportEligibilityResult['size_classification'],
+  k3: K3ScopeInput | undefined,
+): void {
+  requireAnswer(
+    issues,
+    profile.securities_traded_on_regulated_market,
+    'AR-K3-LISTED-UNKNOWN',
+    'Om värdepapper är upptagna till handel på en reglerad marknad',
+  )
+  requireAnswer(issues, profile.is_public_limited_company, 'AR-K3-PUBLIC-UNKNOWN', 'Om bolaget är publikt')
+
+  if (profile.securities_traded_on_regulated_market === true || size === 'larger') {
+    issues.push(
+      issue(
+        'AR-K3-STORRE-UNSUPPORTED',
+        'Bolaget är ett större företag enligt ÅRL 1 kap. 3 §. Accounteds K3-dokument omfattar ännu bara mindre företag: ett större företag ska bland annat ha kassaflödesanalys och fler noter (ÅRL 5 kap. 25-48 §§).',
+        'Upprätta årsredovisningen med redovisningskonsult eller revisor.',
+      ),
+    )
+  } else if (size === 'unknown') {
+    issues.push(
+      issue(
+        'AR-K3-SIZE-UNKNOWN',
+        'Storleksklassificeringen kan inte avgöras eftersom ett eller flera jämförelsetal saknas, och Accounteds K3-dokument omfattar bara mindre företag.',
+        'Kontrollera jämförelseårets balansomslutning, nettoomsättning och medelantal anställda.',
+      ),
+    )
+  }
+
+  const firstYear = k3?.firstYear ?? 'unknown'
+  if (firstYear === 'after_k2') {
+    issues.push(
+      issue(
+        'AR-K3-FIRST-YEAR-UNSUPPORTED',
+        'Föregående räkenskapsår upprättades enligt K2, så det här är första året bolaget tillämpar K3. Övergången kräver omräkning av ingångsbalansen och jämförelsetalen och särskilda noter (K3 kapitel 35), som Accounted ännu inte stöder.',
+        'Upprätta årsredovisningen för övergångsåret med redovisningskonsult eller revisor.',
+      ),
+    )
+  } else if (firstYear === 'unknown') {
+    issues.push(
+      issue(
+        'AR-K3-FIRST-YEAR-UNKNOWN',
+        'Det går inte att avgöra om det här är första året bolaget tillämpar K3.',
+        'Ange i avsnittet Omfattning och regelverk vilket regelverk föregående årsredovisning upprättades enligt, eller att bolaget inte har upprättat någon tidigare.',
+      ),
+    )
+  }
+
+  const booked = k3?.deferredTaxBooked ?? []
+  if (booked.length > 0 || profile.has_other_temporary_differences === true) {
+    issues.push(
+      issue(
+        'AR-K3-TEMPORARY-DIFFERENCES-UNSUPPORTED',
+        booked.length > 0
+          ? `Bokföringen visar uppskjuten skatt (${booked.join('; ')}). Accounteds K3-dokument redovisar ännu inte uppskjuten skatt på andra temporära skillnader än obeskattade reserver (K3 kapitel 29).`
+          : 'Bolaget har temporära skillnader utöver obeskattade reserver. Accounteds K3-dokument redovisar ännu inte uppskjuten skatt på dem (K3 kapitel 29).',
+        'Upprätta årsredovisningen med redovisningskonsult eller revisor.',
+      ),
+    )
+  } else if (profile.has_other_temporary_differences === null) {
+    const hints = k3?.temporaryDifferenceHints ?? []
+    issues.push(
+      issue(
+        'AR-K3-TEMPORARY-DIFFERENCES-UNKNOWN',
+        'Det är inte besvarat om bolaget har temporära skillnader utöver obeskattade reserver, till exempel skillnader mellan bokförda och skattemässiga värden på byggnader (K3 kapitel 29).'
+          + (hints.length > 0 ? ` Att kontrollera: ${hints.join('; ')}.` : ''),
+        'Besvara frågan i avsnittet Omfattning och regelverk.',
+      ),
+    )
+  }
 }
 
 /**
@@ -316,6 +412,8 @@ export function evaluateAnnualReportEligibility(
     }
   }
 
+  if (input.framework === 'k3') k3ScopeIssues(issues, profile, size, input.k3)
+
   if (profile.reporting_currency !== 'SEK') {
     issues.push(
       issue(
@@ -337,12 +435,16 @@ export function evaluateAnnualReportEligibility(
       ),
     )
   }
-  if (input.framework !== 'k2') {
+  // K3 files digitally only once its iXBRL document is switched on
+  // (NEXT_PUBLIC_K3_IXBRL_ENABLED). Until then the copy says what is and is
+  // not possible, and points at no paper flow: paper for K3 opens with the
+  // reviewed K3 document, not before.
+  if (input.framework === 'k3' && !k3IxbrlEnabled()) {
     digitalIssues.push(
       issue(
         'AR-DIGITAL-FRAMEWORK',
-        'Accounteds digitala Bolagsverket-flöde stöder ännu endast K2 för aktiebolag.',
-        'Använd pappersflödet tills K3-taxonomin är implementerad och godkänd.',
+        'Accounted kan ännu inte lämna in en K3-årsredovisning digitalt: K3-dokumentet finns som PDF för granskning, men inget iXBRL-dokument skapas för det än.',
+        'Inlämningen av K3-årsredovisningar öppnas när K3-dokumentet har granskats och godkänts. Den som behöver lämna in innan dess gör det med ett annat program eller med hjälp av redovisningskonsult eller revisor.',
       ),
     )
   }
@@ -355,13 +457,21 @@ export function evaluateAnnualReportEligibility(
       ),
     )
   } else if (profile.auditor_report_required) {
-    digitalIssues.push(
-      issue(
-        'AR-DIGITAL-AUDIT',
-        'Det här bolaget kräver revisionsberättelse, vilket Accounteds digitala paket ännu inte skickar.',
-        'Använd pappersflödet eller vänta tills separat revisionsberättelse stöds.',
-      ),
-    )
+    // Supported since the revisor package: the årsredovisning goes up as
+    // arsredovisning_kompletteras with the revisorspåteckning, and the
+    // revisionsberättelse follows as its own handling (Bolagsverket API 2.1).
+    // What the påteckning needs (a revisor in the roster, its date, the
+    // opinion) is known only after the board signed, so the iXBRL preflight
+    // checks it at filing, not this lock-time gate.
+    digitalIssues.push({
+      code: 'AR-DIGITAL-AUDIT',
+      severity: 'info',
+      section: 'filing',
+      message:
+        'Revisionsberättelsen lämnas in separat: årsredovisningen laddas upp med revisorspåteckningen och revisorn meddelas att revisionsberättelsen ska kompletteras.',
+      remediation:
+        'Lägg till revisorn bland undertecknarna och registrera påteckningen när revisionsberättelsen har lämnats.',
+    })
   }
 
   return {

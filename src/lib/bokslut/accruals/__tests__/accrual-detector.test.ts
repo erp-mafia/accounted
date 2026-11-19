@@ -21,10 +21,17 @@ vi.mock('@/lib/reports/trial-balance', () => ({
 
 const OPTIONS = { closingDate: '2026-12-31' }
 
-function vacationReport(rows: number, accruedAmount: number) {
+// computedLiability is the day-valued target; accruedAmount the booked
+// specification, which by default restates the same figure.
+function vacationReport(rows: number, computedLiability: number, accruedAmount = computedLiability) {
   return {
-    rows: Array.from({ length: rows }, (_, i) => ({ employee_id: `e-${i}` })),
-    totals: { accruedAmount },
+    rows: Array.from({ length: rows }, (_, i) => ({
+      employeeId: `e-${i}`,
+      accruedAmount: accruedAmount / rows,
+      computedLiability: computedLiability / rows,
+      liabilityChangeAccount: '7290',
+    })),
+    totals: { accruedAmount, computedLiability },
   }
 }
 
@@ -92,6 +99,48 @@ describe('assessVacationLiability', () => {
     expect(l2920.debit_amount).toBe(0)
   })
 
+  // The booked specification restates 2920 itself, so targeting it proposed
+  // ~0 whenever the runs had under- or over-accrued. The target is the
+  // day-valued liability.
+  it('targets the computed liability, not the booked specification', async () => {
+    vi.mocked(generateVacationLiability).mockResolvedValue(vacationReport(2, 100000, 80000) as never)
+    vi.mocked(generateTrialBalance).mockResolvedValue(trialBalanceWith2920(80000) as never)
+
+    const result = await assessVacationLiability({} as never, 'c1', 'p1', OPTIONS)
+
+    expect(result.proposal!.computation).toMatchObject({ current_2920: 80000, closing_target: 100000, delta: 20000 })
+  })
+
+  // Plan 1: the förändring side splits per category, pro rata by each
+  // employee's 2920 share; 2920 stays one line.
+  it('splits the change over 7090 and 7290 by each employee share', async () => {
+    vi.mocked(generateVacationLiability).mockResolvedValue({
+      rows: [
+        { employeeId: 'e-arb', computedLiability: 75000, liabilityChangeAccount: '7090' },
+        { employeeId: 'e-tj', computedLiability: 25000, liabilityChangeAccount: '7290' },
+      ],
+      totals: { computedLiability: 100000 },
+    } as never)
+    vi.mocked(generateTrialBalance).mockResolvedValue(trialBalanceWith2920(80000) as never)
+
+    const result = await assessVacationLiability({} as never, 'c1', 'p1', OPTIONS)
+
+    const lines = result.proposal!.lines
+    expect(lines.filter((l) => l.account_number === '7090')).toEqual([
+      expect.objectContaining({ debit_amount: 15000, credit_amount: 0 }),
+    ])
+    expect(lines.filter((l) => l.account_number === '7290')).toEqual([
+      expect.objectContaining({ debit_amount: 5000, credit_amount: 0 }),
+    ])
+    expect(lines.filter((l) => l.account_number === '2920')).toEqual([
+      expect.objectContaining({ debit_amount: 0, credit_amount: 20000 }),
+    ])
+    const debit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const credit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(debit).toBeCloseTo(credit, 2)
+    expect(result.proposal!.description).toContain('7090/7290')
+  })
+
   it('still proposes a decrease when employees exist and the liability fell', async () => {
     vi.mocked(generateVacationLiability).mockResolvedValue(vacationReport(2, 50000) as never)
     vi.mocked(generateTrialBalance).mockResolvedValue(trialBalanceWith2920(80000) as never)
@@ -100,6 +149,10 @@ describe('assessVacationLiability', () => {
 
     expect(result.notice).toBeNull()
     expect(result.proposal!.computation).toMatchObject({ delta: -30000, employee_rows: 2 })
+    expect(result.proposal!.lines.find((l) => l.account_number === '7290')).toMatchObject({
+      debit_amount: 0,
+      credit_amount: 30000,
+    })
   })
 })
 

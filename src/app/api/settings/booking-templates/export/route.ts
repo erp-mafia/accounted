@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/settings/booking-templates/export
@@ -23,11 +24,6 @@ export const GET = withRouteContext(
 
     if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
-    return new NextResponse(JSON.stringify({ version: 1, templates: data }, null, 2), {
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Disposition': 'attachment; filename="bokforingsmallar.json"',
-      },
-    })
+    return fileResponse(JSON.stringify({ version: 1, templates: data }, null, 2), { filename: 'bokforingsmallar.json', contentType: 'application/json' })
   },
 )

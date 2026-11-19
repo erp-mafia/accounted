@@ -6,12 +6,15 @@
  * posted with the new lines. All three remain in the verifikationsserie,
  * linked via reverses_id, reversed_by_id, and correction_of_id.
  *
- * Body: `{ lines: [...], description?, allow_deep_chain? }`: the new balanced
+ * Body: `{ lines: [...], description?, allow_deep_chain?, sides_swapped? }`: the new balanced
  * lines. The corrected entry inherits entry_date, fiscal_period_id, and
  * voucher_series from the original. Its description defaults to
  * "Rättelse: <original>"; pass `description` to override it (e.g. when the
  * original label named the wrong account). `allow_deep_chain` bypasses the
  * correction-chain depth guard (CORRECTION_CHAIN_TOO_DEEP at 3+ levels).
+ * Lines that are the original with debit and credit swapped answer
+ * MEANINGLESS_CORRECTION (negates_original) unless `sides_swapped` says the
+ * original itself had the sides swapped (crm#1397).
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  */
@@ -26,9 +29,17 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { validateBalance } from '@/lib/bookkeeping/engine'
-import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
+import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
+import { debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
+import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
-import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
+import { OWNED_BY_PITFALL, VoucherOwnerSchema } from '@/lib/api/v1/voucher-owner-schema'
+import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
+import { CorrectionChainTooDeepError, MeaninglessCorrectionError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const JournalEntryCorrected = z.object({
   reversal_id: z.string().uuid(),
@@ -37,6 +48,7 @@ const JournalEntryCorrected = z.object({
   voucher_series: z.string(),
   reversal_voucher_number: z.number().int(),
   corrected_voucher_number: z.number().int(),
+  owned_by: VoucherOwnerSchema.nullable(),
 })
 
 registerEndpoint({
@@ -56,6 +68,10 @@ registerEndpoint({
     'The original\'s entry_date and fiscal_period_id are inherited. If the original\'s period has been locked since posting, the call returns PERIOD_LOCKED.',
     'Three voucher numbers are advanced in this call: the original (already burned), the reversal, and the corrected. The series stays unbroken.',
     'A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.',
+    'Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.',
+    'Lines crediting import VAT (2615/2625/2635, boxes 60-62) need the taxable amount in box 50 (4545-4547) in the same lines, else 400 IMPORT_VAT_WITHOUT_BASE; reverse charge books its output VAT on 2614/2624/2634.',
+    OWNED_BY_PITFALL,
+    'An entry linked to a bank transaction keeps its amount on that transaction\'s bank ledger account (the account the bank says the money moved on): lines that move it to another bank account (19xx or a cash account ledger) return 409 CORRECTION_BANK_ACCOUNT_CHANGED (details.bank_account, details.moved_to). If the transaction does not belong to the entry, reverse the entry instead.',
   ],
   example: {
     request: {
@@ -72,6 +88,7 @@ registerEndpoint({
         voucher_series: 'A',
         reversal_voucher_number: 144,
         corrected_voucher_number: 145,
+        owned_by: null,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -103,7 +120,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const rawBody = rawBodyResult.body
     const parsed = CorrectJournalEntrySchema.safeParse(rawBody)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-    const { lines, description, allow_deep_chain } = parsed.data
+    const { lines, description, allow_deep_chain, sides_swapped } = parsed.data
 
     const balance = validateBalance(lines)
     if (!balance.valid) {
@@ -117,7 +134,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // CANNOT_CORRECT_NON_POSTED otherwise but we want the structured envelope).
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, entry_date, voucher_series, correction_of_id, reverses_id')
+      .select('id, status, entry_date, voucher_series, correction_of_id, reverses_id, source_type, source_id, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -133,6 +150,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       voucher_series: string
       correction_of_id: string | null
       reverses_id: string | null
+      source_type: string | null
+      source_id: string | null
+      lines?: Array<{ account_number: string; debit_amount: number | string; credit_amount: number | string }> | null
     }
     if (typed.status !== 'posted') {
       return v1ErrorResponseFromCode('CANNOT_CORRECT_NON_POSTED', ctx.log, {
@@ -156,6 +176,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
+    // A second reversal is refused before the dry-run return too, so the dry
+    // run answers what the real call would (correctEntry re-checks).
+    if (!sides_swapped && negatesOriginal(lines, typed.lines ?? [])) {
+      return v1ErrorResponse(new MeaninglessCorrectionError('negates_original'), ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
+
     // Period-lock pre-check on the INHERITED entry_date. /reverse already has
     // this guard against its `reversal_date`; /correct must match because
     // both the storno and the corrected entry land on typed.entry_date and
@@ -174,6 +202,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Importmoms keeps its ruta 50 base in the corrected lines (#94): the rule
+    // correctEntry runs at commit, here before the dry-run return too.
+    try {
+      await assertCorrectedImportVatBase(ctx.supabase, ctx.companyId!, typed.source_type, lines)
+    } catch (err) {
+      return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+    }
+
+    // An API key's unattended ceiling, which correctEntry asks for the storno
+    // and the corrected verifikat before either is drafted: here before the
+    // dry-run return too.
+    const overCeiling = unattendedCeilingRefusal(Math.max(debitTotal(typed.lines ?? []), debitTotal(lines)))
+    if (overCeiling) return v1ErrorResponse(overCeiling, ctx.log, { requestId: ctx.requestId })
+
+    // The object the verifikat books, if any (advice, never a refusal): the
+    // correction is a new verifikat it does not point at, so name it.
+    const ownedBy = await voucherOwnerOrNull(ctx.supabase, ctx.companyId!, typed)
+
     if (ctx.dryRun) {
       return dryRunPreview(
         {
@@ -183,20 +229,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           voucher_series: typed.voucher_series,
           inherited_entry_date: typed.entry_date,
           new_lines_balance: { debit: balance.totalDebit, credit: balance.totalCredit },
+          owned_by: ownedBy,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
 
     try {
-      const { reversal, corrected } = await correctEntry(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
+      // Posting port (step 2i): ledger.storno and ledger.correction of the
+      // verifikat while POSTING_EVENTS is on, client_asserted on a key.
+      const { reversal, corrected } = await postingPort.correctJournalEntry({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
         entryId,
-        lines,
-        { description, allowDeepChain: allow_deep_chain },
-      )
+        ...correctionBusinessEvents({ entryId, occurredOn: todayIsoStockholm, linkBasis: () => linkBasisColumns('user_created') }),
+        correction: {
+          lines,
+          options: {
+            description,
+            allowDeepChain: allow_deep_chain,
+            ...(sides_swapped ? { sidesSwapped: true } : {}),
+          },
+        },
+      })
       return ok(
         {
           reversal_id: reversal.id,
@@ -205,6 +261,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           voucher_series: corrected.voucher_series,
           reversal_voucher_number: reversal.voucher_number,
           corrected_voucher_number: corrected.voucher_number,
+          owned_by: ownedBy,
         },
         { requestId: ctx.requestId },
       )

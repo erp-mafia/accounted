@@ -77,7 +77,7 @@ export default function MoveTransactionCashAccountDialog({
         onOpenChange(v)
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('move_account_dialog_title')}</DialogTitle>
           <DialogDescription>{t('move_account_dialog_description')}</DialogDescription>
@@ -91,7 +91,7 @@ export default function MoveTransactionCashAccountDialog({
               <label
                 key={account.id}
                 className={cn(
-                  'flex min-h-11 items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm transition-colors duration-150',
+                  'flex min-h-11 items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-150 bg-control shadow-raised',
                   disabled ? 'opacity-60' : 'cursor-pointer hover:bg-secondary/35',
                   selected === account.ledger_account && !disabled && 'bg-secondary/40',
                 )}

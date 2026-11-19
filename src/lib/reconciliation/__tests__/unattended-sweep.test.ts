@@ -83,6 +83,56 @@ describe('runUnattendedReconciliationSweep', () => {
     vi.clearAllMocks()
   })
 
+  it('sweeps only the named ledger accounts when a bank sync limits it', async () => {
+    const supabase = makeSupabase({ data: [CA_1930, CA_1931, CA_1932_EUR], error: null })
+    runReconciliationMock.mockResolvedValue(emptyRunResult({ applied: 1 }))
+
+    const result = await runUnattendedReconciliationSweep(supabase as never, 'company-1', 'user-1', {
+      dateFrom: '2026-01-01',
+      dateTo: '2026-06-30',
+      ledgerAccounts: ['1931', '1932'],
+    })
+
+    expect(runReconciliationMock).toHaveBeenCalledTimes(2)
+    expect(runReconciliationMock.mock.calls.map((c) => c[3].accountNumber)).toEqual(['1931', '1932'])
+    expect(result.applied).toBe(2)
+  })
+
+  it('never widens a limited sweep to the pooled 1930 run when no named account has a row', async () => {
+    const supabase = makeSupabase({ data: [CA_1931], error: null })
+
+    const result = await runUnattendedReconciliationSweep(supabase as never, 'company-1', 'user-1', {
+      ledgerAccounts: ['1930'],
+    })
+
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+    expect(result.accounts).toEqual([])
+  })
+
+  it('hands the named verifikat down to every account run (crm#1958)', async () => {
+    const supabase = makeSupabase({ data: [CA_1930, CA_1931], error: null })
+    runReconciliationMock.mockResolvedValue(emptyRunResult())
+
+    await runUnattendedReconciliationSweep(supabase as never, 'company-1', 'user-1', {
+      ledgerAccounts: ['1930', '1931'],
+      journalEntryIds: ['je-1'],
+    })
+
+    expect(runReconciliationMock).toHaveBeenCalledTimes(2)
+    for (const call of runReconciliationMock.mock.calls) {
+      expect(call[3]).toMatchObject({ onlyJournalEntryIds: ['je-1'] })
+    }
+  })
+
+  it('passes no verifikat filter when the sweep names none', async () => {
+    const supabase = makeSupabase({ data: [CA_1930], error: null })
+    runReconciliationMock.mockResolvedValue(emptyRunResult())
+
+    await runUnattendedReconciliationSweep(supabase as never, 'company-1', 'user-1', {})
+
+    expect(runReconciliationMock.mock.calls[0][3]).not.toHaveProperty('onlyJournalEntryIds')
+  })
+
   it('runs once per enabled cash account with that account\'s scope', async () => {
     const supabase = makeSupabase({ data: [CA_1930, CA_1931, CA_1932_EUR], error: null })
     runReconciliationMock.mockResolvedValue(emptyRunResult())

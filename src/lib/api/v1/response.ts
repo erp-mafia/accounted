@@ -13,7 +13,21 @@
  */
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
+
+/**
+ * The `webhook_event` field on a 202 and on the operation poll. It names a
+ * completion event that is reserved but not deliverable: it is not in the
+ * webhook catalogue (lib/webhooks/public-events.ts), so nobody can
+ * subscribe to it. Polling poll_url is the completion signal. One schema so
+ * every async endpoint documents the field the same way.
+ */
+export const OperationWebhookEventField = z
+  .literal('operation.completed')
+  .describe(
+    'Reserved name of a future completion webhook. Not deliverable or subscribable today: poll poll_url until a terminal status.',
+  )
 
 export interface AuditBlock {
   voucher_number?: string
@@ -151,7 +165,8 @@ export function created<T>(data: T, opts: ResponseOptions): NextResponse {
 
 /**
  * 202 Accepted for async long-running operations. Returns the operation_id +
- * polling URL + the webhook event the caller can subscribe to for completion.
+ * polling URL + the reserved webhook_event name (OperationWebhookEventField:
+ * not deliverable today, poll the URL).
  */
 export function accepted(
   operationId: string,

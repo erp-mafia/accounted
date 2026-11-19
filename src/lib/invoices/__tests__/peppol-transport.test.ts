@@ -37,43 +37,43 @@ describe('Peppol transport registry', () => {
     }
   })
 
-  it('defaults to the connector transport when that is the only registered adapter and no provider is selected', () => {
+  it('defaults to the connector transport when that is the only registered adapter and no provider is selected', async () => {
     cleanups.push(registerPeppolTransport(makeTransport('connector')))
-    expect(getPeppolTransportAvailability()).toEqual({ available: true, provider: 'connector' })
+    expect(await getPeppolTransportAvailability()).toEqual({ available: true, provider: 'connector' })
     // An explicit selection still wins, and still refuses an absent adapter.
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
-    expect(getPeppolTransportAvailability()).toEqual({
+    expect(await getPeppolTransportAvailability()).toEqual({
       available: false,
       provider: null,
       reason: 'provider_adapter_unavailable',
     })
   })
 
-  it('stays truthfully unavailable until a provider is selected', () => {
-    expect(getPeppolTransportAvailability()).toEqual({
+  it('stays truthfully unavailable until a provider is selected', async () => {
+    expect(await getPeppolTransportAvailability()).toEqual({
       available: false,
       provider: null,
       reason: 'provider_selection_required',
     })
   })
 
-  it('does not claim availability for a configured but absent adapter', () => {
+  it('does not claim availability for a configured but absent adapter', async () => {
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'storecove'
 
-    expect(getPeppolTransportAvailability()).toEqual({
+    expect(await getPeppolTransportAvailability()).toEqual({
       available: false,
       provider: null,
       reason: 'provider_adapter_unavailable',
     })
   })
 
-  it('registers and removes an explicit adapter without a core default', () => {
+  it('registers and removes an explicit adapter without a core default', async () => {
     const transport = makeTransport('Storecove')
     cleanups.push(registerPeppolTransport(transport))
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'storecove'
 
-    expect(getPeppolTransport('STORECOVE')).toBe(transport)
-    expect(getPeppolTransportAvailability()).toEqual({
+    expect(await getPeppolTransport('STORECOVE')).toBe(transport)
+    expect(await getPeppolTransportAvailability()).toEqual({
       available: true,
       provider: 'storecove',
     })

@@ -60,10 +60,12 @@ export function validatePersonnummer(personnummer: string): { valid: boolean; er
     return { valid: false, error: 'Ogiltig dag' }
   }
 
-  // Luhn check on digits 3-12 (YYMMDDNNNN, 10 digits)
+  // Luhn check on digits 3-12 (YYMMDDNNNN, 10 digits). The message names the
+  // personnummer itself: it is often refused in the same call as a bank
+  // account, whose kontonummer has check digits of its own.
   const luhnDigits = digits.slice(2)
   if (!luhnValidate(luhnDigits)) {
-    return { valid: false, error: 'Ogiltigt kontrollnummer (Luhn)' }
+    return { valid: false, error: 'Personnumrets kontrollsiffra stämmer inte. Kontrollera alla 12 siffror.' }
   }
 
   return { valid: true }
@@ -118,12 +120,54 @@ export function calculateAgeAtYearStart(personnummer: string, year: number): num
   return year - 1 - extractBirthDate(personnummer).year
 }
 
+/** What a value that is not a 10- or 12-digit number masks to: nothing shown. */
+export const REDACTED_PERSONNUMMER = 'XXXXXXXX-XXXX'
+
 /**
- * Mask personnummer for display: YYYYMMDD-XXXX (birthdate visible, suffix hidden).
+ * The one display form of a natural person's personnummer on every read
+ * surface (the payroll pages, payslips, ROT/RUT, v1, MCP): the birth date
+ * visible, the last four digits (sex and check digit) hidden, in the written
+ * form Skatteverket uses. YYYYMMDD-XXXX for the 12-digit form, YYMMDD-XXXX
+ * for the 10-digit form (an enskild firma's organisation number). Anything
+ * else is redacted whole: slicing an unexpected length would show digits of
+ * the serial number.
  */
-export function maskPersonnummer(personnummer: string): string {
-  const digits = personnummer.replace(/\D/g, '')
-  return `${digits.slice(0, 8)}-XXXX`
+export function maskPersonnummer(personnummer: string | null | undefined): string {
+  const digits = (personnummer ?? '').replace(/\D/g, '')
+  if (digits.length === 12) return `${digits.slice(0, 8)}-XXXX`
+  if (digits.length === 10) return `${digits.slice(0, 6)}-XXXX`
+  return REDACTED_PERSONNUMMER
+}
+
+/** Month 01-12 and day 01-31, or 61-91 for a samordningsnummer (day + 60). */
+const MMDD = '(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01]|6[1-9]|[78]\\d|9[01])'
+
+/**
+ * A 12-digit personnummer or samordningsnummer in free text: YYYYMMDDNNNN,
+ * or with "-", "+" or a space before the last four digits. The date part
+ * must look like a birth date (year 18xx-20xx), so an employer id such as
+ * 16XXXXXXXXXX, an amount or a reference number is left alone.
+ */
+const PERSONNUMMER_12_IN_TEXT = new RegExp(`(?<!\\d)((?:18|19|20)\\d{2}${MMDD})[-+ ]?\\d{4}(?!\\d)`, 'g')
+
+/**
+ * The 10-digit form, YYMMDDNNNN or YYMMDD-NNNN / YYMMDD+NNNN. An
+ * organisationsnummer has the same shape but its third digit is 2 or more
+ * (NN2N...), which no month can be, so the month check leaves it alone.
+ */
+const PERSONNUMMER_10_IN_TEXT = new RegExp(`(?<![\\d-])(\\d{2}${MMDD})[-+]?\\d{4}(?![\\d-])`, 'g')
+
+/**
+ * Mask every personnummer in a free-text message, keeping the birth date
+ * the way maskPersonnummer does: YYYYMMDD-XXXX for the 12-digit form,
+ * YYMMDD-XXXX for the 10-digit form. For third-party text that can name an
+ * employee by personnummer (e.g. Skatteverket's AGI kontrollsvar) before it
+ * reaches an API caller or an agent's context.
+ */
+export function maskPersonnummerInText(text: string): string {
+  return text
+    .replace(PERSONNUMMER_12_IN_TEXT, '$1-XXXX')
+    .replace(PERSONNUMMER_10_IN_TEXT, '$1-XXXX')
 }
 
 /**
@@ -134,35 +178,4 @@ export function formatPersonnummer(personnummer: string): string {
   return `${digits.slice(0, 8)}-${digits.slice(8)}`
 }
 
-/**
- * Expand a personnummer to the 12-digit form (YYYYMMDDNNNN).
- *
- * Accepts the shapes the customer card stores (10 or 12 digits, optional -/+
- * separator; see PERSONAL_NUMBER_INPUT_RE in lib/customers). A 10-digit value
- * gets its century inferred the standard Skatteverket way: the most recent
- * birth date not after `now`, minus a further hundred years when the
- * separator is '+' (the over-100 marker). Samordningsnummer day offsets
- * (+60) are stripped for the calendar comparison only; the returned digits
- * keep the printed day. Returns digits only, or null when the input has
- * neither shape. No checksum validation here: callers that need it run the
- * result through validatePersonnummer.
- */
-export function expandPersonnummerTo12(value: string, now: Date = new Date()): string | null {
-  const trimmed = value.trim()
-  const digits = trimmed.replace(/\D/g, '')
-  if (digits.length === 12) return digits
-  if (digits.length !== 10) return null
-
-  const yy = parseInt(digits.slice(0, 2), 10)
-  const month = parseInt(digits.slice(2, 4), 10)
-  const day = parseInt(digits.slice(4, 6), 10)
-  const birthDay = day > 60 ? day - 60 : day
-
-  // Compare dates as yyyymmdd integers: immune to Date rollover on the
-  // not-yet-validated month/day values.
-  const today = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate()
-  let year = Math.floor(now.getFullYear() / 100) * 100 + yy
-  if (year * 10000 + month * 100 + birthDay > today) year -= 100
-  if (trimmed.includes('+')) year -= 100
-  return `${year}${digits.slice(2)}`
-}
+export { expandPersonnummerTo12 } from '@/lib/invariants/personal-number-shape'

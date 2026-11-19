@@ -23,7 +23,8 @@ import {
  *     headers, or post a draft with a voucher number the sequence never
  *     issued; the engine's own direct shapes still work.
  *  D. create_document_version refuses viewers and foreign storage paths;
- *     validate_version_chain needs membership; leftover grants tightened.
+ *     leftover grants tightened. (validate_version_chain, gated here too, was
+ *     dropped in 20261012100300 with no caller left.)
  */
 
 async function seedWithRoles() {
@@ -76,31 +77,6 @@ describe('A. viewer role cannot write (pg)', () => {
       expect(res.rows[0]!.n).toBe(1)
     })
   })
-
-  it('blocks a viewer posting through import_sie_journal_entries', async () => {
-    const { companyId, fiscalPeriodId, viewer } = await seedWithRoles()
-    await expect(
-      withUserContext(viewer, (c) =>
-        c.query(`SELECT public.import_sie_journal_entries($1, $2, $3, $4::jsonb)`, [
-          companyId,
-          viewer,
-          fiscalPeriodId,
-          JSON.stringify([
-            {
-              date: '2026-06-01',
-              description: 'viewer',
-              sourceType: 'import',
-              series: 'A',
-              lines: [
-                { account_number: '1930', debit_amount: 100, credit_amount: 0 },
-                { account_number: '3001', debit_amount: 0, credit_amount: 100 },
-              ],
-            },
-          ]),
-        ]),
-      ),
-    ).rejects.toMatchObject({ code: '42501' })
-  })
 })
 
 describe('B. admin cannot seize ownership (pg)', () => {
@@ -129,7 +105,9 @@ describe('B. admin cannot seize ownership (pg)', () => {
     })
   })
 
-  it('refuses invitations that grant owner, allows member', async () => {
+  // Since 20261012100800 the role CHECK itself lists only the grantable roles
+  // (23514); before, a trigger refused owner with 42501.
+  it('refuses invitations that grant owner, allows admin, member and viewer', async () => {
     const { companyId, admin } = await seedWithRoles()
     const tokenHash = randomUUID().replace(/-/g, '')
     await expect(
@@ -140,15 +118,66 @@ describe('B. admin cannot seize ownership (pg)', () => {
           [companyId, tokenHash, admin],
         ),
       ),
-    ).rejects.toMatchObject({ code: '42501' })
-    await withUserContext(admin, async (c) => {
-      const res = await c.query(
-        `INSERT INTO public.company_invitations (company_id, email, role, token_hash, invited_by, expires_at)
-         VALUES ($1, 'y@example.com', 'member', $2, $3, now() + interval '7 days') RETURNING id`,
-        [companyId, tokenHash + 'b', admin],
-      )
-      expect(res.rows).toHaveLength(1)
-    })
+    ).rejects.toMatchObject({ code: '23514', constraint: 'company_invitations_role_check' })
+    for (const role of ['admin', 'member', 'viewer']) {
+      await withUserContext(admin, async (c) => {
+        const res = await c.query(
+          `INSERT INTO public.company_invitations (company_id, email, role, token_hash, invited_by, expires_at)
+           VALUES ($1, $2, $3, $4, $5, now() + interval '7 days') RETURNING role`,
+          [companyId, `${role}@example.com`, role, `${tokenHash}-${role}`, admin],
+        )
+        expect(res.rows).toEqual([{ role }])
+      })
+    }
+  })
+
+  it('refuses team invitations that grant owner, allows admin and member', async () => {
+    const founder = await insertAuthUser()
+    const team = await getPool().query<{ id: string }>(
+      `INSERT INTO public.teams (name, created_by) VALUES ('Byrå', $1) RETURNING id`,
+      [founder],
+    )
+    const teamId = team.rows[0]!.id
+    await getPool().query(`INSERT INTO public.team_members (team_id, user_id, role) VALUES ($1, $2, 'owner')`, [
+      teamId,
+      founder,
+    ])
+    const teamAdmin = await insertAuthUser()
+    await getPool().query(`INSERT INTO public.team_members (team_id, user_id, role) VALUES ($1, $2, 'admin')`, [
+      teamId,
+      teamAdmin,
+    ])
+    const tokenHash = randomUUID().replace(/-/g, '')
+
+    await expect(
+      withUserContext(teamAdmin, (c) =>
+        c.query(
+          `INSERT INTO public.team_invitations (team_id, email, role, token_hash, invited_by, expires_at)
+           VALUES ($1, 'x@example.com', 'owner', $2, $3, now() + interval '7 days')`,
+          [teamId, tokenHash, teamAdmin],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'team_invitations_role_check' })
+    for (const role of ['admin', 'member']) {
+      await withUserContext(teamAdmin, async (c) => {
+        const res = await c.query(
+          `INSERT INTO public.team_invitations (team_id, email, role, token_hash, invited_by, expires_at)
+           VALUES ($1, $2, $3, $4, $5, now() + interval '7 days') RETURNING role`,
+          [teamId, `${role}@example.com`, role, `${tokenHash}-${role}`, teamAdmin],
+        )
+        expect(res.rows).toEqual([{ role }])
+      })
+    }
+  })
+
+  it('the owner-invitation trigger is gone; the CHECK is the one rule', async () => {
+    const { rows } = await getPool().query<{ fn: string | null; triggers: number }>(
+      `SELECT to_regprocedure('public.enforce_company_invitation_role()')::text AS fn,
+              (SELECT count(*)::int FROM pg_trigger
+                WHERE tgrelid = 'public.company_invitations'::regclass
+                  AND tgname = 'enforce_company_invitation_role') AS triggers`,
+    )
+    expect(rows[0]).toEqual({ fn: null, triggers: 0 })
   })
 
   it('team admin cannot promote themselves; owner can; first owner self-insert still works', async () => {
@@ -185,10 +214,11 @@ describe('B. admin cannot seize ownership (pg)', () => {
       expect(res.rows[0]).toMatchObject({ role: 'owner' })
     })
 
-    // The very first owner of a fresh team is self-inserted by the definer RPC.
+    // The very first owner of a fresh team is self-inserted by the definer RPC
+    // (ensure_user_team; create_team_with_owner was dropped in 20261012100300).
     const newcomer = await insertAuthUser()
     await withUserContext(newcomer, async (c) => {
-      const res = await c.query<{ id: string }>(`SELECT public.create_team_with_owner('Ny byrå') AS id`)
+      const res = await c.query<{ id: string }>(`SELECT public.ensure_user_team() AS id`)
       const mine = await c.query<{ role: string }>(
         `SELECT role FROM public.team_members WHERE team_id = $1 AND user_id = $2`,
         [res.rows[0]!.id, newcomer],
@@ -384,22 +414,6 @@ describe('D. document RPCs and leftover grants (pg)', () => {
       )
       expect(res.rows[0]!.id).toBeTruthy()
     })
-  })
-
-  it('validate_version_chain answers not found to non-members and is not anon-callable', async () => {
-    const { docId, owner } = await seedDocument()
-    const outsider = await insertAuthUser()
-    await expect(
-      withUserContext(outsider, (c) => c.query(`SELECT * FROM public.validate_version_chain($1)`, [docId])),
-    ).rejects.toMatchObject({ code: 'P0001' })
-    await withUserContext(owner, async (c) => {
-      const res = await c.query(`SELECT * FROM public.validate_version_chain($1)`, [docId])
-      expect(res.rows).toHaveLength(1)
-    })
-    const { rows } = await getPool().query<{ anon: boolean }>(
-      `SELECT has_function_privilege('anon', 'public.validate_version_chain(uuid)', 'execute') AS anon`,
-    )
-    expect(rows[0]!.anon).toBe(false)
   })
 
   it('tightens the leftover grants', async () => {

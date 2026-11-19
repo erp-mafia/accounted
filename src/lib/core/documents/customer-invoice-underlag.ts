@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { firstAnchorableEntry } from './supplier-invoice-underlag'
+import { scopeFreeLinkBasisColumns } from '@/lib/links/link-basis'
 
 const log = createLogger('customer-invoice-underlag')
 
@@ -116,7 +117,11 @@ export async function anchorCustomerInvoiceDocument(
 
     const { data: updatedRows, error } = await supabase
       .from('document_attachments')
-      .update({ journal_entry_id: entryId })
+      .update({
+        journal_entry_id: entryId,
+        // The invoice's own document anchored on the invoice's verifikat.
+        ...scopeFreeLinkBasisColumns('system_derived', { rule_id: 'invoice_document_anchor' }),
+      })
       .eq('id', doc.id)
       .eq('company_id', companyId)
       // Concurrency guard: never steal a document another writer anchored

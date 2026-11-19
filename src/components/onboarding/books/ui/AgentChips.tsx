@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Bot, Check } from 'lucide-react'
+import { CheckIcon, CpuChipIcon } from '@/components/icons'
 import { useBranding } from '@/lib/branding/brand-context'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, unknownAgentOnly, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
  * offers a selectable server address and an explicit connector link. Same
  * URLs as Settings and the Hem checklist. A client that has completed the
  * OAuth sign-in (the Done step polls /api/onboarding/ai-status) turns its
- * chip into a green Ansluten mark. Founder direction 2026-09-14: no card,
+ * chip into a green Ansluten mark. Product direction 2026-09-14: no card,
  * all three visible, the connect action a pill like everything else. An
  * agent connected with a key that names none of the three (an older key,
  * Cursor) shows as one generic connected agent instead of three offers that
@@ -45,10 +45,10 @@ export function AgentChips({ connection, onConnect }: {
     return (
       <div className="agent-chips">
         <span className="agent-chip is-on">
-          <Bot size={14} aria-hidden="true" />
+          <CpuChipIcon className="size-3.5" aria-hidden="true" />
           <span className="n">{t('ai_agent')}</span>
           <span className="st" role="status">
-            <Check size={12} aria-hidden="true" />
+            <CheckIcon className="size-3" aria-hidden="true" />
             {t('ai_connected')}
           </span>
         </span>
@@ -69,11 +69,11 @@ export function AgentChips({ connection, onConnect }: {
             <span className="n">{c.name}</span>
             {on ? (
               <span className="st" role="status">
-                <Check size={12} aria-hidden="true" />
+                <CheckIcon className="size-3" aria-hidden="true" />
                 {t('ai_connected')}
               </span>
             ) : (
-              <Button variant="secondary" size="sm" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
+              <Button variant="outline" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
                 {t('ai_connect')}
               </Button>
             )}

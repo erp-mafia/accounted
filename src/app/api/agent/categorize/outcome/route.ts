@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { guardSandbox } from '@/lib/sandbox/guard'
+import { isPoolingOn } from '@/lib/legal/data-choices-store'
 
 /**
  * POST /api/agent/categorize/outcome: log one calibration sample.
@@ -55,15 +57,22 @@ export async function POST(request: Request): Promise<Response> {
 
   const { data: membership } = await supabase
     .from('company_members')
-    .select('user_id')
+    .select('user_id, role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // The invoicing-only role (lib/auth/invoicer-role.ts) adds nothing to the
+  // booking calibration corpus: it books nothing.
+  if (isInvoicerRole(membership.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   // Sandbox bookings are seed data: don't pollute the calibration corpus.
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return noContent()
+
+  // The corpus is pooled across companies: a company that opted out of
+  // pooling (Inställningar → Datadelning och AI) adds nothing to it.
+  if (!(await isPoolingOn(supabase, companyId))) return noContent()
 
   const proposed = parsed.data.proposed_account ?? null
 

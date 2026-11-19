@@ -9,7 +9,7 @@ export default function DeadlinesLoading() {
         {[1, 2, 3, 4, 5].map((i) => (
           <div
             key={i}
-            className="flex items-start gap-4 rounded-lg border border-border p-4"
+            className="flex items-start gap-4 rounded-lg p-4 bg-control shadow-raised"
           >
             <div className="w-12 space-y-1">
               <Skeleton className="h-6 w-10" />

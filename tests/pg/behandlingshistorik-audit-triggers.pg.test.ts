@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember } from './fixtures'
+import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember, setActiveCompany } from './fixtures'
 import { getPool, withUserContext } from './setup'
 
 /**
@@ -10,15 +10,6 @@ import { getPool, withUserContext } from './setup'
  * constants are logged without a company, and app_releases is an append-only,
  * read-for-all, service-role-written version log.
  */
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
-}
 
 async function auditActions(table: string, recordId: string): Promise<string[]> {
   const res = await getPool().query<{ action: string }>(
@@ -67,7 +58,7 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
     )
     // Learning on every booking: occurrence_count / confidence / last_seen_date,
     // and counterparty_aliases, which the learning path merges in the same
-    // write (20260901200000; prod showed 15 of the first 16 audit rows were
+    // write (20260901200000; without it 15 of the first 16 audit rows were
     // alias+learning noise).
     await getPool().query(
       `UPDATE public.categorization_templates

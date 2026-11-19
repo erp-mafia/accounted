@@ -29,8 +29,11 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+// Only the posting is mocked: the service holds the rows to the invoice's
+// payable with the real rule before it writes anything.
 const createCreditEntryMock = vi.fn()
-vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
+vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/supplier-invoice-entries')>()),
   createSupplierCreditNoteEntry: (...args: unknown[]) => createCreditEntryMock(...args),
 }))
 
@@ -187,6 +190,8 @@ describe('POST /api/supplier-invoices/[id]/credit', () => {
       original.items,
       'swedish_business',
       'Leverantör AB',
+      1250, // the original's payable, which the reversal must match
+      expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
   })
 
@@ -234,6 +239,25 @@ describe('POST /api/supplier-invoices/[id]/credit', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREDIT_PARTIAL')
     expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(createCreditEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses an invoice without rows with 409 SI_CREDIT_ROWS_MISMATCH before an ankomstnummer is drawn', async () => {
+    // A migrated header: the rows give nothing to reverse against its total.
+    tables({ ...original, items: [] })
+
+    const response = await post()
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_CREDIT_ROWS_MISMATCH')
+    expect(body.error.message).toMatch(/Ingenting har bokförts/)
+    expect(body.error.details).toMatchObject({ rows_payable_sek: 0, invoice_payable_sek: 1250 })
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+    expect(findCall('supplier_invoices', 'delete')).toBeUndefined()
     expect(createCreditEntryMock).not.toHaveBeenCalled()
   })
 

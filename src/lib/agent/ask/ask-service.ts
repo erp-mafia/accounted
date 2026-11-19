@@ -1,10 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiService, type AiChatTurn, type AiTier, type AiToolDef } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
-import { EmptyModelAnswerError } from './errors'
+import { EmptyModelAnswerError, truncatedAnswerNote } from './errors'
 import { buildLedgerTools } from './ledger-tools'
 import { buildAssistantSnapshot } from './snapshot'
+import { buildUiGrounding } from './ui-map'
 import { FISCAL_YEAR_RULE } from '@/lib/agent/fiscal-years'
+import { replyLanguageRule } from '@/lib/agent/reply-language'
+import type { Locale } from '@/i18n/config'
 
 const log = createLogger('agent.ask')
 
@@ -43,6 +46,13 @@ export interface AskRequest {
    * string; the caller decides what is relevant to this page.
    */
   pageContext?: string
+  /**
+   * The app path the user asked from (AskConsole sends usePathname()). Named
+   * in the prompt as the page they are on, resolved against the real menu.
+   */
+  route?: string
+  /** The UI locale, so the menu the model is given uses the labels the user sees. Default 'sv'. */
+  locale?: Locale
   /** 'heavy' for the deep-reasoning surfaces (bokslut, VAT review), else 'assistant'. */
   tier?: AskTier
   maxTokens?: number
@@ -68,24 +78,41 @@ export interface AskResult {
   model: string
 }
 
-// Matches MAX_TOKENS_NO_THINKING in lib/agent/composer/client.ts, the
-// streaming chat's reply-sized ceiling on the same model. The original 1500
-// cap was tighter than every other assistant surface and made stop_reason
-// max_tokens routine on tool-loop turns: the whole budget could be spent
-// before the first visible text block, so the model came back with no text at
-// all ("Tänker", then silence).
-const DEFAULT_MAX_TOKENS = 5400
+// Sized for a model that THINKS. The request sends no `thinking` field, and
+// Claude Sonnet 5 (the hosted assistant model) runs adaptive thinking at its
+// default effort (high) whenever a request does not say otherwise. max_tokens
+// caps thinking and the visible answer together, and thinking blocks come
+// back with empty text by default. The earlier 5400 was the chat's former
+// no-thinking reply ceiling, so a question the model reasoned hard
+// about spent the whole budget on thinking and came back with no text at all:
+// seen 2026-10-17..23, single turns ending at exactly 5400 output tokens.
+// 16000 is what the streaming chat gives the same model at the same effort
+// (MAX_TOKENS_STANDARD in lib/agent/composer/client.ts). It is a ceiling, not
+// a spend: only generated tokens are billed.
+const DEFAULT_MAX_TOKENS = 16_000
 const DEFAULT_MAX_STEPS = 5
 const MAX_QUESTION_CHARS = 4000
 const MAX_CONTEXT_CHARS = 24_000
 
-const BASE_RULES = `Du är en svensk bokföringsassistent i Accounted. Du hjälper användaren med bokföring enligt svensk redovisningssed (Bokföringslagen).
+// The answer's language follows the UI's locale, as the menu labels below do.
+function baseRules(locale: Locale | undefined): string {
+  return `Du är en svensk bokföringsassistent i Accounted. Du hjälper användaren med bokföring enligt svensk redovisningssed (Bokföringslagen).
 
 Regler:
-- Svara på svenska, kort och konkret.
+- ${replyLanguageRule(locale)} Svara kort och konkret.
 - Hitta ALDRIG på siffror, konton eller belopp. Ange bara tal du faktiskt har underlag för.
 - KontoNUMMER är strängar (t.ex. "1930"), aldrig tal att räkna på.
 - Föreslå aldrig att bokföra eller ändra något direkt; du beskriver och vägleder, användaren beslutar.`
+}
+
+// The model is given the real menu for this company ("Appens meny", built by
+// ui-map.ts from the sidebar's own config and gates) and the page the user is
+// on. Without both it guessed, and named buttons and menus that do not exist.
+const UI_RULES = `
+Appen:
+- Hänvisa bara till sidor och menyval som står i "Appens meny" nedan, med exakt de namnen. Länka gärna till sidan som [Namn](/sökväg) med sökvägen därifrån.
+- Du ser menyn, inte innehållet på sidorna. Hitta ALDRIG på knappar, flikar, fält eller menyval, och beskriv inte vad som finns på en sida utöver det användaren själv berättat eller sidkontexten visar.
+- Vet du inte var något görs i appen: säg det rakt ut i stället för att gissa.`
 
 // With tools: the model can and should fetch the real figures itself.
 const TOOL_RULES = `
@@ -98,12 +125,12 @@ ${FISCAL_YEAR_RULE}`
 const NO_TOOL_RULES = `
 - Svara utifrån den kontext du får. Om kontexten inte räcker för att svara: säg det och beskriv vad som saknas, gissa inte.`
 
-function systemPrompt(hasTools: boolean): string {
-  return BASE_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
+function systemPrompt(hasTools: boolean, locale: Locale | undefined): string {
+  return baseRules(locale) + UI_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
 }
 
 /** Read the company's own basic profile for grounding. Company-scoped: never another tenant's data. */
-async function companyProfileLine(supabase: SupabaseClient, companyId: string): Promise<string> {
+export async function companyProfileLine(supabase: SupabaseClient, companyId: string): Promise<string> {
   const { data } = await supabase
     .from('companies')
     .select('name, entity_type')
@@ -126,12 +153,13 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
 
   // Tools + snapshot only when we have a user to run the tools as. The tool
   // list is empty in a core-only build (registry unpopulated) → snapshot-only.
-  const tools: AiToolDef[] = req.userId
-    ? buildLedgerTools(req.supabase, req.companyId, req.userId, req.conversationId)
-    : []
-  const [profile, snapshot] = await Promise.all([
+  const [tools, profile, snapshot, uiGrounding] = await Promise.all([
+    req.userId
+      ? buildLedgerTools(req.supabase, req.companyId, req.userId, req.conversationId)
+      : Promise.resolve<AiToolDef[]>([]),
     companyProfileLine(req.supabase, req.companyId),
     req.userId ? buildAssistantSnapshot(req.supabase, req.companyId) : Promise.resolve(''),
+    buildUiGrounding(req.supabase, req.companyId, { route: req.route, locale: req.locale }),
   ])
 
   const promptParts: string[] = []
@@ -139,6 +167,10 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
   if (snapshot) {
     promptParts.push('Företagets nuläge (grunddata, inte hela bokföringen):')
     promptParts.push(snapshot)
+    promptParts.push('')
+  }
+  if (uiGrounding) {
+    promptParts.push(uiGrounding)
     promptParts.push('')
   }
   if (pageContext) {
@@ -151,27 +183,43 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
   const result = await getAiService().generateText({
     tier: req.tier ?? 'assistant',
     meter: { feature: 'assistant_ask', companyId: req.companyId },
-    system: systemPrompt(tools.length > 0),
+    system: systemPrompt(tools.length > 0, req.locale),
     prompt: promptParts.join('\n'),
     ...(req.history && req.history.length > 0 ? { history: req.history } : {}),
     maxTokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
     ...(tools.length > 0 ? { tools, maxSteps: req.maxSteps ?? DEFAULT_MAX_STEPS } : {}),
   })
 
-  // An empty answer is a failure, not a result. Passing it through is exactly
-  // the silent-stop bug: the route would 200 and the console would append an
-  // invisible bubble. Log loudly (model + usage tell us whether the budget was
-  // spent on tool churn) and fail typed so the route can answer 502.
-  if (result.text.trim().length === 0) {
-    log.error('model returned an empty answer', {
-      companyId: req.companyId,
-      model: result.model,
-      tier: req.tier ?? 'assistant',
-      usage: result.usage,
-      toolCount: tools.length,
-    })
-    throw new EmptyModelAnswerError(result.model)
+  const diagnostics = {
+    companyId: req.companyId,
+    model: result.model,
+    tier: req.tier ?? 'assistant',
+    usage: result.usage,
+    toolCount: tools.length,
+    stopReason: result.stopReason ?? null,
+    truncated: result.truncated === true,
+    forcedFinal: result.forcedFinal ?? null,
   }
 
-  return { answer: result.text, model: result.model }
+  // An empty answer is a failure, not a result. Passing it through is exactly
+  // the silent-stop bug: the route would 200 and the console would append an
+  // invisible bubble. Log loudly (stop reason, usage and whether the final
+  // answer turn already ran tell us why) and fail typed so the route can
+  // answer 502 with a message that says what to do.
+  if (result.text.trim().length === 0) {
+    log.error('model returned an empty answer', diagnostics)
+    throw new EmptyModelAnswerError(result.model, { truncated: result.truncated === true })
+  }
+
+  // The answer needed the tool loop's final no-tools turn. The user got an
+  // answer, but keep the rate visible: a rise means the step budget or the
+  // token ceiling no longer fits the questions people ask.
+  if (result.forcedFinal) log.warn('answer needed the final answer turn', diagnostics)
+
+  // Cut off at max_tokens: say so, so half an answer never reads as a whole one.
+  const answer = result.truncated
+    ? `${result.text}\n\n${truncatedAnswerNote(req.locale)}`
+    : result.text
+
+  return { answer, model: result.model }
 }

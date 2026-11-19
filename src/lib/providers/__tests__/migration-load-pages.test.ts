@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { providerPage } from '../../../../scripts/provider-migration/fixtures'
+import { providerPage } from './provider-load-fixtures'
 import type { SalesInvoiceDto } from '../dto'
 // This is a pagination/correctness test. Staging timing runs keep real throttling.
-vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} } }))
+vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} }, connectionRateKey: (credential: string) => credential }))
 import { fetchMigrationPage } from '../provider-data-fetcher'
 
 afterEach(() => vi.unstubAllGlobals())

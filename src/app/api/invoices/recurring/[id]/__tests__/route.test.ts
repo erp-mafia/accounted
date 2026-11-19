@@ -287,6 +287,8 @@ describe('PATCH /api/invoices/recurring/[id] combined edit rollback', () => {
   let itemsSnapshot: Record<string, unknown>[] = []
   let headerExists = true
   const itemsInserts: Record<string, unknown>[][] = []
+  // The company-scoped articles read (accounted#52).
+  let articleRows: Array<{ id: string }> = []
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -295,6 +297,7 @@ describe('PATCH /api/invoices/recurring/[id] combined edit rollback', () => {
     itemsInsertErrors = []
     itemsSnapshot = []
     headerExists = true
+    articleRows = []
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
 
     let headerUpdateCall = 0
@@ -324,6 +327,13 @@ describe('PATCH /api/invoices/recurring/[id] combined edit rollback', () => {
             }
             return chain
           },
+        }
+      }
+      if (table === 'articles') {
+        return {
+          select: () => ({
+            eq: () => ({ in: () => Promise.resolve({ data: articleRows, error: null }) }),
+          }),
         }
       }
       const itemsChain: Record<string, unknown> = {
@@ -419,6 +429,40 @@ describe('PATCH /api/invoices/recurring/[id] combined edit rollback', () => {
     expect(updatePayloads[0]).toEqual({ default_dimensions: { '1': 'KS01' } })
     expect(itemsInserts).toHaveLength(1)
     expect(itemsInserts[0].map((row) => row.dimensions)).toEqual([{ '6': 'P001' }, {}])
+  })
+
+  it('keeps the article link on the replaced lines (accounted#52)', async () => {
+    const article = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+    articleRows = [{ id: article }]
+
+    const { status } = await parseJsonResponse(
+      await PATCH(
+        patchReq({ items: [{ description: 'Hosting', quantity: 1, unit: 'st', unit_price: 500, article_id: article }] }),
+        params,
+      ),
+    )
+
+    expect(status).toBe(200)
+    expect(itemsInserts[0][0]).toMatchObject({ article_id: article })
+  })
+
+  it('returns 400 for another company\'s article before writing anything', async () => {
+    articleRows = []
+
+    const { status, body } = await parseJsonResponse<{ type: string }>(
+      await PATCH(
+        patchReq({
+          name: 'Nytt namn',
+          items: [{ description: 'Hosting', quantity: 1, unit: 'st', unit_price: 500, article_id: '7c9e6679-7425-40de-944b-e07fc1f90ae7' }],
+        }),
+        params,
+      ),
+    )
+
+    expect(status).toBe(400)
+    expect(body.type).toBe('validation_error')
+    expect(updatePayloads).toHaveLength(0)
+    expect(itemsInserts).toHaveLength(0)
   })
 
   it('404s before writing the header when the schedule does not exist', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 /**
@@ -44,6 +44,7 @@ vi.mock('@/lib/supabase/server', () => ({
 import { exchangeAuthToken, ProviderCompanyMismatchError } from '../lib/provider-client'
 import { exchangeFortnoxCode } from '@/lib/providers/fortnox/oauth'
 import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
+import { openConsentToken } from '@/lib/providers/consent-tokens'
 
 // Both pass normalizeOrgNumber's Luhn check: Spotify AB and Ericsson.
 const TARGET_ORG = '5560160680'
@@ -68,10 +69,12 @@ function useDb(consentCompanyId: string | null, targetOrgNumber: string | null) 
 describe('exchangeAuthToken: provider company must match the consent company', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'test-personnummer-key')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
     ;(exchangeFortnoxCode as Mock).mockResolvedValue(TOKENS)
   })
+  afterEach(() => vi.unstubAllEnvs())
 
   it('refuses tokens for a different company and stores nothing', async () => {
     const db = useDb('company-1', '556016-0680')
@@ -116,13 +119,13 @@ describe('exchangeAuthToken: provider company must match the consent company', (
       consentId: 'consent-1',
     })
 
-    const upsert = db.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, unknown>
-    expect(upsert).toMatchObject({
-      consent_id: 'consent-1',
-      provider: 'fortnox',
-      access_token: 'access-1',
-      refresh_token: 'refresh-1',
-    })
+    const upsert = db.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string>
+    expect(upsert).toMatchObject({ consent_id: 'consent-1', provider: 'fortnox' })
+    // Sealed at rest (accounted#58): the stored values open to the tokens
+    // and never contain them.
+    expect(JSON.stringify(upsert)).not.toContain('access-1')
+    expect(openConsentToken(upsert.access_token!)).toBe('access-1')
+    expect(openConsentToken(upsert.refresh_token!)).toBe('refresh-1')
     // The org number the token opened is the consent's durable source
     // identity: without it create_provider_migration_job refuses the consent.
     expect(db.findCall('provider_consents', 'update')?.[0]).toEqual({ status: 1, org_number: TARGET_ORG })

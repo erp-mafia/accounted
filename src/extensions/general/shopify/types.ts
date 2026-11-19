@@ -90,6 +90,11 @@ export interface ShopifyLineItem {
    */
   discountedTotalSet: ShopifyMoneyBag
   taxLines: ShopifyTaxLine[]
+  /**
+   * The variant's "physical product" flag: false for digital products and
+   * services. Optional so a row without it reads as "may ship".
+   */
+  requiresShipping?: boolean
 }
 
 /** One shipping line of an order. */
@@ -128,6 +133,19 @@ export interface ShopifyOrder {
   totalPriceSet: ShopifyMoneyBag
   /** Per-rate tax charged on the whole order; the vat_breakdown source. */
   taxLines: ShopifyTaxLine[]
+  /**
+   * Destination only: the shipping address's country code, nothing else from
+   * the address. Null when the order ships nowhere (digital goods, local
+   * pickup) or the store withholds addresses from the app (protected
+   * customer data); absent when the run stopped asking after such a refusal.
+   */
+  shippingAddress?: { countryCodeV2: string | null } | null
+  /**
+   * The billing address's country code, nothing else from the address. Read
+   * only for an order with nothing to ship (#98); null/absent exactly as
+   * shippingAddress (same protected field, same grant).
+   */
+  billingAddress?: { countryCodeV2: string | null } | null
   /** First page of line items; hasNextPage means the snapshot is incomplete. */
   lineItems: { pageInfo: { hasNextPage: boolean }; nodes: ShopifyLineItem[] }
   shippingLines: { pageInfo: { hasNextPage: boolean }; nodes: ShopifyShippingLine[] }

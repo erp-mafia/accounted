@@ -84,8 +84,7 @@ describe('validateComponents', () => {
     expect(errors.some((e) => e.includes('summerar'))).toBe(true)
   })
 
-  it('cost mismatch within 1 kr tolerance → no error', () => {
-    // 99_999.5 vs 100_000: öre rounding shouldn't fail
+  it('cost mismatch of 50 öre → error: the asset row becomes the components\' sum, so it must equal the ledger', () => {
     const components: K3Component[] = [
       { name: 'A', cost: 50_000, useful_life_months: 60 },
       { name: 'B', cost: 49_999.5, useful_life_months: 60 },
@@ -94,7 +93,40 @@ describe('validateComponents', () => {
       acquisition_cost: 100_000,
       k3_components: components,
     })
-    expect(errors).toEqual([])
+    expect(errors.some((e) => e.includes('summerar'))).toBe(true)
+  })
+
+  it('accepts a component that is not depreciated (mark, K3 17.13) and refuses an opening on it', () => {
+    const ok = validateComponents({
+      acquisition_cost: 1_000_000,
+      k3_components: [
+        { name: 'Byggnad', cost: 700_000, useful_life_months: 600 },
+        { name: 'Mark', cost: 300_000, useful_life_months: null },
+      ],
+    })
+    expect(ok.errors).toEqual([])
+    const bad = validateComponents({
+      acquisition_cost: 300_000,
+      k3_components: [
+        { name: 'Mark', cost: 300_000, useful_life_months: null, opening_accumulated_depreciation: 1000, opening_depreciation_date: '2025-12-31' },
+      ],
+    })
+    expect(bad.errors.some((e) => e.includes('skrivs av'))).toBe(true)
+  })
+
+  it('validates a component opening: amount within the base, a date, not before acquisition', () => {
+    const { errors } = validateComponents({
+      acquisition_cost: 100_000,
+      acquisition_date: '2025-01-01',
+      k3_components: [
+        { name: 'A', cost: 50_000, useful_life_months: 60, opening_accumulated_depreciation: 60_000, opening_depreciation_date: '2025-12-31' },
+        { name: 'B', cost: 50_000, useful_life_months: 60, opening_accumulated_depreciation: 1000 },
+        { name: 'C', cost: 0.5, useful_life_months: 60, acquisition_date: '2024-01-01' },
+      ],
+    })
+    expect(errors.some((e) => e.startsWith('A:') && e.includes('överstiga'))).toBe(true)
+    expect(errors.some((e) => e.startsWith('B:') && e.includes('datumet'))).toBe(true)
+    expect(errors.some((e) => e.startsWith('C:') && e.includes('före tillgången'))).toBe(true)
   })
 
   it('negative useful_life_months → error', () => {
@@ -211,9 +243,9 @@ describe('computeComponentDepreciation', () => {
     expect(result.amount).toBe(47_500)
     expect(result.proRated).toBe(false)
     expect(result.perComponent).toHaveLength(3)
-    expect(result.perComponent[0]).toEqual({ name: 'Tak', amount: 15_000 })
-    expect(result.perComponent[1]).toEqual({ name: 'Fasad', amount: 12_500 })
-    expect(result.perComponent[2]).toEqual({ name: 'Installationer', amount: 20_000 })
+    expect(result.perComponent[0]).toMatchObject({ name: 'Tak', amount: 15_000 })
+    expect(result.perComponent[1]).toMatchObject({ name: 'Fasad', amount: 12_500 })
+    expect(result.perComponent[2]).toMatchObject({ name: 'Installationer', amount: 20_000 })
   })
 
   it('half-year pro-ration: acquired July 1 → roughly half the annual sum', () => {
@@ -291,8 +323,8 @@ describe('computeComponentDepreciation', () => {
     const result = computeComponentDepreciation(asset, FULL_YEAR_2025)
     // Kort: 0 (life ended). Lång: 70_000 × 12/240 = 3_500.
     expect(result.amount).toBe(3_500)
-    expect(result.perComponent[0]).toEqual({ name: 'Kort', amount: 0 })
-    expect(result.perComponent[1]).toEqual({ name: 'Lång', amount: 3_500 })
+    expect(result.perComponent[0]).toMatchObject({ name: 'Kort', amount: 0 })
+    expect(result.perComponent[1]).toMatchObject({ name: 'Lång', amount: 3_500 })
   })
 
   it('treats components with non-positive cost/life as 0 (defensive)', () => {

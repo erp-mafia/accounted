@@ -18,7 +18,7 @@ function makeSupabase(opts: {
           if (rejects) throw new Error('db down')
           return { data: table === 'document_attachments' ? (opts.doc ?? null) : null }
         },
-        // The awaited list query resolves with rows — or rejects async, exactly
+        // The awaited list query resolves with rows - or rejects async, exactly
         // how a real supabase query fails (never a synchronous throw from .from).
         then: (resolve: (v: { data: unknown[] }) => unknown, reject: (e: unknown) => unknown) => {
           if (rejects) return reject(new Error('db down'))

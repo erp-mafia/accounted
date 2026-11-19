@@ -25,7 +25,7 @@ function parseBuffer(buffer: Buffer): XLSX.WorkBook {
 }
 
 describe('reportToWorkbook', () => {
-  it('writes a single sheet with header row and body cells', () => {
+  it('writes a single sheet with header row and body cells', async () => {
     type Row = { account: string; amount: number }
     const spec: SheetSpec<Row> = {
       name: 'Test',
@@ -37,7 +37,7 @@ describe('reportToWorkbook', () => {
       mapRow: (r) => [r.account, r.amount],
     }
 
-    const buffer = reportToWorkbook([spec])
+    const buffer = await reportToWorkbook([spec])
     expect(buffer).toBeInstanceOf(Buffer)
     expect(buffer.byteLength).toBeGreaterThan(0)
 
@@ -52,9 +52,9 @@ describe('reportToWorkbook', () => {
     expect(sheet['B3'].v).toBe(-750.25)
   })
 
-  it('applies currency format to currency columns', () => {
+  it('applies currency format to currency columns', async () => {
     type Row = { name: string; total: number }
-    const buffer = reportToWorkbook<Row>([
+    const buffer = await reportToWorkbook<Row>([
       {
         name: 'Currency',
         columns: [textColumn('Name'), currencyColumn('Total')],
@@ -71,9 +71,9 @@ describe('reportToWorkbook', () => {
     expect(sheet['A2'].z).not.toBe('#,##0.00 " kr"')
   })
 
-  it('applies the suffix-free decimal format to decimal columns', () => {
+  it('applies the suffix-free decimal format to decimal columns', async () => {
     type Row = { name: string; price: number }
-    const buffer = reportToWorkbook<Row>([
+    const buffer = await reportToWorkbook<Row>([
       {
         name: 'Decimal',
         columns: [textColumn('Name'), decimalColumn('Pris')],
@@ -89,9 +89,9 @@ describe('reportToWorkbook', () => {
     expect(sheet['B2'].v).toBe(1234.56)
   })
 
-  it('applies date format to date columns', () => {
+  it('applies date format to date columns', async () => {
     type Row = { date: Date }
-    const buffer = reportToWorkbook<Row>([
+    const buffer = await reportToWorkbook<Row>([
       {
         name: 'Dates',
         columns: [dateColumn('Datum')],
@@ -106,8 +106,8 @@ describe('reportToWorkbook', () => {
     expect(sheet['A2'].t).toBe('d')
   })
 
-  it('applies integer and percent formats', () => {
-    const buffer = reportToWorkbook([
+  it('applies integer and percent formats', async () => {
+    const buffer = await reportToWorkbook([
       {
         name: 'Numeric',
         columns: [integerColumn('Antal'), percentColumn('Andel')],
@@ -124,8 +124,8 @@ describe('reportToWorkbook', () => {
     expect(sheet['B2'].v).toBe(0.255)
   })
 
-  it('produces multiple sheets with independent column shapes', () => {
-    const buffer = reportToWorkbook([
+  it('produces multiple sheets with independent column shapes', async () => {
+    const buffer = await reportToWorkbook([
       {
         name: 'Saldo',
         columns: [textColumn('Konto'), currencyColumn('Belopp')],
@@ -147,8 +147,8 @@ describe('reportToWorkbook', () => {
     expect(wb.Sheets['Period']['A2'].z).toBe('yyyy-mm-dd')
   })
 
-  it('handles empty row arrays (header-only sheet)', () => {
-    const buffer = reportToWorkbook([
+  it('handles empty row arrays (header-only sheet)', async () => {
+    const buffer = await reportToWorkbook([
       {
         name: 'Empty',
         columns: [textColumn('Konto'), currencyColumn('Belopp')],
@@ -167,9 +167,9 @@ describe('reportToWorkbook', () => {
     expect(sheet['B2']).toBeUndefined()
   })
 
-  it('truncates sheet names to Excel 31-char limit', () => {
+  it('truncates sheet names to Excel 31-char limit', async () => {
     const longName = 'A'.repeat(40)
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: longName,
         columns: [textColumn('x')],
@@ -182,8 +182,8 @@ describe('reportToWorkbook', () => {
     expect(wb.SheetNames[0]).toHaveLength(31)
   })
 
-  it('treats undefined cells as blank', () => {
-    const buffer = reportToWorkbook([
+  it('treats undefined cells as blank', async () => {
+    const buffer = await reportToWorkbook([
       {
         name: 'Sparse',
         columns: [textColumn('A'), textColumn('B')],
@@ -198,8 +198,8 @@ describe('reportToWorkbook', () => {
     expect(sheet['B2']).toBeUndefined()
   })
 
-  it('throws when row length does not match column count', () => {
-    expect(() =>
+  it('throws when row length does not match column count', async () => {
+    await expect(
       reportToWorkbook([
         {
           name: 'Bad',
@@ -208,11 +208,11 @@ describe('reportToWorkbook', () => {
           mapRow: () => ['only one'],
         },
       ]),
-    ).toThrow(/row length 1 does not match column count 2/)
+    ).rejects.toThrow(/row length 1 does not match column count 2/)
   })
 
-  it('throws when given zero sheets', () => {
-    expect(() => reportToWorkbook([])).toThrow(/at least one sheet/)
+  it('throws when given zero sheets', async () => {
+    await expect(reportToWorkbook([])).rejects.toThrow(/at least one sheet/)
   })
 })
 

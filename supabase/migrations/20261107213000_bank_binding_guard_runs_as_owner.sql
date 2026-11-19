@@ -1,0 +1,28 @@
+-- Moving a bank account onto its history ledger still timed out after
+-- 20261107100200 when a person did it (crm#1683, crm#1702).
+--
+-- What happened. guard_cash_transaction_binding runs as the caller. In the
+-- bank settings the caller is `authenticated`, so the probe it calls,
+-- posted_entries_naming_bank_row (SECURITY INVOKER), runs under the
+-- journal_entries select policy. jsonb @> is not leakproof, so under that
+-- policy Postgres may not use the GIN index for the bank-context half of the
+-- probe: as `authenticated` it reads a large part of the table for every
+-- moved row, where the table owner answers the same probe from the index.
+-- The cost is paid once per moved row, so a move of more than a handful of
+-- rows by a person timed out.
+--
+-- What changes. The trigger function runs as its owner (SECURITY DEFINER),
+-- as cash_transaction_is_movable and observe_cash_account_company, which it
+-- already calls, do. Its body is unchanged:
+--   * search_path is already empty and every name is schema-qualified;
+--   * every query it runs is bounded by the row's own company
+--     (NEW.company_id / OLD.company_id), and the caller's INSERT or UPDATE on
+--     transactions has already passed row level security for that row;
+--   * the identity checks it reaches read current_setting('role') and
+--     auth.uid(), which a definer call keeps unchanged;
+--   * a trigger function cannot be called directly, so no new entry point
+--     opens. posted_entries_naming_bank_row stays SECURITY INVOKER.
+--
+-- pg-test: covered-by tests/pg/bank-row-claim-probes.pg.test.ts
+
+ALTER FUNCTION public.guard_cash_transaction_binding() SECURITY DEFINER;

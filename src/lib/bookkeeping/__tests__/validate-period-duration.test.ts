@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { validatePeriodDuration, monthsBetween } from '../validate-period-duration'
+import {
+  checkPeriodDuration,
+  exceedsFiscalYearCap,
+  isFirstFiscalPeriod,
+  monthsBetween,
+  validatePeriodDuration,
+} from '../validate-period-duration'
 
 describe('monthsBetween', () => {
   it('returns 12 for a standard calendar year', () => {
@@ -128,5 +134,74 @@ describe('validatePeriodDuration', () => {
 
   it('returns null for a broken fiscal year (May-Apr)', () => {
     expect(validatePeriodDuration('2025-05-01', '2026-04-30')).toBeNull()
+  })
+})
+
+describe('exceedsFiscalYearCap', () => {
+  it.each([
+    ['2024-03-01', '2025-08-31', false], // exactly 18 months
+    ['2024-03-15', '2025-08-31', false], // a mid-month start counts its month, and fits
+    ['2024-01-31', '2025-07-31', true], // the day of the 31st, then 18 whole months
+    ['2024-03-31', '2025-09-30', true], // the same, ending in a shorter month
+    ['2024-02-29', '2025-08-31', true],
+    ['2024-03-01', '2025-09-30', true], // 19 months
+    ['2024-01-01', '2026-12-31', true], // the 36 months on prod
+  ])('%s to %s: %s', (start, end, over) => {
+    expect(exceedsFiscalYearCap(start, end)).toBe(over)
+  })
+
+  it('is the cap checkPeriodDuration refuses', () => {
+    expect(checkPeriodDuration('2024-01-31', '2025-07-31', { isFirstPeriod: true })).toMatchObject({
+      rule: 'exceeds_18_months',
+      months: 19,
+    })
+    expect(checkPeriodDuration('2024-03-15', '2025-08-31', { isFirstPeriod: true })).toBeNull()
+  })
+})
+
+describe('isFirstFiscalPeriod', () => {
+  it('is the year no recorded year starts before', () => {
+    expect(isFirstFiscalPeriod('2024-03-14', ['2025-01-01', '2026-01-01'])).toBe(true)
+    expect(isFirstFiscalPeriod('2025-01-01', ['2024-03-14', '2026-01-01'])).toBe(false)
+  })
+
+  it('is not the year behind a gap', () => {
+    expect(isFirstFiscalPeriod('2025-01-01', ['2023-01-01'])).toBe(false)
+  })
+
+  it('takes a lone year as the first, and may be handed the year itself', () => {
+    expect(isFirstFiscalPeriod('2025-01-01', [])).toBe(true)
+    expect(isFirstFiscalPeriod('2025-01-01', ['2025-01-01'])).toBe(true)
+  })
+})
+
+describe('checkPeriodDuration on a form bound to the calendar year', () => {
+  const calendarYearOnly = true
+
+  it('takes a calendar year, and a first year from any day to 31 December', () => {
+    expect(checkPeriodDuration('2026-01-01', '2026-12-31', { calendarYearOnly })).toBeNull()
+    expect(checkPeriodDuration('2026-03-10', '2026-12-31', { calendarYearOnly, isFirstPeriod: true })).toBeNull()
+    expect(checkPeriodDuration('2025-07-14', '2026-12-31', { calendarYearOnly, isFirstPeriod: true })).toBeNull()
+  })
+
+  it('refuses any other end, the first year included', () => {
+    expect(checkPeriodDuration('2026-01-01', '2026-06-30', { calendarYearOnly })?.rule).toBe('not_calendar_year_end')
+    expect(checkPeriodDuration('2026-03-10', '2026-06-30', { calendarYearOnly, isFirstPeriod: true })?.rule).toBe(
+      'not_calendar_year_end',
+    )
+  })
+
+  it('refuses a later year starting after 1 January', () => {
+    expect(checkPeriodDuration('2026-02-01', '2026-12-31', { calendarYearOnly })?.rule).toBe('not_calendar_year_start')
+  })
+
+  it('still holds a first year to 18 months', () => {
+    expect(checkPeriodDuration('2025-06-14', '2026-12-31', { calendarYearOnly, isFirstPeriod: true })?.rule).toBe(
+      'exceeds_18_months',
+    )
+  })
+
+  it('leaves every other form its broken year', () => {
+    expect(checkPeriodDuration('2025-09-01', '2026-08-31')).toBeNull()
   })
 })

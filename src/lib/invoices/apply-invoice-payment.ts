@@ -23,7 +23,7 @@
  * except on exact-half-öre amounts, where `roundOre` rounds correctly.
  */
 import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
-import { oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
+import { bookedOreRounding, oreSettlementResidual } from '@/lib/bookkeeping/ore-rounding'
 
 /** Half an öre: anything over the remaining by more than this is a real overpayment. */
 export const PAYMENT_OVERSHOOT_TOLERANCE = ORE_TOLERANCE
@@ -171,6 +171,10 @@ export function deriveCustomerSettlementAmount(
  * sub-krona overshoot is rejected, exactly as before absorption existed.
  * Without this gate an invoice could flip to paid while the posted lines
  * under-clear 1510, diverging the GL from the AR sub-ledger.
+ *
+ * `carriedSek` (carriedSekOf): when the issue verifikat already booked the
+ * öresavrundning, the payment's 3740 carries only the rest of it (the
+ * residual less bookedOreRounding), which is what the proposal books.
  */
 export function planInvoicePaymentForLines(
   invoice: InvoicePaymentTotals,
@@ -179,6 +183,7 @@ export function planInvoicePaymentForLines(
     | Array<{ account_number: string; debit_amount: number; credit_amount: number }>
     | undefined,
   invoiceCurrency: string,
+  carriedSek?: number | null,
 ): PlanInvoicePaymentResult {
   const absorbEligible = !!lines && invoiceCurrency === 'SEK'
   const payment = planInvoicePayment(invoice, paymentAmountInInvoiceCurrency, {
@@ -188,7 +193,10 @@ export function planInvoicePaymentForLines(
 
   const currentRemaining =
     invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-  const residual = oreSettlementResidual(currentRemaining, paymentAmountInInvoiceCurrency)
+  const residual = roundOre(
+    oreSettlementResidual(currentRemaining, paymentAmountInInvoiceCurrency) -
+      bookedOreRounding(roundOre(currentRemaining), carriedSek),
+  )
   const net3740 = roundOre(
     lines!
       .filter((l) => l.account_number === ORE_ROUNDING_ACCOUNT)

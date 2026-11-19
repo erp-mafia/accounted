@@ -8,6 +8,8 @@ vi.mock('../lib/token-store', () => ({
     expires_at: Date.now() + 60 * 60_000,
     refresh_count: 0,
     scope: 'momsdeklaration',
+    row_id: 'row-live',
+    stored_at: Date.now(),
   })),
   storeTokens: vi.fn(),
   deleteTokens: vi.fn(),
@@ -144,6 +146,32 @@ describe('skvRequestWithAuth: connector mode', () => {
     }
   })
 
+  it('names the stored token a NOT_OWNED call went out with, so the flag cannot land on the one another job stored', async () => {
+    // The race: B read R1 just before the refresh margin, A refreshed and
+    // stored R2, and B's call carried R1's token, which the broker no longer
+    // vouches for. markNeedsReconsent compares on R1's row id and
+    // refresh_count, so R2 (another row) is not flagged.
+    const { getTokens } = await import('../lib/token-store')
+    vi.mocked(getTokens).mockResolvedValueOnce({
+      access_token: 'r1-access',
+      refresh_token: 'r1-refresh',
+      expires_at: Date.now() + 6 * 60_000,
+      refresh_count: 3,
+      scope: 'momsdeklaration',
+      row_id: 'row-r1',
+      stored_at: Date.now() - 54 * 60_000,
+    })
+    mockFetchStatus(404, '{"error":"Unknown Skatteverket connection for this key","code":"CONNECTOR_NOT_OWNED"}')
+
+    const thrown = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT).then(
+      () => null,
+      (e: unknown) => e,
+    )
+
+    expect((thrown as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
+    expect((thrown as SkatteverketAuthError).tokenRow).toEqual({ userId: 'user-1', version: { rowId: 'row-r1', refreshCount: 3 } })
+  })
+
   it('classifies CONNECTOR_RATE_LIMITED as RATE_LIMITED', async () => {
     mockFetchStatus(429, '{"error":"busy","code":"CONNECTOR_RATE_LIMITED"}')
     try {
@@ -222,14 +250,20 @@ describe('skvRequestWithAuth: connector mode', () => {
     // as it does on the direct path.
     const { getTokens } = await import('../lib/token-store')
     const { refreshAccessToken } = await import('../lib/oauth')
+    // Stored hours ago (a session left overnight): three reads, getValidToken,
+    // the re-read before the refresh, and one look for a token another
+    // process may have stored, with no wait (nobody can have refreshed it).
     const expiredTokens = {
       access_token: 'stale',
       refresh_token: 'old-refresh',
-      expires_at: Date.now() - 60_000,
+      expires_at: Date.now() - 60 * 60_000,
       refresh_count: 1,
       scope: 'momsdeklaration',
+      row_id: 'row-1',
+      stored_at: Date.now() - 3 * 60 * 60_000,
     }
     vi.mocked(getTokens)
+      .mockResolvedValueOnce(expiredTokens)
       .mockResolvedValueOnce(expiredTokens)
       .mockResolvedValueOnce(expiredTokens)
     vi.mocked(refreshAccessToken).mockRejectedValueOnce(
@@ -254,11 +288,14 @@ describe('skvRequestWithAuth: connector mode', () => {
     const expiredTokens = {
       access_token: 'stale',
       refresh_token: 'dead-refresh',
-      expires_at: Date.now() - 60_000,
+      expires_at: Date.now() - 60 * 60_000,
       refresh_count: 1,
       scope: 'momsdeklaration',
+      row_id: 'row-1',
+      stored_at: Date.now() - 3 * 60 * 60_000,
     }
     vi.mocked(getTokens)
+      .mockResolvedValueOnce(expiredTokens)
       .mockResolvedValueOnce(expiredTokens)
       .mockResolvedValueOnce(expiredTokens)
     vi.mocked(refreshAccessToken).mockRejectedValueOnce(
@@ -287,6 +324,8 @@ describe('skvRequestWithAuth: connector mode', () => {
       expires_at: Date.now() - 60_000,
       refresh_count: 1,
       scope: 'momsdeklaration',
+      row_id: 'row-1',
+      stored_at: Date.now() - 3_600_000,
     }
     vi.mocked(getTokens)
       .mockResolvedValueOnce(expiredTokens)

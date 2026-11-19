@@ -1,7 +1,7 @@
 /**
  * Parties, phase 1: the read model behind "Förslag från bokföringen".
  *
- * The user's registers are Leverantörer and Kunder (founder decision
+ * The user's registers are Leverantörer and Kunder (product decision
  * 2026-09-03: no third noun). This model serves the queue in front of them:
  * suggested parties with a reason per row and the role each will become,
  * and observed parties the ledger names but nothing owns yet. Money, rhythm
@@ -10,13 +10,15 @@
  * the reveal. Confirmed parties are read here only for counts and for the
  * dossier; the user sees them as suppliers and customers.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { coreKey } from './ledger-key'
 import { isScbConfigured } from './scb/config'
-import { getObservedParties, type ObservedParty } from './observed'
+import { getObservedParties, OBSERVED_PARTIES_MAX, type ObservedParty } from './observed'
 import type { SuggestionReason } from './suggest'
 
 export type RegisterView = 'suggested' | 'observed' | 'all'
@@ -104,6 +106,8 @@ interface PartyRecord {
   suggested_reason: SuggestionReason | null
   created_at: string
   archived_at?: string | null
+  /** 'bolaget': created for a role or a shareholding (lib/bolaget/people.ts). */
+  origin?: string | null
 }
 
 export function statsFrom(o: ObservedParty): LedgerStats {
@@ -210,11 +214,10 @@ export function defaultRoles(stats: LedgerStats | null): PartyRole[] {
   return roles
 }
 
-function periodStart(period: RegisterPeriod, now = new Date()): string | null {
+/** First day of a register period: twelve months before the Swedish calendar day, or null for all time. */
+export function periodStart(period: RegisterPeriod, now = new Date()): string | null {
   if (period === 'all') return null
-  const d = new Date(now)
-  d.setUTCFullYear(d.getUTCFullYear() - 1)
-  return d.toISOString().slice(0, 10)
+  return addMonthsIso(todayIsoStockholm(now), -12)
 }
 
 function normalizeQuery(q: string | undefined): string {
@@ -244,30 +247,45 @@ export async function getRegister(
   const period = options.period ?? '12m'
   const q = normalizeQuery(options.q)
 
+  // Archived (dismissed) parties stay out of the list but keep their keys
+  // claimed, so a dismissed suggestion does not resurface as observed.
+  const partiesRead = fetchAllRows<PartyRecord>(({ from, to }) =>
+    supabase
+      .from('parties')
+      .select('id, display_name, org_number, kind, status, alias_keys, suggested_reason, created_at, archived_at, origin')
+      .eq('company_id', companyId)
+      .is('merged_into', null)
+      .order('display_name', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
   const [parties, customers, suppliers, observed, customerCounts, supplierCounts, countryFacts] = await Promise.all([
-    // Archived (dismissed) parties stay out of the list but keep their keys
-    // claimed, so a dismissed suggestion does not resurface as observed.
-    fetchAllRows<PartyRecord>(({ from, to }) =>
-      supabase
-        .from('parties')
-        .select('id, display_name, org_number, kind, status, alias_keys, suggested_reason, created_at, archived_at')
-        .eq('company_id', companyId)
-        .is('merged_into', null)
-        .order('display_name', { ascending: true })
-        .range(from, to),
+    partiesRead,
+    // Every paged read below orders on its unique id: paging without a total
+    // order duplicates or skips rows on a page boundary, and the counts drift.
+    fetchAllRows<{ id: string; party_id: string | null }>(({ from, to }) =>
+      supabase.from('customers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(from, to),
     ),
     fetchAllRows<{ id: string; party_id: string | null }>(({ from, to }) =>
-      supabase.from('customers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).range(from, to),
+      supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(from, to),
     ),
-    fetchAllRows<{ id: string; party_id: string | null }>(({ from, to }) =>
-      supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).range(from, to),
+    // The ranked list feeds the observed queue and stops at
+    // OBSERVED_PARTIES_MAX keys. Every live party's stats come from the same
+    // call by its alias keys, so those keys are named: a party ranked below
+    // the cut used to get no stats, sort last and default to the supplier
+    // role whatever side of the ledger it sits on (accounted#16).
+    partiesRead.then((ps) =>
+      getObservedParties(supabase, companyId, {
+        fromDate: periodStart(period),
+        limit: OBSERVED_PARTIES_MAX,
+        keys: ps.filter((p) => !p.archived_at).flatMap((p) => p.alias_keys),
+      }),
     ),
-    getObservedParties(supabase, companyId, { fromDate: periodStart(period), limit: 5000 }),
     fetchAllRows<{ customer_id: string }>(({ from, to }) =>
-      supabase.from('invoices').select('customer_id').eq('company_id', companyId).not('customer_id', 'is', null).range(from, to),
+      supabase.from('invoices').select('customer_id').eq('company_id', companyId).not('customer_id', 'is', null).order('id').range(from, to),
     ),
     fetchAllRows<{ supplier_id: string }>(({ from, to }) =>
-      supabase.from('supplier_invoices').select('supplier_id').eq('company_id', companyId).not('supplier_id', 'is', null).range(from, to),
+      supabase.from('supplier_invoices').select('supplier_id').eq('company_id', companyId).not('supplier_id', 'is', null).order('id').range(from, to),
     ),
     fetchAllRows<{ party_id: string; value: unknown; recorded_at: string }>(({ from, to }) =>
       supabase
@@ -277,6 +295,7 @@ export async function getRegister(
         .eq('field', 'country')
         .is('superseded_at', null)
         .order('recorded_at', { ascending: false })
+        .order('id', { ascending: true })
         .range(from, to),
     ),
   ])
@@ -312,6 +331,10 @@ export async function getRegister(
     if (p.archived_at) continue
     const customerId = customerByParty.get(p.id) ?? null
     const supplierId = supplierByParty.get(p.id) ?? null
+    // A board member or shareholder from the Bolaget registers is no
+    // counterparty: Motparter shows them only once they are a customer or a
+    // supplier too, or the books name them.
+    if (p.origin === 'bolaget' && !customerId && !supplierId && parts.length === 0) continue
     const stats = mergeStats(parts)
     rows.push({
       id: p.id,
@@ -466,7 +489,9 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       .limit(50),
     supabase.from('customers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
     supabase.from('suppliers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
-    getObservedParties(supabase, companyId, { limit: 5000 }),
+    // This party's keys by name, whatever their rank; the one ranked key the
+    // RPC always returns is filtered out below.
+    getObservedParties(supabase, companyId, { limit: 1, keys: p.alias_keys }),
   ])
   for (const r of [facts, identities, decisions]) if (r.error) throw new Error(`dossier read failed: ${r.error.message}`)
 
@@ -495,7 +520,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       id: e.id,
       entryDate: e.entry_date,
       description: e.description,
-      voucher: e.voucher_series && e.voucher_number != null ? `${e.voucher_series}-${e.voucher_number}` : '',
+      voucher: e.voucher_series && e.voucher_number != null ? formatVoucher(e) : '',
       amount: roundOre(
         (e.journal_entry_lines ?? [])
           .filter((l) => /^[3-8][0-9]{3}$/.test(l.account_number))
@@ -512,6 +537,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       .eq('company_id', companyId)
       .is('merged_into', null)
       .is('archived_at', null)
+      .order('id', { ascending: true })
       .range(from, to),
   )
   const liveById = new Map(live.map((l) => [l.id, l]))

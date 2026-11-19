@@ -25,9 +25,13 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
   },
   // 2012 is deliberately absent: the official BAS kontoplan (bas.se, BAS 2026 v2)
   // has no 2012; the enskild firma equity block runs 2010, 2011, 2013, 2017,
-  // 2018, 2019. "Avräkning för skatter och avgifter" as 2012 is a program
-  // convention (Visma, Bokio, Björn Lundén), not standard BAS; owner taxes are
-  // booked as eget uttag on 2013. Verified against the primary source in #1409.
+  // 2018, 2019. "Avräkning för skatter och avgifter (skattekonto)" as 2012 is
+  // the BAS K1 chart and a program convention (Fortnox, Björn Lundén, Bokio),
+  // not BAS 2026; owner taxes are booked as eget uttag on 2013. Verified
+  // against the primary source in #1409. An enskild firma that runs its
+  // skattekonto on 2012 chooses it (company_settings.skattekonto_account,
+  // PH 175) and the account is then added to its chart with the K1 name
+  // (lib/skatteverket/skattekonto-account-service.ts), not from this list.
   {
     account_number: '2013',
     account_name: 'Övriga egna uttag',
@@ -475,7 +479,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '20',
     account_type: 'equity',
     normal_balance: 'credit',
-    description: 'Bundet eget kapital i aktiebolag. Ska vara minst 20% av aktiekapitalet (aldre regler).',
+    description: 'Bundet eget kapital i aktiebolag. Ska vara minst 20% av aktiekapitalet (äldre regler).',
     sru_code: '7301',
     k2_excluded: false,
   },
@@ -2059,7 +2063,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '26',
     account_type: 'liability',
     normal_balance: 'credit',
-    description: 'Moms på inköp som företaget har ratt att dra av. Minskar momsskulden.',
+    description: 'Moms på inköp som företaget har rätt att dra av. Minskar momsskulden.',
     sru_code: '7369',
     k2_excluded: false,
   },
@@ -2136,7 +2140,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_group: '26',
     account_type: 'liability',
     normal_balance: 'credit',
-    description: 'Samlingskonto dit moms bokfors efter varje momsperiod, utgor nettot att betala till Skatteverket.',
+    description: 'Samlingskonto dit moms bokförs efter varje momsperiod, utgör nettot att betala till Skatteverket.',
     sru_code: '7369',
     k2_excluded: false,
   },
@@ -2988,3 +2992,12 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     k2_excluded: false,
   },
 ]
+
+/**
+ * Whether an account lies in BAS kontogrupp 20, Eget kapital. A chart built
+ * on BAS keeps all equity there, sub-accounts this reference does not list
+ * included, so the group decides where getBASReference has no row.
+ */
+export function isBASEquityGroupAccount(accountNumber: string): boolean {
+  return accountNumber.startsWith('20')
+}

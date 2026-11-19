@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildAssetDisposalPlan, type DisposeAssetInput } from '../asset-service'
+import { createTableMockSupabase } from '@/tests/helpers'
+import { buildAssetDisposalPlan, previewAssetDisposal, type DisposeAssetInput } from '../asset-service'
 import type { Asset, AssetCategory } from '@/types'
 
 const PERIOD = { id: 'period-2026', period_start: '2026-01-01', period_end: '2026-12-31' }
@@ -63,6 +64,7 @@ function build(overrides: {
   }>
 } = {}) {
   return buildAssetDisposalPlan({
+    proceedsAccount: '1930',
     asset: makeAsset(overrides.asset),
     input: makeInput(overrides.input),
     fiscalPeriod: PERIOD,
@@ -224,5 +226,34 @@ describe('buildAssetDisposalPlan', () => {
       },
     })
     expect(plan.jamkning.direction).toBe('transferred')
+  })
+})
+
+describe('previewAssetDisposal', () => {
+  it('lands the proceeds on the primary bank account when no proceeds account is named', async () => {
+    const { supabase, findCalls } = createTableMockSupabase({
+      assets: { data: makeAsset() },
+      fiscal_periods: { data: PERIODS.map((period) => ({ ...period, period_end: `${period.period_start.slice(0, 4)}-12-31` })) },
+      depreciation_schedules: {
+        data: [{ id: 'schedule-2025', fiscal_period_id: 'period-2025', planned_depreciation: 20_000, journal_entry_id: 'entry-2025' }],
+      },
+      cash_accounts: { data: { id: 'ca-1931', ledger_account: '1931', enabled: true, currency: 'SEK' } },
+    })
+
+    const { plan } = await previewAssetDisposal(
+      supabase as never,
+      'company-1',
+      'asset-1',
+      makeInput({ disposed_proceeds: 125_000, proceeds_account: undefined }),
+    )
+
+    expect(plan.lines).toEqual(
+      expect.arrayContaining([expect.objectContaining({ account_number: '1931', debit_amount: 125_000, credit_amount: 0 })]),
+    )
+    expect(plan.lines.map((line) => line.account_number)).not.toContain('1930')
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['is_primary', true],
+    ])
   })
 })

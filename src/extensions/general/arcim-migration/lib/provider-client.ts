@@ -33,9 +33,12 @@ import {
 } from '@/lib/providers/bokio/client'
 import { WintClient, WintApiError } from '@/lib/providers/wint/client'
 import { loginWint, WintLoginRejectedError } from '@/lib/providers/wint/oauth'
-import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { checkSourceOrgNumber } from '@/lib/company/org-number'
 import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent as resolveConsentForIdentity } from '@/lib/providers/resolve-consent'
+import { saveConsentTokens } from '@/lib/providers/consent-tokens'
+import { subscriptionRefusal } from '@/lib/providers/with-provider-call'
 import type { CompanyInformationDto } from '@/lib/providers/dto'
 import { createLogger } from '@/lib/logger'
 import type { ConsentRecord, OtcResponse } from '../types'
@@ -71,7 +74,10 @@ export class ProviderTokenInvalidError extends Error {
       | 'company-key-not-found'
       // Bokio: the company's price plan has no API access (Basic, or an
       // expired plan). The token can be fine; the fix is the plan.
-      | 'plan-no-api' = 'credentials',
+      | 'plan-no-api'
+      // Bokio: what was pasted as the company id holds no GUID, so Bokio
+      // can never find a company by it.
+      | 'company-id-invalid' = 'credentials',
   ) {
     super(message)
     this.name = 'ProviderTokenInvalidError'
@@ -99,7 +105,8 @@ export class ConsentNotFoundError extends Error {
  * company id for the wrong company imports a FOREIGN legal entity's customers,
  * suppliers and invoices into this ledger. Nothing errors, so the first signal
  * is the user noticing their books are full of a stranger's data. Both org
- * numbers are carried on the error so the wizard can name the two companies.
+ * numbers and the opened company's name are carried on the error so the
+ * message can name them (./company-mismatch-message).
  */
 export class ProviderCompanyMismatchError extends Error {
   constructor(
@@ -286,8 +293,51 @@ export async function generateOtc(
   return { code, consentId, expiresAt }
 }
 
+/** What a live OAuth `state` row resolves to: the flow the callback belongs to. */
+type ResolvedOAuthState = {
+  consentId: string
+  provider: ProviderName
+  /** The Accounted company that owns the consent (read server-side, never from the callback). */
+  companyId: string
+  userId: string | null
+  origin: string | null
+}
+
+/**
+ * Resolve a matched provider_otc state row to the flow it was minted for. The
+ * one definition behind consumeOAuthState and peekOAuthState: the provider and
+ * the owning company are read from the consent row (written server-side at
+ * connect time), never from the callback query string.
+ */
+async function resolveOAuthStateRow(
+  supabase: ReturnType<typeof createServiceClient>,
+  row: { consent_id: string; user_id: unknown; origin: unknown },
+): Promise<ResolvedOAuthState | null> {
+  const { data: consent } = await supabase
+    .from('provider_consents')
+    .select('provider, company_id')
+    .eq('id', row.consent_id)
+    .maybeSingle()
+
+  if (!consent?.provider || !consent.company_id) {
+    return null
+  }
+
+  return {
+    consentId: row.consent_id,
+    provider: consent.provider as ProviderName,
+    companyId: consent.company_id as string,
+    userId: typeof row.user_id === 'string' ? row.user_id : null,
+    origin: typeof row.origin === 'string' ? row.origin : null,
+  }
+}
+
 /**
  * Atomically consume an OAuth `state` token and resolve what it was minted for.
+ *
+ * Called for a callback that carries a code. A provider error without a code
+ * (the user pressed cancel) exchanges nothing and reads the row with
+ * peekOAuthState instead, so a cancel leaves the state unspent.
  *
  * The single UPDATE is the entire check: `used_at IS NULL` and
  * `expires_at > now` sit in the WHERE clause, so a replayed callback loses the
@@ -308,14 +358,7 @@ export async function generateOtc(
  */
 export async function consumeOAuthState(
   state: string,
-): Promise<{
-  consentId: string
-  provider: ProviderName
-  /** The Accounted company that owns the consent (read server-side, never from the callback). */
-  companyId: string
-  userId: string | null
-  origin: string | null
-} | null> {
+): Promise<ResolvedOAuthState | null> {
   const supabase = createServiceClient()
   const now = new Date().toISOString()
 
@@ -334,22 +377,136 @@ export async function consumeOAuthState(
     return null
   }
 
-  const { data: consent } = await supabase
-    .from('provider_consents')
-    .select('provider, company_id')
-    .eq('id', consumed.consent_id)
+  return resolveOAuthStateRow(supabase, consumed)
+}
+
+/**
+ * Resolve an OAuth `state` token WITHOUT spending it: the same row under the
+ * same predicates as consumeOAuthState (unused, not a handoff row, unexpired),
+ * read with a SELECT instead of the UPDATE.
+ *
+ * For a callback that carries a provider error and no code. Nothing is
+ * exchanged on that path, so there is no replay to lose a race against, and
+ * spending the state there cost real connections: a second delivery of the
+ * same cancelled callback was answered with the session error instead of the
+ * cancel sentence, and a user who cancelled, went Back at the provider and
+ * approved came home with a code for a state the cancel had already used.
+ *
+ * A callback with a code must keep using consumeOAuthState: the state stays
+ * one-time for the token exchange.
+ *
+ * Returns null for every failure mode, exactly like consumeOAuthState, and
+ * callers must not distinguish them either.
+ */
+export async function peekOAuthState(
+  state: string,
+): Promise<ResolvedOAuthState | null> {
+  const supabase = createServiceClient()
+
+  const { data: row, error } = await supabase
+    .from('provider_otc')
+    .select('consent_id, user_id, origin')
+    .eq('code', state)
+    .is('used_at', null)
+    .is('provider_code', null)
+    .is('provider_error', null)
+    .gt('expires_at', new Date().toISOString())
     .maybeSingle()
 
-  if (!consent?.provider || !consent.company_id) {
+  if (error || !row?.consent_id) {
     return null
   }
 
-  return {
-    consentId: consumed.consent_id as string,
-    provider: consent.provider as ProviderName,
-    companyId: consent.company_id as string,
-    userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
-    origin: typeof consumed.origin === 'string' ? consumed.origin : null,
+  return resolveOAuthStateRow(supabase, row)
+}
+
+/**
+ * Move the logins still open on `fromConsentIds` (states a callback can still
+ * use, under the same predicates as consumeOAuthState and peekOAuthState:
+ * unused, not a handoff row, unexpired) onto `toConsentId`. POST /connect
+ * calls it before deleting the earlier attempts of the same company and
+ * provider, so a login window left open from an earlier click finishes on the
+ * new attempt instead of coming back to a deleted state. Each state keeps its
+ * initiator and origin; only the consent it resolves to changes, within one
+ * company.
+ *
+ * A failed move logs and answers 0: /connect then cleans up as it did before,
+ * which costs the open window, never the new connect.
+ */
+export async function moveOpenLogins(fromConsentIds: string[], toConsentId: string): Promise<number> {
+  if (fromConsentIds.length === 0) return 0
+  const { data, error } = await createServiceClient()
+    .from('provider_otc')
+    .update({ consent_id: toConsentId })
+    .in('consent_id', fromConsentIds)
+    .is('used_at', null)
+    .is('provider_code', null)
+    .is('provider_error', null)
+    .gt('expires_at', new Date().toISOString())
+    .select('code')
+  if (error) {
+    log.warn('open provider logins could not be moved to the new connect', { toConsentId, reason: error.message })
+    return 0
+  }
+  return data?.length ?? 0
+}
+
+/**
+ * Whether the consent already holds provider tokens: the login renews a
+ * connection the company has, rather than making its first one. The OAuth
+ * callback words a licence refusal by it. A failed read answers false.
+ */
+export async function consentHoldsTokens(consentId: string): Promise<boolean> {
+  const { data, error } = await createServiceClient()
+    .from('provider_consent_tokens')
+    .select('consent_id')
+    .eq('consent_id', consentId)
+    .limit(1)
+  return !error && (data?.length ?? 0) > 0
+}
+
+export type OAuthStateRejectionReason = 'unknown' | 'used' | 'expired' | 'handoff'
+
+/**
+ * Why a token the callback has just rejected was dead, for the SERVER LOG
+ * only. The caller's answer stays the one generic sentence for every reason:
+ * the route is unauthenticated, and telling them apart there is the oracle
+ * consumeOAuthState exists to remove.
+ *
+ * Read after the rejection, so it decides nothing. It only lets a rejected
+ * callback be sorted afterwards, which the row itself cannot do once purged:
+ *   - used: a callback with a code already spent this state (a replay, or a
+ *     second delivery of the same approval).
+ *   - expired: the row outlived its lifetime before the callback arrived.
+ *   - handoff: a live white-label handoff row, presented as a state or
+ *     claimed from another origin than the one it was minted for.
+ *   - unknown: no such row (forged, a handoff already claimed, or purged), or
+ *     the lookup failed. The cleanup cron deletes expired rows within
+ *     minutes, used ones included, so a callback that arrives later than
+ *     that reads unknown. So does an approval for a connect the user started
+ *     over: /connect deletes the pending consent and its state rows with it.
+ *
+ * Never throws: the log line must not change what the callback answers.
+ */
+export async function oauthStateRejectionReason(
+  code: string,
+): Promise<OAuthStateRejectionReason> {
+  try {
+    const { data: row, error } = await createServiceClient()
+      .from('provider_otc')
+      .select('used_at, expires_at, provider_code, provider_error')
+      .eq('code', code)
+      .maybeSingle()
+
+    if (error || !row) return 'unknown'
+    if (row.used_at) return 'used'
+    if (new Date(row.expires_at).getTime() <= Date.now()) return 'expired'
+    if (row.provider_code || row.provider_error) return 'handoff'
+    return 'unknown'
+  } catch {
+    // Safe to drop: the callback has already rejected the state, this only
+    // labels that rejection in the log, and 'unknown' is the trace it leaves.
+    return 'unknown'
   }
 }
 
@@ -502,15 +659,13 @@ export async function exchangeAuthToken(
   )
 
   // Store tokens
-  const { error: tokenError } = await supabase
-    .from('provider_consent_tokens')
-    .upsert({
-      consent_id: consentId,
-      provider,
-      access_token: tokenResponse.access_token,
-      refresh_token: tokenResponse.refresh_token,
-      token_expires_at: expiresAt,
-    })
+  const { error: tokenError } = await saveConsentTokens(supabase, {
+    consent_id: consentId,
+    provider,
+    access_token: tokenResponse.access_token,
+    refresh_token: tokenResponse.refresh_token,
+    token_expires_at: expiresAt,
+  })
   if (tokenError) throw new Error('Provider credentials could not be saved')
 
   // Mark consent as accepted and record which provider company it opens. The
@@ -559,7 +714,7 @@ async function assertProviderCompanyMatchesConsent(
     return null
   }
 
-  if (!normalizeOrgNumber(info?.organizationNumber)) return null
+  if (!orgNumberKey(info?.organizationNumber)) return null
 
   const { data: consent } = await supabase
     .from('provider_consents')
@@ -581,24 +736,28 @@ async function providerOrgNumberMatchingCompany(
   companyId: string,
   info: CompanyInformationDto | null,
 ): Promise<string | null> {
-  const providerOrgNumber = normalizeOrgNumber(info?.organizationNumber)
-  if (!providerOrgNumber) return null
+  await refuseProviderOfOtherCompany(supabase, companyId, info?.organizationNumber, info?.companyName?.trim() || null)
+  return normalizeOrgNumber(info?.organizationNumber)
+}
 
-  const { data: targetCompany } = await supabase
-    .from('companies')
-    .select('org_number')
-    .eq('id', companyId)
-    .maybeSingle()
-  const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
-
-  if (targetOrgNumber && providerOrgNumber !== targetOrgNumber) {
-    throw new ProviderCompanyMismatchError(
-      targetOrgNumber,
-      providerOrgNumber,
-      info?.companyName?.trim() || null,
-    )
-  }
-  return providerOrgNumber
+/**
+ * Only a confident mismatch blocks: the comparison every wrong-company check
+ * uses (lib/company/org-number.ts), so a number held only in settings counts
+ * and a number whose check digit fails is still compared. A missing number on
+ * either side is not evidence of anything (Accounted allows companies without
+ * one, and a provider response could omit it).
+ */
+async function refuseProviderOfOtherCompany(
+  supabase: ReturnType<typeof createServiceClient>,
+  companyId: string,
+  providerNumber: string | null | undefined,
+  providerCompanyName: string | null,
+): Promise<void> {
+  const providerKey = orgNumberKey(providerNumber)
+  if (!providerKey) return
+  const check = await checkSourceOrgNumber(supabase, companyId, providerNumber)
+  const companyKey = orgNumberKey(check.companyOrgNumber)
+  if (check.mismatch && companyKey) throw new ProviderCompanyMismatchError(companyKey, providerKey, providerCompanyName)
 }
 
 /** Mirrors the RPC's account key: separators do not make an identity. */
@@ -657,10 +816,21 @@ export async function ensureConsentSourceIdentity(
     const resolved = await resolveConsentForIdentity(companyId, consentId)
     info = await fetchCompanyInfoDirect(provider, resolved.accessToken, resolved.providerCompanyId)
   } catch (error) {
+    // The customer's subscription at the provider refuses (no API module, no
+    // licence): every register call would too, so the register fetch stops
+    // with that sentence instead of the RPC's bare "identity missing".
+    if (subscriptionRefusal(error)) throw error
+    // Anything else leaves the identity unfilled and the RPC refuses. The
+    // status and the provider's own body say why (a Visma 403 on the company
+    // settings read the same as an inactive module in the log until now).
+    const failed = error as { statusCode?: unknown; status?: unknown; body?: unknown } | null
+    const status = failed?.statusCode ?? failed?.status
     log.warn('provider company information unavailable; source identity not filled', {
       provider,
       consentId,
       reason: error instanceof Error ? error.message : 'unknown',
+      ...(typeof status === 'number' ? { status } : {}),
+      ...(typeof failed?.body === 'string' && failed.body ? { body: failed.body.slice(0, 300) } : {}),
     })
     return 'unavailable'
   }
@@ -682,6 +852,18 @@ export async function ensureConsentSourceIdentity(
     return 'unavailable'
   }
   return 'filled'
+}
+
+const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+
+/**
+ * The Bokio company id in what the user pasted: the GUID itself, or the
+ * address of a Bokio page that holds exactly one (the connect help points at
+ * the address bar). Null when there is none, or more than one to choose from.
+ */
+export function bokioCompanyIdFrom(pasted: string): string | null {
+  const found = [...new Map((pasted.match(GUID) ?? []).map(id => [id.toLowerCase(), id])).values()]
+  return found.length === 1 ? found[0] : null
 }
 
 export async function submitProviderToken(
@@ -818,17 +1000,25 @@ export async function submitProviderToken(
   // storing anything: it proves the credentials work and returns the
   // organizationNumber to compare.
   if (provider === 'bokio') {
-    const bokioCompanyId = providerCompanyId?.trim() ?? ''
+    const pastedCompanyId = providerCompanyId?.trim() ?? ''
     accessToken = normalizeBokioAccessToken(apiToken)
 
     if (!accessToken) {
       throw new ProviderTokenInvalidError('Bokio requires an integration token')
     }
-    if (!bokioCompanyId) {
+    if (!pastedCompanyId) {
       throw new ProviderTokenInvalidError(
         'Bokio requires a company id',
         'company-not-found',
       )
+    }
+    // Decided here, not by Bokio: a value without a GUID (an org number, the
+    // token pasted into the wrong field) drew a Bokio 400 that the route
+    // answered with "try again", five times in a row for one user on
+    // 2026-10-27. Every Bokio company id stored since the probe is a GUID.
+    const bokioCompanyId = bokioCompanyIdFrom(pastedCompanyId)
+    if (!bokioCompanyId) {
+      throw new ProviderTokenInvalidError('Bokio company id holds no GUID', 'company-id-invalid')
     }
     storedProviderCompanyId = bokioCompanyId
 
@@ -885,25 +1075,15 @@ export async function submitProviderToken(
       bokioCompany['organizationNumber'] as string | undefined,
     )
 
-    const { data: targetCompany } = await supabase
-      .from('companies')
-      .select('org_number')
-      .eq('id', ownerCompanyId)
-      .maybeSingle()
-    const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
-
-    // Only a confident mismatch blocks. A missing org number on either side is
-    // not evidence of anything (Accounted allows companies without one, and a
-    // Bokio response could omit it), so those fall through to the labelling
+    // A missing org number on either side falls through to the labelling
     // below: the wizard still shows WHICH Bokio company was linked, which is
     // what lets the user catch it themselves.
-    if (bokioOrgNumber && targetOrgNumber && bokioOrgNumber !== targetOrgNumber) {
-      throw new ProviderCompanyMismatchError(
-        targetOrgNumber,
-        bokioOrgNumber,
-        bokioName || null,
-      )
-    }
+    await refuseProviderOfOtherCompany(
+      supabase,
+      ownerCompanyId,
+      bokioCompany['organizationNumber'] as string | undefined,
+      bokioName || null,
+    )
 
     // Label the consent with what the credentials actually opened. Written as
     // an object literal (not a conditional spread) so the phantom-column guard
@@ -955,18 +1135,9 @@ export async function submitProviderToken(
     const wintCompanyName = typeof wintCompany['Name'] === 'string' ? (wintCompany['Name'] as string).trim() : ''
     const wintOrgNumber = normalizeOrgNumber(wintCompany['Org'] as string | undefined)
 
-    const { data: targetCompany } = await supabase
-      .from('companies')
-      .select('org_number')
-      .eq('id', ownerCompanyId)
-      .maybeSingle()
-    const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
-
     // Same confident-mismatch-only rule as Bokio: a missing org number on
     // either side falls through to labelling, a definite mismatch blocks.
-    if (wintOrgNumber && targetOrgNumber && wintOrgNumber !== targetOrgNumber) {
-      throw new ProviderCompanyMismatchError(targetOrgNumber, wintOrgNumber, wintCompanyName || null)
-    }
+    await refuseProviderOfOtherCompany(supabase, ownerCompanyId, wintCompany['Org'] as string | undefined, wintCompanyName || null)
 
     // The WINT-internal company id is what later calls may need (CompanyAuth
     // company switching); the login mail is deliberately NOT persisted.
@@ -984,16 +1155,14 @@ export async function submitProviderToken(
   }
 
   // Store tokens: consent stays at status 0 until migration/SIE import completes
-  await supabase
-    .from('provider_consent_tokens')
-    .upsert({
-      consent_id: consentId,
-      provider,
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      token_expires_at: tokenExpiresAt,
-      provider_company_id: storedProviderCompanyId,
-    })
+  await saveConsentTokens(supabase, {
+    consent_id: consentId,
+    provider,
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    token_expires_at: tokenExpiresAt,
+    provider_company_id: storedProviderCompanyId,
+  })
 
   return { success: true, consentId }
 }

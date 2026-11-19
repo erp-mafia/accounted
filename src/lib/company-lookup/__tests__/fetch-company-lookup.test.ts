@@ -48,9 +48,12 @@ describe('fetchCompanyLookup', () => {
     const outcome = await fetchCompanyLookup('556677-8899', { ticEnabled: true })
     expect(outcome).toEqual({ status: 'found', result: LOOKUP })
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
-      '/api/extensions/ext/tic/lookup?org_number=',
-    )
+    // The org number rides in a POST body, never the URL: a sole trader's
+    // is the owner's personnummer (#95).
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/extensions/ext/tic/lookup')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({ org_number: '556677-8899' })
   })
 
   it("maps the TIC handler's 404 (Company not found) to not_found", async () => {
@@ -72,7 +75,7 @@ describe('fetchCompanyLookup', () => {
         },
       }),
     )
-    const outcome = await fetchCompanyLookup('802481-1658', { ticEnabled: true })
+    const outcome = await fetchCompanyLookup('802233-4455', { ticEnabled: true })
     expect(outcome).toEqual({
       status: 'not_found',
       registry: {
@@ -89,7 +92,7 @@ describe('fetchCompanyLookup', () => {
     fetchMock.mockResolvedValue(
       jsonResponse(404, { error: 'Company not found', registry: { source: 'tic', companyName: 42 } }),
     )
-    const outcome = await fetchCompanyLookup('802481-1658', { ticEnabled: true })
+    const outcome = await fetchCompanyLookup('802233-4455', { ticEnabled: true })
     expect(outcome).toEqual({ status: 'not_found' })
   })
 

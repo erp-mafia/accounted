@@ -4,9 +4,6 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { BokslutChecklistError, buildBokslutChecklist, setChecklistItem } from '@/lib/bokslut/checklist'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * GET   /api/bookkeeping/fiscal-periods/{id}/bokslut-checklist

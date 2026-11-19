@@ -1,0 +1,579 @@
+{
+  "company": {
+    "id": "demo-company",
+    "company_id": "demo-company",
+    "name": "Exempelsnickeriet AB",
+    "org_number": "559000-0001",
+    "entity_type": "aktiebolag",
+    "accounting_method": "accrual"
+  },
+  "user_name": "Demo",
+  "profile_summary": "Snickeri med fyra anställda. Bygger kök och inredning åt privatpersoner och byggföretag, köper material från byggvaruhus.",
+  "bolaget": {
+    "owners": [
+      {
+        "name": "Demo Ägare",
+        "capital_pct": 70
+      },
+      {
+        "name": "Demo Delägare",
+        "capital_pct": 30
+      }
+    ],
+    "board": [
+      {
+        "name": "Demo Ägare",
+        "role": "ledamot"
+      },
+      {
+        "name": "Demo Delägare",
+        "role": "suppleant"
+      }
+    ],
+    "ceo": "Demo Ägare",
+    "signatory_rule": "Styrelsen"
+  },
+  "arkiv": {
+    "documents": 418,
+    "agreements": 6
+  },
+  "atoms": [
+    {
+      "id": "horizontal/swedish-vat",
+      "atom_id": "horizontal/swedish-vat",
+      "tier": "horizontal",
+      "title": "Swedish VAT",
+      "description": "Moms: perioder, omvänd skattskyldighet och rutor i deklarationen."
+    },
+    {
+      "id": "horizontal/swedish-accounting-compliance",
+      "atom_id": "horizontal/swedish-accounting-compliance",
+      "tier": "horizontal",
+      "title": "Swedish Accounting Compliance",
+      "description": "Bokföringslagen, BFNAR och BAS-kontoplanen."
+    },
+    {
+      "id": "vertical/bygg-hantverk",
+      "atom_id": "vertical/bygg-hantverk",
+      "tier": "vertical",
+      "title": "Bygg & hantverk (SNI 41-43)",
+      "description": "Omvänd moms i byggsektorn, ROT och pågående arbeten."
+    },
+    {
+      "id": "horizontal/swedish-payroll",
+      "atom_id": "horizontal/swedish-payroll",
+      "tier": "horizontal",
+      "title": "Swedish Payroll",
+      "description": "Lön, arbetsgivaravgifter och förmåner."
+    }
+  ],
+  "group_memory": {
+    "group_name": "Exempelbyrån",
+    "group_kind": "byra",
+    "facts": [
+      {
+        "id": "a2000000-0000-4000-8000-000000000101",
+        "fact_id": "a2000000-0000-4000-8000-000000000101",
+        "kind": "fact",
+        "content": "Månadsstängning senast den 10:e varje månad.",
+        "saved_at": "2026-02-02T08:00:00Z",
+        "origin": "conversation",
+        "client": "claude-connector",
+        "created_by": "Byråchefen"
+      },
+      {
+        "id": "a2000000-0000-4000-8000-000000000102",
+        "fact_id": "a2000000-0000-4000-8000-000000000102",
+        "kind": "preference",
+        "content": "Byråns konsulter ställer frågor om underlag till kunden via byrån, inte direkt.",
+        "saved_at": "2026-03-14T08:00:00Z",
+        "origin": null,
+        "client": null,
+        "created_by": "Byråchefen"
+      },
+      {
+        "id": "a2000000-0000-4000-8000-000000000103",
+        "fact_id": "a2000000-0000-4000-8000-000000000103",
+        "kind": "preference",
+        "content": "Påminnelser om saknade kvitton skickas på måndagar.",
+        "saved_at": "2026-10-06T08:00:00Z",
+        "origin": "conversation",
+        "client": "chatgpt",
+        "created_by": "Konsulten"
+      }
+    ]
+  },
+  "memory": [
+    {
+      "id": "a2000000-0000-4000-8000-000000000001",
+      "fact_id": "a2000000-0000-4000-8000-000000000001",
+      "kind": "fact",
+      "content": "Lagerhyran hos Fastighetsbolaget betalas kvartalsvis i förskott och periodiseras per månad.",
+      "saved_at": "2026-11-03T09:12:00Z",
+      "origin": "conversation",
+      "client": "claude-connector",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000002",
+      "fact_id": "a2000000-0000-4000-8000-000000000002",
+      "kind": "fact",
+      "content": "Kort 4821 är företagskortet, alla köp på det är bolagets.",
+      "saved_at": "2026-10-28T09:12:00Z",
+      "origin": "conversation",
+      "client": "claude-connector",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000003",
+      "fact_id": "a2000000-0000-4000-8000-000000000003",
+      "kind": "preference",
+      "content": "Fråga alltid innan något över 10 000 kr bokförs.",
+      "saved_at": "2026-10-21T14:40:00Z",
+      "origin": "conversation",
+      "client": "chatgpt",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000004",
+      "fact_id": "a2000000-0000-4000-8000-000000000004",
+      "kind": "preference",
+      "content": "Svara kort och med en fråga i taget.",
+      "saved_at": "2026-10-21T14:40:00Z",
+      "origin": "conversation",
+      "client": "chatgpt",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000005",
+      "fact_id": "a2000000-0000-4000-8000-000000000005",
+      "kind": "correction",
+      "content": "Arbeten åt byggföretag faktureras med omvänd moms.",
+      "saved_at": "2026-10-02T08:05:00Z",
+      "origin": "conversation",
+      "client": "claude-code",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000006",
+      "fact_id": "a2000000-0000-4000-8000-000000000006",
+      "kind": "fact",
+      "content": "Lön betalas ut den 25:e varje månad.",
+      "saved_at": "2026-09-14T10:00:00Z",
+      "origin": null,
+      "client": null,
+      "created_by": null
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000007",
+      "fact_id": "a2000000-0000-4000-8000-000000000007",
+      "kind": "fact",
+      "content": "Byggvaruhuset fakturerar samlat en gång i månaden.",
+      "saved_at": "2026-09-02T10:00:00Z",
+      "origin": "conversation",
+      "client": "claude-connector",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000008",
+      "fact_id": "a2000000-0000-4000-8000-000000000008",
+      "kind": "pattern",
+      "content": "Drivmedel från Macken bokförs alltid på 5611.",
+      "saved_at": "2026-08-20T10:00:00Z",
+      "origin": "conversation",
+      "client": "claude-connector",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000009",
+      "fact_id": "a2000000-0000-4000-8000-000000000009",
+      "kind": "fact",
+      "content": "Skåpbilen leasas, avtalet löper till 2028.",
+      "saved_at": "2026-08-11T10:00:00Z",
+      "origin": null,
+      "client": null,
+      "created_by": null
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000010",
+      "fact_id": "a2000000-0000-4000-8000-000000000010",
+      "kind": "fact",
+      "content": "Telefonbolaget dras med autogiro från banken.",
+      "saved_at": "2026-07-30T10:00:00Z",
+      "origin": "conversation",
+      "client": "chatgpt",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000011",
+      "fact_id": "a2000000-0000-4000-8000-000000000011",
+      "kind": "preference",
+      "content": "Kvitton under 300 kr behöver ingen kommentar.",
+      "saved_at": "2026-07-02T10:00:00Z",
+      "origin": null,
+      "client": null,
+      "created_by": null
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000012",
+      "fact_id": "a2000000-0000-4000-8000-000000000012",
+      "kind": "fact",
+      "content": "Semesterstängt vecka 29 till 31.",
+      "saved_at": "2026-06-18T10:00:00Z",
+      "origin": null,
+      "client": null,
+      "created_by": null
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000013",
+      "fact_id": "a2000000-0000-4000-8000-000000000013",
+      "kind": "fact",
+      "content": "Verktygsbutiken ger 30 dagars kredit.",
+      "saved_at": "2026-05-09T10:00:00Z",
+      "origin": "conversation",
+      "client": "claude-connector",
+      "created_by": "Demo"
+    },
+    {
+      "id": "a2000000-0000-4000-8000-000000000014",
+      "fact_id": "a2000000-0000-4000-8000-000000000014",
+      "kind": "fact",
+      "content": "ROT-arbeten faktureras med avdraget direkt på fakturan.",
+      "saved_at": "2026-04-22T10:00:00Z",
+      "origin": "conversation",
+      "client": "claude-connector",
+      "created_by": "Demo"
+    }
+  ],
+  "memory_sync": {
+    "last_synced_at": "2026-10-21T14:40:00Z",
+    "note": "If you know facts about this business from your own memory or earlier chats that are not in memory, offer once in this conversation to save them with gnubok_remember_fact (origin: session_sync)."
+  },
+  "where_to_find": [
+    "memory: every fact agents were told about this company, newest first; a later fact settles an earlier one.",
+    "profile_summary: what the company does, written at onboarding; may be outdated.",
+    "ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier."
+  ],
+  "data_status": {
+    "bank_last_synced_at": "2026-11-09T06:10:00Z"
+  },
+  "skatteverket_connection": {
+    "status": "active"
+  },
+  "ledger_context": {
+    "resource_uri": "Accounted://ledger/context",
+    "window_from": "2025-11-01",
+    "posted_entries_window": 1284,
+    "top_supplier_patterns": [
+      {
+        "supplier": "Byggvaruhuset AB",
+        "dominant_account_number": "4010",
+        "evidence": {
+          "seen_12m": 48,
+          "agree": 46,
+          "last_booked": "2026-11-05"
+        }
+      },
+      {
+        "supplier": "Brädgården AB",
+        "dominant_account_number": "4010",
+        "evidence": {
+          "seen_12m": 22,
+          "agree": 22,
+          "last_booked": "2026-11-02"
+        }
+      },
+      {
+        "supplier": "Järnhandeln AB",
+        "dominant_account_number": "4010",
+        "evidence": {
+          "seen_12m": 19,
+          "agree": 17,
+          "last_booked": "2026-10-30"
+        }
+      },
+      {
+        "supplier": "Verktygsbutiken AB",
+        "dominant_account_number": "5410",
+        "evidence": {
+          "seen_12m": 15,
+          "agree": 14,
+          "last_booked": "2026-10-27"
+        }
+      },
+      {
+        "supplier": "Fastighetsbolaget AB",
+        "dominant_account_number": "5010",
+        "evidence": {
+          "seen_12m": 10,
+          "agree": 10,
+          "last_booked": "2026-10-05"
+        }
+      },
+      {
+        "supplier": "Macken AB",
+        "dominant_account_number": "5611",
+        "evidence": {
+          "seen_12m": 40,
+          "agree": 38,
+          "last_booked": "2026-11-07"
+        }
+      },
+      {
+        "supplier": "Telefonbolaget AB",
+        "dominant_account_number": "6212",
+        "evidence": {
+          "seen_12m": 12,
+          "agree": 12,
+          "last_booked": "2026-10-28"
+        }
+      },
+      {
+        "supplier": "Molntjänst Inc",
+        "dominant_account_number": "6540",
+        "vat_treatment": "reverse_charge_services",
+        "evidence": {
+          "seen_12m": 12,
+          "agree": 11,
+          "last_booked": "2026-11-02"
+        }
+      },
+      {
+        "supplier": "Försäkringsbolaget AB",
+        "dominant_account_number": "6310",
+        "evidence": {
+          "seen_12m": 4,
+          "agree": 4,
+          "last_booked": "2026-10-01"
+        }
+      },
+      {
+        "supplier": "Leasingbolaget AB",
+        "dominant_account_number": "5615",
+        "evidence": {
+          "seen_12m": 12,
+          "agree": 12,
+          "last_booked": "2026-11-01"
+        }
+      },
+      {
+        "supplier": "Elbolaget AB",
+        "dominant_account_number": "5020",
+        "evidence": {
+          "seen_12m": 12,
+          "agree": 12,
+          "last_booked": "2026-10-29"
+        }
+      },
+      {
+        "supplier": "Städfirman AB",
+        "dominant_account_number": "5060",
+        "evidence": {
+          "seen_12m": 9,
+          "agree": 9,
+          "last_booked": "2026-10-20"
+        }
+      },
+      {
+        "supplier": "Kontorsvaror AB",
+        "dominant_account_number": "6110",
+        "evidence": {
+          "seen_12m": 7,
+          "agree": 6,
+          "last_booked": "2026-09-18"
+        }
+      },
+      {
+        "supplier": "Färghandeln AB",
+        "dominant_account_number": "4010",
+        "evidence": {
+          "seen_12m": 6,
+          "agree": 5,
+          "last_booked": "2026-09-11"
+        }
+      },
+      {
+        "supplier": "Fraktbolaget AB",
+        "dominant_account_number": "5710",
+        "evidence": {
+          "seen_12m": 5,
+          "agree": 4,
+          "last_booked": "2026-08-30"
+        }
+      },
+      {
+        "supplier": "Lunchstället AB",
+        "dominant_account_number": "6071",
+        "evidence": {
+          "seen_12m": 5,
+          "agree": 3,
+          "last_booked": "2026-08-14"
+        }
+      }
+    ],
+    "top_counterparty_patterns": [
+      {
+        "counterparty": "Kortinlösen",
+        "dominant_category": "bank_fees",
+        "dominant_account_number": "6570",
+        "evidence": {
+          "seen_12m": 31,
+          "agree": 29,
+          "last_booked": "2026-11-05"
+        }
+      }
+    ]
+  },
+  "inbox": {
+    "address": "exempelsnickeriet@inbox.example.test",
+    "note": "Forward mail here, by hand or with a forwarding rule."
+  },
+  "measures": {
+    "tool": "gnubok_get_measure",
+    "how": "Defined figures, each equal to its report."
+  },
+  "unexplained": {
+    "tool": "gnubok_list_unexplained",
+    "as_of": "2026-11-09",
+    "unexplained": 2,
+    "cannot_check": 0,
+    "top": [
+      {
+        "check_id": "bank_balance",
+        "name_sv": "Banken mot bokföringen",
+        "subject": "1930",
+        "difference": 1249,
+        "unit": "SEK"
+      },
+      {
+        "check_id": "overdue_bank_rows",
+        "name_sv": "Obokade bankrader äldre än 30 dagar",
+        "difference": 23,
+        "unit": "count"
+      }
+    ],
+    "how": "Differences that should be zero."
+  },
+  "suggestions": [
+    {
+      "title": "Bankrader att bokföra som tidigare"
+    },
+    {
+      "title": "Kvitton att koppla till verifikationer"
+    },
+    {
+      "title": "Inbetalningar att matcha mot fakturor"
+    }
+  ],
+  "capabilities_profile": {
+    "id": "standard",
+    "version": 1,
+    "name": "Standard",
+    "name_sv": "Standard",
+    "source": "implicit",
+    "packages_off": []
+  },
+  "recommended_tools": [
+    {
+      "workflow": "categorize_month",
+      "description": "Book a month of bank rows.",
+      "skill": "bookkeep",
+      "tools": [
+        {
+          "name": "gnubok_list_uncategorized_transactions",
+          "callable": true
+        }
+      ]
+    },
+    {
+      "workflow": "vat_declaration",
+      "description": "Review and file VAT.",
+      "skill": "quarterly-vat-review",
+      "tools": [
+        {
+          "name": "gnubok_get_vat_report",
+          "callable": true
+        }
+      ]
+    }
+  ],
+  "feedback_channel": {
+    "tool": "gnubok_feedback",
+    "when": "A tool is missing or a result looks wrong.",
+    "include": "context, suggestion and tool_name."
+  },
+  "deadlines": [
+    {
+      "due": "2026-11-12",
+      "what": "Betala Byggvaruhuset AB, faktura 551203",
+      "amount": 18420,
+      "state": "Väntar på attest."
+    },
+    {
+      "due": "2026-11-12",
+      "what": "Betala Fastighetsbolaget AB, faktura 2026-1187",
+      "amount": 24000,
+      "state": "Väntar på attest."
+    },
+    {
+      "due": "2026-11-12",
+      "what": "Momsdeklaration kvartal 3",
+      "amount": 40362,
+      "state": "Förberedd, inte inlämnad."
+    },
+    {
+      "due": "2026-11-12",
+      "what": "Arbetsgivardeklaration oktober",
+      "amount": 14267,
+      "state": "Underlaget inskickat, väntar på signering med BankID."
+    },
+    {
+      "due": "2026-11-12",
+      "what": "Betala in till skattekontot",
+      "amount": 54629,
+      "state": "Pengarna dras inte automatiskt från banken."
+    }
+  ],
+  "open_questions": [
+    {
+      "asked_at": "2026-11-04T22:18:00Z",
+      "about": "Swish, 4 200,00 kr, bankrad 28 okt",
+      "question": "Vilken faktura gäller Swishen, 1039 eller 1040?",
+      "waiting_for": "Demo"
+    },
+    {
+      "asked_at": "2026-11-04T22:17:00Z",
+      "about": "Macken AB, 396,00 kr, bankrad 27 okt",
+      "question": "Tjänsteresa eller privat?",
+      "waiting_for": "Demo"
+    }
+  ],
+  "permissions": {
+    "areas": [
+      {
+        "area": "Bokföring"
+      },
+      {
+        "area": "Fakturor"
+      },
+      {
+        "area": "Inköp"
+      },
+      {
+        "area": "Betalningar"
+      },
+      {
+        "area": "Moms"
+      },
+      {
+        "area": "Löner"
+      },
+      {
+        "area": "Bokslut"
+      },
+      {
+        "area": "Dokument"
+      }
+    ]
+  }
+}

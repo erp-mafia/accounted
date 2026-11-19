@@ -1,17 +1,11 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
 import { sendCompanyInviteMail } from '@/lib/email/send-company-invite'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
-
-// Loads the email extension so the re-send path gets the Resend
-// implementation instead of the noop default (same as POST
-// /api/company/members/invite).
-ensureInitialized()
 
 interface CompanyInviteRow {
   id: string

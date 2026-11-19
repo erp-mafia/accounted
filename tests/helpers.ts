@@ -18,6 +18,7 @@ import type {
   CategorizationTemplate,
 } from '@/types'
 import type { SIEVoucher, SIETransactionLine } from '@/lib/import/types'
+import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 
 // ============================================================
 // Chainable Supabase mock
@@ -358,6 +359,8 @@ export function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     invoice_email_bcc_addresses: null,
     language: 'sv',
     default_payment_terms: 30,
+    invoice_reference: null,
+    invoice_marking: null,
     notes: null,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
@@ -576,6 +579,7 @@ export function makeCompanySettings(
     salary_net_rounding: false,
     salary_payslip_show_employer_cost: true,
     salary_payslip_show_breakdown: true,
+    salary_regional_support: false,
     salary_deviation_period: 'same_month',
     salary_vacation_year_basis: 'calendar',
     logo_url: null,
@@ -650,6 +654,18 @@ export function createMockRequest(
 }
 
 /**
+ * Build the Request a cron route receives. verifyCronSecret reads only the
+ * authorization header (and the path, to name the job in failure reports);
+ * pass `authorization` when a test exercises the secret check itself.
+ */
+export function createCronRequest(path: string, authorization?: string): Request {
+  return new Request(
+    new URL(path, 'http://localhost:3000').toString(),
+    authorization ? { headers: { authorization } } : undefined,
+  )
+}
+
+/**
  * Parse NextResponse to {status, body}.
  */
 export async function parseJsonResponse<T = unknown>(
@@ -666,6 +682,27 @@ export function createMockRouteParams<T extends Record<string, string>>(
   params: T
 ): { params: Promise<T> } {
   return { params: Promise.resolve(params) }
+}
+
+/**
+ * The bank link core's reads after the verifikat (lib/transactions/bank-link.ts),
+ * for a queued-mock test of a link that goes on: the settlement account of a
+ * row without a cash account (no enabled account in its currency answers
+ * 1930), the voucher's line on 1930, then who else holds that bank leg
+ * (lib/transactions/voucher-bank-leg.ts: bank_line slices, pointers): nobody.
+ */
+export function enqueueBankLinkLeg(
+  enqueue: (result: { data?: unknown; error?: unknown }) => void,
+  /** The voucher's bank line, signed like the row (+ debit, - credit): the row's own amount for a link that fits. */
+  bankLine = 1000,
+): void {
+  enqueue({ data: [], error: null }) // cash_accounts in the row's currency
+  enqueue({
+    data: [{ account_number: '1930', debit_amount: Math.max(bankLine, 0), credit_amount: Math.max(-bankLine, 0) }],
+    error: null,
+  }) // the voucher's bank line
+  enqueue({ data: [], error: null }) // bank_line slices other rows hold on the verifikat
+  enqueue({ data: [], error: null }) // other rows whose pointer names the verifikat
 }
 
 /**
@@ -799,6 +836,20 @@ export function createQueuedMockSupabase() {
 export type TableMockResult = { data?: unknown; error?: unknown; count?: number | null }
 
 /**
+ * A table answer computed from the chain that asked: every builder call made
+ * on that one chain (`.select()`, `.eq()`, `.in()`, ...), in order. For a
+ * table the code reads in two shapes (one row by id, a list by `.in()`), so a
+ * test answers by WHAT was asked instead of by the order of the reads.
+ *
+ * It may answer with a Promise, for a test that lets something else happen
+ * while the statement is on its way (another request interleaved with it). A
+ * plain answer resolves exactly as before, in the same tick.
+ */
+export type TableMockResolver = (
+  chainCalls: { method: string; args: unknown[] }[],
+) => TableMockResult | Promise<TableMockResult>
+
+/**
  * A Supabase mock that answers per table instead of from one global FIFO
  * queue, so a test pins WHAT each table returns rather than the order the
  * code under test happens to query in (createQueuedMockSupabase breaks on
@@ -807,7 +858,10 @@ export type TableMockResult = { data?: unknown; error?: unknown; count?: number 
  * Each key holds either:
  *   - an array: one entry is consumed per awaited chain, and the last entry
  *     sticks once the others are used up;
- *   - a plain object: returned for every await (a constant).
+ *   - a plain object: returned for every await (a constant);
+ *   - a function (TableMockResolver): called on every await with the calls
+ *     made on that chain, its return value (or what its Promise resolves
+ *     to) is the answer.
  * A key with nothing set resolves `{ data: null, error: null }`.
  *
  * Tables are keyed by name ('suppliers'); RPCs by 'rpc:<name>'
@@ -827,34 +881,50 @@ export type TableMockResult = { data?: unknown; error?: unknown; count?: number 
  *   setTable('rpc:get_next_arrival_number', { data: 5 })
  */
 export function createTableMockSupabase(
-  initial: Record<string, TableMockResult | TableMockResult[]> = {},
+  initial: Record<string, TableMockResult | TableMockResult[] | TableMockResolver> = {},
 ) {
-  const queues = new Map<string, TableMockResult[]>()
+  const queues = new Map<string, Array<TableMockResult | TableMockResolver>>()
 
   /** Every chained builder call, in order: { table, method, args }. */
   const calls: { table: string; method: string; args: unknown[] }[] = []
 
-  const setTable = (key: string, value: TableMockResult | TableMockResult[]) => {
+  const setTable = (key: string, value: TableMockResult | TableMockResult[] | TableMockResolver) => {
     queues.set(key, Array.isArray(value) ? [...value] : [value])
   }
 
-  const next = (key: string) => {
+  type Answer = { data: unknown; error: unknown; count: number | null }
+  const answerOf = (entry: TableMockResult | undefined): Answer => ({
+    data: entry?.data ?? null,
+    error: entry?.error ?? null,
+    count: entry?.count ?? null,
+  })
+
+  const next = (key: string, chainCalls: { method: string; args: unknown[] }[]): Answer | Promise<Answer> => {
     const q = queues.get(key)
-    const entry = q && q.length > 1 ? q.shift()! : q?.[0]
-    return { data: entry?.data ?? null, error: entry?.error ?? null, count: entry?.count ?? null }
+    const queued = q && q.length > 1 ? q.shift()! : q?.[0]
+    const entry = typeof queued === 'function' ? queued(chainCalls) : queued
+    return entry instanceof Promise ? entry.then(answerOf) : answerOf(entry)
   }
 
-  const buildChain = (key: string): unknown =>
+  // chainCalls: the calls made on this one chain since from()/rpc(), for a
+  // resolver to read. A plain answer is handed to resolve in the same tick,
+  // as it always was; only a resolver's Promise is waited for.
+  const buildChain = (key: string, chainCalls: { method: string; args: unknown[] }[] = []): unknown =>
     new Proxy(
       {},
       {
         get(_target, prop) {
           if (prop === 'then') {
-            return (resolve: (v: unknown) => void) => resolve(next(key))
+            return (resolve: (v: unknown) => void, reject?: (e: unknown) => void) => {
+              const answer = next(key, chainCalls)
+              if (answer instanceof Promise) return answer.then(resolve, reject)
+              return resolve(answer)
+            }
           }
           return (...args: unknown[]) => {
             calls.push({ table: key, method: String(prop), args })
-            return buildChain(key)
+            chainCalls.push({ method: String(prop), args })
+            return buildChain(key, chainCalls)
           }
         },
       },
@@ -868,6 +938,14 @@ export function createTableMockSupabase(
   const findCalls = (table: string, method: string): unknown[][] =>
     calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
 
+  /**
+   * First argument of every `method` call against `table`, in order: the
+   * rows a test wants from `.insert()`/`.update()`/`.upsert()`, or the
+   * projection of each `.select()`. Empty when the code never called it.
+   */
+  const payloads = (table: string, method: string): unknown[] =>
+    findCalls(table, method).map((args) => args[0])
+
   /** Drop every table answer and recorded call, then re-apply `initial`. */
   const reset = () => {
     queues.clear()
@@ -875,6 +953,12 @@ export function createTableMockSupabase(
     for (const [key, value] of Object.entries(initial)) setTable(key, value)
   }
   reset()
+
+  /**
+   * Every table passed to `from()`, in order, so a test can assert a table
+   * was never touched (or touched once) whatever the chain did after it.
+   */
+  const tables = (): string[] => supabase.from.mock.calls.map(([table]) => table)
 
   const supabase = {
     from: vi.fn((table: string) => buildChain(table)),
@@ -889,7 +973,191 @@ export function createTableMockSupabase(
     },
   }
 
-  return { supabase, setTable, reset, calls, findCall, findCalls }
+  return { supabase, setTable, reset, calls, findCall, findCalls, payloads, tables }
+}
+
+/**
+ * createTableMockSupabase answering from rows: every read applies the chain's
+ * eq/neq/in/lt/lte/gt/gte/is/contains/order/limit to the table's rows, so a door gets what
+ * a real query would return whichever way it asks. For a test of a rule across
+ * doors, where a queue of answers would pin each door's reads instead of what
+ * it concludes. Writes are recorded in `writes` and answer with the row.
+ */
+export function createRowsMockSupabase(
+  tables: Record<string, Record<string, unknown>[]>,
+  writes: { table: string; method: string; row: unknown }[] = [],
+) {
+  type Row = Record<string, unknown>
+  const answer = (rows: Row[], chain: { method: string; args: unknown[] }[]) => {
+    let out = [...rows]
+    let one = false
+    let head = false
+    for (const { method, args } of chain) {
+      const [column, value] = args as [string, unknown]
+      if (method === 'eq') out = out.filter((row) => row[column] === value)
+      else if (method === 'neq') out = out.filter((row) => row[column] !== value)
+      else if (method === 'in') out = out.filter((row) => (value as unknown[]).includes(row[column]))
+      else if (method === 'lt') out = out.filter((row) => String(row[column]) < String(value))
+      else if (method === 'lte') out = out.filter((row) => String(row[column]) <= String(value))
+      else if (method === 'gt') out = out.filter((row) => String(row[column]) > String(value))
+      else if (method === 'gte') out = out.filter((row) => String(row[column]) >= String(value))
+      else if (method === 'is') out = out.filter((row) => (row[column] ?? null) === value)
+      else if (method === 'contains') {
+        const wanted = value as unknown[]
+        out = out.filter((row) => Array.isArray(row[column]) && wanted.every((v) => (row[column] as unknown[]).includes(v)))
+      } else if (method === 'order') {
+        const direction = (args[1] as { ascending?: boolean } | undefined)?.ascending === false ? -1 : 1
+        out.sort((a, b) => (String(a[column]) < String(b[column]) ? -1 : 1) * direction)
+      } else if (method === 'limit') out = out.slice(0, Number(args[0]))
+      else if (method === 'single' || method === 'maybeSingle') one = true
+      else if (method === 'select' && (args[1] as { head?: boolean } | undefined)?.head) head = true
+    }
+    if (head) return { data: null, error: null, count: out.length }
+    return one ? { data: out[0] ?? null, error: null } : { data: out, error: null, count: out.length }
+  }
+  const initial: Record<string, TableMockResolver> = {}
+  for (const [table, rows] of Object.entries(tables)) {
+    initial[table] = (chain) => {
+      const write = chain.find(({ method }) => ['insert', 'upsert', 'update', 'delete'].includes(method))
+      if (!write) return answer(rows, chain)
+      const row = write.args[0]
+      writes.push({ table, method: write.method, row })
+      if (write.method === 'insert' || write.method === 'upsert') {
+        const added = { id: `new-${writes.length}`, ...(row as Row) }
+        rows.push(added)
+        return { data: added, error: null }
+      }
+      return { data: row as Row, error: null }
+    }
+  }
+  return createTableMockSupabase(initial)
+}
+
+/**
+ * The RPC withApiV1 (and the MCP retry key) makes to claim an Idempotency-Key
+ * before the write runs (src/lib/api/idempotency.ts). It is the wrapper's
+ * bookkeeping of the key, not a write of the route under test, so an
+ * assertion that reads "the route wrote nothing" off "no rpc was called"
+ * leaves it out.
+ */
+export const IDEMPOTENCY_CLAIM_RPC = 'claim_idempotency_key'
+
+/**
+ * A recorded call that is the idempotency claim, in each shape the mocks
+ * record an rpc: createTableMockSupabase on table 'rpc:<name>'; hand-rolled
+ * per-test clients on table 'rpc' with the name as the method, or as the
+ * first argument.
+ */
+export function isIdempotencyClaim(call: { table: string; method?: string; args?: unknown[] }): boolean {
+  return (
+    call.table === `rpc:${IDEMPOTENCY_CLAIM_RPC}` ||
+    call.method === IDEMPOTENCY_CLAIM_RPC ||
+    ((call.table === 'rpc' || call.method === 'rpc') && call.args?.[0] === IDEMPOTENCY_CLAIM_RPC)
+  )
+}
+
+/** The `rpc` calls a route made itself: every call but the idempotency claim. */
+export function routeRpcCalls(rpc: { mock: { calls: unknown[][] } }): unknown[][] {
+  return rpc.mock.calls.filter(([name]) => name !== IDEMPOTENCY_CLAIM_RPC)
+}
+
+// ============================================================
+// Paging Supabase mock
+// ============================================================
+
+/** PostgREST's max-rows: what one request returns without a smaller window. */
+export const POSTGREST_MAX_ROWS = 1000
+
+/**
+ * A Supabase mock that pages like PostgREST, for "more than 1,000 rows"
+ * tests: a read returns at most POSTGREST_MAX_ROWS rows, `.range(from, to)`
+ * picks the window and `.limit(n)` shortens it. A read that neither pages nor
+ * aggregates therefore sees only the first 1,000 rows, as in production.
+ *
+ * Each table (or 'rpc:<name>') holds its full row set; filters are recorded
+ * but not applied, so a test seeds only the rows the filters would return.
+ * `.single()` / `.maybeSingle()` answer the first row, a `head: true` select
+ * answers the count, and writes resolve with no data. A table with nothing
+ * seeded reads as empty.
+ */
+export function createPagedMockSupabase(tables: Record<string, unknown[]> = {}) {
+  const calls: { table: string; method: string; args: unknown[] }[] = []
+
+  const buildChain = (key: string): unknown => {
+    let from = 0
+    let to: number | null = null
+    let limit: number | null = null
+    let single: 'single' | 'maybeSingle' | null = null
+    let head = false
+    let write = false
+
+    const resolve = () => {
+      const rows = tables[key] ?? []
+      if (write) return { data: null, error: null, count: null }
+      if (head) return { data: null, error: null, count: rows.length }
+      if (single) {
+        const row = rows[0] ?? null
+        if (!row && single === 'single') return { data: null, error: { code: 'PGRST116', message: 'no rows' }, count: null }
+        return { data: row, error: null, count: null }
+      }
+      let end = to === null ? from + POSTGREST_MAX_ROWS : to + 1
+      if (limit !== null) end = Math.min(end, from + limit)
+      end = Math.min(end, from + POSTGREST_MAX_ROWS)
+      return { data: rows.slice(from, end), error: null, count: rows.length }
+    }
+
+    const chain: unknown = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (prop === 'then') {
+            return (onFulfilled: (v: unknown) => unknown) => Promise.resolve(resolve()).then(onFulfilled)
+          }
+          return (...args: unknown[]) => {
+            const method = String(prop)
+            calls.push({ table: key, method, args })
+            if (method === 'range') {
+              from = Number(args[0])
+              to = Number(args[1])
+            } else if (method === 'limit') {
+              limit = Number(args[0])
+            } else if (method === 'single' || method === 'maybeSingle') {
+              single = method
+            } else if (method === 'select') {
+              head = (args[1] as { head?: boolean } | undefined)?.head === true
+            } else if (['insert', 'update', 'upsert', 'delete'].includes(method)) {
+              write = true
+            }
+            return chain
+          }
+        },
+      },
+    )
+    return chain
+  }
+
+  /** Args of every `method` call made against `table`. */
+  const findCalls = (table: string, method: string): unknown[][] =>
+    calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
+
+  const supabase = {
+    from: vi.fn((table: string) => buildChain(table)),
+    rpc: vi.fn((name: string, args?: unknown) => {
+      calls.push({ table: `rpc:${name}`, method: 'rpc', args: [args] })
+      return buildChain(`rpc:${name}`)
+    }),
+    auth: {
+      getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null }),
+      mfa: { listFactors: vi.fn().mockResolvedValue(NO_VERIFIED_FACTORS) },
+    },
+  }
+
+  return { supabase, calls, findCalls }
+}
+
+/** `count` rows built by `make(i)`: seed data for createPagedMockSupabase. */
+export function manyRows<T>(count: number, make: (i: number) => T): T[] {
+  return Array.from({ length: count }, (_, i) => make(i))
 }
 
 export function makeCategorizationTemplate(
@@ -935,5 +1203,97 @@ export function makeSIEVoucher(
       { account: '2641', amount: 200 },
     ],
     ...overrides,
+  }
+}
+
+// ============================================================
+// Extension routes
+// ============================================================
+
+/**
+ * An extension route as a test calls it. ApiRouteDefinition is a union: a
+ * context route's handler takes the dispatcher's ctx, a skipAuth or
+ * skipCompanyContext handler takes none. A test knows which route it holds
+ * and calls the handler the way the dispatcher would.
+ */
+export interface TestExtensionRoute {
+  method: string
+  path: string
+  skipAuth?: boolean
+  skipCompanyContext?: boolean
+  requireWrite?: boolean
+  requireAdmin?: boolean
+  handler: (request: Request, ctx?: ExtensionContext) => Promise<Response>
+}
+
+export function testRoutes(extension: Extension): TestExtensionRoute[] {
+  return (extension.apiRoutes ?? []) as TestExtensionRoute[]
+}
+
+
+// ============================================================
+// Payment files: the paying account
+// ============================================================
+
+/**
+ * A cash account as the payment-file rule reads it (lib/payments/
+ * paying-account.ts: id, name, ledger, currency, enabled, both IBANs, BIC,
+ * clearing, bank name and the bank connection). Defaults to the seeded
+ * primary 1930 without an IBAN of its own.
+ */
+export function makePayingCashAccount(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'ca-1930',
+    name: 'Företagskonto (SEK)',
+    ledger_account: '1930',
+    currency: 'SEK',
+    enabled: true,
+    is_primary: true,
+    kind: 'bank' as 'bank' | 'card',
+    iban: null as string | null,
+    payee_iban: null as string | null,
+    bic: null as string | null,
+    clearing_number: null as string | null,
+    bank_name: null as string | null,
+    bank_connection_id: null as string | null,
+    bank_connection: null as { bank_name: string | null; bic: string | null } | null,
+    ...overrides,
+  }
+}
+
+/**
+ * The two reads a pain.001 makes for its paying account, for a
+ * createQueuedMockSupabase queue: the primary, then every cash account. With
+ * no accounts given, the company's only account is the seeded 1930 without
+ * an IBAN, which pays from the settings IBAN as before accounts carried one.
+ */
+export function payingAccountReads(
+  accounts: Array<ReturnType<typeof makePayingCashAccount>> = [makePayingCashAccount()],
+): TableMockResult[] {
+  const primary = accounts.find((a) => a.is_primary) ?? null
+  return [
+    { data: primary && { id: primary.id, ledger_account: primary.ledger_account, enabled: primary.enabled, currency: primary.currency } },
+    { data: accounts.filter((a) => a.kind === 'bank') },
+  ]
+}
+
+/**
+ * A createTableMockSupabase answer for cash_accounts that serves the three
+ * reads of the paying-account rule by what the chain asked: the primary
+ * (is_primary), the enabled SEK listing (enabled), or every account.
+ */
+export function payingCashAccountsTable(
+  accounts: Array<ReturnType<typeof makePayingCashAccount>>,
+): TableMockResolver {
+  return (chain) => {
+    const eqs = chain.filter((c) => c.method === 'eq')
+    const columns = eqs.map((c) => c.args[0])
+    const kind = eqs.find((c) => c.args[0] === 'kind')?.args[1]
+    const scoped = kind ? accounts.filter((a) => a.kind === kind) : accounts
+    if (columns.includes('is_primary')) return { data: scoped.find((a) => a.is_primary) ?? null }
+    if (columns.includes('enabled')) {
+      return { data: scoped.filter((a) => a.enabled && a.currency === 'SEK') }
+    }
+    return { data: scoped }
   }
 }

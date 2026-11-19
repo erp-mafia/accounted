@@ -1,13 +1,12 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { FinancialStatementPDF } from '@/lib/reports/financial-statement-pdf-template'
 import { buildIncomeStatementPdfModel } from '@/lib/reports/financial-statement-pdf'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const GET = withRouteContext('report.income_statement.pdf', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -65,6 +64,10 @@ export const GET = withRouteContext('report.income_statement.pdf', async (reques
 
     const { groups, summary } = buildIncomeStatementPdfModel(report)
 
+    const [{ renderToBuffer }, { FinancialStatementPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/financial-statement-pdf-template'),
+    ])
     const pdfBuffer = await renderToBuffer(
       FinancialStatementPDF({
         // Partial-view disclosure in the document title (BFNAR 2013:2).
@@ -83,12 +86,7 @@ export const GET = withRouteContext('report.income_statement.pdf', async (reques
     // leaves the browser: complements the in-document ÅRL 2:7 disclaimer.
     const filename = `resultatrakning${dimensionFilterFileSuffix(dimFilter.dimensions)}-${report.period.start}--${report.period.end}-utkast.pdf`
 
-    return new Response(new Uint8Array(pdfBuffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(pdfBuffer), { filename: filename, contentType: 'application/pdf' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera resultaträkning' },
