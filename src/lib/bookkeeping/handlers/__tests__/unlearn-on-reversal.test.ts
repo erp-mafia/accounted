@@ -259,7 +259,7 @@ describe('unlearnOnCorrection', () => {
 
   it('a second correction reaches the bank booking through correction_of_id and takes its occurrence back', async () => {
     const amountOnly = REVERSE_CHARGE.map((l) => ({ ...l, debit_amount: l.debit_amount ? l.debit_amount + 1 : 0, credit_amount: l.credit_amount ? l.credit_amount + 1 : 0 }))
-    const { client, reads } = makeChainClient({
+    const { client } = makeChainClient({
       'je-orig': { source_type: 'bank_transaction', source_id: 'tx-1', correction_of_id: null, lines: REVERSE_CHARGE },
       'je-fix1': { source_type: 'correction', source_id: null, correction_of_id: 'je-orig', lines: amountOnly },
     })
