@@ -2,7 +2,7 @@
 name: accounted-api
 description: >-
   Consume the Accounted REST API (Swedish double-entry bookkeeping SaaS,
-  https://app.gnubok.se/api/v1). Use when building an integration, app, backend
+  https://app.accounted.se/api/v1). Use when building an integration, app, backend
   job, or agent tool layer against Accounted: invoices, customers,
   suppliers, supplier invoices, journal entries (bokföring), bank
   transactions and reconciliation, payroll (lön), VAT/moms and financial
@@ -24,7 +24,7 @@ exposed as a REST API designed for agents and integrations first.
 backend job, an agent tool layer). If the goal is to *operate* a ledger
 conversationally (book receipts, run month close), use the Accounted MCP
 connector and its workflow skills instead: install the `accounted` plugin or
-see https://app.gnubok.se/docs/api/connect-claude.
+see https://app.accounted.se/docs/api/connect-claude.
 
 If you have used Stripe's API the shape will feel familiar: bearer keys, dated
 versions, idempotency keys, webhook signatures, cursor pagination. The domain
@@ -36,12 +36,13 @@ violations before you ship them.
 Every request sends a bearer key:
 
 ```bash
-curl https://app.gnubok.se/api/v1/companies \
+curl https://app.accounted.se/api/v1/companies \
   -H "Authorization: Bearer gnubok_sk_..."
 ```
 
-- Base URL: `https://app.gnubok.se/api/v1` (legacy machine host, permanent).
-  `https://app.accounted.se/api/v1` serves the identical API.
+- Base URL: `https://app.accounted.se/api/v1`. Integrations set up against
+  the earlier host `app.gnubok.se` keep working there; new integrations use
+  `app.accounted.se`.
 - Keys are created in the Accounted dashboard under **Settings -> API**
   (`/settings/api`). Two prefixes:
   - `gnubok_sk_<random>` (live: no infix after `gnubok_sk_`) commits real writes.
@@ -84,7 +85,7 @@ React to `code`, read `message_en` and `recovery_hint`, follow
 `valid_alternatives` when present (e.g. `next_open_period`). Standard codes on
 every endpoint: `400` validation, `401` bad key, `403` missing scope, `404`,
 `429` rate limited (honor `Retry-After`), `500`. Full catalogue:
-https://app.gnubok.se/docs/api/errors. Only endpoint-specific codes are
+https://app.accounted.se/docs/api/errors. Only endpoint-specific codes are
 mentioned per endpoint below.
 
 **Typed handles.** Responses add `handle` next to the id of the resources
@@ -213,7 +214,7 @@ whether the work ran inline or queued.
 carry the `Gnubok-Version` header; request pinning via a `Gnubok-Version`
 request header is reserved for a future breaking change and is not read
 today. Additive changes ship without a version bump; see
-https://app.gnubok.se/docs/api/versioning.
+https://app.accounted.se/docs/api/versioning.
 
 **Index badges.** Every operation line below carries machine-readable
 annotations from the spec: `scope:` (required key scope), `risk:` (low/medium/
@@ -224,7 +225,7 @@ call can undo it, e.g. invoice credit).
 ## Endpoint index
 
 API version `2026-05-12`, 475 operations. Paths are shown without
-their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
+their `/api/v1` prefix (full base URL: `https://app.accounted.se/api/v1`).
 
 ### Core (24)
 
@@ -870,17 +871,17 @@ Rules a generic REST integration will violate unless told:
 
 This skill is generated (`npm run apiskill:generate` in the Accounted repo)
 from the same endpoint registry that serves the live API, its OpenAPI spec
-(`https://app.gnubok.se/api/v1/openapi.json`), and its runtime request
+(`https://app.accounted.se/api/v1/openapi.json`), and its runtime request
 validators, so schema drift between this text and the server cannot occur for
 a matching `api_version`. CI regenerates and diffs it on every change.
 
 Before first use in a new environment, smoke-test:
 
 ```bash
-curl -s https://app.gnubok.se/api/v1/health
-curl -s https://app.gnubok.se/api/v1/companies -H "Authorization: Bearer $ACCOUNTED_API_KEY"
+curl -s https://app.accounted.se/api/v1/health
+curl -s https://app.accounted.se/api/v1/companies -H "Authorization: Bearer $ACCOUNTED_API_KEY"
 ```
 
 If `meta.api_version` in responses is newer than the version in this skill's
 index header, refetch the skill (or read the changelog at
-https://app.gnubok.se/docs/api/changelog) before relying on endpoint details.
+https://app.accounted.se/docs/api/changelog) before relying on endpoint details.

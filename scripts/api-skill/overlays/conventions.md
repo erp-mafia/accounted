@@ -19,7 +19,7 @@ React to `code`, read `message_en` and `recovery_hint`, follow
 `valid_alternatives` when present (e.g. `next_open_period`). Standard codes on
 every endpoint: `400` validation, `401` bad key, `403` missing scope, `404`,
 `429` rate limited (honor `Retry-After`), `500`. Full catalogue:
-https://app.gnubok.se/docs/api/errors. Only endpoint-specific codes are
+https://app.accounted.se/docs/api/errors. Only endpoint-specific codes are
 mentioned per endpoint below.
 
 **Typed handles.** Responses add `handle` next to the id of the resources
@@ -148,7 +148,7 @@ whether the work ran inline or queued.
 carry the `Gnubok-Version` header; request pinning via a `Gnubok-Version`
 request header is reserved for a future breaking change and is not read
 today. Additive changes ship without a version bump; see
-https://app.gnubok.se/docs/api/versioning.
+https://app.accounted.se/docs/api/versioning.
 
 **Index badges.** Every operation line below carries machine-readable
 annotations from the spec: `scope:` (required key scope), `risk:` (low/medium/

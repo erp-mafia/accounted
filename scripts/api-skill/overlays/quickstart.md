@@ -3,12 +3,13 @@
 Every request sends a bearer key:
 
 ```bash
-curl https://app.gnubok.se/api/v1/companies \
+curl https://app.accounted.se/api/v1/companies \
   -H "Authorization: Bearer gnubok_sk_..."
 ```
 
-- Base URL: `https://app.gnubok.se/api/v1` (legacy machine host, permanent).
-  `https://app.accounted.se/api/v1` serves the identical API.
+- Base URL: `https://app.accounted.se/api/v1`. Integrations set up against
+  the earlier host `app.gnubok.se` keep working there; new integrations use
+  `app.accounted.se`.
 - Keys are created in the Accounted dashboard under **Settings -> API**
   (`/settings/api`). Two prefixes:
   - `gnubok_sk_<random>` (live: no infix after `gnubok_sk_`) commits real writes.

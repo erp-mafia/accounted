@@ -38,8 +38,12 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const OVERLAY_DIR = join(ROOT, 'scripts', 'api-skill', 'overlays')
 const OUT_DIR = join(ROOT, 'skills', 'accounted-api')
 
-/** Base URL shown in examples: the permanent machine host (see lib/api/v1/base-url.ts). */
-const MACHINE_BASE = 'https://app.gnubok.se'
+/**
+ * Base URL shown in examples: the canonical host the live OpenAPI spec names
+ * (getCanonicalBaseUrl in lib/api/v1/base-url.ts, NEXT_PUBLIC_APP_URL on
+ * hosted). The legacy app.gnubok.se keeps serving existing integrations.
+ */
+const API_BASE = 'https://app.accounted.se'
 
 /**
  * Reference-file layout: every derived path group must be claimed by exactly
@@ -305,7 +309,7 @@ function withoutOperationTags(spec: ReturnType<typeof generateOpenApiSpec>): Ret
 }
 
 function buildFiles(): Map<string, string> {
-  const spec = withoutOperationTags(generateOpenApiSpec(MACHINE_BASE))
+  const spec = withoutOperationTags(generateOpenApiSpec(API_BASE))
   const ops = listOperations(spec)
 
   const memberToFile = new Map<string, (typeof GROUPS)[number]>()
@@ -381,7 +385,7 @@ function buildFiles(): Map<string, string> {
     'name: accounted-api',
     'description: >-',
     '  Consume the Accounted REST API (Swedish double-entry bookkeeping SaaS,',
-    `  ${MACHINE_BASE}/api/v1). Use when building an integration, app, backend`,
+    `  ${API_BASE}/api/v1). Use when building an integration, app, backend`,
     '  job, or agent tool layer against Accounted: invoices, customers,',
     '  suppliers, supplier invoices, journal entries (bokföring), bank',
     '  transactions and reconciliation, payroll (lön), VAT/moms and financial',
@@ -407,7 +411,7 @@ function buildFiles(): Map<string, string> {
       '## Endpoint index',
       '',
       `API version \`${API_V1_VERSION}\`, ${ops.length} operations. Paths are shown without`,
-      `their \`/api/v1\` prefix (full base URL: \`${MACHINE_BASE}/api/v1\`).`,
+      `their \`/api/v1\` prefix (full base URL: \`${API_BASE}/api/v1\`).`,
       '',
       indexSections.join('\n\n'),
       '',
