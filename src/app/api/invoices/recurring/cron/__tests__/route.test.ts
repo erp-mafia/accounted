@@ -518,7 +518,21 @@ describe('GET /api/invoices/recurring/cron', () => {
       const statements = scheduleUpdates()
       // Claim, record, hold, kept warning: no release, so the hold stays.
       expect(statements).toHaveLength(4)
-      expect(statements[3]![0]!.args[0]).toEqual({ last_run_warning: expect.stringContaining('gjort något av detta') })
+      const [, record, hold, kept] = statements
+      const { last_run_at: recordTs } = record![0]!.args[0] as Record<string, string>
+      const { last_run_at: holdTs } = hold![0]!.args[0] as Record<string, string>
+      const { last_run_at: keptTs } = kept![0]!.args[0] as Record<string, string>
+      expect(kept![0]!.args[0]).toEqual({ last_run_at: keptTs, last_run_warning: expect.stringContaining('gjort något av detta') })
+      // A token of its own, after every one this run wrote or sent (#206):
+      // a write gated on any earlier token, another run's included, matches nothing after it.
+      expect(keptTs > holdTs!).toBe(true)
+      expect(holdTs! > recordTs!).toBe(true)
+      expect(recordTs! > '2026-07-06T08:30:00.000Z').toBe(true)
+      // Written whoever holds the schedule: it only ever holds it.
+      expect(kept!.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([
+        ['id', 's-1'],
+        ['company_id', 'c-1'],
+      ])
     })
 
     it('landed before the hold: the hold matches nothing, the read-back finds this run\'s invoice, and the send goes on (accounted#211)', async () => {
@@ -571,6 +585,7 @@ describe('GET /api/invoices/recurring/cron', () => {
       expect(removedDrafts).toEqual([])
       const writes = updatePayloads.filter((u) => u.table === 'recurring_invoice_schedules').map((u) => u.payload)
       expect(writes.at(-1)).toEqual({
+        last_run_at: expect.any(String),
         last_run_warning: expect.stringContaining('avbröts: the record of invoice inv-1 on the schedule is not confirmed (moved)'),
       })
     })

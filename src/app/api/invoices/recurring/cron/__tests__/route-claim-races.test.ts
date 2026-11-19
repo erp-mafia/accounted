@@ -170,6 +170,8 @@ async function invoices(calls: Call[]): Promise<Answer> {
     return fate === 'lost' ? LOST : ok(row)
   }
   if (calls.some((c) => c.method === 'delete')) {
+    // The removal of a draft a run cannot use: delete#1 is the first.
+    if (fateOf('delete', count('delete')) === 'down') return DOWN
     const gone = [...db.invoices.values()].filter((row) => matches(row, calls))
     for (const row of gone) {
       db.invoices.delete(row.id as string)
@@ -793,5 +795,80 @@ describe('accounted#213: the cuts the first version still let through', () => {
       expect(db.schedule).toMatchObject({ next_run_date: '2026-07-06', period_start: '2026-07-01' })
       expect(skips(body)).toEqual(['claimed_by_concurrent_run'])
     })
+  })
+})
+
+describe('#206: a draft a run could not remove keeps the held warning about it', () => {
+  const says = () => String(db.schedule.last_run_warning ?? '')
+
+  it('N7: "Skapa faktura nu" takes the claim while the hourly run creates its invoice, and that run cannot remove its draft: the click does not record over the kept warning, and July has one invoice', async () => {
+    db.fates.set('delete#1', 'down') // the hourly run's draft cannot be removed
+    let click: Promise<Response> | undefined
+    let cronKept!: () => void
+    const kept = new Promise<void>((resolve) => {
+      cronKept = resolve
+    })
+    db.duringInsert.set(1, async () => {
+      // The click claims while the hourly run's header insert is on its way,
+      const claimed = new Promise<void>((resolve) => db.afterUpdate.set(2, resolve))
+      click = runNow()
+      await claimed
+      // and the hourly run goes on a second later.
+      vi.setSystemTime(new Date(Date.now() + 1000))
+    })
+    // Update #3 is the hourly run's record (its claim is gone), #4 its kept
+    // warning; the click's own header insert answers only after that.
+    db.afterUpdate.set(4, () => cronKept())
+    db.duringInsert.set(2, () => kept)
+
+    const first = await cronAt('2026-07-06T08:30:00Z')
+    const res = await click!
+
+    expect(first.failed).toBe(1)
+    // The click finds its claim gone and removes its own draft.
+    expect(res.status).toBe(409)
+    expect(periodsBilled()).toEqual(['2026-07-01'])
+    expectHeldForAPerson()
+    expect(says()).toContain('Körningen 2026-07-06 avbröts')
+    const { later, nextDay } = await carryOn()
+    expect(skips(later)).toEqual(['already_ran_today'])
+    expect(skips(nextDay)).toEqual(['held_for_a_person'])
+    expect(periodsBilled()).toEqual(['2026-07-01'])
+  })
+
+  it('N7, the click recorded first: the answer of its send does not replace the kept warning', async () => {
+    db.schedule.auto_send = true
+    db.fates.set('delete#1', 'down') // the hourly run's draft cannot be removed
+    let click: Promise<Response> | undefined
+    let cronKept!: () => void
+    const kept = new Promise<void>((resolve) => {
+      cronKept = resolve
+    })
+    db.duringInsert.set(1, async () => {
+      // The click claims and records while the hourly run's header insert is on its way,
+      const recorded = new Promise<void>((resolve) => db.afterUpdate.set(3, resolve))
+      click = runNow()
+      await recorded
+      // and the hourly run goes on a second later.
+      vi.setSystemTime(new Date(Date.now() + 1000))
+    })
+    // Update #4 is the hourly run's record (its claim is gone), #5 its kept
+    // warning; the click's mail goes out only after that.
+    db.afterUpdate.set(5, () => cronKept())
+    db.duringSend = () => kept
+
+    const first = await cronAt('2026-07-06T08:30:00Z')
+    const res = await click!
+
+    expect(first.failed).toBe(1)
+    expect(res.status).toBe(200)
+    // July twice: the click's invoice, sent, and the hourly run's draft beside it, which the schedule still asks a person to look for.
+    expect(periodsBilled()).toEqual(['2026-07-01', '2026-07-01'])
+    expect(db.sent).toHaveLength(1)
+    expect(db.schedule).toMatchObject({ next_run_date: '2026-08-06', period_start: '2026-08-01' })
+    expect(says()).toContain('Körningen 2026-07-06 avbröts')
+    expect(says().endsWith(HELD)).toBe(true)
+    const august = await cronAt('2026-08-06T08:30:00Z')
+    expect(skips(august)).toEqual(['held_for_a_person'])
   })
 })

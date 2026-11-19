@@ -85,6 +85,8 @@ export async function runRecurringSchedule(
   const provisionalWarning = schedule.auto_send && !suppressAutoSend ? SEND_NOT_CONFIRMED_WARNING : null
   /** The token the record left on last_run_at once it landed: the schedule is this run's while it stays. */
   let recordedAt: string | null = null
+  /** The latest token this run has written, or sent, to last_run_at: the claim, the record's, the hold's. */
+  let latestToken = claimTs
 
   // Record the invoice on the schedule the moment it exists, before the
   // send, and only while this run holds the claim (last_run_at = claimTs).
@@ -111,6 +113,7 @@ export async function runRecurringSchedule(
   // and cannot, and the claim is not this run's to hold.
   const recordInvoice = async (invoiceId: string) => {
     const recordTs = new Date(Math.max(Date.now(), now.getTime() + 1)).toISOString()
+    latestToken = recordTs
     const { data: landed, error: updateError } = await supabase
       .from('recurring_invoice_schedules')
       .update({
@@ -145,6 +148,7 @@ export async function runRecurringSchedule(
     // A hold distinct from the claim and from the record's token, so the
     // record (gated on the claim) can no longer land once the hold has.
     const holdTs = new Date(Math.max(Date.now(), Date.parse(recordTs) + 1)).toISOString()
+    latestToken = holdTs
     const hold = await holdRecurringScheduleRun(supabase, schedule, claimTs, holdTs, heldWarning(day, reason))
     if (hold === 'held') {
       throw new RecurringRecordNotLandedError(invoiceId, `schedule update failed for invoice ${invoiceId}: ${updateError.message}`, holdTs)
@@ -181,14 +185,23 @@ export async function runRecurringSchedule(
       // Recorded: the schedule names the invoice and has moved on; the
       // record's own warning stands (for a send, "check that it went out").
       // Not recorded: the invoice may be there and the schedule does not
-      // know it, so the claim (or the hold) stays and the person is told to
-      // look. Should this write fail too, the held warning the claim or the
-      // hold wrote already says the same. It writes only a hold, never lifts
-      // one, so it needs no gate.
+      // know it, so the schedule stays held and the person is told to look.
+      // Should this write fail too, the held warning the claim or the hold
+      // wrote already says the same. It writes only a hold, never lifts one,
+      // so it needs no gate. Like the hold, it moves last_run_at on to a
+      // token of its own: every write that replaces the warning is gated on
+      // a token (another run's record, closing warning or release, a claim
+      // from a read taken before it), and a kept warning that left the token
+      // where it was was erased by the next of them. A run that took the
+      // claim from this one recorded over it with no warning, beside this
+      // run's draft (#206). Moved on, those writes match nothing: a run
+      // still creating its invoice finds its claim gone and removes its own
+      // draft, and one that has recorded leaves its send's answer unwritten.
       if (recordedAt === null) {
+        const keptTs = new Date(Math.max(Date.now(), Date.parse(latestToken) + 1)).toISOString()
         const { error: warningError } = await supabase
           .from('recurring_invoice_schedules')
-          .update({ last_run_warning: heldWarning(day, reason) })
+          .update({ last_run_at: keptTs, last_run_warning: heldWarning(day, reason) })
           .eq('id', schedule.id)
           .eq('company_id', schedule.company_id)
         if (warningError) {
