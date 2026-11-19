@@ -13,7 +13,10 @@ import {
   reviewRowsToRender,
   stoppedImportParams,
   MERGED_ERRORS_SHOWN,
+  REGISTER_IMPORT_MAX_FILE_SIZE,
+  registerParseMaxFileBytes,
 } from '../register-import-flow'
+import { HOSTED_MAX_UPLOAD_BYTES } from '@/lib/documents/upload-size'
 import type { DetectedCustomerColumns } from '../customers/types'
 import type { DetectedSupplierColumns } from '../suppliers/types'
 import type { DetectedArticleColumns } from '../articles/types'
@@ -225,6 +228,14 @@ describe('invalidRowsNoticeParams', () => {
       { is_valid: false, validation_errors: ['Fel'] },
     ]
     expect(invalidRowsNoticeParams(rows)?.row).toBe(3)
+  })
+})
+
+describe('registerParseMaxFileBytes', () => {
+  it('caps a posted file under the hosted body limit on hosted, and at the route cap self-hosted', () => {
+    expect(registerParseMaxFileBytes(true)).toBe(HOSTED_MAX_UPLOAD_BYTES)
+    expect(registerParseMaxFileBytes(true)).toBeLessThan(4.5 * 1024 * 1024)
+    expect(registerParseMaxFileBytes(false)).toBe(REGISTER_IMPORT_MAX_FILE_SIZE)
   })
 })
 

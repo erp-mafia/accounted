@@ -7,6 +7,7 @@ import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ARTICLE_BROWSER_MAX_FILE_BYTES } from '@/lib/import/articles/browser-parse'
+import { isHostedDeployment } from '@/lib/documents/upload-size'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
 import type { RegisterImportEntity } from '@/lib/import/register-import-link'
 import {
@@ -16,6 +17,7 @@ import {
   mergeExecuteResults,
   needsColumnMapping,
   registerImportEndpoint,
+  registerParseMaxFileBytes,
   registerSteps,
   rowsForExecute,
   stoppedImportParams,
@@ -95,17 +97,22 @@ export default function RegisterImportFlow({
         }
         return { ok: false, message: outcome.message || (overrides ? t('remap_failed') : t('parse_failed')) }
       }
+      const maxBytes = registerParseMaxFileBytes(isHostedDeployment())
+      if (selectedFile.size > maxBytes) {
+        return { ok: false, message: t('file_too_large', { max: `${maxBytes / 1024 / 1024} MB` }) }
+      }
       const formData = new FormData()
       formData.append('file', selectedFile)
       if (overrides) formData.append('column_overrides', JSON.stringify(overrides))
       const res = await fetch(registerImportEndpoint(entity, 'parse'), { method: 'POST', body: formData })
-      const data = await res.json()
-      if (!res.ok) {
+      // A platform error (413, 504) answers in plain text, not JSON.
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.data) {
         return {
           ok: false,
           message:
-            data.error?.message_sv ||
-            getErrorMessage(data.error) ||
+            data?.error?.message_sv ||
+            (data?.error ? getErrorMessage(data.error) : '') ||
             (overrides ? t('remap_failed') : t('parse_failed')),
         }
       }

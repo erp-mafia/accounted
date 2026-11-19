@@ -12,6 +12,7 @@ import { checkRevenueAccount, type RevenueAccountStatus } from '@/lib/articles/v
 import type { Article } from '@/types'
 import type { ArticleImportExecuteResult } from '@/lib/import/articles/types'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
+import { planArticleUpserts, type PlannedArticleUpdate } from '@/lib/import/articles/bulk-update'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface ExistingArticle {
@@ -27,13 +28,6 @@ interface PlannedInsert {
   payload: Record<string, unknown>
 }
 
-/** The merged fields for one existing article, and the file rows that named it. */
-interface PlannedUpdate {
-  id: string
-  merged: Record<string, unknown>
-  rows: { row_index: number; name: string }[]
-}
-
 /**
  * The client sends a large file in batches (lib/import/register-import-flow.ts
  * executeBatches); one batch of new articles plus the lookups fits well inside
@@ -41,8 +35,8 @@ interface PlannedUpdate {
  */
 export const maxDuration = 300
 
-/** New articles per insert statement. */
-const ARTICLE_INSERT_SLICE = 500
+/** Articles per insert or upsert statement. */
+const ARTICLE_WRITE_SLICE = 500
 
 /** Updates in flight at once: enough to overlap round trips, few enough to spare the pool. */
 const UPDATE_CONCURRENCY = 8
@@ -159,11 +153,11 @@ export const POST = withRouteContext(
       }
 
       // Plan the batch in memory first, then write it set-based: one insert
-      // statement per ARTICLE_INSERT_SLICE new articles and a few updates in
-      // flight at once. Row-at-a-time writes made a supplier price list
-      // (crm#1383) take one database round trip per row.
+      // statement per ARTICLE_WRITE_SLICE new articles and one upsert per
+      // ARTICLE_WRITE_SLICE updated ones. Row-at-a-time writes made a
+      // supplier price list (crm#1383) take one database round trip per row.
       const inserts: PlannedInsert[] = []
-      const updates = new Map<string, PlannedUpdate>()
+      const updates = new Map<string, PlannedArticleUpdate>()
       let skipped = 0
       let updatedCount = 0
       const errors: { row_index: number; name: string; reason: string }[] = []
@@ -278,8 +272,8 @@ export const POST = withRouteContext(
         }
         if (data) created.push(data as Article)
       }
-      for (let i = 0; i < inserts.length; i += ARTICLE_INSERT_SLICE) {
-        const slice = inserts.slice(i, i + ARTICLE_INSERT_SLICE)
+      for (let i = 0; i < inserts.length; i += ARTICLE_WRITE_SLICE) {
+        const slice = inserts.slice(i, i + ARTICLE_WRITE_SLICE)
         const { data, error } = await supabase
           .from('articles')
           .insert(slice.map((p) => p.payload))
@@ -305,7 +299,7 @@ export const POST = withRouteContext(
       }
 
       const updated: Article[] = []
-      await runWithConcurrency([...updates.values()], UPDATE_CONCURRENCY, async (planned) => {
+      const updateOne = async (planned: PlannedArticleUpdate) => {
         const { data, error } = await supabase
           .from('articles')
           .update(planned.merged)
@@ -322,7 +316,41 @@ export const POST = withRouteContext(
           updated.push(data as Article)
           updatedCount += planned.rows.length
         }
-      })
+      }
+
+      // Existing articles are updated set-based too: one upsert on the
+      // primary key per ARTICLE_WRITE_SLICE articles (lib/import/articles/
+      // bulk-update.ts groups them so no statement sets a field a row does
+      // not carry). A row the grouping cannot place, or a slice whose
+      // statement fails, is written row by row, so a bad row still fails
+      // alone and is reported with its file line.
+      const { slices: upsertSlices, rowByRow } = planArticleUpserts(
+        [...updates.values()],
+        beforeImport,
+        companyId!,
+        ARTICLE_WRITE_SLICE,
+      )
+      for (const slice of upsertSlices) {
+        const { data, error } = await supabase
+          .from('articles')
+          .upsert(slice.map((s) => s.payload), { onConflict: 'id' })
+          .select()
+        if (error || !Array.isArray(data)) {
+          if (error) opLog.warn('article upsert slice failed, writing it row by row', error, { size: slice.length })
+          rowByRow.push(...slice.map((s) => s.planned))
+          continue
+        }
+        const written = new Set<string>()
+        for (const article of data as Article[]) {
+          written.add(article.id)
+          updated.push(article)
+        }
+        for (const s of slice) {
+          if (written.has(s.planned.id)) updatedCount += s.planned.rows.length
+          else rowByRow.push(s.planned)
+        }
+      }
+      await runWithConcurrency(rowByRow, UPDATE_CONCURRENCY, updateOne)
       errors.sort((a, b) => a.row_index - b.row_index)
 
       // Emit events for downstream listeners (non-blocking).

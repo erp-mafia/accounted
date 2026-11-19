@@ -4,10 +4,10 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { UnreadableWorkbookError } from './workbook-reader'
+import { REGISTER_IMPORT_MAX_FILE_SIZE } from '@/lib/import/register-import-flow'
 
 /** File types every register import accepts (Excel, CSV, OpenDocument). */
 export const REGISTER_IMPORT_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
-export const REGISTER_IMPORT_MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
 /** What a register parser (customers, suppliers, articles) returns for one file. */
 export interface ParsedRegisterFile<TColumns, TRow> {

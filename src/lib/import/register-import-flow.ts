@@ -5,6 +5,22 @@
  * register; what differs per register lives in register-import-config.tsx.
  */
 import type { RegisterImportEntity } from './register-import-link'
+import { HOSTED_MAX_UPLOAD_BYTES } from '@/lib/documents/upload-size'
+
+/** The largest file the parse route reads (POST /api/import/<register>/parse). */
+export const REGISTER_IMPORT_MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+
+/**
+ * The largest file the wizard posts to the parse route. On hosted the
+ * platform refuses a request body over 4.5 MB before the route runs, with a
+ * plain-text 413 the wizard could only call a failed read; the hosted upload
+ * cap leaves room for the multipart framing. Self-hosted has no such limit,
+ * so the route's own cap holds there. The article import reads its file in
+ * the browser and has its own cap (ARTICLE_BROWSER_MAX_FILE_BYTES).
+ */
+export function registerParseMaxFileBytes(hosted: boolean): number {
+  return hosted ? HOSTED_MAX_UPLOAD_BYTES : REGISTER_IMPORT_MAX_FILE_SIZE
+}
 
 /** Below this detection confidence the user maps the columns by hand. */
 export const COLUMN_MAPPING_CONFIDENCE = 0.8
