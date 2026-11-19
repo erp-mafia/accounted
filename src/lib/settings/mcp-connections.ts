@@ -7,8 +7,10 @@
  * 20260913120000): claude, chatgpt, grok, gemini, cursor, cursor_deeplink,
  * squidler, celemine and local. `local` is any loopback sign-in (Claude Code,
  * Codex, ...), so it is named as a local client, never guessed as Claude Code.
+ * `partner` is a key minted through a partner row (client 'partner:<slug>',
+ * migration 20261119132951); the list names it by the partner's name.
  */
-export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor' | 'squidler' | 'celemine' | 'local' | 'mcp' | 'key'
+export type ConnectionKind = 'claude' | 'chatgpt' | 'grok' | 'gemini' | 'cursor' | 'squidler' | 'celemine' | 'partner' | 'local' | 'mcp' | 'key'
 
 export interface ConnectionRow {
   source?: 'signin' | 'manual'
@@ -20,6 +22,7 @@ export interface ConnectionRow {
 /** Map a key row to the label/logo family it is shown with. */
 export function connectionKind(row: Pick<ConnectionRow, 'source' | 'client'>): ConnectionKind {
   if (row.source !== 'signin') return 'key'
+  if (typeof row.client === 'string' && /^partner:[a-z][a-z0-9_]{1,39}$/.test(row.client)) return 'partner'
   switch (row.client) {
     case 'claude':
     case 'chatgpt':

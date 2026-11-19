@@ -13,6 +13,7 @@ import {
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
 import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole, resolveRedirectUri } from '@/lib/auth/oauth-allowlist'
+import { partnerClientValue } from '@/lib/auth/oauth-partner-clients'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { isUuid } from '@/lib/invariants/uuid'
 import { createLogger } from '@/lib/logger'
@@ -240,10 +241,11 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
   let storedClient: string | null = builtInRedirectProvider(payload.redirectUri)
   if (!storedClient) {
-    // The registration /authorize resolved for this user: several users may
-    // each have registered the same URI (crm#1654).
+    // The partner row, or the registration, /authorize resolved for this
+    // user: several users may each have registered the same URI (crm#1654).
     const resolution = await resolveRedirectUri(payload.redirectUri, supabase, { consentingUserId: payload.userId })
     if (resolution.allowed && resolution.kind === 'registered') storedClient = `registered:${resolution.registrationId}`
+    if (resolution.allowed && resolution.kind === 'partner') storedClient = partnerClientValue(resolution.slug)
   }
 
   // A reconnect lands on the same connector identity as the connection it

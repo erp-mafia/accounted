@@ -797,6 +797,34 @@ describe('GET /api/settings/api-keys', () => {
     expect(service.find('profiles', 'in')).toEqual(['id', ['user-2', 'user-3']])
   })
 
+  it("names a partner's key by the partner, read with the service role, and no other key", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [
+          { id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-11-19T12:00:00Z', user_id: 'user-1', client: 'partner:acme' },
+          { id: 'ak-gone', key_prefix: 'gnubok_sk_g', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-11-18T12:00:00Z', user_id: 'user-1', client: 'partner:unknown' },
+          { id: 'ak-c', key_prefix: 'gnubok_sk_c', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-11-17T12:00:00Z', user_id: 'user-1', client: 'claude' },
+        ],
+      },
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [] },
+      oauth_partner_clients: { data: [{ slug: 'acme', name: 'Acme' }] },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([
+      expect.objectContaining({ id: 'ak-p', client: 'partner:acme', client_label: 'Acme' }),
+      expect.objectContaining({ id: 'ak-gone', client: 'partner:unknown', client_label: null }),
+      expect.objectContaining({ id: 'ak-c', client: 'claude', client_label: null }),
+    ])
+    expect(service.find('oauth_partner_clients', 'in')).toEqual(['slug', ['acme', 'unknown']])
+  })
+
   it("reads no profiles when every key is the caller's own", async () => {
     getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
     listUserCompaniesForPickerMock.mockResolvedValue(memberships)

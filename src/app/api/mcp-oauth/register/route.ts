@@ -10,8 +10,9 @@ import { truncateIp } from '@/lib/api/v1/with-api-v1'
  *
  * Claude Desktop and self-hosted MCP clients register themselves before
  * starting the auth flow. The redirect URIs they declare are validated
- * against built-in patterns (Claude/localhost) and the user-managed
- * oauth_client_registrations table (self-hosted custom apps).
+ * against built-in patterns (Claude/localhost), the partner rows in
+ * oauth_partner_clients, and the user-managed oauth_client_registrations
+ * table (self-hosted custom apps).
  *
  * Security model:
  *  - Anonymous by design (RFC 7591 §3 allows it); the endpoint does NOT

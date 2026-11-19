@@ -12,6 +12,7 @@ import { validateQuery } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ApiKeyMode, ApiKeyScope } from '@/lib/auth/api-keys'
+import { partnerClientNames, partnerSlugOf } from '@/lib/auth/oauth-partner-clients'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { listUserCompaniesForPicker, resolveCompanySelection } from '@/lib/company/company-picker'
 
@@ -43,7 +44,9 @@ const listQuerySchema = z.object({ scope: z.enum(['mine']).optional() })
  * Each row carries `source`: 'signin' for a key the MCP OAuth token route
  * minted (an AI client that signed in: claude.ai, ChatGPT, Cursor, ...),
  * 'manual' for one created here. `client` names the built-in client behind a
- * sign-in (null for older rows, registered clients and manual keys). The
+ * sign-in (null for older rows, registered clients and manual keys), and
+ * `client_label` the partner's name when `client` is 'partner:<slug>' (null
+ * otherwise, and when the partner table cannot be read). The
  * reserved OAuth key name is the marker, the same one the Hem checklist reads.
  * Each row also carries `company_ids` (null = unrestricted) and
  * `read_only_company_ids` (null = none), and the response adds
@@ -171,9 +174,16 @@ export const GET = withRouteContext(
       }
     }
 
+    // Keys minted through a partner row carry 'partner:<slug>'; the list
+    // names them by the partner. The partner table is service-role only, and
+    // the name only decorates the row, so a failed read leaves it unnamed.
+    const partnerSlugs = keys.map((key) => partnerSlugOf(key.client)).filter((slug): slug is string => slug !== null)
+    const partnerNames = partnerSlugs.length > 0 ? await partnerClientNames(createServiceClient(), partnerSlugs) : new Map<string, string>()
+
     return NextResponse.json({
       data: keys.map(({ user_id: ownerId, service_account_id: serviceAccountId, company_id: _keyCompanyId, ...key }) => ({
         ...key,
+        client_label: partnerNames.get(partnerSlugOf(key.client) ?? '') ?? null,
         is_own: ownerId === user.id,
         owner_name: ownerId === user.id ? null : ownerNames.get(ownerId) ?? null,
         service_account:
