@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bankDetailsSettled, closeOutcome, consentRefused, displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
+import { bankDetailsSettled, closeOutcome, consentRefused, displayBankName, flowReducer, officeChoiceMissing, openFlow, pollingActive, redirectInFlight, removesConnectionOnClose, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
 import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView, OpenPaymentsBankDetails, PolledAccount } from '../open-payments-client'
 import { selectionBlocker } from '../account-selection'
 
@@ -155,6 +155,37 @@ describe('Continue waits for the bank\'s details (for #208)', () => {
     // A late failure for a bank no longer chosen settles nothing.
     const late = run(openFlow('new'), { type: 'bank_picked', bank: REDIRECT_BANK }, { type: 'bank_details_failed', bic: SWEDBANK.bic })
     expect(bankDetailsSettled(late)).toBe(false)
+  })
+})
+
+describe('a bank that needs one of its offices (for #158)', () => {
+  const RESURS = { bic: 'RESUSE2H', name: 'Resurs Bank', decoupled: false, redirect: true }
+  const OFFICE = { id: 'office-1', name: 'Kontor Ett' }
+  const RESURS_DETAILS: OpenPaymentsBankDetails = { ...DETAILS, bic: 'RESUSE2H', name: 'Resurs Bank', decoupled: false, redirect: true, affiliates: [OFFICE, { id: 'office-2', name: 'Kontor Två' }] }
+
+  it('waits for an office once its offices are on screen, and not after one is chosen', () => {
+    const loaded = run(openFlow('new'), { type: 'bank_picked', bank: RESURS }, { type: 'bank_details_loaded', details: RESURS_DETAILS })
+    expect(loaded.affiliate).toBeNull()
+    expect(officeChoiceMissing(loaded)).toBe(true)
+    const chosen = flowReducer(loaded, { type: 'affiliate_picked', affiliate: OFFICE })
+    expect(officeChoiceMissing(chosen)).toBe(false)
+    expect(displayBankName(chosen)).toBe('Kontor Ett')
+    // Picking the bank again drops the office: the wait starts over.
+    expect(officeChoiceMissing(flowReducer(chosen, { type: 'bank_picked', bank: RESURS }))).toBe(true)
+  })
+
+  it('never holds Swedbank, whose own row is the default, nor a bank without a chosen BIC', () => {
+    const swedbank = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'bank_details_loaded', details: DETAILS })
+    expect(swedbank.affiliate).toBeNull()
+    expect(officeChoiceMissing(swedbank)).toBe(false)
+    expect(officeChoiceMissing(openFlow('new'))).toBe(false)
+  })
+
+  it('goes on with what the list said when the details failed or list no offices', () => {
+    const failed = run(openFlow('new'), { type: 'bank_picked', bank: RESURS }, { type: 'bank_details_failed', bic: RESURS.bic })
+    expect(officeChoiceMissing(failed)).toBe(false)
+    const none = run(openFlow('new'), { type: 'bank_picked', bank: RESURS }, { type: 'bank_details_loaded', details: { ...RESURS_DETAILS, affiliates: [] } })
+    expect(officeChoiceMissing(none)).toBe(false)
   })
 })
 

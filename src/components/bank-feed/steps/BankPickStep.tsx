@@ -7,8 +7,8 @@ import { DialogFooter } from '@/components/ui/dialog'
 import { SettingsSeg } from '@/components/settings/SettingsRows'
 import { BankList, OpenPaymentsBankMark } from '../BankList'
 import { bankReached } from '@/lib/bank-feed/bank-coverage'
-import { bankGuideUrl, bankPrerequisiteKey } from '../bank-help'
-import { bankDetailsSettled, type FlowAction, type FlowState } from '../connect-flow-reducer'
+import { bankGuideUrl, bankPrerequisiteKey, bankRequiresOffice } from '../bank-help'
+import { bankDetailsSettled, officeChoiceMissing, type FlowAction, type FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
 import { AffiliatePicker } from './AffiliatePicker'
 import { LoadError } from '@/components/ui/empty-state'
@@ -36,7 +36,8 @@ interface BankPickStepProps {
  * prerequisite that prevents a failed BankID at the chosen bank, as the
  * step's attention line, plus the bank's one-minute film when we have one.
  * When the chosen bank's details carry sparbanker (SWEDSESS), the picker
- * "Vilken sparbank?" follows the list; the choice travels as the party's
+ * "Vilken sparbank?" follows the list, or "Vilket kontor?" for a bank that
+ * needs one of its offices chosen; the choice travels as the party's
  * affiliated_aspsp_id and names the connection.
  */
 export function BankPickStep({ state, dispatch, banks, banksFailed, onRetryBanks, soleTrader, onContinue, onEarlierConnection, closeButton }: BankPickStepProps) {
@@ -53,8 +54,10 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, onRetryBanks
   // Continue waits for the bank's details: until they answer nobody knows
   // whether the bank has offices to choose among, and a start without one is
   // refused by a bank that needs it (for #208).
-  const canContinue = state.bank !== null && state.bank.bic !== '' && !notReached && bankDetailsSettled(state)
+  // A bank that needs one of its offices waits for that choice too (for #158).
+  const canContinue = state.bank !== null && state.bank.bic !== '' && !notReached && bankDetailsSettled(state) && !officeChoiceMissing(state)
   const affiliates = state.bankDetails?.affiliates ?? []
+  const officeRequired = state.bank !== null && bankRequiresOffice(state.bank)
 
   return (
     <div className="space-y-4">
@@ -82,6 +85,7 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, onRetryBanks
       {affiliates.length > 0 && state.bankDetails && (
         <AffiliatePicker
           parentName={state.bankDetails.name}
+          officeRequired={officeRequired}
           affiliates={affiliates}
           value={state.affiliate}
           onChange={(affiliate) => dispatch({ type: 'affiliate_picked', affiliate })}

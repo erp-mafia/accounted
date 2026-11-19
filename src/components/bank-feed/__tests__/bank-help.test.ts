@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { BANK_GUIDE_URLS, bankGuideUrl, bankHelpKey, bankPrerequisiteKey, bankSelectable, bankSigningApproach, isTwoStepBank, orderBanks, resolveBankByName } from '../bank-help'
+import { BANK_GUIDE_URLS, bankGuideUrl, bankHelpKey, bankPrerequisiteKey, bankRequiresOffice, bankSelectable, bankSigningApproach, isTwoStepBank, orderBanks, resolveBankByName } from '../bank-help'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
+
+describe('bankRequiresOffice (for #158)', () => {
+  it('is true for Resurs Bank by its BIC, whatever the case or branch suffix', () => {
+    expect(bankRequiresOffice({ bic: 'RESUSE2H' })).toBe(true)
+    expect(bankRequiresOffice({ bic: 'resuse2h' })).toBe(true)
+    expect(bankRequiresOffice({ bic: 'RESUSE2HXXX' })).toBe(true)
+  })
+
+  it('is false for Swedbank, whose own row stays the default, and for any other bank', () => {
+    for (const bic of ['SWEDSESS', 'ESSESESS', 'HANDSESS', 'NDEASESS', '']) expect(bankRequiresOffice({ bic }), bic).toBe(false)
+  })
+})
 
 describe('bankPrerequisiteKey', () => {
   it('keeps the prerequisites that prevent a failed BankID visible and leaves Svea’s process note to the help', () => {

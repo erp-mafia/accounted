@@ -14,7 +14,7 @@
 
 import { initialSelection, setLedger, toggleAccount, type SelectionMap } from './account-selection'
 import type { VerificationState } from '@/lib/payments/orders/verification-state'
-import { bankSigningApproach, type SigningApproach } from './bank-help'
+import { bankRequiresOffice, bankSigningApproach, type SigningApproach } from './bank-help'
 import { dismissPolicy, firstStep, nextStep, type FlowMode, type FlowStep } from './flow-steps'
 import type {
   AccountContext,
@@ -250,6 +250,18 @@ export function bankDetailsSettled(state: Pick<FlowState, 'bank' | 'bankDetails'
   const bic = state.bank?.bic
   if (!bic) return false
   return state.bankDetails?.bic === bic || state.bankDetailsFailedBic === bic
+}
+
+/**
+ * Whether the chosen bank still lacks the office it needs (bankRequiresOffice
+ * in bank-help.ts): such a bank has no row of its own in the picker, so
+ * Continue waits until one of its offices is chosen (for #158). Only while
+ * its offices are on screen: details that failed or list none leave the flow
+ * to go on with what the list said, as for any other bank.
+ */
+export function officeChoiceMissing(state: Pick<FlowState, 'bank' | 'bankDetails' | 'affiliate'>): boolean {
+  if (!state.bank?.bic || !bankRequiresOffice(state.bank)) return false
+  return state.affiliate === null && (state.bankDetails?.affiliates.length ?? 0) > 0
 }
 
 /**

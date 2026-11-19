@@ -10,6 +10,8 @@ import type { FlowAffiliate } from '../connect-flow-reducer'
 interface AffiliatePickerProps {
   /** The bank behind the shared BIC (Swedbank): the first row, chosen when no sparbank is. */
   parentName: string
+  /** The bank needs one of its offices (bank-help bankRequiresOffice): no row of its own, and "Vilket kontor?". */
+  officeRequired?: boolean
   affiliates: ReadonlyArray<FlowAffiliate>
   value: FlowAffiliate | null
   onChange: (affiliate: FlowAffiliate | null) => void
@@ -23,10 +25,12 @@ function matches(name: string, query: string): boolean {
  * "Vilken sparbank?": the savings banks reached through a shared BIC, as a
  * searchable list under the bank list. The bank itself is the first row and
  * the default, so a Swedbank customer changes nothing; a sparbank customer
- * types a few letters and picks theirs. The choice travels as the party's
- * affiliated_aspsp_id and names the connection.
+ * types a few letters and picks theirs. A bank that takes no request for
+ * itself has no row of its own: "Vilket kontor?" lists only its offices, and
+ * nothing is chosen until the person picks one. The choice travels as the
+ * party's affiliated_aspsp_id and names the connection.
  */
-export function AffiliatePicker({ parentName, affiliates, value, onChange }: AffiliatePickerProps) {
+export function AffiliatePicker({ parentName, officeRequired = false, affiliates, value, onChange }: AffiliatePickerProps) {
   const t = useTranslations('bank_connect')
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
@@ -34,7 +38,9 @@ export function AffiliatePicker({ parentName, affiliates, value, onChange }: Aff
     const sorted = [...affiliates].sort((a, b) => a.name.localeCompare(b.name, 'sv'))
     return needle ? sorted.filter((a) => matches(a.name, needle)) : sorted
   }, [affiliates, needle])
-  const parentShown = !needle || matches(parentName, needle)
+  const parentShown = !officeRequired && (!needle || matches(parentName, needle))
+  const heading = officeRequired ? t('office_label') : t('affiliate_label')
+  const searchLabel = officeRequired ? t('office_search') : t('affiliate_search')
 
   const row = (key: string, label: string, selected: boolean, onClick: () => void) => (
     <button
@@ -58,15 +64,15 @@ export function AffiliatePicker({ parentName, affiliates, value, onChange }: Aff
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[13px]">
         <span id="bank-connect-affiliate-label" className="text-muted-foreground">
-          {t('affiliate_label')}
+          {heading}
         </span>
         <div className="relative">
           <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
           <Input
             type="search"
             autoComplete="off"
-            placeholder={t('affiliate_search')}
-            aria-label={t('affiliate_search')}
+            placeholder={searchLabel}
+            aria-label={searchLabel}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="h-8 w-[200px] pl-10"
@@ -77,7 +83,7 @@ export function AffiliatePicker({ parentName, affiliates, value, onChange }: Aff
       <div role="listbox" aria-labelledby="bank-connect-affiliate-label" className="max-h-60 divide-y divide-border overflow-y-auto overscroll-contain border-y border-border">
         {parentShown && row('parent', parentName, value === null, () => onChange(null))}
         {shown.map((affiliate) => row(affiliate.id, affiliate.name, value?.id === affiliate.id, () => onChange(affiliate)))}
-        {!parentShown && shown.length === 0 && <p className="px-1 py-6 text-center text-[13px] text-muted-foreground">{t('affiliate_no_matches')}</p>}
+        {!parentShown && shown.length === 0 && <p className="px-1 py-6 text-center text-[13px] text-muted-foreground">{officeRequired ? t('office_no_matches') : t('affiliate_no_matches')}</p>}
       </div>
     </div>
   )

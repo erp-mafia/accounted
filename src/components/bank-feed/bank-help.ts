@@ -39,6 +39,20 @@ export function bankPrerequisiteKey(bank: Pick<OpenPaymentsBank, 'name' | 'bic'>
   return key && PREREQUISITES.has(key) ? key : null
 }
 
+/**
+ * Banks that take no request for the bank itself: one of the offices in its
+ * details (the affiliates) must be chosen, and a start without one is refused
+ * over the X-AffiliatedASPSP-ID header. Keyed by the BIC the provider lists.
+ * Swedbank (SWEDSESS) is not one: the bank behind its shared BIC is itself a
+ * bank a company has accounts in.
+ */
+const OFFICE_REQUIRED_BICS: ReadonlySet<string> = new Set(['RESUSE2H'])
+
+/** The bank needs one of its offices chosen, so its own row is not offered in the picker (for #158). */
+export function bankRequiresOffice(bank: Pick<OpenPaymentsBank, 'bic'>): boolean {
+  return OFFICE_REQUIRED_BICS.has(bank.bic.trim().toUpperCase().slice(0, 8))
+}
+
 /** Svea runs the consent in two BankID rounds: accounts first, then a confirmation of the chosen ones. */
 export function isTwoStepBank(bank: Pick<OpenPaymentsBank, 'name' | 'bic'>): boolean {
   return bankHelpKey(bank) === 'svea'
