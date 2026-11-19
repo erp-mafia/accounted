@@ -91,7 +91,7 @@ export async function detectNoFiscalYear(
       severity: 'warning',
       messageKey: 'no_fiscal_year',
       actionKey: 'no_fiscal_year_action',
-      actionHref: '/settings/bookkeeping',
+      actionHref: '/settings/fiscal-years',
     }
   } catch (err) {
     return logAndNull(

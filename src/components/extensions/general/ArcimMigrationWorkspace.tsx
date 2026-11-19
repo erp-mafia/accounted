@@ -2528,7 +2528,7 @@ export function DocumentImportFollowUp({
   const lockedYears = (state.result?.lockedPeriods ?? []).join(', ')
   const openYearsLink = (
     <Link
-      href="/settings/bookkeeping"
+      href="/settings/fiscal-years"
       className="underline decoration-foreground/25 underline-offset-4 transition-colors duration-150 hover:text-foreground"
     >
       {t('ext_arcim_documents_locked_open_years')}
@@ -2748,7 +2748,7 @@ export function DocumentImportFollowUp({
                   hint={t('ext_arcim_documents_locked_result')}
                 >
                   <Button variant="ghost" asChild>
-                    <Link href="/settings/bookkeeping">{t('ext_arcim_documents_locked_open_years')}</Link>
+                    <Link href="/settings/fiscal-years">{t('ext_arcim_documents_locked_open_years')}</Link>
                   </Button>
                   <Button variant="outline" onClick={onDiscover}>
                     <ArrowUturnLeftIcon className="h-3.5 w-3.5" />

@@ -26,7 +26,7 @@ export function FiscalYearGapNotice() {
   return (
     <div className="space-y-1">
       <AttnLine
-        action={{ label: t('manage'), href: '/settings/bookkeeping' }}
+        action={{ label: t('manage'), href: '/settings/fiscal-years' }}
         trailing={<HelpPopover className="ml-2 inline-flex align-middle">{t('hint')}</HelpPopover>}
       >
         {t('title', { count: gaps.length })}

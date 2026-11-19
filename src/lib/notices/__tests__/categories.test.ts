@@ -706,7 +706,7 @@ describe('detectNoFiscalYear', () => {
       severity: 'warning',
       messageKey: 'no_fiscal_year',
       actionKey: 'no_fiscal_year_action',
-      actionHref: '/settings/bookkeeping',
+      actionHref: '/settings/fiscal-years',
     })
     expect(findCall('fiscal_periods', 'eq')).toEqual(['company_id', COMPANY])
   })

@@ -119,7 +119,7 @@ export default function SIELegacyRecoveryPanel({ importId, filename, onClose, on
               {legacySIENextStep(assessment) === 'reset_year' ? (
                 <p className="text-sm leading-6 text-muted-foreground">
                   {t('nextStepResetYear')}{' '}
-                  <Link href="/settings/bookkeeping" className="underline underline-offset-4">{t('openFiscalYears')}</Link>
+                  <Link href="/settings/fiscal-years" className="underline underline-offset-4">{t('openFiscalYears')}</Link>
                 </p>
               ) : (
                 <p className="text-sm leading-6 text-muted-foreground">{t('nextStep')}</p>

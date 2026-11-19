@@ -329,7 +329,7 @@ export default function ImportResultStep({
 
       {result.success && result.nextPeriodOpeningBalanceReview && (
         <div role="status">
-          <AttnLine action={{ label: t('next_year_review_action'), href: '/settings/bookkeeping' }}>
+          <AttnLine action={{ label: t('next_year_review_action'), href: '/settings/fiscal-years' }}>
             {t('next_year_review', { name: result.nextPeriodOpeningBalanceReview.nextPeriodName })}
           </AttnLine>
         </div>

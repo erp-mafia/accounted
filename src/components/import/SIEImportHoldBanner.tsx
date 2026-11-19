@@ -66,7 +66,7 @@ export function SIEImportHoldBanner({ companyId }: { companyId: string | null })
   const derived = reviews.every(period => !period.opening_balance_entry_id)
   if (!holds.length) return <aside className="mb-6" role="status"><AttnLine>
     {reviewText(derived ? 'next_year_review_derived' : 'next_year_review', { name: reviews.map(period => period.name).join(', ') })}{' '}
-    <Link className="underline underline-offset-2" href="/settings/bookkeeping">{reviewText('next_year_review_action')}</Link>
+    <Link className="underline underline-offset-2" href="/settings/fiscal-years">{reviewText('next_year_review_action')}</Link>
   </AttnLine></aside>
   return <aside className="mb-6" role="status">
     <AttnLine>

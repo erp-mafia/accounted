@@ -103,7 +103,8 @@ const BRANDED_ERRORS = [
   },
 ] as const
 
-describe.each(BRANDED_ERRORS)('$name', ({ name, load }) => {
+// The limit ends a hang, it does not time an import: each case imports its module graph twice after resetModules.
+describe.each(BRANDED_ERRORS)('$name', { timeout: 30_000 }, ({ name, load }) => {
   beforeEach(() => {
     vi.resetModules()
     resetGlobalSingletons()
