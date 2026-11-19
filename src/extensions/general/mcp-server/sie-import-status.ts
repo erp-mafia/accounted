@@ -10,6 +10,17 @@ export const SIE_IMPORT_STATUS_SCHEMA = {
     state: { type: 'string' }, chunks_done: { type: ['integer', 'null'] }, chunks_total: { type: ['integer', 'null'] },
     vouchers_written: { type: ['integer', 'null'] }, error_message: { type: ['string', 'null'] },
     result: { type: ['object', 'null'], additionalProperties: true },
+    opening_balance_review: {
+      type: 'object',
+      description: 'The next year\'s opening balance review this import raised (result.nextPeriodOpeningBalanceReview), as it stands now.',
+      properties: {
+        fiscal_period_id: { type: 'string' }, period_name: { type: ['string', 'null'] },
+        open: { type: 'boolean', description: 'False once confirmed. A later import of the year before renews review_token.' },
+        review_token: { type: ['string', 'null'] }, opening_balance_entry_id: { type: ['string', 'null'] },
+        acknowledge_tool: { type: 'string' }, next: { type: 'string' },
+      },
+      required: ['fiscal_period_id', 'period_name', 'open', 'review_token', 'opening_balance_entry_id', 'acknowledge_tool', 'next'],
+    },
     recovery: {
       type: 'object',
       properties: {
@@ -124,11 +135,52 @@ export function sieAppendSummary(plan: SIEAppendPlan) {
   }
 }
 
+/** The tool that confirms an opening balance review (crm#1967). */
+const ACKNOWLEDGE_REVIEW_TOOL = 'gnubok_acknowledge_opening_balance_review'
+
+/**
+ * The review an import raised on the next year's IB, as it stands now. The
+ * job result's nextPeriodOpeningBalanceReview is a receipt of the moment the
+ * import finished: a confirmation clears the review since, and a later import
+ * or undo of the year before renews its token. The year's row is the review.
+ * Undefined when the import raised none.
+ */
+async function openingBalanceReviewNow(supabase: SupabaseClient, companyId: string, result: unknown) {
+  const raised = (result as { nextPeriodOpeningBalanceReview?: { nextPeriodId?: unknown; nextPeriodName?: unknown } } | null)
+    ?.nextPeriodOpeningBalanceReview
+  if (!raised || typeof raised.nextPeriodId !== 'string') return undefined
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('id, name, opening_balance_entry_id, opening_balance_review_token')
+    .eq('id', raised.nextPeriodId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw new Error(`Kunde inte läsa räkenskapsåret: ${error.message}`)
+  const year = data as { name: string; opening_balance_entry_id: string | null; opening_balance_review_token: string | null } | null
+  const token = year?.opening_balance_review_token ?? null
+  const periodName = year?.name ?? (typeof raised.nextPeriodName === 'string' ? raised.nextPeriodName : null)
+  return {
+    fiscal_period_id: raised.nextPeriodId,
+    period_name: periodName,
+    open: token !== null,
+    review_token: token,
+    opening_balance_entry_id: token ? (year?.opening_balance_entry_id ?? null) : null,
+    acknowledge_tool: ACKNOWLEDGE_REVIEW_TOOL,
+    next: token
+      ? `Preview ${ACKNOWLEDGE_REVIEW_TOOL} with this fiscal_period_id and review_token (dry_run): it compares the year's IB with the previous year's UB per account. Show the differences to the user, then stage it; a person approves it.`
+      : 'Confirmed: nothing to do.',
+  }
+}
+
 /** Keep the durable progress contract, and label legacy observations without inventing job progress. */
 export async function readSIEImportStatus(supabase: SupabaseClient, companyId: string, importId: string) {
   const job = await getSIEJob(supabase, companyId, importId)
-  if (job) return { import_id: job.id, kind: 'durable', state: job.job_state, chunks_done: job.chunks_done,
-    chunks_total: job.chunks_total, vouchers_written: job.transactions_count, error_message: job.error_message, result: job.job_result }
+  if (job) {
+    const review = await openingBalanceReviewNow(supabase, companyId, job.job_result)
+    return { import_id: job.id, kind: 'durable', state: job.job_state, chunks_done: job.chunks_done,
+      chunks_total: job.chunks_total, vouchers_written: job.transactions_count, error_message: job.error_message, result: job.job_result,
+      ...(review ? { opening_balance_review: review } : {}) }
+  }
 
   const assessment = await assessLegacySIEImport(supabase, companyId, importId)
   if (!assessment) throw Object.assign(new Error('SIE import not found'), { code: 'NOT_FOUND' })

@@ -500,6 +500,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_mark_vat_period_filed: 'bookkeeping:write',
   gnubok_unmark_vat_period_filed: 'bookkeeping:write',
   gnubok_mark_vat_check_reviewed: 'bookkeeping:write',
+  gnubok_acknowledge_opening_balance_review: 'bookkeeping:write',
   gnubok_mark_not_momsredovisning: 'bookkeeping:write',
   gnubok_withdraw_not_momsredovisning: 'bookkeeping:write',
   gnubok_mark_agi_period_filed: 'payroll:write',

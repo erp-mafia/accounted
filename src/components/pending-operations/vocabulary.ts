@@ -213,6 +213,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   lock_period: 'warning_lock_period',
   unlock_period: 'warning_unlock_period',
   undo_sie_import: 'warning_undo_sie_import',
+  acknowledge_opening_balance_review: 'warning_acknowledge_opening_balance_review',
   close_period: 'warning_close_period',
   run_year_end: 'warning_run_year_end',
   set_opening_balances: 'warning_set_opening_balances',

@@ -10,13 +10,19 @@
  *     (lib/import/sie-job-action-service.ts).
  *
  * MCP: both undos stage (gnubok_undo_bank_import, gnubok_undo_sie_import).
- * The SIE resume is v1 only.
+ * The SIE resume is v1 only. Confirming the opening balance review an SIE
+ * import raises on the next year is MCP only and staged
+ * (gnubok_acknowledge_opening_balance_review, crm#1967): the dashboard's
+ * review dialog runs the same service (lib/import/opening-balance/review.ts).
  */
 import { after } from 'next/server'
 import { z } from 'zod'
 import { undoBankImport } from '@/lib/import/bank-file/undo-operation'
+import { acknowledgeOpeningBalanceReview } from '@/lib/import/opening-balance/review'
 import { requestSIEImportAction } from '@/lib/import/sie-job-action-service'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
+import { formatCurrency } from '@/lib/utils'
+import type { ContinuityDiscrepancy } from '@/types'
 import type { OperationOutcome } from './types'
 import { defineOperation } from './types'
 
@@ -249,4 +255,120 @@ export const importsSieResume = defineOperation({
     pathParams: { id: 'import_id' },
   },
   run: (ctx, { import_id }, { dryRun }) => runSIEAction(requestSIEImportAction(ctx, import_id, 'resume', { dryRun })),
+})
+
+// ---------------------------------------------------------------------------
+// imports.opening-balance-review.acknowledge
+// ---------------------------------------------------------------------------
+
+/**
+ * What the approver and the agent see when the confirmation is staged:
+ * labelled facts for the approval card, and the dry run's per-account rows
+ * (previous_ub_net, current_ib_net, difference = UB minus IB) for the agent.
+ */
+function reviewStagePreview(preview: Record<string, unknown>): Record<string, unknown> {
+  const discrepancies = Array.isArray(preview.discrepancies) ? (preview.discrepancies as ContinuityDiscrepancy[]) : []
+  const matches = preview.ib_matches_previous_ub === true
+  return {
+    fiscal_period_id: preview.fiscal_period_id,
+    review_token: preview.review_token,
+    opening_balance_entry_id: preview.opening_balance_entry_id ?? null,
+    fiscal_year: preview.period_name,
+    previous_fiscal_year: preview.previous_period_name ?? null,
+    ib_matches_previous_ub: matches,
+    compared_accounts: preview.checked_accounts,
+    // Öre shown: a difference can be a few öre.
+    opening_balance_differences: discrepancies.map(
+      (row) => `${row.account_number}: ${formatCurrency(row.difference, 'SEK', { minimumFractionDigits: 2 })}`,
+    ),
+    discrepancies,
+    will: matches
+      ? 'Confirm the review and clear it: the IB equals the previous year\'s UB on every account. No verifikat changes.'
+      : 'Confirm the review and clear it although the IB differs from the previous year\'s UB on the accounts in discrepancies. No verifikat changes: correct the IB first if the differences are wrong.',
+  }
+}
+
+export const importsOpeningBalanceReviewAcknowledge = defineOperation({
+  id: 'imports.opening-balance-review.acknowledge',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Confirm the review of a year\'s ingående balanser that an SIE import of the year before raised.',
+    description:
+      'An SIE import, or its undo, flags the year after the imported year for review: that year\'s IB was not changed automatically and may no longer equal the changed year\'s utgående balanser. Confirming clears the review (the banner "Granska ingående balanser" and opening_balance_review in gnubok_sie_import_status) and records who confirmed it and when; no verifikat changes. The dry run compares the year\'s IB with the year before\'s UB per balance-sheet account, as GET /reports/continuity-check does, and lists every difference. As in the review dialog, a review can be confirmed with differences, so correct the IB first when they are wrong. Owner/admin only.',
+    useWhen:
+      'The banner "Granska ingående balanser för ..." shows, or gnubok_sie_import_status answers opening_balance_review with open true, and the year\'s IB has been checked against the year before\'s UB.',
+    doNotUseFor:
+      'Changing an IB (gnubok_correct_opening_balances for a booked one, gnubok_set_opening_balances_manual for a year without one), or a year with no open review (OB_REVIEW_NOT_PENDING).',
+    pitfalls: [
+      'Read discrepancies in the preview before staging: confirming leaves the IB as it is. When an account differs and should not, correct the IB (gnubok_correct_opening_balances) and preview again.',
+      'The staged confirmation is pinned to the review and the IB verifikat the preview read: a new import or a corrected IB before the approval answers 409 OB_REVIEW_CHANGED; preview again.',
+      'A year with no open review answers 409 OB_REVIEW_NOT_PENDING; an SIE import still running at the approval answers 409 OB_REVIEW_IMPORT_RUNNING.',
+      'Owner or admin only: 403 FORBIDDEN otherwise.',
+    ],
+    example: {
+      request: { fiscal_period_id: '7b3a…' },
+      response: {
+        data: { fiscal_period_id: '7b3a…', period_name: 'Räkenskapsår 2026', reviewed: true },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({
+    fiscal_period_id: z
+      .string()
+      .uuid()
+      .describe('The year whose IB waits for review: opening_balance_review.fiscal_period_id in gnubok_sie_import_status, or the year the banner names (gnubok_list_fiscal_periods).'),
+    review_token: z
+      .string()
+      .uuid()
+      .optional()
+      .describe('opening_balance_review.review_token from gnubok_sie_import_status. Omit to take the year\'s open review.'),
+    opening_balance_entry_id: z
+      .string()
+      .uuid()
+      .nullable()
+      .optional()
+      .describe('The IB verifikat that was reviewed (null when the year has none). Omit to take the year\'s current one.'),
+  }),
+  output: z.object({
+    fiscal_period_id: z.string().uuid(),
+    period_name: z.string(),
+    reviewed: z.literal(true),
+  }),
+  errorCodes: ['OB_PERIOD_NOT_FOUND', 'OB_REVIEW_NOT_PENDING', 'OB_REVIEW_CHANGED', 'OB_REVIEW_IMPORT_RUNNING', 'FORBIDDEN'],
+  mcp: {
+    name: 'gnubok_acknowledge_opening_balance_review',
+    title: 'Confirm Opening Balance Review (Granska Ingående Balanser)',
+    description:
+      'Stage confirming the opening balance review an SIE import raised (banner "Granska ingående balanser"). The preview compares the year\'s IB with the prior year\'s UB per account and lists differences: correct those first (gnubok_correct_opening_balances).',
+    keywords: [
+      'granska ingående balanser',
+      'granskning ingående balans',
+      'kvittera granskning',
+      'bekräfta granskning',
+      'ingående balans',
+      'utgående balans',
+      'ib ub',
+      'sie',
+      'reviewtoken',
+      'nextperiodopeningbalancereview',
+    ],
+    stage: {
+      pendingType: 'acknowledge_opening_balance_review',
+      title: (_input, preview) =>
+        `Bekräfta granskningen av ingående balanser för ${String(preview?.period_name ?? 'räkenskapsåret')}`,
+      // The approval confirms the review the preview compared, never one a
+      // later import raised or an IB corrected since.
+      pinParams: (input, preview) => ({
+        fiscal_period_id: input.fiscal_period_id,
+        review_token: preview.review_token,
+        opening_balance_entry_id: preview.opening_balance_entry_id ?? null,
+      }),
+      preview: (_input, preview) => reviewStagePreview(preview),
+    },
+  },
+  run: (ctx, input, { dryRun }) => acknowledgeOpeningBalanceReview(ctx, input, { dryRun }),
 })

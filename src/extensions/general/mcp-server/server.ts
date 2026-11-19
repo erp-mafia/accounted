@@ -26984,7 +26984,7 @@ export const tools: McpTool[] = [
 
   {
     name:'gnubok_sie_import_status',title:'SIE Import Status',keywords:['sie','importstatus'],catalogVisibility:'search',
-    description:'Read durable SIE job progress or a read-only legacy recovery assessment. Legacy counts describe the whole year, not entry ownership; review_required never permits undo, reset or retry. Poll durable jobs after approval until completed or undone.',
+    description:'Read durable SIE job progress or a read-only legacy recovery assessment. Legacy counts describe the whole year, not entry ownership; review_required never permits undo, reset or retry. Poll durable jobs until completed or undone. opening_balance_review: next year\'s IB review.',
     inputSchema:{type:'object',additionalProperties:false,properties:{import_id:{type:'string',format:'uuid',description:'Omit to list the company\'s recent imports.'}}},
     outputSchema:SIE_IMPORT_STATUS_TOOL_SCHEMA,
     annotations:ANNOTATIONS_READ_ONLY,

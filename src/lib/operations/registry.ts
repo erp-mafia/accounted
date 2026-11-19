@@ -176,6 +176,7 @@ import {
 } from './transactions'
 import {
   importsBankUndo,
+  importsOpeningBalanceReviewAcknowledge,
   importsSieResume,
   importsSieUndo,
 } from './imports'
@@ -456,6 +457,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   importsBankUndo,
   importsSieUndo,
   importsSieResume,
+  // MCP only, staged: the review dialog has its own route (crm#1967)
+  importsOpeningBalanceReviewAcknowledge,
   // skattekonto-file
   importsSkattekontoFile,
   // journal-entries

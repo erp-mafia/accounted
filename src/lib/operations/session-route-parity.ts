@@ -276,7 +276,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/reset': uiOnly('destructive owner-only fiscal year reset'),
   'POST /api/bookkeeping/currency-revaluation/monthly': gap('P2', 'month-end currency revaluation with its next-day storno (#523), a monthly close step where the company has switched it on; v1 and MCP revalue the balansdag only'),
   'POST /api/bookkeeping/fiscal-periods/:id/reopen': uiOnly('owner-only reopen of a year closed with a bokslut, on the owner\'s typed statement that the årsredovisning was not signed, adopted or filed'),
-  'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review': gap('P3', 'sign off the opening balance review'),
+  'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review': covered(
+    ['gnubok_acknowledge_opening_balance_review'],
+    'staged; a person approves the agent\'s confirmation (crm#1967)',
+  ),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review/sie-file': covered(
     [`POST ${V}/fiscal-periods/:id/opening-balances/manual`, 'gnubok_set_opening_balances_manual'],
     'the API takes lines; reading them from the SIE import manifest stays UI-only',
@@ -1144,5 +1147,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 169 -> 168 (2026-11-15, crm#1849): that mark, and its withdrawal, through
  * the staged gnubok_mark_not_momsredovisning and
  * gnubok_withdraw_not_momsredovisning.
+ * 163 -> 162 (2026-11-19, crm#1967): confirming the opening balance review,
+ * through the staged gnubok_acknowledge_opening_balance_review.
  */
-export const GAP_CEILING = 163
+export const GAP_CEILING = 162

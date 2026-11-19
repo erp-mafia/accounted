@@ -1128,6 +1128,25 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_mark_vat_check_reviewed: {
     args: { period_type: 'quarterly', year: 2026, period: 1, check_code: 'RC_INPUT_VAT_MISMATCH', note: 'Begränsad avdragsrätt' },
   },
+  // The opening balance review an SIE import raised on the next year
+  // (crm#1967), confirmed by an owner; the IB/UB comparison (the trial
+  // balance) runs for real on the generic rows.
+  gnubok_acknowledge_opening_balance_review: {
+    rows: {
+      fiscal_periods: {
+        ...FISCAL_YEAR_2026,
+        name: 'Räkenskapsår 2026',
+        opening_balance_entry_id: SOME_UUID,
+        opening_balance_review_token: SOME_UUID,
+        opening_balance_review_reason: 'import',
+        opening_balance_review_import_id: SOME_UUID,
+      },
+      company_members: { role: 'owner' },
+      journal_entry_lines: { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+      'rpc:get_trial_balance_aggregates': { bucket: 'period', account_number: '1930', debit: 100, credit: 0 },
+      'rpc:compute_prior_opening_balances': { account_number: '1930', debit: 100, credit: 0 },
+    },
+  },
   // A correction the momsredovisning shapes catch (crm#1849): a posted
   // manual verifikat in an open period, marked as a correction and back.
   gnubok_mark_not_momsredovisning: {

@@ -5864,6 +5864,32 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Granskningen har ändrats sedan du öppnade den. Ladda om sidan och försök igen.',
     message_en: 'The review changed after you opened it. Reload the page and try again.',
+    remediation: {
+      description:
+        'A new import or a changed IB verifikat replaced the review that was read. Preview gnubok_acknowledge_opening_balance_review again without review_token and opening_balance_entry_id, check the differences, then stage it.',
+      tool: 'gnubok_acknowledge_opening_balance_review',
+    },
+  },
+  // Confirming the opening balance review over MCP (crm#1967):
+  // lib/import/opening-balance/review.ts.
+  OB_REVIEW_NOT_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret har ingen granskning av ingående balanser som väntar.',
+    message_en: 'The fiscal year has no opening balance review waiting.',
+    remediation: {
+      description:
+        'Nothing to confirm for this year. gnubok_sie_import_status names the year a review waits on under opening_balance_review.',
+      tool: 'gnubok_sie_import_status',
+    },
+  },
+  OB_REVIEW_IMPORT_RUNNING: {
+    httpStatus: 409,
+    message_sv: 'En SIE-import i bolaget är inte klar. Bekräfta granskningen när den är klar.',
+    message_en: 'An SIE import of the company is not finished. Confirm the review once it has completed.',
+    remediation: {
+      description: 'Poll gnubok_sie_import_status until the import is completed or undone, then confirm the review again.',
+      tool: 'gnubok_sie_import_status',
+    },
   },
   // PH 193: the year before was imported again after the undo that raised the
   // review, so the year already opens on that year's utgående balanser.
