@@ -72,6 +72,25 @@ describe('submitAgiUnderlag: a fresh underlag, never a stale stored one (issue #
     )
   })
 
+  // The refresh's outcome leaves the step: a replaced XML means the figures
+  // posted differ from the underlag last generated or downloaded, and every
+  // door says so. Only 'replaced' says it.
+  it.each([
+    ['replaced', true],
+    ['unchanged', false],
+    ['filed', false],
+    ['skipped', false],
+  ] as const)('refresh outcome %s answers underlagRegenerated %s, on the step and on the chain', async (outcome, regenerated) => {
+    const { supabase } = createQueuedMockSupabase()
+    vi.mocked(refreshAgiUnderlag).mockResolvedValue({ ok: true, outcome })
+
+    const underlag = await submitAgiUnderlag(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+    const chain = await submitAgiChain(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+
+    expect(underlag).toMatchObject({ ok: true, underlagRegenerated: regenerated })
+    expect(chain).toMatchObject({ ok: true, underlagRegenerated: regenerated })
+  })
+
   it('stops at a refused regeneration: nothing posted, nothing flipped, no settings written', async () => {
     const { supabase, findCall } = createQueuedMockSupabase()
     vi.mocked(refreshAgiUnderlag).mockResolvedValue({
@@ -112,6 +131,7 @@ describe('submitAgiChain', () => {
       period: '202606',
       inlamningId: 42,
       tillstand: 'LOCKED_FOR_SIGNING',
+      underlagRegenerated: false,
     })
     expect(agiSkapaGranskningsunderlag).toHaveBeenCalledWith(supabase, 'user-1', 'company-1', '165560000000', '202606', { lasPeriod: true })
     expect(findCall('agi_declarations', 'update')).toEqual([{ status: 'pending_signature' }])
@@ -226,7 +246,7 @@ describe('the chain\'s steps on their own', () => {
 
     const result = await submitAgiUnderlag(supabase as never, 'user-1', 'company-1', settings, 'run-1')
 
-    expect(result).toEqual({ ok: true, target, inlamningId: 42, kontrollrapport: null })
+    expect(result).toEqual({ ok: true, target, inlamningId: 42, kontrollrapport: null, underlagRegenerated: false })
     expect(agiSkapaGranskningsunderlag).not.toHaveBeenCalled()
     expect(findCall('agi_declarations', 'update')).toBeUndefined()
   })

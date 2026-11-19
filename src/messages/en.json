@@ -12610,6 +12610,7 @@
     "chain_step_kontroll": "Waiting for Skatteverket's checks",
     "chain_step_link": "Creating signing link",
     "chain_ready_to_sign": "The underlag has been accepted and is ready to sign. Sign with BankID in the tab that opened, or use the signing link above.",
+    "underlag_regenerated": "The declaration was regenerated from current data. Review it in Mina sidor before you sign.",
     "chain_tab_title": "BankID signing at Skatteverket",
     "chain_tab_body": "Preparing BankID signing at Skatteverket...",
     "advanced_show": "Show advanced actions",

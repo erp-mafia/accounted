@@ -162,6 +162,41 @@ describe('AGI panel filing routes', () => {
     },
   )
 
+  // The refresh replaced the stored XML: the answer says so, and the panel
+  // tells the person to review the declaration in Mina sidor before signing.
+  it.each(['/agi/send-for-signing', '/agi/submit'])(
+    '%s answers underlag_regenerated when the stored XML was replaced',
+    async (path) => {
+      const { ctx } = context()
+      vi.mocked(refreshAgiUnderlag).mockResolvedValue({ ok: true, outcome: 'replaced' })
+
+      const { status, json } = await call(path, { salaryRunId: 'run-1' }, ctx)
+
+      expect(status).toBe(200)
+      expect(json.data.underlag_regenerated).toBe(true)
+    },
+  )
+
+  it.each(['/agi/send-for-signing', '/agi/submit'])(
+    '%s says nothing of a regeneration when the stored XML was unchanged',
+    async (path) => {
+      const { ctx } = context()
+
+      const { status, json } = await call(path, { salaryRunId: 'run-1' }, ctx)
+
+      expect(status).toBe(200)
+      expect(json.data).not.toHaveProperty('underlag_regenerated')
+    },
+  )
+
+  it('POST /agi/send-for-signing keeps its answer as it was when the XML was unchanged', async () => {
+    const { ctx } = context()
+
+    const { json } = await call('/agi/send-for-signing', { salaryRunId: 'run-1' }, ctx)
+
+    expect(json.data).toEqual({ signing_url: 'https://skatteverket.se/sign', tillstand: 'LOCKED_FOR_SIGNING', period: '202606' })
+  })
+
   it('POST /agi/granskningsunderlag regenerates nothing: it locks what step 1 posted', async () => {
     const { ctx } = context()
 

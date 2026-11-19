@@ -70,6 +70,12 @@ export type AgiUnderlagStepResult =
       inlamningId: number
       /** Skatteverket's kontrollsvar on an accepted underlag (warnings), masked; null when it sent none. */
       kontrollrapport: AgiKontrollrapportSummary | null
+      /**
+       * true when refreshAgiUnderlag replaced the stored XML before the POST:
+       * the figures posted differ from the underlag last generated or
+       * downloaded, and every door says so.
+       */
+      underlagRegenerated: boolean
     }
   | AgiStepFailure
 
@@ -85,6 +91,8 @@ export type AgiSubmitChainResult =
       period: string
       inlamningId: number
       tillstand: string
+      /** As on the underlag step: the stored XML was replaced before the POST. */
+      underlagRegenerated: boolean
     }
   | AgiStepFailure
 
@@ -107,7 +115,8 @@ function flipRunDeclaration(supabase: SupabaseClient, companyId: string, target:
  * declaration is regenerated from current data, so a generator fix reaches
  * an XML stored before it), POST it and poll kontrollresultat until it
  * settles. A refusal at kontroll marks the run's declaration rejected and
- * carries Skatteverket's kontrollsvar.
+ * carries Skatteverket's kontrollsvar. A success says whether the stored
+ * XML was replaced (underlagRegenerated).
  */
 export async function submitAgiUnderlag(
   supabase: SupabaseClient,
@@ -204,7 +213,13 @@ export async function submitAgiUnderlag(
       details: { kontrollrapport: kontrollrapport ?? { kontrollresultat_status: kontroll.data.status } },
     }
   }
-  return { ok: true, target, inlamningId, kontrollrapport: summarizeAgiKontrollrapport(kontroll.data) }
+  return {
+    ok: true,
+    target,
+    inlamningId,
+    kontrollrapport: summarizeAgiKontrollrapport(kontroll.data),
+    underlagRegenerated: refreshed.outcome === 'replaced',
+  }
 }
 
 /**
@@ -305,5 +320,6 @@ export async function submitAgiChain(
     period: underlag.target.period,
     inlamningId: underlag.inlamningId,
     tillstand: link.tillstand,
+    underlagRegenerated: underlag.underlagRegenerated,
   }
 }

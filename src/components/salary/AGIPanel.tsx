@@ -166,6 +166,11 @@ export function AGIPanel(props: AGIPanelProps) {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [chain, setChain] = useState<ChainProgress | null>(null)
+  // True when the last submit's server refresh replaced the stored XML
+  // (underlag_regenerated on /agi/send-for-signing or /agi/submit): the
+  // figures posted differ from the file last downloaded. Cleared by the next
+  // submit.
+  const [underlagRegenerated, setUnderlagRegenerated] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   // True while an OAuth tab opened from this panel is still alive. Disables
   // the connect buttons so a second click cannot start a parallel flow: each
@@ -615,6 +620,7 @@ export function AGIPanel(props: AGIPanelProps) {
       setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('submit_failed_status', { status: res.status }) }))
       return false
     }
+    setUnderlagRegenerated(json.data?.underlag_regenerated === true)
     return true
   }
 
@@ -663,6 +669,7 @@ export function AGIPanel(props: AGIPanelProps) {
       setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('submit_failed_status', { status: res.status }) }))
       return null
     }
+    setUnderlagRegenerated(json.data?.underlag_regenerated === true)
     // The user typically opens the link, signs in Mina Sidor, then returns
     // later (or never). Auto-poll so we capture the kvittens (and stamp
     // agi_submitted_at) without forcing the user to click "Hämta kvittens".
@@ -684,6 +691,7 @@ export function AGIPanel(props: AGIPanelProps) {
     setActionLoading('chain')
     setError(null)
     setSuccess(null)
+    setUnderlagRegenerated(false)
     let signingTab: Window | null = null
     try {
       signingTab = window.open('', '_blank')
@@ -760,6 +768,7 @@ export function AGIPanel(props: AGIPanelProps) {
     setActionLoading('submit')
     setError(null)
     setSuccess(null)
+    setUnderlagRegenerated(false)
     try {
       if (!(await ensureAgiGenerated())) return
       const ok = await runSubmitUnderlag()
@@ -949,8 +958,19 @@ export function AGIPanel(props: AGIPanelProps) {
   // outranks the missing inlämning scope: nothing can be filed until the
   // user has reconnected, and the fresh grant re-evaluates the scope. When
   // both hold, the scope notice drops to a muted line so it is still said.
-  const attn: 'expired' | 'scope' | null =
-    readOnly ? null : sessionExpiredStatus ? 'expired' : missingAgdScope ? 'scope' : null
+  // A regenerated underlag (the last submit replaced the stored XML) comes
+  // last, and drops to a muted line the same way.
+  const showRegenerated = underlagRegenerated && !readOnly && !isSigned
+  const attn: 'expired' | 'scope' | 'regenerated' | null =
+    readOnly
+      ? null
+      : sessionExpiredStatus
+        ? 'expired'
+        : missingAgdScope
+          ? 'scope'
+          : showRegenerated
+            ? 'regenerated'
+            : null
 
   // Recovery states expose the advanced actions on their own: the stale-draft
   // and error-report guidance below reference them by name.
@@ -1075,6 +1095,10 @@ export function AGIPanel(props: AGIPanelProps) {
               {t('open_settings')}
             </a>
           </p>
+        )}
+        {attn === 'regenerated' && <AttnLine>{t('underlag_regenerated')}</AttnLine>}
+        {showRegenerated && attn !== 'regenerated' && (
+          <p className="text-xs text-muted-foreground">{t('underlag_regenerated')}</p>
         )}
         {missingKvittensScope && !kvittensNoticeDismissed && !readOnly && (
           <p className="text-xs text-muted-foreground">

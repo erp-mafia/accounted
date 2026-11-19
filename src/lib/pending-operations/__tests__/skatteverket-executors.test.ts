@@ -112,6 +112,30 @@ describe('commitPendingOperation: submit_vat_declaration / submit_agi', () => {
     expect(agi).toHaveBeenCalledWith(expect.anything(), 'user-1', 'company-1', { salary_run_id: 'sr-1' })
   })
 
+  it('AGI path with a regenerated underlag → the flag and the note reach the approver', async () => {
+    const agi = vi.fn().mockResolvedValue({
+      ok: true,
+      signing_url: 'https://skv.test/agi/xyz',
+      period: '202503',
+      underlag_regenerated: true,
+      note: 'Review it in Mina sidor before signing.',
+    })
+    registerFakeSkatteverket({ commitSubmitVatDeclaration: vi.fn(), commitSubmitAgi: agi })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null })
+
+    const op = makePendingOp({ operation_type: 'submit_agi', params: { salary_run_id: 'sr-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      status: 'awaiting_signature',
+      underlag_regenerated: true,
+      note: 'Review it in Mina sidor before signing.',
+    })
+  })
+
   it('no service registered → failed EXTENSION_DISABLED, op released to pending', async () => {
     // registry is empty (afterEach cleared it; nothing registered here)
     const { supabase, enqueue } = createQueuedMockSupabase()

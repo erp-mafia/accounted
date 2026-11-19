@@ -1805,8 +1805,10 @@ export const skatteverketExtension: Extension = {
     // submitAgiUnderlag (lib/agi-submit.ts), the first step of the one-click
     // chain: refresh and POST the XML, poll kontrollresultat with the panel's
     // patience, mark the run's declaration rejected on a refusal at kontroll.
-    // Answers { data: { inlamningId, kontrollrapport } } or { error, code,
-    // details } (details.kontrollrapport on a refusal at kontroll).
+    // Answers { data: { inlamningId, kontrollrapport, underlag_regenerated? } }
+    // or { error, code, details } (details.kontrollrapport on a refusal at
+    // kontroll). underlag_regenerated: true when the stored XML was replaced
+    // before the POST; absent when it was unchanged.
     {
       method: 'POST',
       path: '/agi/submit',
@@ -1833,7 +1835,11 @@ export const skatteverketExtension: Extension = {
             return agiStepFailureResponse(result)
           }
           return NextResponse.json({
-            data: { inlamningId: result.inlamningId, kontrollrapport: result.kontrollrapport },
+            data: {
+              inlamningId: result.inlamningId,
+              kontrollrapport: result.kontrollrapport,
+              ...(result.underlagRegenerated ? { underlag_regenerated: true } : {}),
+            },
           })
         } catch (err) {
           return handleSkvError(err)
@@ -1845,9 +1851,11 @@ export const skatteverketExtension: Extension = {
     // Body: { salaryRunId }. The panel's one-click "Skicka för signering":
     // submitAgiChain (lib/agi-submit.ts), the chain MCP gnubok_agi_submit
     // runs at approval, so both doors submit, poll, lock and flip the run's
-    // declaration alike. Answers { data: { signing_url, tillstand, period } }
-    // or { error, code, details } (details.kontrollrapport on a refusal at
-    // kontroll). The XML is (re)generated first; nothing is filed here.
+    // declaration alike. Answers { data: { signing_url, tillstand, period,
+    // underlag_regenerated? } } or { error, code, details }
+    // (details.kontrollrapport on a refusal at kontroll). The XML is
+    // (re)generated first (underlag_regenerated: true when that replaced the
+    // stored one); nothing is filed here.
     {
       method: 'POST',
       path: '/agi/send-for-signing',
@@ -1868,7 +1876,12 @@ export const skatteverketExtension: Extension = {
           })
           if (!result.ok) return agiStepFailureResponse(result)
           return NextResponse.json({
-            data: { signing_url: result.signingUrl, tillstand: result.tillstand, period: result.period },
+            data: {
+              signing_url: result.signingUrl,
+              tillstand: result.tillstand,
+              period: result.period,
+              ...(result.underlagRegenerated ? { underlag_regenerated: true } : {}),
+            },
           })
         } catch (err) {
           return handleSkvError(err)
@@ -3199,10 +3212,15 @@ async function commitSubmitVatDeclaration(
   }
 }
 
+/** What an approval says when the AGI underlag was regenerated before the POST. */
+const AGI_UNDERLAG_REGENERATED_NOTE =
+  'The AGI underlag was regenerated from current data before it was posted, so it differs from the one last generated or downloaded. Ask the user to review it in Mina sidor before signing.'
+
 /**
  * AGI "skicka för signering" for an approved MCP operation: submitAgiChain
  * (lib/agi-submit.ts), the chain the panel's one-click route runs, in the
- * pending-operation result shape.
+ * pending-operation result shape (underlag_regenerated and a note when the
+ * stored XML was replaced).
  */
 async function commitSubmitAgi(
   supabase: SupabaseClient,
@@ -3249,6 +3267,9 @@ async function commitSubmitAgi(
       period: result.period,
       inlamning_id: result.inlamningId,
       tillstand: result.tillstand,
+      // The stored XML was replaced before the POST: the approver is told
+      // the figures posted differ from the underlag last generated.
+      ...(result.underlagRegenerated ? { underlag_regenerated: true, note: AGI_UNDERLAG_REGENERATED_NOTE } : {}),
     }
   } catch (err) {
     return mapServiceError(err, companyId, 'AGI')

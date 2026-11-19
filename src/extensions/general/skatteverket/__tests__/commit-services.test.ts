@@ -118,6 +118,30 @@ describe('commitSubmitAgi', () => {
     expect(mockAgiPostUnderlag.mock.calls[0][3]).toBe('<Skatteverket>fresh</Skatteverket>')
   })
 
+  it('says the underlag was regenerated when the stored XML was replaced, with a note for the approver', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toMatchObject({ ok: true, underlag_regenerated: true, note: expect.stringContaining('Mina sidor') })
+  })
+
+  it('says nothing of a regeneration when the stored XML was unchanged', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockRefreshAgiUnderlag.mockResolvedValue({ ok: true, outcome: 'unchanged' })
+
+    const result = await commitSubmitAgi(supabase, 'user-1', 'company-1', { salary_run_id: 'run-1' })
+
+    expect(result).toEqual({
+      ok: true,
+      signing_url: 'https://skv.test/agi/sign',
+      arbetsgivare: '165560000000',
+      period: '202609',
+      inlamning_id: 7,
+      tillstand: 'LOCKED_FOR_SIGNING',
+    })
+  })
+
   // crm#1944: the thrown text of a failed step is an upstream's or our own
   // internals. The approver reads a sentence; the text stays in the log.
   it('an unexpected failure answers a sentence, never the thrown text', async () => {
