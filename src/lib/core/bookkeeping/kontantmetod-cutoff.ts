@@ -3485,6 +3485,9 @@ async function correctPaidBeforePosting(
       options: {
         preloadedOriginal: original as unknown as JournalEntry & { lines?: JournalEntryLine[] | null },
         description: paidBeforePostingCorrectionDescription(voucher),
+        // The cut-off moves a right booking to its clearing account; the
+        // template it was booked from was not rejected.
+        keepLearnedTemplates: true,
       },
     },
   })
