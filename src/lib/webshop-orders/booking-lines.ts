@@ -1,4 +1,5 @@
 import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import { roundOre as round } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
@@ -24,7 +25,8 @@ import {
  *   Credit 3001                              400.00   net per rate
  *   Credit 2611                              100.00   VAT per rate
  * Refund rows mirror (debit revenue/VAT, credit the payment account).
- * A rounding residual goes to 3740 Öresavrundning so the entry balances.
+ * A rounding residual up to MAX_RESIDUAL_SEK goes to 3740 Öresavrundning so
+ * the entry balances; a larger gap never does (OrderBookingGap).
  *
  * A Shopify order shipped outside Sweden books each VAT bucket on the store's
  * country rules (country-routing.ts) instead, e.g. 3106/2670 for an OSS sale;
@@ -82,6 +84,14 @@ const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
  * residual line it emits (a residual above öre scale means the order's
  * totals do not match its VAT breakdown and needs per-order review). */
 export const ROUNDING_ACCOUNT = '3740'
+
+/**
+ * A gap between an order's gross total and its VAT buckets above this
+ * magnitude (SEK) is not öresavrundning: per-bucket öre rounding and FX drift
+ * stay well below it. The prefill never books such a gap on 3740, and an
+ * unattended booking refuses the order (unattended-lines.ts).
+ */
+export const MAX_RESIDUAL_SEK = 1
 
 /**
  * Every account this prefill can emit, as a closed set.
@@ -319,15 +329,42 @@ export interface OrderBookingLinesInput {
 }
 
 /**
+ * The part of an order's gross total its VAT buckets do not cover, when it
+ * is above MAX_RESIDUAL_SEK. amount is in SEK, positive when the gross is the
+ * larger (in the refund's own direction for a refund row).
+ * - booked 'shipping': the gross is the larger and every bucket books on one
+ *   rate and one pair of accounts, so the gap is split at that rate onto
+ *   those accounts, like shipping that follows the goods (a refund whose
+ *   shipping part has no tax line, crm#1993). The lines balance.
+ * - booked null: several rates, no bucket, or buckets above the gross. The
+ *   lines leave the gap out and do not balance, so a person decides.
+ */
+export interface OrderBookingGap {
+  amount: number
+  booked: 'shipping' | null
+}
+
+export interface OrderBooking {
+  lines: CreateJournalEntryLineInput[]
+  /** null when the gross and the buckets agree within MAX_RESIDUAL_SEK. */
+  gap: OrderBookingGap | null
+}
+
+/**
  * Build balanced prefill lines for one order/refund row. Throws if total_sek
  * is required but unresolved: callers gate on it first.
  */
-export function buildOrderBookingLines({
+export function buildOrderBookingLines(input: OrderBookingLinesInput): CreateJournalEntryLineInput[] {
+  return buildOrderBooking(input).lines
+}
+
+/** buildOrderBookingLines() with the gap it could not book as öresavrundning. */
+export function buildOrderBooking({
   order,
   settings,
   paymentAccount,
   revenueAccounts,
-}: OrderBookingLinesInput): CreateJournalEntryLineInput[] {
+}: OrderBookingLinesInput): OrderBooking {
   const isSek = order.currency.toUpperCase() === 'SEK'
   const rate = isSek ? 1 : order.exchange_rate
   const grossSek = isSek ? round(order.total) : order.total_sek
@@ -383,8 +420,11 @@ export function buildOrderBookingLines({
   // finding). counterSum accumulates the signed counter-direction total so
   // the residual stays a pure öre artifact.
   let counterSum = 0
+  // The same total in the order currency, for a gap above the residual limit.
+  let counterSumOriginal = 0
   const pushSigned = (account: string, signedOriginal: number) => {
     if (signedOriginal === 0) return
+    counterSumOriginal = round(counterSumOriginal + signedOriginal)
     const amountAbs = round(Math.abs(signedOriginal))
     const sekAbs = toSek(amountAbs)
     if (sekAbs === 0) return
@@ -392,12 +432,18 @@ export function buildOrderBookingLines({
     lines.push(line(account, sekAbs, side, amountAbs))
     counterSum = round(counterSum + (signedOriginal > 0 ? sekAbs : -sekAbs))
   }
+  // The rate and accounts of every bucket with an amount.
+  const targets: Array<{ rate: number; revenueAccount: string; vatAccount: string | null }> = []
   for (const { bucket, rule } of routing.buckets) {
+    const hasAmount = round(bucket.net) !== 0 || round(bucket.tax) !== 0
     if (rule && rule.mode === 'accounts') {
       pushSigned(rule.revenue_account, round(bucket.net))
       // routeOrderBuckets never routes a bucket with tax to a rule without
       // a VAT account, so a missing one here means the bucket has no tax.
       if (rule.vat_account) pushSigned(rule.vat_account, round(bucket.tax))
+      if (hasAmount) {
+        targets.push({ rate: bucket.rate, revenueAccount: rule.revenue_account, vatAccount: rule.vat_account })
+      }
       continue
     }
     // A 'swedish' rule may name the revenue account (Swedish VAT on EU sales
@@ -411,14 +457,42 @@ export function buildOrderBookingLines({
     const vatAccount = VAT_ACCOUNT_BY_RATE[bucket.rate] ?? VAT_ACCOUNT_BY_RATE[25]
     pushSigned(revenueAccount, round(bucket.net))
     pushSigned(vatAccount, round(bucket.tax))
+    if (hasAmount) targets.push({ rate: bucket.rate, revenueAccount, vatAccount })
   }
 
-  // Balance residual (per-line rounding, FX drift) to öresavrundning. The
-  // residual can fall on either side. No currency metadata: the residual is
-  // an SEK-conversion artifact, not an amount that exists in the order
-  // currency.
+  // A gap above the residual limit is not öresavrundning (OrderBookingGap):
+  // split at the order's one rate when the gross is the larger, else left
+  // out for a person to book.
+  let gap: OrderBookingGap | null = null
+  const bucketGap = round(grossAbs - counterSum)
+  if (Math.abs(bucketGap) > MAX_RESIDUAL_SEK) {
+    const [first] = targets
+    const oneTarget =
+      first &&
+      targets.every(
+        (t) => t.rate === first.rate && t.revenueAccount === first.revenueAccount && t.vatAccount === first.vatAccount,
+      )
+        ? first
+        : null
+    const gapOriginal = round(Math.abs(order.total) - counterSumOriginal)
+    if (bucketGap > 0 && gapOriginal > 0 && oneTarget && (oneTarget.vatAccount || oneTarget.rate <= 0)) {
+      const { vat, net } = splitGrossVat(gapOriginal, oneTarget.rate / 100)
+      pushSigned(oneTarget.revenueAccount, net)
+      if (oneTarget.vatAccount) pushSigned(oneTarget.vatAccount, vat)
+      gap = { amount: bucketGap, booked: 'shipping' }
+    } else {
+      gap = { amount: bucketGap, booked: null }
+    }
+  }
+
+  // Balance residual (per-line rounding, FX drift) to öresavrundning, only
+  // within the limit. The residual can fall on either side. No currency
+  // metadata: the residual is an SEK-conversion artifact, not an amount that
+  // exists in the order currency.
   const residual = round(grossAbs - counterSum)
-  if (residual !== 0) {
+  // A split the SEK conversion leaves unbalanced beyond the limit is not booked.
+  if (gap && Math.abs(residual) > MAX_RESIDUAL_SEK) gap = { amount: gap.amount, booked: null }
+  if (residual !== 0 && Math.abs(residual) <= MAX_RESIDUAL_SEK) {
     const side: 'debit' | 'credit' = residual > 0 ? counterSide : grossSide
     const residualAbs = round(Math.abs(residual))
     lines.push({
@@ -429,5 +503,5 @@ export function buildOrderBookingLines({
     })
   }
 
-  return lines
+  return { lines, gap }
 }

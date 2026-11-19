@@ -11016,6 +11016,7 @@
     "warning_country_unknown": "The order has no destination country, so the suggestion uses the Swedish accounts. If the order went to another country, change the lines. If every order lacks a country, the store does not share addresses with the app: check the Shopify panel under Settings > Connections > Shopify.",
     "warning_zero_rate_foreign": "The order has VAT-free sales to a customer outside Sweden. The suggestion uses 3004 (other VAT-free); export or EU sales normally belong on 31xx/33xx accounts. Adjust the lines if needed.",
     "warning_foreign_vat": "The order is in a foreign currency with VAT. Verify that Swedish output VAT is correct: for EU sales above the threshold (OSS), VAT should not be reported through the 2611 series.",
+    "warning_vat_breakdown_gap": "The order total differs from its VAT breakdown by more than öre rounding, and the difference cannot be put on a single VAT rate. The suggestion leaves the difference out and does not balance: add lines for it before booking the order.",
     "invoice_title": "Create invoice from order {number}",
     "invoice_description": "A draft invoice is created for {customer}. You review the draft before sending; the invoice number is assigned when it is sent.",
     "invoice_no_customer": "Unknown customer",

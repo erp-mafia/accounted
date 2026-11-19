@@ -118,9 +118,9 @@ const SCENARIOS: Scenario[] = [
       currency: 'EUR',
       order_date: '2026-08-10',
       paid_date: '2026-08-11',
-      total: 61,
+      total: 61.2,
       total_tax: 9,
-      total_sek: 686.25,
+      total_sek: 688.5,
       exchange_rate: 11.25,
       vat_breakdown: [
         { rate: 25, net: 40, tax: 10 },
@@ -263,8 +263,8 @@ describe('bookOrderThroughEngine engine input (posting port parity)', () => {
     expect(event('order in euro with a resolved SEK total, two rates')).toMatchObject({
       occurred_on: '2026-08-11',
       currency: 'EUR',
-      amount: 61,
-      amount_sek: 686.25,
+      amount: 61.2,
+      amount_sek: 688.5,
       tax_amounts: [{ tax: 'vat', amount_sek: 101.25 }],
     })
   })

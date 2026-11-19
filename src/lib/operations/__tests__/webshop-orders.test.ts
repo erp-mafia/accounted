@@ -177,6 +177,20 @@ describe('webshopOrderWarnings', () => {
     expect(codes(order())).toEqual([])
   })
 
+  it('flags a gap above öre rounding the suggestion leaves out, not one it splits at the one rate (crm#1993)', () => {
+    const twoRates = order({
+      total: 300,
+      total_tax: 37,
+      total_sek: 300,
+      vat_breakdown: [
+        { rate: 25, net: 100, tax: 25 },
+        { rate: 12, net: 100, tax: 12 },
+      ],
+    })
+    expect(codes(twoRates)).toEqual(['vat_breakdown_gap'])
+    expect(codes(order({ total: 164, total_sek: 164 }))).toEqual([])
+  })
+
   it('flags a country outside Sweden, which the Swedish suggestion cannot know', () => {
     expect(codes(order({ customer_country: 'no' }))).toEqual(['country_outside_sweden'])
   })

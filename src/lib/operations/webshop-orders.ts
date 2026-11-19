@@ -226,7 +226,7 @@ export const webshopOrdersGet = defineOperation({
   docs: {
     summary: 'One webshop order row with its line items and the booking the Orders page would prefill.',
     description:
-      'Everything GET /webshop-orders returns for the row plus its line items and suggestion: the entry date (paid date, else order date), the open fiscal period covering it, the description, the payment account from the store\'s payment-method mapping (1686 when unmapped), and balanced lines with revenue and VAT per rate: on the store\'s accounts for the order\'s destination country when the store has set them, otherwise on the Swedish accounts. warnings lists what the suggestion cannot know, e.g. a country outside Sweden that no store rule covers. Read-only.',
+      'Everything GET /webshop-orders returns for the row plus its line items and suggestion: the entry date (paid date, else order date), the open fiscal period covering it, the description, the payment account from the store\'s payment-method mapping (1686 when unmapped), and balanced lines with revenue and VAT per rate: on the store\'s accounts for the order\'s destination country when the store has set them, otherwise on the Swedish accounts. warnings lists what the suggestion cannot know, e.g. a country outside Sweden that no store rule covers. A difference above öre rounding between the total and the VAT per rate is never put on 3740: with one VAT rate it is booked at that rate (e.g. shipping without its own tax line), otherwise it is left out, the lines do not balance and warnings has vat_breakdown_gap. Read-only.',
     useWhen: 'Before booking an order, to start from the dialog\'s lines and change the accounts that the country or VAT rate calls for.',
     doNotUseFor: 'Listing orders (GET /webshop-orders) or booking (POST /webshop-orders/{orderId}/book).',
     pitfalls: [
@@ -276,7 +276,7 @@ export const webshopOrdersGet = defineOperation({
     name: 'gnubok_get_webshop_order',
     title: 'Get Webshop Order',
     description:
-      'One webshop order: line items, VAT per rate, country (Shopify: destination), and the booking the Orders page would prefill (date, period, balanced lines on Swedish accounts) with warnings, e.g. a country outside Sweden.',
+      'One webshop order: line items, VAT per rate, country (Shopify: destination), and the booking the Orders page would prefill (date, period, lines on Swedish accounts) with warnings, e.g. a country outside Sweden, or vat_breakdown_gap for a gap no single VAT rate fits.',
     keywords: [
       'webshop', 'webbshop', 'order', 'orderrader', 'orderdetaljer', 'order details', 'orderunderlag', 'ordernummer',
       'shopify', 'woocommerce', 'kontering order', 'oss', 'voec', 'leveransland',

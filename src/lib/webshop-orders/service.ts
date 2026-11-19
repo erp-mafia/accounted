@@ -38,12 +38,13 @@ import {
 } from './book-order'
 import {
   WEBSHOP_PREFILL_ACCOUNTS,
-  buildOrderBookingLines,
+  buildOrderBooking,
   orderBookingDescription,
   resolveBookingWarnings,
   resolvePaymentAccount,
   routeOrder,
   unsupportedSwedishRates,
+  type OrderBooking,
 } from './booking-lines'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -81,6 +82,10 @@ const WARNING_TEXT: Record<string, { sv: string; en: string }> = {
   vat_breakdown_missing: {
     sv: 'Butiken skickade ingen momsuppdelning. Momssatsen i förslaget är härledd ur beloppen och måste kontrolleras.',
     en: 'The store sent no VAT breakdown. The VAT rate in the suggestion is inferred from the amounts and must be checked.',
+  },
+  vat_breakdown_gap: {
+    sv: 'Orderns belopp skiljer sig från momsuppdelningen med mer än öresavrundning, och skillnaden går inte att lägga på en enda momssats. Förslaget tar inte med skillnaden och balanserar inte: lägg till rader för den innan ordern bokförs.',
+    en: 'The order total differs from its VAT breakdown by more than öre rounding, and the difference cannot be put on a single VAT rate. The suggestion leaves the difference out and does not balance: add lines for it before booking the order.',
   },
   invoice_mode_method: {
     sv: 'Betalsättet är markerat som fakturaflöde för butiken. Överväg Skapa faktura i stället för att bokföra direkt.',
@@ -120,6 +125,7 @@ export function webshopOrderWarnings(
   if (order.row_type === 'order' && resolvePaymentAccount(order, settings).invoiceMode) {
     out.push(warning('invoice_mode_method'))
   }
+  if (suggestedBooking(order, settings)?.gap?.booked === null) out.push(warning('vat_breakdown_gap'))
   return out
 }
 
@@ -210,9 +216,14 @@ function suggestedLines(
   order: WebshopOrder,
   settings: WebshopStoreSettings | null,
 ): CreateJournalEntryLineInput[] | null {
+  return suggestedBooking(order, settings)?.lines ?? null
+}
+
+function suggestedBooking(order: WebshopOrder, settings: WebshopStoreSettings | null): OrderBooking | null {
   try {
-    return buildOrderBookingLines({ order, settings })
+    return buildOrderBooking({ order, settings })
   } catch {
+    // Only a non-SEK order without an exchange rate throws: no prefill yet.
     return null
   }
 }

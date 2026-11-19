@@ -8,11 +8,11 @@ import type {
 } from '@/types'
 import { assertOrderBookable, resolveOrderFx } from './book-order'
 import {
-  buildOrderBookingLines,
+  buildOrderBooking,
   resolvePaymentAccount,
   routeOrder,
   unsupportedSwedishRates,
-  ROUNDING_ACCOUNT,
+  type OrderBooking,
 } from './booking-lines'
 import { usesRevenueTemplate } from './country-routing'
 
@@ -26,26 +26,17 @@ import { usesRevenueTemplate } from './country-routing'
  * ratio-inferred fallback), a destination outside Sweden the store's country
  * rules do not cover, a missing destination in a store with rules, a
  * non-Swedish rate on the Swedish accounts, an invoice-mode payment method,
- * an unresolved exchange rate, or a 3740 residual above öre scale is refused
- * per order and pointed at the single-order dialog, where a person sees the
- * lines.
+ * an unresolved exchange rate, or a gap between the gross total and the VAT
+ * breakdown above MAX_RESIDUAL_SEK is refused per order and pointed at the
+ * single-order dialog, where a person sees the lines.
  */
-
-/**
- * A residual on 3740 above this magnitude (SEK) is not öresavrundning: it
- * means the order's gross total does not match its VAT breakdown (gift
- * cards, plugin-mangled orders). Legitimate per-bucket öre rounding and FX
- * drift stay well below this; anything above needs the single-order dialog
- * where the user sees the line.
- */
-export const MAX_RESIDUAL_SEK = 1
 
 export type UnattendedLinesOutcome =
   /** order is the row with its exchange rate resolved. */
   | { ok: true; order: WebshopOrder; lines: CreateJournalEntryLineInput[] }
   /** A refusal with a structured-error code. */
   | { ok: false; code: string; details?: Record<string, unknown> }
-  /** buildOrderBookingLines threw; the caller maps the error. */
+  /** buildOrderBooking threw; the caller maps the error. */
   | { ok: false; code: null; error: unknown }
 
 export interface UnattendedLinesInput {
@@ -161,39 +152,28 @@ export async function deriveUnattendedOrderLines(
     return { ok: false, code: 'WEBSHOP_ORDER_FX_UNRESOLVED' }
   }
 
-  let lines: CreateJournalEntryLineInput[]
+  let booking: OrderBooking
   try {
-    lines = buildOrderBookingLines({
+    booking = buildOrderBooking({
       order: resolvedOrder,
       settings,
       paymentAccount: input.paymentAccount,
       revenueAccounts: input.revenueAccounts,
     })
   } catch (err) {
-    // buildOrderBookingLines throws only on an unresolved SEK amount, which
+    // buildOrderBooking throws only on an unresolved SEK amount, which
     // resolveOrderFx already excluded; belt-and-braces per order.
     return { ok: false, code: null, error: err }
   }
 
-  // Residual bound: the 3740 line exists to absorb öre rounding and FX
-  // drift, both bounded by a few öre per bucket. A residual above
-  // MAX_RESIDUAL_SEK means the gross total and the VAT breakdown disagree
-  // (gift-card redemptions, mangled orders); in the single dialog the user
-  // sees the fat 3740 line and stops, so an unattended booking must refuse
-  // instead of booking the gap as "öresavrundning". The residual is
-  // identified structurally as the LAST line: the builder appends it after
-  // every bucket line, and find-by-account would read the wrong line
-  // whenever an earlier line also sits on 3740 (e.g. a 3740 payment_account,
-  // or historically a 3740 template account before the schema banned it),
-  // silently disarming this guard (skeptic finding).
-  const lastLine = lines[lines.length - 1]
-  const residualLine = lastLine.account_number === ROUNDING_ACCOUNT ? lastLine : undefined
-  const residualAbs = residualLine
-    ? Math.max(residualLine.debit_amount || 0, residualLine.credit_amount || 0)
-    : 0
-  if (residualAbs > MAX_RESIDUAL_SEK) {
-    return { ok: false, code: 'WEBSHOP_ORDER_RESIDUAL_TOO_LARGE', details: { residual: residualAbs } }
+  // A gap above MAX_RESIDUAL_SEK means the gross total and the VAT breakdown
+  // disagree (missing shipping tax, gift cards, mangled orders). The builder
+  // either splits it at the order's one rate or leaves it out; both need a
+  // person, so an unattended booking refuses instead.
+  if (booking.gap) {
+    return { ok: false, code: 'WEBSHOP_ORDER_RESIDUAL_TOO_LARGE', details: { residual: Math.abs(booking.gap.amount) } }
   }
+  const { lines } = booking
 
   return { ok: true, order: resolvedOrder, lines }
 }

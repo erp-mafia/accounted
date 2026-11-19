@@ -11016,6 +11016,7 @@
     "warning_country_unknown": "Ordern saknar leveransland, så förslaget använder de svenska kontona. Gick ordern till ett annat land, ändra raderna. Saknar alla ordrar land delar butiken inte adresser med appen: kontrollera Shopify-panelen under Inställningar > Kopplingar > Shopify.",
     "warning_zero_rate_foreign": "Ordern har momsfri försäljning till kund utanför Sverige. Förslaget använder 3004 (övrig momsfri); export- eller EU-försäljning ska normalt bokas på 31xx/33xx-konton. Justera raderna vid behov.",
     "warning_foreign_vat": "Ordern är i utländsk valuta med moms. Kontrollera att svensk utgående moms är rätt: vid EU-försäljning över tröskelvärdet (OSS) ska momsen inte redovisas via 2611-serien.",
+    "warning_vat_breakdown_gap": "Orderns belopp skiljer sig från momsuppdelningen med mer än öresavrundning, och skillnaden går inte att lägga på en enda momssats. Förslaget tar inte med skillnaden och balanserar inte: lägg till rader för den innan ordern bokförs.",
     "invoice_title": "Skapa faktura från order {number}",
     "invoice_description": "Ett fakturautkast skapas för {customer}. Du granskar utkastet innan det skickas; fakturanummer sätts först när fakturan skickas.",
     "invoice_no_customer": "Okänd kund",

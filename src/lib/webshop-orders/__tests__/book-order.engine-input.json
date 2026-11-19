@@ -110,11 +110,11 @@
           "lines": [
             {
               "account_number": "1686",
-              "debit_amount": 686.25,
+              "debit_amount": 688.5,
               "credit_amount": 0,
               "line_description": "Order 1003 (Swish)",
               "currency": "EUR",
-              "amount_in_currency": 61,
+              "amount_in_currency": 61.2,
               "exchange_rate": 11.25
             },
             {
@@ -152,12 +152,6 @@
               "currency": "EUR",
               "amount_in_currency": 1.2,
               "exchange_rate": 11.25
-            },
-            {
-              "account_number": "3740",
-              "debit_amount": 2.25,
-              "credit_amount": 0,
-              "line_description": "Order 1003 (Swish)"
             }
           ]
         }

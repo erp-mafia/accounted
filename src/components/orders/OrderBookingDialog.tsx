@@ -18,7 +18,7 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import {
-  buildOrderBookingLines,
+  buildOrderBooking,
   resolveBookingWarnings,
   resolvePaymentAccount,
 } from '@/lib/webshop-orders/booking-lines'
@@ -76,14 +76,15 @@ export default function OrderBookingDialog({
   const fxUnresolved = order.currency.toUpperCase() !== 'SEK' && order.total_sek === null
   const accountValid = ACCOUNT_NUMBER_RE.test(paymentAccount)
 
-  const initialLines = useMemo<FormLine[] | null>(() => {
+  const prefill = useMemo(() => {
     if (fxUnresolved || !accountValid) return null
     try {
-      return buildOrderBookingLines({
+      const booking = buildOrderBooking({
         order,
         settings: storeSettings,
         paymentAccount,
-      }).map((line) => ({
+      })
+      const lines: FormLine[] = booking.lines.map((line) => ({
         account_number: line.account_number,
         debit_amount: line.debit_amount ? formatAmountInput(line.debit_amount, '.') : '',
         credit_amount: line.credit_amount ? formatAmountInput(line.credit_amount, '.') : '',
@@ -96,10 +97,12 @@ export default function OrderBookingDialog({
             }
           : {}),
       }))
+      return { lines, gapUnbooked: booking.gap?.booked === null }
     } catch {
       return null
     }
   }, [order, storeSettings, paymentAccount, fxUnresolved, accountValid])
+  const initialLines = prefill?.lines ?? null
 
   const methodLabel = order.payment_method_title || order.payment_method || ''
 
@@ -223,6 +226,10 @@ export default function OrderBookingDialog({
                 (Swedish review: the hint must never suppress a real
                 cross-border VAT advisory). */}
             {(() => {
+              // A gap the prefill leaves out first: the lines do not balance.
+              if (prefill?.gapUnbooked) {
+                return <p className="attn text-xs">{t('warning_vat_breakdown_gap')}</p>
+              }
               const warnings = resolveBookingWarnings(order, storeSettings)
               if (warnings.length > 0) {
                 return (

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildOrderBooking,
   buildOrderBookingLines,
   fallbackVatBreakdown,
   orderBookingDescription,
@@ -174,6 +175,99 @@ describe('buildOrderBookingLines', () => {
     expect(sumDebits(lines)).toBe(sumCredits(lines))
   })
 
+  describe('a gap between the gross total and the VAT buckets (crm#1993)', () => {
+    const accountLines = (lines: CreateJournalEntryLineInput[]) =>
+      lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+    it('keeps a gap within the residual limit on 3740', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({ total: 500.4, total_sek: 500.4 }),
+        settings,
+      })
+      expect(gap).toBeNull()
+      expect(lineFor(lines, '3740')).toMatchObject({ debit_amount: 0, credit_amount: 0.4 })
+      expect(sumDebits(lines)).toBe(sumCredits(lines))
+    })
+
+    it('books a refund\'s untaxed shipping part at the order\'s one rate, never on 3740', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({
+          row_type: 'refund',
+          total: -768,
+          total_tax: -146,
+          total_sek: -768,
+          vat_breakdown: [{ rate: 25, net: 583, tax: 146 }],
+        }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: 39, booked: 'shipping' })
+      expect(accountLines(lines)).toEqual([
+        ['1930', 0, 768],
+        ['3001', 583, 0],
+        ['2611', 146, 0],
+        ['3001', 31.2, 0],
+        ['2611', 7.8, 0],
+      ])
+      expect(lineFor(lines, '3740')).toBeUndefined()
+      expect(sumDebits(lines)).toBe(768)
+      expect(sumCredits(lines)).toBe(768)
+    })
+
+    it('splits the gap of a foreign-currency order in that currency', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({
+          currency: 'EUR',
+          total: 110,
+          total_tax: 20,
+          total_sek: 1100,
+          exchange_rate: 10,
+          vat_breakdown: [{ rate: 25, net: 80, tax: 20 }],
+        }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: 100, booked: 'shipping' })
+      expect(lines.slice(3)).toEqual([
+        expect.objectContaining({ account_number: '3001', credit_amount: 80, amount_in_currency: 8, currency: 'EUR' }),
+        expect.objectContaining({ account_number: '2611', credit_amount: 20, amount_in_currency: 2, currency: 'EUR' }),
+      ])
+      expect(sumDebits(lines)).toBe(sumCredits(lines))
+    })
+
+    it('leaves the gap of a two-rate order out, with nothing on 3740', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({
+          total: 700,
+          total_tax: 112,
+          total_sek: 700,
+          vat_breakdown: [
+            { rate: 25, net: 400, tax: 100 },
+            { rate: 12, net: 100, tax: 12 },
+          ],
+        }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: 88, booked: null })
+      expect(accountLines(lines)).toEqual([
+        ['1930', 700, 0],
+        ['3001', 0, 400],
+        ['2611', 0, 100],
+        ['3002', 0, 100],
+        ['2621', 0, 12],
+      ])
+      expect(round(sumDebits(lines) - sumCredits(lines))).toBe(88)
+    })
+
+    it('leaves out a gap where the buckets exceed the gross: no missing shipping makes the gross smaller', () => {
+      const { lines, gap } = buildOrderBooking({
+        order: makeOrder({ total: 400, total_sek: 400 }),
+        settings,
+      })
+      expect(gap).toEqual({ amount: -100, booked: null })
+      expect(lineFor(lines, '3740')).toBeUndefined()
+      expect(lines).toHaveLength(3)
+    })
+  })
+
   it('mirrors refund rows: credit the payment account, debit revenue and VAT', () => {
     const lines = buildOrderBookingLines({
       order: makeOrder({
@@ -295,9 +389,9 @@ describe('buildOrderBookingLines', () => {
   it('falls back to the default revenue account for rates not in the template', () => {
     const lines = buildOrderBookingLines({
       order: makeOrder({
-        total: 537,
+        total: 487,
         total_tax: 87,
-        total_sek: 537,
+        total_sek: 487,
         vat_breakdown: [
           { rate: 25, net: 300, tax: 75 },
           { rate: 12, net: 100, tax: 12 },
