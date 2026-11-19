@@ -1,8 +1,9 @@
 #!/usr/bin/env npx tsx
-import { readFile, writeFile, mkdir, unlink, lstat, realpath } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, unlink, lstat, realpath, readdir } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
+import yaml from 'js-yaml'
 import { discoverAtoms } from './lib/atom-discovery'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -54,8 +55,15 @@ export function skillSummary(description: string): string {
   return cut.slice(0, cut.lastIndexOf(' '))
 }
 
-/** The mirror's README: what the skills are, one install line per way in, and every skill in a table. */
-export function publicReadme(skills: { name: string; path: string; description: string }[]): string {
+export interface ReadmeSkill { name: string; path: string; description: string }
+const skillRow = (skill: ReadmeSkill) => `| [\`${skill.name}\`](${skill.path}) | ${skillSummary(skill.description).replace(/\|/g, '\\|')} |`
+
+/**
+ * The mirror's README: what the skills are, one install line per way in, and every skill in a table.
+ * `repoOnly` are skills that live in the public repository and are not generated from here; they
+ * get a table of their own so a sync never drops them from the list.
+ */
+export function publicReadme(skills: ReadmeSkill[], repoOnly: ReadmeSkill[] = []): string {
   return [
     '# Swedish accounting skills',
     '',
@@ -76,8 +84,20 @@ export function publicReadme(skills: { name: string; path: string; description: 
     '',
     '| Skill | Covers |',
     '| --- | --- |',
-    ...skills.map((skill) => `| [\`${skill.name}\`](${skill.path}) | ${skillSummary(skill.description).replace(/\|/g, '\\|')} |`),
+    ...skills.map(skillRow),
     '',
+    ...(repoOnly.length
+      ? [
+          '### Also in this repository',
+          '',
+          "Skills written in this repository, not generated from Accounted's source.",
+          '',
+          '| Skill | Covers |',
+          '| --- | --- |',
+          ...repoOnly.map(skillRow),
+          '',
+        ]
+      : []),
     '## Community',
     '',
     "Instructions shared by Accounted's users and others live in [`community/`](community/README.md): workflows, knowledge and analyses, each reviewed by Accounted before it is merged.",
@@ -105,7 +125,7 @@ export function stampMit(body: string): string {
   return normalized.slice(0, end) + HEADER + normalized.slice(end)
 }
 
-export async function publicSkillFiles(root: string): Promise<Map<string, string>> {
+export async function publicSkillFiles(root: string, repoOnly: ReadmeSkill[] = []): Promise<Map<string, string>> {
   const atoms = (await discoverAtoms(root)).filter((atom) => atom.tier === 'horizontal')
   const files = new Map<string, string>()
   for (const atom of atoms) {
@@ -114,9 +134,37 @@ export async function publicSkillFiles(root: string): Promise<Map<string, string
     files.set(path, stampMit(await readFile(join(root, atom.body_path), 'utf8')))
   }
   files.set('LICENSE', LICENSE)
-  files.set('README.md', publicReadme(atoms.filter((atom) => !atom.parent_atom_id).map((atom) => ({ name: atom.slug, path: atom.body_path.split(sep).join('/'), description: atom.description }))))
+  files.set('README.md', publicReadme(atoms.filter((atom) => !atom.parent_atom_id).map((atom) => ({ name: atom.slug, path: atom.body_path.split(sep).join('/'), description: atom.description })), repoOnly))
   files.set(MANIFEST, JSON.stringify([...files.keys()].sort(), null, 2) + '\n')
   return files
+}
+
+/**
+ * Skills that live only in the public repository: a folder under `.claude/skills`
+ * whose SKILL.md the mirror neither writes now (`managed`) nor wrote before
+ * (the previous manifest, also in `managed`). Read, never written. A folder
+ * without a readable name and description in its frontmatter is left out.
+ */
+export async function repoOnlySkills(target: string, managed: Set<string>): Promise<ReadmeSkill[]> {
+  const skillsDir = join(target, '.claude', 'skills')
+  const entries = await readdir(skillsDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return []; throw error })
+  const found: ReadmeSkill[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[a-z0-9][a-z0-9-]*$/.test(entry.name)) continue
+    const path = `.claude/skills/${entry.name}/SKILL.md`
+    if (managed.has(path)) continue
+    const file = join(skillsDir, entry.name, 'SKILL.md')
+    const info = await lstat(file).catch(() => null)
+    if (!info?.isFile()) continue
+    const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec((await readFile(file, 'utf8')).replace(/\r\n/g, '\n'))
+    if (!frontmatter) continue
+    let meta: unknown
+    try { meta = yaml.load(frontmatter[1]) } catch { continue }
+    const { name, description } = (meta ?? {}) as { name?: unknown; description?: unknown }
+    if (name !== entry.name || typeof description !== 'string' || !description.trim()) continue
+    found.push({ name: entry.name, path, description })
+  }
+  return found.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 async function safePath(target: string, file: string): Promise<string> {
@@ -137,8 +185,10 @@ export async function syncPublicSkills(root: string, target: string, check = fal
   target = await realpath(resolve(target))
   const source = await realpath(root)
   if (target === source || !relative(source, target).startsWith('..')) throw new Error('Use a separate public-repo checkout or temporary directory')
-  const files = await publicSkillFiles(root)
   const previous = JSON.parse(await readFile(join(target, MANIFEST), 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return '[]'; throw error })) as string[]
+  const mirrored = await publicSkillFiles(root)
+  const repoOnly = await repoOnlySkills(target, new Set([...mirrored.keys(), ...previous]))
+  const files = repoOnly.length ? await publicSkillFiles(root, repoOnly) : mirrored
   const changed: string[] = []
   for (const file of new Set([...files.keys(), ...previous])) {
     const output = await safePath(target, file)

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import yaml from 'js-yaml'
 import { discoverAtoms } from '../lib/atom-discovery'
 import { buildMigrationSql } from '../generate-skill-bodies'
-import { PUBLIC_REPO, publicSkillFiles, skillSummary, stampMit, syncPublicSkills } from '../sync-public-skills'
+import { PUBLIC_REPO, publicSkillFiles, repoOnlySkills, skillSummary, stampMit, syncPublicSkills } from '../sync-public-skills'
 import { COMMUNITY_REPO } from '@/lib/agent-skills/community-repo-name'
 
 const directories: string[] = []
@@ -88,6 +88,45 @@ describe('public mirror', () => {
       expect(summary.length).toBeGreaterThan(0)
       expect(summary.length).toBeLessThanOrEqual(160)
     }
+  })
+  it('keeps a skill that lives only in the public repository: listed in the README, its files untouched', async () => {
+    const target = await directory()
+    const own = join(target, '.claude/skills/swedish-industry-test')
+    await mkdir(join(own, 'references'), { recursive: true })
+    const body = '---\nname: swedish-industry-test\ndescription: >\n  Accounting for a test trade. Covers | pipes and more.\n---\n# Written here\n'
+    await writeFile(join(own, 'SKILL.md'), body)
+    await writeFile(join(own, 'references/detail.md'), 'Detail')
+    await syncPublicSkills(process.cwd(), target)
+    const readme = await readFile(join(target, 'README.md'), 'utf8')
+    expect(readme).toContain('### Also in this repository')
+    expect(readme).toContain('| [`swedish-industry-test`](.claude/skills/swedish-industry-test/SKILL.md) | Accounting for a test trade |')
+    expect(readme.indexOf('### Also in this repository')).toBeLessThan(readme.indexOf('## Community'))
+    expect(await readFile(join(own, 'SKILL.md'), 'utf8')).toBe(body)
+    expect(await readFile(join(own, 'references/detail.md'), 'utf8')).toBe('Detail')
+    const manifest = JSON.parse(await readFile(join(target, '.accounted-skills-mirror.json'), 'utf8')) as string[]
+    expect(manifest.some((file) => file.includes('swedish-industry-test'))).toBe(false)
+    expect(await syncPublicSkills(process.cwd(), target, true)).toEqual([])
+  })
+  it('leaves the README as it was when the public repository has no skill of its own', async () => {
+    const target = await directory()
+    await syncPublicSkills(process.cwd(), target)
+    expect(await readFile(join(target, 'README.md'), 'utf8')).not.toContain('Also in this repository')
+  })
+  it('reads only real skill folders as repository-only skills', async () => {
+    const target = await directory()
+    const skills = join(target, '.claude/skills')
+    const write = async (folder: string, content: string) => { await mkdir(join(skills, folder), { recursive: true }); await writeFile(join(skills, folder, 'SKILL.md'), content) }
+    await write('swedish-own', '---\nname: swedish-own\ndescription: Written in the public repository.\n---\nBody\n')
+    await write('swedish-vat', '---\nname: swedish-vat\ndescription: Mirrored.\n---\nBody\n')
+    await write('wrong-name', '---\nname: another-name\ndescription: The name is not the folder.\n---\nBody\n')
+    await write('no-description', '---\nname: no-description\n---\nBody\n')
+    await write('no-frontmatter', '# Just a heading\n')
+    await write('broken-yaml', '---\nname: [broken\n---\nBody\n')
+    await mkdir(join(skills, 'empty-folder'), { recursive: true })
+    await symlink(join(skills, 'swedish-own'), join(skills, 'linked'))
+    const found = await repoOnlySkills(target, new Set(['.claude/skills/swedish-vat/SKILL.md']))
+    expect(found).toEqual([{ name: 'swedish-own', path: '.claude/skills/swedish-own/SKILL.md', description: 'Written in the public repository.' }])
+    expect(await repoOnlySkills(await directory(), new Set())).toEqual([])
   })
   it('refuses the source checkout as a destination', async () => {
     await expect(syncPublicSkills(process.cwd(), process.cwd())).rejects.toThrow('separate')
