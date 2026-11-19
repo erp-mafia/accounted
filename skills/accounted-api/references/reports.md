@@ -1278,7 +1278,7 @@ Example response `200`:
           "report": "Balansräkning",
           "figure": "...",
           "v1_path": "/reports/balance-sheet",
-          "mcp_tool": "gnubok_get_balance_sheet"
+          "mcp_tool": "accounted_get_balance_sheet"
         }
       }
     ]
@@ -1337,7 +1337,7 @@ Response `200`:
     equals: { report: string, figure: string, v1_path: string, mcp_tool: string },
     caveats: { code: string, message_sv: string, message_en: string }[],
     data_status?: unknown,
-    explain: { tool: "gnubok_explain_measure", arguments: Record<string, unknown>, v1_path: string }
+    explain: { tool: "accounted_explain_measure", arguments: Record<string, unknown>, v1_path: string }
   },
   meta: {
     request_id: string,
@@ -1377,12 +1377,12 @@ Example response `200`:
       "report": "Momsdeklaration (SKV 4700)",
       "figure": "rutor.ruta49, same period_type/year/period",
       "v1_path": "/reports/vat-declaration",
-      "mcp_tool": "gnubok_get_vat_report"
+      "mcp_tool": "accounted_get_vat_report"
     },
     "caveats": [],
     "data_status": null,
     "explain": {
-      "tool": "gnubok_explain_measure",
+      "tool": "accounted_explain_measure",
       "arguments": {
         "measure_id": "vat_payable",
         "period_type": "quarterly",
@@ -1477,7 +1477,7 @@ Example response `200`:
       "report": "Balansräkning",
       "figure": "...",
       "v1_path": "/reports/balance-sheet",
-      "mcp_tool": "gnubok_get_balance_sheet"
+      "mcp_tool": "accounted_get_balance_sheet"
     },
     "contributors": [
       {
@@ -3115,7 +3115,7 @@ Example response `200`:
 Computes the NE-bilaga rutor R1-R11 from the books before the resultatavslut (försäljning, momsfria intäkter, varuinköp, övriga kostnader, lönekostnader, räntor, avskrivningar, årets resultat), with the per-ruta account breakdown and warnings. The owner's personnummer (the enskild firma's org number) is masked in this JSON; the SRU files for upload at skatteverket.se, served by GET /reports/ne-bilaga/sru, carry it in full. Read-only.
 
 **Use when:** Preparing or checking the enskild firma's NE-bilaga after bokslut.
-**Do not use for:** Aktiebolag (GET /reports/ink2), the egenavgifter / räntefördelning / periodiseringsfond adjustments (MCP gnubok_preview_ef_declaration), or submitting (upload the SRU files at skatteverket.se).
+**Do not use for:** Aktiebolag (GET /reports/ink2), the egenavgifter / räntefördelning / periodiseringsfond adjustments (MCP accounted_preview_ef_declaration), or submitting (upload the SRU files at skatteverket.se).
 
 **Pitfalls:**
 - Only for enskild firma: another legal form answers 400 TAX_DECL_NE_WRONG_LEGAL_FORM.
@@ -3983,7 +3983,7 @@ Builds the settlement entry for a momsperiod from the same ledger totals as the 
 - is_empty true means the period has no VAT to clear.
 - lines clear the WHOLE period, also when booking_status is booked and the period is settled in full. Only with partly_settled true are they what is left after the settlements already posted: booking is still refused then (booking_status booked), so the rest is posted as an ordinary verifikat or the earlier settlement is reversed and the period booked whole.
 - An ordinary verifikat stays out of the declaration rutor as a momsredovisning only when it has a 2650 or 1650 line (or is a pure 26xx movement against 1630): two 26xx accounts against each other count as VAT of the period.
-- An existing_entries row recognised by shape can be a correction, not a momsredovisning (e.g. output VAT moved to 1650 next to a sales correction): once the user confirms, it is marked as one on the Moms page or with gnubok_mark_not_momsredovisning; the rutor then read it and it no longer counts as a momsredovisning.
+- An existing_entries row recognised by shape can be a correction, not a momsredovisning (e.g. output VAT moved to 1650 next to a sales correction): once the user confirms, it is marked as one on the Moms page or with accounted_mark_not_momsredovisning; the rutor then read it and it no longer counts as a momsredovisning.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -4104,7 +4104,7 @@ Response `200`:
   data: {
     as_of: string,
     counts: { unexplained: number, cannot_check: number, ok: number },
-    items: { check_id: string, name_sv: string, status: "ok" | "unexplained" | "cannot_check", subject: { kind: "company" | "bank_account" | "vat_period", cash_account_id?: string, handle?: string | null, account_number?: string, name?: string, period_type?: string, year?: number, period?: number, start?: string, end?: string, label?: string }, difference: number | null, unit: "SEK" | "count", as_of: string, summary_sv: string, refusal_code: string | null, next: { tool: string, arguments?: Record<string, unknown>, screen: string } | null, explain: { tool: "gnubok_explain_unexplained", arguments: Record<string, unknown>, v1_path: string } }[],
+    items: { check_id: string, name_sv: string, status: "ok" | "unexplained" | "cannot_check", subject: { kind: "company" | "bank_account" | "vat_period", cash_account_id?: string, handle?: string | null, account_number?: string, name?: string, period_type?: string, year?: number, period?: number, start?: string, end?: string, label?: string }, difference: number | null, unit: "SEK" | "count", as_of: string, summary_sv: string, refusal_code: string | null, next: { tool: string, arguments?: Record<string, unknown>, screen: string } | null, explain: { tool: "accounted_explain_unexplained", arguments: Record<string, unknown>, v1_path: string } }[],
     truncated: number
   },
   meta: {
@@ -4143,11 +4143,11 @@ Example response `200`:
         "summary_sv": "Kundreskontran visar 15 500,00 kr men de bokförda kundfordringarna är 12 500,00 kr: differens 3 000,00 kr.",
         "refusal_code": null,
         "next": {
-          "tool": "gnubok_link_invoice_to_voucher",
+          "tool": "accounted_link_invoice_to_voucher",
           "screen": "/reports/kundreskontra"
         },
         "explain": {
-          "tool": "gnubok_explain_unexplained",
+          "tool": "accounted_explain_unexplained",
           "arguments": {
             "check_id": "receivables_vs_ledger"
           },
@@ -4200,7 +4200,7 @@ Response `200`:
     compares: { report: string, v1_path: string | null, mcp_tool: string, screen: string | null }[],
     next_action: { message_sv: string, tool: string, arguments?: Record<string, unknown>, screen: string },
     status: "ok" | "unexplained" | "cannot_check",
-    results: { status: "ok" | "unexplained" | "cannot_check", subject: { kind: "company" | "bank_account" | "vat_period", cash_account_id?: string, handle?: string | null, account_number?: string, name?: string, period_type?: string, year?: number, period?: number, start?: string, end?: string, label?: string }, difference: number | null, as_of: string, summary_sv: string, sides: { key: string, label_sv: string, label_en: string, amount: number | null, source: { report: string, v1_path: string | null, mcp_tool: string, screen: string | null } }[], refusal: { code: string, message_sv: string, message_en: string, retryable?: boolean, details?: Record<string, unknown> } | null, facts: Record<string, unknown> | null, next_action: { message_sv: string, tool: string, arguments?: Record<string, unknown>, screen: string } | null, explain: { tool: "gnubok_explain_unexplained", arguments: Record<string, unknown>, v1_path: string } }[]
+    results: { status: "ok" | "unexplained" | "cannot_check", subject: { kind: "company" | "bank_account" | "vat_period", cash_account_id?: string, handle?: string | null, account_number?: string, name?: string, period_type?: string, year?: number, period?: number, start?: string, end?: string, label?: string }, difference: number | null, as_of: string, summary_sv: string, sides: { key: string, label_sv: string, label_en: string, amount: number | null, source: { report: string, v1_path: string | null, mcp_tool: string, screen: string | null } }[], refusal: { code: string, message_sv: string, message_en: string, retryable?: boolean, details?: Record<string, unknown> } | null, facts: Record<string, unknown> | null, next_action: { message_sv: string, tool: string, arguments?: Record<string, unknown>, screen: string } | null, explain: { tool: "accounted_explain_unexplained", arguments: Record<string, unknown>, v1_path: string } }[]
   },
   meta: {
     request_id: string,
@@ -4231,19 +4231,19 @@ Example response `200`:
       {
         "report": "Kundreskontra (öppna kundfakturor)",
         "v1_path": "/reports/ar-ledger",
-        "mcp_tool": "gnubok_get_ar_ledger",
+        "mcp_tool": "accounted_get_ar_ledger",
         "screen": "/reports/kundreskontra"
       },
       {
         "report": "Huvudbok, kundfordringskontona",
         "v1_path": "/reports/general-ledger",
-        "mcp_tool": "gnubok_get_general_ledger",
+        "mcp_tool": "accounted_get_general_ledger",
         "screen": "/reports/huvudbok"
       }
     ],
     "next_action": {
       "message_sv": "Öppna förklaringen ...",
-      "tool": "gnubok_link_invoice_to_voucher",
+      "tool": "accounted_link_invoice_to_voucher",
       "screen": "/reports/kundreskontra"
     },
     "status": "unexplained",
@@ -4265,7 +4265,7 @@ Example response `200`:
             "source": {
               "report": "Kundreskontra (öppna kundfakturor)",
               "v1_path": "/reports/ar-ledger",
-              "mcp_tool": "gnubok_get_ar_ledger",
+              "mcp_tool": "accounted_get_ar_ledger",
               "screen": "/reports/kundreskontra"
             }
           },
@@ -4277,7 +4277,7 @@ Example response `200`:
             "source": {
               "report": "Huvudbok, kundfordringskontona",
               "v1_path": "/reports/general-ledger",
-              "mcp_tool": "gnubok_get_general_ledger",
+              "mcp_tool": "accounted_get_general_ledger",
               "screen": "/reports/huvudbok"
             }
           }
@@ -4288,11 +4288,11 @@ Example response `200`:
         },
         "next_action": {
           "message_sv": "Öppna förklaringen ...",
-          "tool": "gnubok_link_invoice_to_voucher",
+          "tool": "accounted_link_invoice_to_voucher",
           "screen": "/reports/kundreskontra"
         },
         "explain": {
-          "tool": "gnubok_explain_unexplained",
+          "tool": "accounted_explain_unexplained",
           "arguments": {
             "check_id": "receivables_vs_ledger"
           },
@@ -4423,7 +4423,7 @@ Example response `200`:
     },
     "next_action": {
       "message_sv": "Öppna förklaringen ...",
-      "tool": "gnubok_link_invoice_to_voucher",
+      "tool": "accounted_link_invoice_to_voucher",
       "screen": "/reports/kundreskontra"
     }
   },
@@ -4447,7 +4447,7 @@ Posts the settlement proposal of GET /reports/vat-declaration/settlement-proposa
 **Do not use for:** Filing the momsdeklaration with Skatteverket (the eSKD file or the Skatteverket connection), booking the payment to the skattekonto, or custom settlement lines (post an ordinary verifikat with POST /journal-entries).
 
 **Pitfalls:**
-- A posted settlement in the period answers 409 VAT_SETTLEMENT_ALREADY_BOOKED with details.journal_entry_id: reverse it first if the period must be re-booked. When that verifikat is a correction the shapes caught, not a momsredovisning, and the user confirms it, mark it as one instead (the Moms page, or gnubok_mark_not_momsredovisning).
+- A posted settlement in the period answers 409 VAT_SETTLEMENT_ALREADY_BOOKED with details.journal_entry_id: reverse it first if the period must be re-booked. When that verifikat is a correction the shapes caught, not a momsredovisning, and the user confirms it, mark it as one instead (the Moms page, or accounted_mark_not_momsredovisning).
 - Pass expected_fingerprint from the proposal you reviewed: if the ledger changed since, 409 VAT_SETTLEMENT_PROPOSAL_CHANGED instead of booking different lines.
 - A locked or closed period, or a date on or before the company lock date, answers 400 PERIOD_LOCKED; no voucher number is spent.
 - A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.

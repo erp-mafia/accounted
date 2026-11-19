@@ -18,7 +18,7 @@ The proposal names every natural person with more than 25 % of the votes (LRVH 1
 **Do not use for:** Filing with Bolagsverket: that is done in Bolagsverket's e-service (filing_url) by an authorised representative.
 
 **Pitfalls:**
-- The proposal is not the answer: a person confirms it with gnubok_confirm_beneficial_owners.
+- The proposal is not the answer: a person confirms it with accounted_confirm_beneficial_owners.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -78,7 +78,7 @@ Example response `200`:
 
 Keeps the dated record (basis, conclusion, family holdings checked, control agreements), brings the verklig_huvudman roles in line, and when the set changed adds a deadline to file the change with Bolagsverket without delay (LRVH 2:3). Dry-runnable.
 
-**Use when:** After gnubok_get_beneficial_owners, once the person has confirmed the owners.
+**Use when:** After accounted_get_beneficial_owners, once the person has confirmed the owners.
 **Do not use for:** Filing with Bolagsverket: an authorised representative files in Bolagsverket's e-service.
 
 **Pitfalls:**

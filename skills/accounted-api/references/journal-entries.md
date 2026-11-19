@@ -715,7 +715,7 @@ Per Bokföringslagen 5 kap 5 §, posted entries cannot be modified. This endpoin
 - A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.
 - Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.
 - Lines crediting import VAT (2615/2625/2635, boxes 60-62) need the taxable amount in box 50 (4545-4547) in the same lines, else 400 IMPORT_VAT_WITHOUT_BASE; reverse charge books its output VAT on 2614/2624/2634.
-- The answer carries owned_by when an invoice, credit note, supplier invoice, periodisering, asset or payroll run owns the verifikat (else null): the change is posted, but that object does not follow it, so prefer owned_by.tool (e.g. gnubok_credit_supplier_invoice) or owned_by.action_href. Nothing is refused.
+- The answer carries owned_by when an invoice, credit note, supplier invoice, periodisering, asset or payroll run owns the verifikat (else null): the change is posted, but that object does not follow it, so prefer owned_by.tool (e.g. accounted_credit_supplier_invoice) or owned_by.action_href. Nothing is refused.
 - An entry linked to a bank transaction keeps its amount on that transaction's bank ledger account (the account the bank says the money moved on): lines that move it to another bank account (19xx or a cash account ledger) return 409 CORRECTION_BANK_ACCOUNT_CHANGED (details.bank_account, details.moved_to). If the transaction does not belong to the entry, reverse the entry instead.
 
 | Parameter | In | Type | Required | Notes |
@@ -1244,7 +1244,7 @@ Creates a reversing journal entry that nullifies the original. The original rema
 - A locked or closed fiscal year, or a date on or before the company lock date, returns PERIOD_LOCKED (details.reason) before any voucher number is drawn; a dry run gives the same verdict. Unlock a locked year with POST /fiscal-periods/{id}/unlock. A closed year stays as it is: book a correcting entry in the open year instead (POST /journal-entries).
 - You cannot reverse a draft (status must be posted). Use /correct after commit if the original needs replacing.
 - Reversing an entry 3+ links deep in a correction chain returns CORRECTION_CHAIN_TOO_DEEP (409). Book ONE net-effect correction instead, or pass allow_deep_chain=true to override.
-- The answer carries owned_by when an invoice, credit note, supplier invoice, periodisering, asset or payroll run owns the verifikat (else null): the change is posted, but that object does not follow it, so prefer owned_by.tool (e.g. gnubok_credit_supplier_invoice) or owned_by.action_href. Nothing is refused.
+- The answer carries owned_by when an invoice, credit note, supplier invoice, periodisering, asset or payroll run owns the verifikat (else null): the change is posted, but that object does not follow it, so prefer owned_by.tool (e.g. accounted_credit_supplier_invoice) or owned_by.action_href. Nothing is refused.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

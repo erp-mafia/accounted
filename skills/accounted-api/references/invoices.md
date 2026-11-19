@@ -14,8 +14,8 @@ are in SKILL.md and are not repeated per endpoint.
 
 Overdue customer invoices (due date passed, Europe/Stockholm) that are issued and still owed, checked against the handover rules: SEK and a Swedish customer, at least the company's minimum, no open case, a complete postal address, an org number for a business, not time-barred, no ROT/RUT share refused by Skatteverket. The bank check (an unbooked payment that may be this invoice) and a consumer's age are checked when the invoice is handed over, not here.
 
-**Use when:** Deciding which overdue invoices to stage for collection with gnubok_send_invoice_to_collection.
-**Do not use for:** Reading an invoice's case (gnubok_get_collection_case) or listing every unpaid invoice (GET /invoices).
+**Use when:** Deciding which overdue invoices to stage for collection with accounted_send_invoice_to_collection.
+**Do not use for:** Reading an invoice's case (accounted_get_collection_case) or listing every unpaid invoice (GET /invoices).
 
 **Pitfalls:**
 - needs_attestation=true means only a person can hand the invoice over in the web UI (the invoice has no delivery record, was imported, or the customer answered a reminder).
@@ -80,7 +80,7 @@ Example response `200`:
 
 Books the capital the debtor paid on the day they paid, against the clearing account for money the provider holds (default 1689), with the provider's payment data rendered as the voucher's underlag. A payment the books refuse (a locked period, an invoice already paid) answers outcome needs_review with the reason and waits for a person. The dry run reads only and names the invoice and the clearing account; the staged booking pins the payment day.
 
-**Use when:** gnubok_list_collection_settlements lists a collected payment as pending or needs_review.
+**Use when:** accounted_list_collection_settlements lists a collected payment as pending or needs_review.
 **Do not use for:** Payments the customer made to the company itself (mark the invoice paid; it is reported to the provider).
 
 **Pitfalls:**
@@ -153,7 +153,7 @@ Example response `200`:
 Newest first, up to 200 of each. With settlement_id it also returns that payout's lines: the account each books to and the choices a person (or an approved staged booking) must make before it books. Served whatever the collections start gates say.
 
 **Use when:** Before booking a collected payment or a payout, or to see what waits in Avräkningar.
-**Do not use for:** Open collection cases (gnubok_get_collection_case) or invoices not handed over.
+**Do not use for:** Open collection cases (accounted_get_collection_case) or invoices not handed over.
 
 **Pitfalls:**
 - A payout in needs_mapping with reason possible_duplicate is answered by a person in the web UI, not by an agent.
@@ -232,7 +232,7 @@ Example response `200`:
 
 Records the accounts chosen for the lines the ledger could not place (lines), books the payout's pending collected payments first, then posts one voucher dated the payout day: principal against the clearing account, the provider's fees and their VAT, the payout to the payout account. The dry run reads only and previews that voucher (voucher_lines); it refuses a payout the ledger cannot book with the choices given (409 COLLECTION_SETTLEMENT_NEEDS_PERSON with the reason). The staged booking pins the payout's day, amount, lines and voucher: a payout or voucher that changed before approval answers 409 COLLECTION_SETTLEMENT_CHANGED. A payout that still needs a person at commit answers outcome needs_mapping with the reason.
 
-**Use when:** gnubok_list_collection_settlements lists a payout as received or needs_mapping, and its lines show the choices to make.
+**Use when:** accounted_list_collection_settlements lists a payout as received or needs_mapping, and its lines show the choices to make.
 **Do not use for:** A payout held as a possible duplicate of one booked by hand: a person answers that in Avräkningar.
 
 **Pitfalls:**
@@ -969,8 +969,8 @@ Example response `200`:
 
 The invoice's open case, or its latest closed or refused one, re-read from the provider when it was last read more than a minute ago. Works whatever the company's plan or switches say: an open case is always readable.
 
-**Use when:** Following up an invoice handed over to collection, or before gnubok_collection_case_action to see which actions the case offers.
-**Do not use for:** Finding invoices to hand over (gnubok_list_collection_candidates).
+**Use when:** Following up an invoice handed over to collection, or before accounted_collection_case_action to see which actions the case offers.
+**Do not use for:** Finding invoices to hand over (accounted_list_collection_candidates).
 
 **Pitfalls:**
 - case=null means the invoice was never handed over.
@@ -1036,7 +1036,7 @@ Example response `200`:
 
 Runs every handover check again (eligibility, the bank check for unbooked payments that may be this invoice, the amount still owed), then registers the claim with the provider, which starts with a reminder or a collection notice. The invoice PDF goes with it. The invoice's status does not change; payments recorded later are reported to the provider. The dry run checks everything as reads and contacts no provider.
 
-**Use when:** gnubok_list_collection_candidates lists the invoice as eligible and the customer has not paid.
+**Use when:** accounted_list_collection_candidates lists the invoice as eligible and the customer has not paid.
 **Do not use for:** Invoices that need a person's attestation (imported, no delivery record, a customer answer to a reminder, a bank not synced in 24 hours): only a person can hand those over in the web UI.
 
 **Pitfalls:**
@@ -1119,16 +1119,16 @@ Example response `200`:
 **Act on an invoice's open collection case: pause, resume, withdraw, mark disputed, or answer what the provider waits for.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-Only the actions the case offers right now are accepted (gnubok_get_collection_case lists them). Pausing, resuming, withdrawing and disputing serve the open case and always run. Approving the next step, contesting a dispute, overriding the customer's "already paid" and approving legal action escalate against the customer: they re-run the bank check and only a person can approve them in Accounted.
+Only the actions the case offers right now are accepted (accounted_get_collection_case lists them). Pausing, resuming, withdrawing and disputing serve the open case and always run. Approving the next step, contesting a dispute, overriding the customer's "already paid" and approving legal action escalate against the customer: they re-run the bank check and only a person can approve them in Accounted.
 
 **Use when:** The case waits for a decision (stage awaiting_decision), the customer disputes the claim, or the company wants to pause or withdraw it.
 **Do not use for:** Recording a payment (mark the invoice paid; it is reported to the provider).
 
 **Pitfalls:**
 - dispute and confirm_not_paid need a message of at least ten characters.
-- withdraw can cost a fee at the provider once its free period has passed (gnubok_get_collection_case withdraw_fee.may_apply): show the user, then pass fee_acknowledged=true.
+- withdraw can cost a fee at the provider once its free period has passed (accounted_get_collection_case withdraw_fee.may_apply): show the user, then pass fee_acknowledged=true.
 - already_paid is never sent: record the payment on the invoice instead (409 COLLECTION_REGISTER_PAYMENT); it is reported to the provider.
-- start is not taken here: starting a delivered invoice is a handover, through gnubok_send_invoice_to_collection (409 COLLECTION_START_VIA_HANDOVER).
+- start is not taken here: starting a delivered invoice is a handover, through accounted_send_invoice_to_collection (409 COLLECTION_START_VIA_HANDOVER).
 - 409 CONNECTOR_COLLECTIONS_ACTION_UNAVAILABLE: the case does not offer that action in its current stage.
 - Over REST, an escalation (approve_step, contest_dispute, confirm_not_paid, approve_legal_action) is sent with ?stage=true: a direct call answers 400 STAGE_REQUIRED. pause, resume, withdraw and dispute also commit directly.
 
@@ -1472,7 +1472,7 @@ Example response `200`:
 **Transition a draft invoice to sent (without emailing).**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, gnubok_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request, or Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol) in the dashboard; check an invoice with GET /invoices/{id}/peppol): senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. With body paid_at_issue: { account_number } (a 19xx kassa, bank or Swish account) the invoice is issued already paid, a kontantfaktura: one verifikat on the invoice date, Debit that account / Credit revenue + output VAT, no 1510 leg, in either accounting method, and status ends paid (no :mark-paid afterwards). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
+Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, accounted_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request, or Inställningar > Kopplingar > E-faktura via Peppol (Settings > Connections > E-invoicing via Peppol) in the dashboard; check an invoice with GET /invoices/{id}/peppol): senders whose org number is not a personnummer (every legal form except enskild firma), standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. With body paid_at_issue: { account_number } (a 19xx kassa, bank or Swish account) the invoice is issued already paid, a kontantfaktura: one verifikat on the invoice date, Debit that account / Credit revenue + output VAT, no 1510 leg, in either accounting method, and status ends paid (no :mark-paid afterwards). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
 
 **Use when:** You delivered the invoice through a channel other than Accounted's email or Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a Peppol send was accepted by the network but reported that the invoice could not be marked as sent. With paid_at_issue: the customer paid when the invoice was issued (Swish, card, cash at the counter) and the invoice is also the receipt.
 **Do not use for:** Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).

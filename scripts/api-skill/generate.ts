@@ -26,6 +26,9 @@ import { fileURLToPath } from 'node:url'
 import '@/lib/api/v1/load-routes'
 import { generateOpenApiSpec } from '@/lib/api/v1/registry'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
+import { ALL_OPERATIONS } from '@/lib/operations/registry'
+import { tools } from '@/extensions/general/mcp-server/server'
+import { projectToolReferencesInText } from '@/extensions/general/mcp-server/tool-namespace'
 
 import {
   listOperations,
@@ -425,6 +428,25 @@ function buildFiles(): Map<string, string> {
   return files
 }
 
+/**
+ * Endpoint descriptions and overlays name MCP tools by their internal ids
+ * (`gnubok_*`). A reader of this skill meets those tools under their public
+ * names (`accounted_*`), so every exact reference to a registered tool is
+ * written with the public name. Other identifiers that start the same way,
+ * such as the `gnubok_sk_` key prefix, are not tool names and stay as they are.
+ *
+ * The server's tool list leaves out operations whose feature is switched off
+ * where this script runs; ALL_OPERATIONS has every one of them, so the result
+ * does not depend on the environment.
+ */
+function withPublicToolNames(files: Map<string, string>): Map<string, string> {
+  const toolNames: ReadonlySet<string> = new Set([
+    ...tools.map((tool) => tool.name),
+    ...ALL_OPERATIONS.flatMap((op) => (op.mcp ? [op.mcp.name] : [])),
+  ])
+  return new Map([...files].map(([rel, content]) => [rel, projectToolReferencesInText(content, 'accounted', toolNames)]))
+}
+
 function listMarkdownFiles(dir: string, prefix = ''): string[] {
   if (!existsSync(dir)) return []
   const out: string[] = []
@@ -438,7 +460,7 @@ function listMarkdownFiles(dir: string, prefix = ''): string[] {
 
 function main() {
   const check = process.argv.includes('--check')
-  const files = buildFiles()
+  const files = withPublicToolNames(buildFiles())
 
   const existing = listMarkdownFiles(OUT_DIR)
   const orphans = existing.filter((rel) => !files.has(rel))

@@ -770,7 +770,7 @@ Example response `200`:
 Merges the given fields into the item's extracted_data: documentKind (what the document is), supplier (name, orgNumber, vatNumber, address, bankgiro, plusgiro), invoice (invoiceNumber, invoiceDate, dueDate, paymentReference, currency, creditedInvoiceNumber) and totals (subtotal, vatAmount, total). Fields not named are kept, line items and the VAT breakdown included; null clears a field. A hand-set total becomes a verified total. Answers the merged reading. Idempotent. Dry-runnable.
 
 **Use when:** The reading got a field wrong (total, date, invoice number) before the item is converted or matched.
-**Do not use for:** Replacing the whole reading from your own extraction pipeline (MCP gnubok_set_inbox_extracted_data), or changing a registered supplier invoice.
+**Do not use for:** Replacing the whole reading from your own extraction pipeline (MCP accounted_set_inbox_extracted_data), or changing a registered supplier invoice.
 
 **Pitfalls:**
 - An item already converted to a supplier invoice returns 409 INBOX_ITEM_EDIT_LOCKED.

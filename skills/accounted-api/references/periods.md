@@ -1440,7 +1440,7 @@ Example response `200`:
 **Run a structured compliance pre-flight check.**
 `scope:compliance:read · risk:low · idempotent`
 
-Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity), vat_close (can the momsperiod be closed: SKV 4700 rutor, bookkeeping blockers and the momsdeklaration completeness checks the web filing UI uses; the same answer as the MCP tool gnubok_vat_close_check). New types can be added without changing the response shape.
+Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity), vat_close (can the momsperiod be closed: SKV 4700 rutor, bookkeeping blockers and the momsdeklaration completeness checks the web filing UI uses; the same answer as the MCP tool accounted_vat_close_check). New types can be added without changing the response shape.
 
 **Use when:** Before committing to an irreversible action (VAT close, year-end close), or as a periodic audit sweep to surface blockers before they become urgent.
 **Do not use for:** Executing the underlying action: this is read-only. After a passing check, call the corresponding async endpoint (POST /fiscal-periods/{id}/year-end, etc).
@@ -1523,7 +1523,7 @@ Example response `200`:
 The deadlines under Deadlines in the app, earliest due date first: tax and filing deadlines generated from the tax settings and the ones added by hand. status open (the default) is what is left to do; completed and all include what is ticked off. A deadline the company removed from its list is never returned. overdue is computed from the due date and only for an open deadline.
 
 **Use when:** Seeing what is due, or finding the deadline_id to tick off after the work is done.
-**Do not use for:** Which moms periods are on record as filed (GET /reports/vat-declaration/filings, gnubok_list_vat_filings) or what Skatteverket has on file (GET /skatteverket/vat-declarations, gnubok_vat_declaration_status).
+**Do not use for:** Which moms periods are on record as filed (GET /reports/vat-declaration/filings, accounted_list_vat_filings) or what Skatteverket has on file (GET /skatteverket/vat-declarations, accounted_vat_declaration_status).
 
 **Pitfalls:**
 - has_more true means more deadlines match than limit returned: narrow with due_from and due_to.
@@ -1597,10 +1597,10 @@ Example response `200`:
 Sets one deadline completed (is_completed true) or open again (false), as the checkbox under Deadlines in the app does. Only the tick changes: no verifikat, period or filing is touched and nothing is sent to Skatteverket. Asking for the state the deadline already has changes nothing (changed false). Dry-runnable.
 
 **Use when:** The work a deadline stands for is done (or was ticked off by mistake) and it should leave (or return to) the open list.
-**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or gnubok_mark_vat_period_filed; AGI: gnubok_mark_agi_period_filed), which completes the deadline with the filing date.
+**Do not use for:** A moms or AGI filing made outside Accounted: record the filing instead (moms: POST /reports/vat-declaration/filings or accounted_mark_vat_period_filed; AGI: accounted_mark_agi_period_filed), which completes the deadline with the filing date.
 
 **Pitfalls:**
-- DEADLINE_NOT_FOUND for an id that is not one of the company's listed deadlines (GET /deadlines, gnubok_list_deadlines), including one the company removed.
+- DEADLINE_NOT_FOUND for an id that is not one of the company's listed deadlines (GET /deadlines, accounted_list_deadlines), including one the company removed.
 - DEADLINE_CONFIRMED_BY_SKATTEVERKET when is_completed false targets a deadline whose filing Skatteverket confirmed through the connection.
 
 | Parameter | In | Type | Required | Notes |
@@ -2937,7 +2937,7 @@ Example response `200`:
 
 Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, the K3 scope questions (previous_year_framework: the framework of the previous årsredovisning, none for the first one; has_other_temporary_differences), reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user's confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.
 
-**Use when:** The validation (gnubok_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.
+**Use when:** The validation (accounted_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.
 **Do not use for:** The document texts (POST .../arsredovisning/narrative) or the signer roster itself (POST .../arsredovisning/signatures).
 
 **Pitfalls:**
@@ -3076,7 +3076,7 @@ Response `200` (`application/xhtml+xml`).
 Generates the K2 inline XBRL document (the live draft, or a frozen version with version_id) and runs the local mirror of Bolagsverket's kontrollera checks on it, plus a generation dry run and the 5 MB size limit. Issues carry the Bolagsverket code where one exists (e.g. 1107 missing signers) or ACC-*. Nothing is sent to Bolagsverket. Read-only.
 
 **Use when:** Before a digital filing, or to see why the iXBRL document is not ready.
-**Do not use for:** The ÅRL/K2 completeness checks per stage (gnubok_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).
+**Do not use for:** The ÅRL/K2 completeness checks per stage (accounted_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).
 
 **Pitfalls:**
 - K2 aktiebolag only: the iXBRL generator does not produce K3 documents.
@@ -3276,7 +3276,7 @@ Example response `200`:
 Renders the årsredovisning for the räkenskapsår (K2 or K3 template by the framework) as the dashboard does. Without version_id it is the live draft from the books, named ...-utkast.pdf; with version_id it is that immutable version with the signatures recorded on it, named ...-papperskopia.pdf once signed. Nothing is sent to Bolagsverket.
 
 **Use when:** A printable copy for the board to sign on paper, the archive, or a review.
-**Do not use for:** The inline XBRL document for digital filing (GET .../arsredovisning/ixbrl) or the report as JSON (gnubok_preview_arsredovisning).
+**Do not use for:** The inline XBRL document for digital filing (GET .../arsredovisning/ixbrl) or the report as JSON (accounted_preview_arsredovisning).
 
 **Pitfalls:**
 - The live draft is refused while an SIE import is unfinished (409); a frozen version stays readable.
@@ -3300,7 +3300,7 @@ Response `200` (`application/pdf`).
 The current signer slots for the räkenskapsår: the unbound pending roster while one exists, otherwise the slots bound to the latest version with their status, signing date, method and evidence reference. The signature_id values are what PATCH and DELETE .../signatures/{signatureId} take; finalizing a version may create new slots bound to it. Read-only.
 
 **Use when:** Before adding a signer (avoid duplicates) or to find the slot to record a signature on after a version is finalized.
-**Do not use for:** The report content (gnubok_preview_arsredovisning) or the version list (gnubok_list_arsredovisning_versions).
+**Do not use for:** The report content (accounted_preview_arsredovisning) or the version list (accounted_list_arsredovisning_versions).
 
 **Pitfalls:**
 - Declined slots are listed too; they do not appear in the document.
@@ -3614,7 +3614,7 @@ Builds the årsredovisning from a complete read of the books (refused while an S
 **Do not use for:** Filing with Bolagsverket (dashboard only, BankID), recording signatures (PATCH .../signatures/{signatureId}) or reading the document (GET .../arsredovisning/pdf).
 
 **Pitfalls:**
-- Statements that do not tie, or (finalize) any signing-stage error, answer 409 ARSREDOVISNING_INCOMPLETE with the validation in details: run gnubok_validate_arsredovisning with stage signing first.
+- Statements that do not tie, or (finalize) any signing-stage error, answer 409 ARSREDOVISNING_INCOMPLETE with the validation in details: run accounted_validate_arsredovisning with stage signing first.
 - finalize needs a confirmed signer roster (PATCH .../compliance {"signer_roster_confirmed": true}) and at least one signer.
 - Content changed since the hash you pass: 409 ARSREDOVISNING_CONTENT_CHANGED; dry-run again and review.
 - A new finalize supersedes the previous ready_for_signature version; signatures recorded on it do not carry over.

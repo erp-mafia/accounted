@@ -868,7 +868,7 @@ Example response `200`:
 Moves one or more accounts that one bank connection syncs (Enable Banking or Open Payments) to other 19xx ledger accounts, as the dashboard does under Inställningar > Kopplingar. Unbooked bank rows follow the account; posted verifikat stay on the old ledger account (move a balance with a voucher if needed). Another account of the connection on a requested ledger account swaps to the mover's old one. Owner/admin only. Dry-run first: the preview lists each move with booked and unbooked row counts.
 
 **Use when:** A company migrated from another system books its bank on other 19xx accounts than the bank connection chose.
-**Do not use for:** Accounts typed in by hand or from SIE (no bank connection), or rebooking posted verifikat (gnubok_correct_entry).
+**Do not use for:** Accounts typed in by hand or from SIE (no bank connection), or rebooking posted verifikat (accounted_correct_entry).
 
 **Pitfalls:**
 - All accounts must be synced by one active bank connection: 400 VALIDATION_ERROR with details.reason several_connections or not_bank_connected; a connection not active answers BANK_LEDGER_CHANGE_NOT_ACTIVE.
@@ -1512,7 +1512,7 @@ Example response `200`:
 accounts: the accounts the connections book card and Swish to (1686 by default; a kind mapped to a bank account clears nothing). ledger_balance: debit minus credit on them as of as_of (default today), read as the balance sheet reads it, ingående balans included; null when no fiscal year covers as_of. unbooked_days and unbooked_amount: the days up to as_of not booked yet and their card and Swish, tips included, which the ledger does not hold yet. With every day booked and every payout booked against the account, ledger_balance is the money still on its way; a negative or growing figure is a payout booked as sales or a day booked twice. Read-only.
 
 **Use when:** A month-end check of the till's card and Swish against the bank, or before booking payouts against 1686.
-**Do not use for:** Which bank row is which payout (gnubok_suggest_categories proposes those), or the days themselves (GET /pos-sales/days).
+**Do not use for:** Which bank row is which payout (accounted_suggest_categories proposes those), or the days themselves (GET /pos-sales/days).
 
 **Pitfalls:**
 - Two venues on one account share one ledger_balance: the ledger cannot tell them apart.
@@ -3269,7 +3269,7 @@ Walks all unbooked bank transactions in the requested date range and pairs them 
 - date_from / date_to default to the company's full bank history if omitted. Specify a window for predictable performance.
 - account_number defaults to 1930. Multi-account companies must pass the BAS code of the account they are reconciling (e.g. 1932 for a EUR account), or it silently reconciles 1930.
 - Idempotency-Key is mandatory.
-- Without confidence_threshold, a non-dry run applies EVERY match found, including fuzzy ones at confidence 0.75. Pass confidence_threshold (0.9 recommended, matching gnubok_auto_match_period) for unattended runs, or dry-run first and review matches.confidence before applying. Matches below the threshold are returned but not applied (skipped_below_threshold counts them).
+- Without confidence_threshold, a non-dry run applies EVERY match found, including fuzzy ones at confidence 0.75. Pass confidence_threshold (0.9 recommended, matching accounted_auto_match_period) for unattended runs, or dry-run first and review matches.confidence before applying. Matches below the threshold are returned but not applied (skipped_below_threshold counts them).
 - The 366-day window bound only applies when BOTH date_from and date_to are set; a single-sided or absent window scans full history.
 
 | Parameter | In | Type | Required | Notes |
@@ -4339,7 +4339,7 @@ Confirms an invoice match for a transaction. Creates the payment journal entry, 
 - Proforma + delivery notes are rejected (MATCH_INVOICE_NOT_INVOICE_TYPE): only document_type='invoice' can be matched.
 - Transaction must be positive (amount > 0): negative transactions return MATCH_INVOICE_NOT_INCOME.
 - Invoice must be in sent / overdue / partially_paid status: paid or draft invoices return MATCH_INVOICE_NOT_OPEN. An invoice with an active credit note returns MATCH_INVOICE_CREDIT_NOTE.
-- A transaction that is already booked returns 409 MATCH_INVOICE_TX_ALREADY_BOOKED and nothing is written: its pointer or a bank_line link names a posted verifikat, it is linked to an existing verifikat, or a posted verifikat was booked from it without being linked to it. details names it (journal_entry_id, voucher, via: pointer, link, reconciliation, named for that last case, or concurrent when another booking took the transaction first) and says in undo how to open the transaction: uncategorize (POST /transactions/{id}/uncategorize), unlink (the reconciliation unlink: the verifikat stays posted) or reverse_voucher (a storno of the verifikat, which releases every transaction on it). On via named, when the verifikat is the booking of this transaction, link the two instead (POST /transactions/{id}/link-journal-entry). If the verifikat already is this payment, do not match: link the invoice to it (gnubok_link_invoice_to_voucher, or the invoice page). Before 2026-11-01 this endpoint reversed a categorization without being asked and booked a second verifikat on a transaction booked through a voucher link.
+- A transaction that is already booked returns 409 MATCH_INVOICE_TX_ALREADY_BOOKED and nothing is written: its pointer or a bank_line link names a posted verifikat, it is linked to an existing verifikat, or a posted verifikat was booked from it without being linked to it. details names it (journal_entry_id, voucher, via: pointer, link, reconciliation, named for that last case, or concurrent when another booking took the transaction first) and says in undo how to open the transaction: uncategorize (POST /transactions/{id}/uncategorize), unlink (the reconciliation unlink: the verifikat stays posted) or reverse_voucher (a storno of the verifikat, which releases every transaction on it). On via named, when the verifikat is the booking of this transaction, link the two instead (POST /transactions/{id}/link-journal-entry). If the verifikat already is this payment, do not match: link the invoice to it (accounted_link_invoice_to_voucher, or the invoice page). Before 2026-11-01 this endpoint reversed a categorization without being asked and booked a second verifikat on a transaction booked through a voucher link.
 - An ignored transaction returns 409 BANK_ROW_IGNORED: restore it first (DELETE /transactions/{id}/ignore).
 - A failed read of the transaction returns 503 BANK_ROW_READ_FAILED: nothing was booked, retry the same request.
 - Kontantmetoden: an invoice never booked at issue is matched only by one payment of its whole amount. A partial payment, or the final payment of an invoice already part-paid, returns INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (details.reason partial_payment | previously_partially_paid); book that payment as a manual journal entry.
