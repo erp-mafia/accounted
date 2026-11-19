@@ -12,6 +12,7 @@ import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isPersonPayer, type PayerChoice } from '@/lib/expenses/payer'
 import { supplierInvoiceEditorAmounts } from './editor-amounts'
 import { bookLimitedDeduction, limitedDeductionApplies } from './limited-deduction'
+import { reverseChargeRateOf } from './reverse-charge-rate'
 import type { StatedRateVat } from '@/lib/vat/document-vat'
 import type { SupplierInvoiceReverseChargeKind, VatTreatment } from '@/types'
 
@@ -223,9 +224,10 @@ export function buildSupplierInvoicePayload(
       amount: item.amount,
       account_number: item.account_number,
       // Reverse charge: the supplier charges no VAT, so the line rate is 0 and
-      // the self-assessed rate travels on reverse_charge_rate (25% default).
+      // the self-assessed rate travels on reverse_charge_rate (never one the
+      // API refuses: a row without a valid one sends its default).
       vat_rate: data.reverse_charge ? 0 : item.vat_rate,
-      reverse_charge_rate: data.reverse_charge ? (item.reverse_charge_rate ?? 0.25) : undefined,
+      reverse_charge_rate: data.reverse_charge ? reverseChargeRateOf(item) : undefined,
       // The deductible part of the row's moms (begränsat momsavdrag).
       ...(!data.reverse_charge && item.vat_amount != null ? { vat_amount: item.vat_amount } : {}),
       // Periodisering: only sent when the row has a complete period AND the

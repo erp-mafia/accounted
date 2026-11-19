@@ -17,6 +17,7 @@ import {
   type SupplierInvoiceBookingItem,
 } from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
+import { reverseChargeRateOf } from '@/lib/supplier-invoices/reverse-charge-rate'
 import type { StatedRateVat } from '@/lib/vat/document-vat'
 import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { roundOre } from '@/lib/money'
@@ -103,7 +104,7 @@ function bookingItems(
     line_total: itemTotals[index].lineTotal,
     vat_rate: reverseCharge ? 0 : item.vat_rate,
     vat_amount: reverseCharge ? 0 : itemTotals[index].vatAmount,
-    reverse_charge_rate: reverseCharge ? (item.reverse_charge_rate ?? 0.25) : null,
+    reverse_charge_rate: reverseCharge ? reverseChargeRateOf(item) : null,
     accrual_period_start: itemHasAccrual(item) ? item.accrual_period_start : null,
     accrual_period_end: itemHasAccrual(item) ? item.accrual_period_end : null,
     accrual_balance_account: itemHasAccrual(item) ? (item.accrual_balance_account ?? null) : null,

@@ -12,12 +12,12 @@ import { accrualWorthOpening, K2_ACCRUAL_THRESHOLD_SEK } from '@/components/book
 import type { SupplierInvoiceFormData, SupplierInvoiceLineItem } from '@/lib/supplier-invoices/form-payload'
 import {
   accountCarriedFrom,
-  reverseChargeRateCarriedFrom,
   rowsFromReading,
   rowsStandAsPut,
   type ReadingRow,
   type ReadingRows,
 } from '@/lib/supplier-invoices/reading-rows'
+import { reverseChargeRateDefault } from '@/lib/supplier-invoices/reverse-charge-rate'
 import { isForeignSupplierType } from '@/lib/vat/supplier-invoice-line-checks'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
 
@@ -108,11 +108,6 @@ interface ReadingRowsOptions {
   accountFor: (row: ReadingRow, index: number) => string
   /** The company's own chart, for the text of a row whose read lines had none. */
   chart: AccountChart
-  /**
-   * The reverse-charge sats a row starts with under reverse charge, when the
-   * rows it replaces carry one for its moms sats (reverseChargeRateCarriedFrom).
-   */
-  reverseChargeRateFor?: (row: ReadingRow) => number | undefined
 }
 
 /**
@@ -123,12 +118,15 @@ interface ReadingRowsOptions {
  * post need not be accrued, K2 2.4 as amended by BFNAR 2025:2): the user
  * sees the panel and can remove it before booking. None under reverse
  * charge, where the editor clears it: the cost row is the momsunderlag.
+ * Under reverse charge each row carries its default reverse-charge sats
+ * (reverseChargeRateDefault), the one the editor gives a row on screen when
+ * reverse charge is switched on: the same sats whichever came first.
  */
 function formRowsOf(
   rows: ReadingRow[],
   extracted: InvoiceExtractionResult,
   reverseCharge: boolean,
-  { thresholdFor, accountFor, chart, reverseChargeRateFor }: ReadingRowsOptions,
+  { thresholdFor, accountFor, chart }: ReadingRowsOptions,
 ): SupplierInvoiceLineItem[] {
   // AI-extracted values are untrusted input: only accept strict
   // ISO-8601 dates before they reach form state (and later the API).
@@ -152,7 +150,6 @@ function formRowsOf(
   return rows.map((row, index) => {
     const { amount } = row
     const account = accountFor(row, index)
-    const reverseChargeRate = reverseCharge ? reverseChargeRateFor?.(row) : undefined
     const withAccrual =
       prefillAccrual && amount > 0 && accrualWorthOpening({ amount, currency: extracted.invoice?.currency, thresholdSek })
     return {
@@ -176,10 +173,7 @@ function formRowsOf(
       accrual_balance_account: withAccrual
         ? suggestExpenseBalanceAccount(account, spe, extracted.invoice?.invoiceDate)
         : undefined,
-      // The sats the editor's own cell gave the rows this one replaces: a
-      // row put after reverse charge was switched on then self-assesses as
-      // one put before it does.
-      ...(reverseChargeRate == null ? {} : { reverse_charge_rate: reverseChargeRate }),
+      ...(reverseCharge ? { reverse_charge_rate: reverseChargeRateDefault(row.vat_rate) } : {}),
     }
   })
 }
@@ -236,7 +230,6 @@ export function readingRowsForNewTreatment(
   return readingFormRows(extracted, treatment, put.split, {
     ...options,
     accountFor: accountCarriedFrom(onScreen, prefillAccount),
-    reverseChargeRateFor: reverseChargeRateCarriedFrom(onScreen),
   })
 }
 
@@ -429,7 +422,6 @@ export function useInboxPrefill({
       readingFormRows(extractedData, treatment, !put.split, {
         thresholdFor: accrualThresholdRef.current,
         accountFor: accountCarriedFrom(onScreen, prefillAccount),
-        reverseChargeRateFor: reverseChargeRateCarriedFrom(onScreen),
         chart: accounts,
       }),
       treatment,

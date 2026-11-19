@@ -5,7 +5,7 @@ import { netVat, splitGrossVat } from '@/lib/bookkeeping/gross-split'
 import type { SupplierInvoiceLineItem } from '../form-payload'
 import {
   accountCarriedFrom,
-  reverseChargeRateCarriedFrom,
+  editorsOwnValue,
   rowsFromReading,
   rowsStandAsPut,
   type ReadingRow,
@@ -935,9 +935,9 @@ describe('rowsStandAsPut', () => {
   // The browser proof of 2026-11-18: for a momsregistrerad company, reverse
   // charge switched on after the reading left the rows as they were (908,80
   // where the supplier known first gave 769,00), and the split link went
-  // away. The row below is the form's own state as read there: nobody had
-  // touched it. Its sats cell had become the reverse-charge sats and handed
-  // the row's 25 % over.
+  // away. The row below is the form's own state once reverse charge is on:
+  // nobody has touched it, and the editor has given it its default
+  // reverse-charge sats (reverseChargeRateDefault).
   describe('what the editor does to a row by itself is no change by the person', () => {
     const asPut: SupplierInvoiceLineItem[] = [
       { description: 'Abonnemang Mobil Bas', amount: 908.8, account_number: '', vat_rate: 0.25, accrual_period_start: undefined, accrual_period_end: undefined, accrual_balance_account: undefined },
@@ -946,11 +946,12 @@ describe('rowsStandAsPut', () => {
       { description: 'Abonnemang Mobil Bas', amount: 908.8, account_number: '6212', vat_rate: 0.25, accrual_period_start: undefined, accrual_period_end: undefined, accrual_balance_account: undefined, reverse_charge_rate: 0.25 },
     ]
 
-    it('stands with the reverse-charge sats the sats cell hands over when reverse charge is switched on', () => {
+    it('stands with the default reverse-charge sats the editor gives a row when reverse charge is switched on', () => {
       expect(rowsStandAsPut(asTheFormHeldIt, asPut, nameOf)).toBe(true)
-      // A row put at 12 % is handed 12 %, one put at 0 % is handed 0.
+      // A row put at 12 % gets 12 %; one put at 0 % or at a foreign rate gets 25 %, never 0.
       const reduced = [{ ...asPut[0], vat_rate: 0.12 }, { ...asPut[0], vat_rate: 0 }]
-      expect(rowsStandAsPut(reduced.map((row) => ({ ...row, reverse_charge_rate: row.vat_rate })), reduced, nameOf)).toBe(true)
+      expect(rowsStandAsPut([{ ...reduced[0], reverse_charge_rate: 0.12 }, { ...reduced[1], reverse_charge_rate: 0.25 }], reduced, nameOf)).toBe(true)
+      expect(rowsStandAsPut([reduced[0], { ...reduced[1], reverse_charge_rate: 0 }], reduced, nameOf)).toBe(false)
     })
 
     it('keeps offering the split under reverse charge until the person edits a row', () => {
@@ -989,22 +990,17 @@ describe('rowsStandAsPut', () => {
   })
 })
 
-describe('reverseChargeRateCarriedFrom', () => {
-  const row = (vat_rate: number): ReadingRow => ({ description: '', amount: 100, vat_rate })
+describe('editorsOwnValue', () => {
+  const was: SupplierInvoiceLineItem = { description: 'Licens', amount: 100, account_number: '', vat_rate: 0.12 }
 
-  it('gives a row the reverse-charge sats the editor gave its moms sats on screen', () => {
-    const rateFor = reverseChargeRateCarriedFrom([
-      { vat_rate: 0.12, reverse_charge_rate: 0.12 },
-      { vat_rate: 0.25, reverse_charge_rate: 0.25 },
-      { vat_rate: 0.25 },
-    ])
-    expect(rateFor(row(0.12))).toBe(0.12)
-    expect(rateFor(row(0.25))).toBe(0.25)
+  it('takes the default reverse-charge sats on a row put without one as the editor\'s', () => {
+    expect(editorsOwnValue('reverse_charge_rate', { ...was, reverse_charge_rate: 0.12 }, was)).toBe(true)
+    expect(editorsOwnValue('reverse_charge_rate', { ...was, reverse_charge_rate: 0.25 }, was)).toBe(false)
+    expect(editorsOwnValue('reverse_charge_rate', { ...was, reverse_charge_rate: 0.12 }, { ...was, reverse_charge_rate: 0.25 })).toBe(false)
   })
 
-  it('gives none where the rows on screen carry none for that sats: the editor then shows its 25 %', () => {
-    expect(reverseChargeRateCarriedFrom([{ vat_rate: 0.25 }])(row(0.25))).toBeUndefined()
-    expect(reverseChargeRateCarriedFrom([{ vat_rate: 0.12, reverse_charge_rate: 0.12 }])(row(0.25))).toBeUndefined()
-    expect(reverseChargeRateCarriedFrom([])(row(0.25))).toBeUndefined()
+  it('names no field the editor does not write by itself', () => {
+    expect(editorsOwnValue('amount', { ...was, amount: 200 }, was)).toBe(false)
+    expect(editorsOwnValue('vat_rate', { ...was, vat_rate: 0.25 }, was)).toBe(false)
   })
 })

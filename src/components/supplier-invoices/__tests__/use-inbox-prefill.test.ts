@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { InvoiceExtractionResult } from '@/types'
 import { roundOre } from '@/lib/money'
 import { rowsStandAsPut } from '@/lib/supplier-invoices/reading-rows'
+import { reverseChargeRateOf } from '@/lib/supplier-invoices/reverse-charge-rate'
 import { totalFirstFill, rowNetFromInvoiceTotals } from '@/lib/supplier-invoices/total-first'
 import { readingFormRows, readingRowsForNewTreatment, useInboxPrefill, type InboxItemData } from '../use-inbox-prefill'
 
@@ -239,39 +240,40 @@ describe('useInboxPrefill', () => {
 
       // The browser proof of 2026-11-18 showed the test above was fed rows the
       // real form never holds at that moment: by the time reverse charge is on,
-      // the row's sats cell has become the reverse-charge sats and handed the
-      // row's 25 % over (reverse_charge_rate, the form's own doing). The rows
-      // then stayed 908,80 for a momsregistrerad company, with the supplier
-      // picked after the reading and with the switch under Förval alike.
+      // the editor has given each row on screen its default reverse-charge
+      // sats (reverseChargeRateOf, the form's own doing). The rows then stayed
+      // 908,80 for a momsregistrerad company, with the supplier picked after
+      // the reading and with the switch under Förval alike.
       describe('with the rows as the form holds them once reverse charge is on', () => {
         const lost = { invoice, totals: { total: 1136, subtotal: null, vatAmount: 227.2 }, lineItems: readLines } as unknown as InvoiceExtractionResult
         const first = readingFormRows(lost, { vatRegistered: true, reverseCharge: false }, false, { ...options, accountFor: () => '' })
-        /** What the sats cell does to rows that were on screen when reverse charge was switched on. */
-        const withTheCellsOwnSats = (rows: typeof first.rows) => rows.map((row) => ({ ...row, reverse_charge_rate: row.vat_rate }))
+        /** What the editor does to the rows on screen when reverse charge is switched on. */
+        const withTheEditorsSats = (rows: typeof first.rows) => rows.map((row) => ({ ...row, reverse_charge_rate: reverseChargeRateOf(row) }))
         const nameOf = () => ''
 
         it('gives the reported reading the same rows in either order: 769,00, the lines\' net', () => {
           expect(first.rows.map((row) => row.amount)).toEqual([908.8])
-          const after = readingRowsForNewTreatment(lost, reverseCharge, first, withTheCellsOwnSats(first.rows), { ...options, prefillAccount: null })
-          // The supplier known first: put for reverse charge, then the cell hands its sats over.
+          const after = readingRowsForNewTreatment(lost, reverseCharge, first, withTheEditorsSats(first.rows), { ...options, prefillAccount: null })
+          // The supplier known first: put for reverse charge, with the sats the editor leaves as it is.
           const known = readingFormRows(lost, reverseCharge, false, { ...options, accountFor: () => '' })
+          expect(withTheEditorsSats(known.rows)).toEqual(known.rows)
           expect(after?.rows.map((row) => row.amount)).toEqual([769])
-          expect(after?.rows).toEqual(withTheCellsOwnSats(known.rows))
+          expect(after?.rows).toEqual(known.rows)
           expect(after?.filledNet).toBeNull()
         })
 
         it('offers the split under reverse charge in either order, until the person edits a row', () => {
           const known = readingFormRows(lost, reverseCharge, false, { ...options, accountFor: () => '' })
           expect(known.lineCount).toBe(3)
-          const onScreen = withTheCellsOwnSats(known.rows)
+          const onScreen = withTheEditorsSats(known.rows)
           expect(rowsStandAsPut(onScreen, known.rows, nameOf)).toBe(true)
-          const after = readingRowsForNewTreatment(lost, reverseCharge, first, withTheCellsOwnSats(first.rows), { ...options, prefillAccount: null })
+          const after = readingRowsForNewTreatment(lost, reverseCharge, first, withTheEditorsSats(first.rows), { ...options, prefillAccount: null })
           expect(after && rowsStandAsPut(after.rows, after.rows, nameOf)).toBe(true)
           expect(rowsStandAsPut(onScreen.map((row) => ({ ...row, amount: 800 })), known.rows, nameOf)).toBe(false)
         })
 
         it('goes back to the ordinary row when reverse charge is switched off again', () => {
-          const on = readingRowsForNewTreatment(lost, reverseCharge, first, withTheCellsOwnSats(first.rows), { ...options, prefillAccount: null })
+          const on = readingRowsForNewTreatment(lost, reverseCharge, first, withTheEditorsSats(first.rows), { ...options, prefillAccount: null })
           if (!on) throw new Error('not proposed for reverse charge')
           const off = readingRowsForNewTreatment(lost, { vatRegistered: true, reverseCharge: false }, on, on.rows, { ...options, prefillAccount: null })
           expect(off?.rows.map((row) => [row.amount, row.vat_rate])).toEqual([[908.8, 0.25]])
@@ -280,7 +282,7 @@ describe('useInboxPrefill', () => {
           expect(off?.rows[0]).not.toHaveProperty('reverse_charge_rate')
         })
 
-        it('carries a reduced sats over as the cell does: a 12 % line self-assesses at 12 % in either order', () => {
+        it('keeps a reduced Swedish sats: a 12 % line self-assesses at 12 % in either order', () => {
           const reduced = {
             invoice,
             totals: { total: 1120, subtotal: null, vatAmount: 120 },
@@ -288,10 +290,50 @@ describe('useInboxPrefill', () => {
           } as unknown as InvoiceExtractionResult
           const opened = readingFormRows(reduced, { vatRegistered: true, reverseCharge: false }, false, { ...options, accountFor: () => '' })
           expect(opened.rows.map((row) => [row.amount, row.vat_rate])).toEqual([[1000, 0.12]])
-          const after = readingRowsForNewTreatment(reduced, reverseCharge, opened, withTheCellsOwnSats(opened.rows), { ...options, prefillAccount: null })
+          const after = readingRowsForNewTreatment(reduced, reverseCharge, opened, withTheEditorsSats(opened.rows), { ...options, prefillAccount: null })
           const known = readingFormRows(reduced, reverseCharge, false, { ...options, accountFor: () => '' })
-          expect(after?.rows).toEqual(withTheCellsOwnSats(known.rows))
+          expect(after?.rows).toEqual(known.rows)
           expect(after?.rows.map((row) => [row.amount, row.reverse_charge_rate])).toEqual([[900, 0.12]])
+        })
+
+        // Issue #227: a line read at 0 % (or at a rate that is not Swedish)
+        // got a reverse-charge sats of 0 once reverse charge came on after
+        // the rows, which the sats select cannot show and the API refuses.
+        it('gives a line read at 0 % or at a foreign rate 25 % in either order, never 0', () => {
+          for (const vatRate of [0, 20]) {
+            const unrated = {
+              invoice,
+              totals: { total: 900, subtotal: 900, vatAmount: 0 },
+              lineItems: [{ description: 'Hosting', quantity: 1, unitPrice: 900, lineTotal: 900, vatRate, accountSuggestion: null }],
+            } as unknown as InvoiceExtractionResult
+            const opened = readingFormRows(unrated, { vatRegistered: true, reverseCharge: false }, false, { ...options, accountFor: () => '' })
+            expect(opened.rows.map((row) => [row.amount, row.vat_rate])).toEqual([[900, 0]])
+            const onScreen = withTheEditorsSats(opened.rows)
+            expect(onScreen.map((row) => row.reverse_charge_rate)).toEqual([0.25])
+            // Still the reading's rows: what the editor gave them is no edit.
+            expect(rowsStandAsPut(onScreen, opened.rows, nameOf)).toBe(true)
+            const after = readingRowsForNewTreatment(unrated, reverseCharge, opened, onScreen, { ...options, prefillAccount: null })
+            const known = readingFormRows(unrated, reverseCharge, false, { ...options, accountFor: () => '' })
+            expect(known.rows.map((row) => [row.amount, row.reverse_charge_rate])).toEqual([[900, 0.25]])
+            expect(after?.rows).toEqual(known.rows)
+          }
+        })
+
+        it('gives the rows their default again when reverse charge is switched off and on by hand', () => {
+          const reduced = {
+            invoice,
+            totals: { total: 1500, subtotal: null, vatAmount: null },
+            lineItems: [
+              { description: 'Livsmedel', quantity: 1, unitPrice: 900, lineTotal: 900, vatRate: 12, accountSuggestion: null },
+              { description: 'Frakt', quantity: 1, unitPrice: 600, lineTotal: 600, vatRate: 0, accountSuggestion: null },
+            ],
+          } as unknown as InvoiceExtractionResult
+          const known = readingFormRows(reduced, reverseCharge, false, { ...options, accountFor: () => '' })
+          const off = readingRowsForNewTreatment(reduced, { vatRegistered: true, reverseCharge: false }, known, known.rows, { ...options, prefillAccount: null })
+          if (!off) throw new Error('not proposed for an ordinary invoice')
+          const on = readingRowsForNewTreatment(reduced, reverseCharge, off, withTheEditorsSats(off.rows), { ...options, prefillAccount: null })
+          expect(on?.rows.map((row) => [row.vat_rate, row.reverse_charge_rate])).toEqual([[0.12, 0.12], [0, 0.25]])
+          expect(on?.rows).toEqual(known.rows)
         })
 
         it('proposes the rows again for a company that is not momsregistrerad after the editor has booked their moms as cost', () => {

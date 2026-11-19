@@ -5,6 +5,7 @@ import { isLegalVatRate } from '@/lib/vat/supplier-invoice-line-checks'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import type { InvoiceExtractionResult } from '@/types'
 import { vatRateFromAi, type SupplierInvoiceLineItem } from './form-payload'
+import { reverseChargeRateDefault } from './reverse-charge-rate'
 import {
   invoiceTotalsCrosscheck,
   invoiceVatIsBooked,
@@ -274,12 +275,26 @@ const EDITORS_OWN: {
   account_number: () => true,
   // A row put without a text is named after that account.
   description: (row, was, accountName) => !was.description && row.description === accountName(row.account_number),
-  // When reverse charge is switched on, the row's sats cell becomes the
-  // reverse-charge sats and is handed the row's sats (react-hook-form
-  // registers the new field with the value the cell was first shown with):
-  // a row put at 25 % then carries 0.25 untouched. Any other sats there is
-  // the person's choice.
-  reverse_charge_rate: (row, was) => was.reverse_charge_rate == null && row.reverse_charge_rate === was.vat_rate,
+  // When reverse charge is switched on after the row was put, the editor
+  // gives the row its default reverse-charge sats (reverseChargeRateDefault).
+  // Any other sats there is the person's choice.
+  reverse_charge_rate: (row, was) =>
+    was.reverse_charge_rate == null && row.reverse_charge_rate === reverseChargeRateDefault(was.vat_rate),
+}
+
+/**
+ * Whether a field of a row on screen holds what the editor put there by
+ * itself (EDITORS_OWN), given the row as it was put (`was`): a difference
+ * there is then no edit by the person. Also asked about the rows a
+ * supplier's default plants (plantedRowTouched).
+ */
+export function editorsOwnValue(
+  field: keyof SupplierInvoiceLineItem,
+  row: SupplierInvoiceLineItem,
+  was: SupplierInvoiceLineItem,
+  accountName: (accountNumber: string) => string = () => '',
+): boolean {
+  return EDITORS_OWN[field]?.(row, was, accountName) ?? false
 }
 
 /**
@@ -319,7 +334,7 @@ export function rowsStandAsPut(
   const untouched = onScreen.every((row, index) =>
     asTheEditorLeavesIt(put[index], vatRegistered).some((left) => {
       const keys = new Set([...Object.keys(row), ...Object.keys(left)] as Array<keyof SupplierInvoiceLineItem>)
-      return [...keys].every((key) => EDITORS_OWN[key]?.(row, put[index], accountName) || same(row[key], left[key]))
+      return [...keys].every((key) => editorsOwnValue(key, row, put[index], accountName) || same(row[key], left[key]))
     }),
   )
   const accountsOf = (rate: number) =>
@@ -340,18 +355,4 @@ export function accountCarriedFrom(
   const chosen = current.filter((item) => item.account_number)
   return (row) =>
     (chosen.find((item) => item.vat_rate === row.vat_rate) ?? chosen[0])?.account_number ?? fallback ?? ''
-}
-
-/**
- * The reverse-charge sats a row of the reading starts with when it replaces
- * the rows the editor holds under reverse charge: the one the editor gave
- * its moms sats there (the list above), else none, and the editor shows its
- * 25 %. A row proposed after reverse charge was switched on then
- * self-assesses at the sats a row put before the switch does.
- */
-export function reverseChargeRateCarriedFrom(
-  current: ReadonlyArray<{ vat_rate: number; reverse_charge_rate?: number }>,
-): (row: ReadingRow) => number | undefined {
-  return (row) =>
-    current.find((item) => item.vat_rate === row.vat_rate && item.reverse_charge_rate != null)?.reverse_charge_rate
 }

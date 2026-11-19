@@ -3,6 +3,7 @@ import { roundOre } from '@/lib/money'
 import { supplierInvoiceDisplayFigures } from '@/lib/bookkeeping/supplier-invoice-display-figures'
 import { isSupplierInvoiceRoundingItem, supplierInvoiceRoundingItem } from '@/lib/bookkeeping/supplier-invoice-rounding-item'
 import { allocateDocumentVat, type DocumentVatLine, type StatedRateVat } from '@/lib/vat/document-vat'
+import { reverseChargeRateOf } from './reverse-charge-rate'
 
 interface AmountItem {
   amount: number
@@ -35,7 +36,7 @@ export function supplierInvoiceEditorAmounts(
     const amount = roundOre(item.amount || 0)
     // Rounding is outside the self-assessed VAT base too.
     const rate = reverseCharge
-      ? (isSupplierInvoiceRoundingItem({ ...item, vat_rate: 0 }, amount, currency) ? 0 : item.reverse_charge_rate ?? 0.25)
+      ? (isSupplierInvoiceRoundingItem({ ...item, vat_rate: 0 }, amount, currency) ? 0 : reverseChargeRateOf(item))
       : item.vat_rate || 0
     const overrideVat = !reverseCharge && item.vat_amount != null ? roundOre(item.vat_amount) : null
     return { lineTotal: amount, rate, overrideVat }

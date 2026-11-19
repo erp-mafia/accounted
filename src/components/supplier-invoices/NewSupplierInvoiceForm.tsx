@@ -64,6 +64,7 @@ import {
   type SupplierInvoiceLineItem,
 } from '@/lib/supplier-invoices/form-payload'
 import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/planted-rows'
+import { reverseChargeRateDefault, reverseChargeRateOf } from '@/lib/supplier-invoices/reverse-charge-rate'
 import {
   bookLimitedDeduction,
   deductibleRowVat,
@@ -991,7 +992,9 @@ export default function NewSupplierInvoiceForm({
       amount: net ?? 0,
       account_number: accountNumber,
       vat_rate: vatRate,
-      reverse_charge_rate: 0.25,
+      // Under reverse charge the row self-assesses at its default sats; a
+      // row added without it gets one when reverse charge is switched on.
+      ...(watchedReverseCharge ? { reverse_charge_rate: reverseChargeRateDefault(vatRate) } : {}),
     })
     return index
   }
@@ -1041,6 +1044,21 @@ export default function NewSupplierInvoiceForm({
         setValue(`items.${index}.accrual_period_end`, undefined, { shouldDirty: true })
         setValue(`items.${index}.accrual_balance_account`, undefined, { shouldDirty: true })
       }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedReverseCharge])
+
+  // When reverse charge is switched on, every row on screen without a
+  // reverse-charge sats of its own gets its default (reverseChargeRateOf): a
+  // sats chosen under reverse charge earlier stands. Rows added or read in
+  // under reverse charge already carry it, so a row self-assesses at the same
+  // sats whichever came first.
+  useEffect(() => {
+    if (!watchedReverseCharge) return
+    const items = getValues('items') ?? []
+    items.forEach((item, index) => {
+      const rate = reverseChargeRateOf(item)
+      if (item.reverse_charge_rate !== rate) setValue(`items.${index}.reverse_charge_rate`, rate)
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedReverseCharge])
@@ -2550,16 +2568,27 @@ export default function NewSupplierInvoiceForm({
                         {vatColsVisible && (
                           <>
                             <td className="py-1 pr-2">
+                              {/* One Controller per field, each with its own key:
+                                  a Controller whose name changes hands the new
+                                  field the value the cell was first shown with. */}
                               {watchedReverseCharge ? (
                                 <Controller
+                                  key="reverse_charge_rate"
                                   name={`items.${index}.reverse_charge_rate`}
                                   control={control}
                                   render={({ field: f }) => (
-                                    <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                                    <RcRateSelect
+                                      value={reverseChargeRateOf({
+                                        vat_rate: watchedItems?.[index]?.vat_rate,
+                                        reverse_charge_rate: f.value,
+                                      })}
+                                      onChange={f.onChange}
+                                    />
                                   )}
                                 />
                               ) : (
                                 <Controller
+                                  key="vat_rate"
                                   name={`items.${index}.vat_rate`}
                                   control={control}
                                   render={({ field: f }) => (
