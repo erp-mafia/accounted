@@ -174,6 +174,33 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(body.client_secret).toBeUndefined()
   })
 
+  it('registers a Copilot Studio connector on Power Platform\'s consent callback as a public client', async () => {
+    const redirect = 'https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda'
+    const response = await POST(createRequest({
+      client_name: 'Copilot Studio',
+      redirect_uris: [redirect],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'client_secret_post',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual([redirect])
+    expect(body.token_endpoint_auth_method).toBe('none')
+    expect(body.client_secret).toBeUndefined()
+  })
+
+  it('rejects a path on Power Platform\'s consent host other than /redirect', async () => {
+    for (const uri of [
+      'https://global.consent.azure-apim.net/redirect/a/b',
+      'https://global.consent.azure-apim.net/other',
+      'https://evil.consent.azure-apim.net/redirect/abc',
+    ]) {
+      const response = await POST(createRequest({ redirect_uris: [uri] }))
+      expect(response.status, uri).toBe(400)
+    }
+  })
+
   it('rejects a Google relay callback that is not a Gemini custom app', async () => {
     const response = await POST(createRequest({
       redirect_uris: ['https://oauth-redirect.googleusercontent.com/r/some-cloud-project'],

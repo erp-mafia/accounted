@@ -15,14 +15,15 @@ import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
 /**
  * Identity of a built-in client, derived from the redirect URI pattern that
  * matched. Rendered on the consent page so the user can tell a real Claude /
- * ChatGPT / Grok / Gemini / Cursor / Squidler / Celemine connector from a
- * look-alike registration.
+ * ChatGPT / Grok / Gemini / Copilot Studio / Cursor / Squidler / Celemine
+ * connector from a look-alike registration.
  */
 export type BuiltInProvider =
   | 'claude'
   | 'chatgpt'
   | 'grok'
   | 'gemini'
+  | 'copilot'
   | 'cursor'
   | 'cursor_deeplink'
   | 'squidler'
@@ -32,7 +33,7 @@ export type BuiltInProvider =
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * the Claude, ChatGPT, Grok, Gemini, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
+ * the Claude, ChatGPT, Grok, Gemini, Copilot Studio, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
@@ -59,6 +60,23 @@ export type BuiltInProvider =
  * project receive codes and show up here as Gemini. Only the
  * `user_bound_custom-mcp-` form is matched: project ids cannot contain
  * underscores, so no project can claim it.
+ *
+ * Microsoft Copilot Studio adds an MCP server as a Power Platform connector,
+ * and the connector signs in through Power Platform's consent service with
+ * one callback per connector:
+ * https://global.consent.azure-apim.net/redirect/<connector id>, for example
+ * .../redirect/cr7d9-5fmonday-20mcp-20test-2077-5f0f516cbecf05asda
+ * (developer.monday.com, "Integrating monday MCP with Copilot Studio"; the
+ * Copilot Studio MCP wizard at learn.microsoft.com/microsoft-copilot-studio/
+ * mcp-add-existing-server-to-agent shows it as the callback URL). Older
+ * connectors use the shared form without an id,
+ * https://global.consent.azure-apim.net/redirect (developer.celonis.com and
+ * Collibra's Copilot Studio guide). The service is shared by every Power
+ * Platform connector, so the consent page names the platform, not one
+ * tenant's agent. Matched on the exact host and the /redirect path only; the
+ * connector id is one segment of letters, digits and `-` (Power Platform
+ * writes `_` and spaces as -5f and -20), so no `.`, `/`, `%`, query or
+ * fragment can follow.
  *
  * Cursor (IDE and CLI) registers through /register with three redirect URIs
  * in one request: the legacy custom-scheme deeplink
@@ -107,6 +125,7 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/chatgpt\.com\/connector_platform_oauth_redirect$/, provider: 'chatgpt' },
   { pattern: /^https:\/\/grok\.com\/connectors-oauth-exchange-code\/?$/, provider: 'grok' },
   { pattern: /^https:\/\/oauth-redirect\.googleusercontent\.com\/r\/user_bound_custom-mcp-[A-Za-z0-9_-]+$/, provider: 'gemini' },
+  { pattern: /^https:\/\/global\.consent\.azure-apim\.net\/redirect(\/[A-Za-z0-9-]+)?$/, provider: 'copilot' },
   { pattern: /^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback$/, provider: 'cursor_deeplink' },
   { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
   { pattern: /^https:\/\/squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
