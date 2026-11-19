@@ -15,7 +15,7 @@ import {
   type BankLinkRefusalCode,
 } from '@/lib/transactions/bank-link'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
+import { holdersOnAccount, readBankLegHolders, type BankLegHolder } from '@/lib/transactions/voucher-bank-leg'
 import {
   ledgerLineAmountIn,
   type LedgerLineAmount,
@@ -2068,7 +2068,8 @@ interface CashAccountInfo {
  * Deliberately conservative: it only acts when the link is unambiguous:
  *   • the voucher has NO bank transaction reconciled to it yet (never adds a
  *     second one automatically: that N:1 case must be an explicit choice in
- *     Bankavstämning),
+ *     Bankavstämning; the one row that already holds it only gets the invoice
+ *     tag, see tagHeldBankRow),
  *   • the voucher touches exactly ONE cash-account line (a transfer hitting two
  *     bank accounts, or an AR/AP reclass with none, is left alone), and
  *   • exactly ONE unbooked, non-ignored transaction on that account matches the
@@ -2095,13 +2096,13 @@ export async function autoReconcileTransactionForLinkedVoucher(
 ): Promise<{ linkedTransactionId: string } | null> {
   const windowDays = options.dateWindowDays ?? VOUCHER_LINK_DATE_WINDOW_DAYS
 
-  // 1. If a bank transaction already holds this voucher, by its pointer or by
-  //    a bank_line slice (a bulk-booked samlingsverifikat, a 1:N split), the
-  //    bank side is settled: don't attach another one behind the user's back.
-  //    The pointer alone missed the slices (GitHub #3507). A failed read
-  //    links nothing: this path is best-effort.
+  // 1. Who already holds this voucher, by its pointer or by a bank_line slice
+  //    (a bulk-booked samlingsverifikat, a 1:N split). The pointer alone
+  //    missed the slices (GitHub #3507). A failed read links nothing: this
+  //    path is best-effort.
   const held = await readBankLegHolders(supabase, companyId, [journalEntryId])
-  if (!held.ok || (held.holders.get(journalEntryId)?.length ?? 0) > 0) return null
+  if (!held.ok) return null
+  const holders = held.holders.get(journalEntryId) ?? []
 
   // 2. Load the voucher (must be posted) and its lines.
   const { data: entry } = await supabase
@@ -2168,6 +2169,19 @@ export async function autoReconcileTransactionForLinkedVoucher(
   if (movement === null) return null
   if (Math.abs(movement) <= VOUCHER_LINK_AMOUNT_TOLERANCE) return null
 
+  // A bank transaction already holds this voucher: the bank side is settled,
+  // so don't attach another one behind the user's back. The row that holds
+  // it, linked before the invoice was (a sweep, a typed verifikat linked at
+  // posting), still gets the invoice tag the link below writes (#204).
+  if (holders.length > 0) {
+    await tagHeldBankRow(supabase, companyId, userId, journalEntryId, holders, {
+      cashAccountId: cashAccount.id,
+      currency: cashAccount.currency,
+      movement,
+    }, options)
+    return null
+  }
+
   // 4. Unbooked, non-ignored candidate transactions on that account, scoped the
   //    same way Bankavstämning scopes (handles legacy NULL cash_account_id rows).
   const fromDate = shiftIsoDate(entry.entry_date, -windowDays)
@@ -2220,19 +2234,10 @@ export async function autoReconcileTransactionForLinkedVoucher(
 
   // Tag the transaction with the (supplier) invoice for traceability + parity
   // with the transactions-side match. is_business is already set by manualLink,
-  // so the row has already dropped out of the inbox regardless of this update.
-  const tag: Record<string, unknown> = {
-    potential_invoice_id: null,
-    potential_rot_rut_payout_request_id: null,
-  }
-  if (options.invoiceId) tag.invoice_id = options.invoiceId
-  if (options.supplierInvoiceId) {
-    tag.supplier_invoice_id = options.supplierInvoiceId
-    tag.potential_supplier_invoice_id = null
-  }
-  // Two hint clears are always present; only an actual invoice tag warrants
-  // the extra write (the row already left the inbox via is_business).
-  if (Object.keys(tag).length > 2) {
+  // so the row has already dropped out of the inbox regardless of this update;
+  // without an invoice there is nothing to tag.
+  const tag = invoiceTagFor(options)
+  if (tag) {
     await supabase
       .from('transactions')
       .update(tag)
@@ -2251,6 +2256,110 @@ export async function autoReconcileTransactionForLinkedVoucher(
   })
 
   return { linkedTransactionId: transactionId }
+}
+
+/**
+ * The invoice tag a bank row gets when the verifikat it holds is linked to a
+ * (supplier) invoice, with the match hints that link makes dead. null without
+ * an invoice: nothing to tag.
+ */
+function invoiceTagFor(options: { invoiceId?: string; supplierInvoiceId?: string }): Record<string, unknown> | null {
+  if (!options.invoiceId && !options.supplierInvoiceId) return null
+  const tag: Record<string, unknown> = {
+    potential_invoice_id: null,
+    potential_rot_rut_payout_request_id: null,
+  }
+  if (options.invoiceId) tag.invoice_id = options.invoiceId
+  if (options.supplierInvoiceId) {
+    tag.supplier_invoice_id = options.supplierInvoiceId
+    tag.potential_supplier_invoice_id = null
+  }
+  return tag
+}
+
+type HeldBankRowState = {
+  journal_entry_id: string | null
+  invoice_id: string | null
+  supplier_invoice_id: string | null
+  transaction_voucher_links?: Array<{ journal_entry_id: string | null; role?: string | null }> | null
+}
+
+/**
+ * Tag the bank row that already holds a verifikat with the (supplier)
+ * invoice just linked to that verifikat: the tag the link path writes
+ * (invoiceTagFor) and nothing else. Nothing is relinked or booked, and no
+ * payment is registered: the invoice's payment row is the link RPC's.
+ *
+ * Only when the verifikat has exactly one holder, on its bank account and in
+ * its direction, holding it by its pointer; the row holds no other verifikat
+ * (a bank_line slice elsewhere) and carries no invoice tag of either kind,
+ * so a tag a person or another door wrote is never replaced. The update
+ * repeats the pointer and no-tag conditions, so a row another writer changed
+ * in between is left alone. Best-effort: a refused write (the denormalised
+ * tag must agree with the row's own payment rows,
+ * trg_block_contradictory_invoice_denorm) is logged and tags nothing.
+ */
+async function tagHeldBankRow(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  journalEntryId: string,
+  holders: readonly BankLegHolder[],
+  account: { cashAccountId: string | null; currency: string; movement: number },
+  options: { invoiceId?: string; supplierInvoiceId?: string },
+): Promise<boolean> {
+  const tag = invoiceTagFor(options)
+  if (!tag || holders.length !== 1) return false
+  const holder = holders[0]
+  if (holdersOnAccount(holders, account).length !== 1) return false
+  if (Math.sign(holder.amount) !== Math.sign(account.movement)) return false
+
+  const { data: rowData, error: readError } = await supabase
+    .from('transactions')
+    .select('journal_entry_id, invoice_id, supplier_invoice_id, transaction_voucher_links(journal_entry_id, role)')
+    .eq('id', holder.transactionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (readError || !rowData) return false
+  const row = rowData as HeldBankRowState
+  if (row.journal_entry_id !== journalEntryId) return false
+  if (row.invoice_id || row.supplier_invoice_id) return false
+  const slices = Array.isArray(row.transaction_voucher_links) ? row.transaction_voucher_links : []
+  if (slices.some((s) => s.role === 'bank_line' && s.journal_entry_id !== journalEntryId)) return false
+
+  const { data: tagged, error } = await supabase
+    .from('transactions')
+    .update(tag)
+    .eq('id', holder.transactionId)
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', journalEntryId)
+    .is('invoice_id', null)
+    .is('supplier_invoice_id', null)
+    .select('id')
+  if (error) {
+    log.warn('invoice tag on the bank row holding the verifikat not written', {
+      companyId,
+      transactionId: holder.transactionId,
+      journalEntryId,
+      code: error.code,
+      reason: error.message,
+    })
+    return false
+  }
+  if (!Array.isArray(tagged) || tagged.length !== 1) return false
+
+  await logMatchEvent(supabase, userId, holder.transactionId, 'linked_to_existing_voucher', {
+    invoiceId: options.invoiceId,
+    supplierInvoiceId: options.supplierInvoiceId,
+    matchMethod: 'invoice_voucher_link',
+    previousState: { journal_entry_id: journalEntryId, invoice_id: null, supplier_invoice_id: null },
+    newState: {
+      journal_entry_id: journalEntryId,
+      invoice_id: options.invoiceId ?? null,
+      supplier_invoice_id: options.supplierInvoiceId ?? null,
+    },
+  })
+  return true
 }
 
 // ============================================================
