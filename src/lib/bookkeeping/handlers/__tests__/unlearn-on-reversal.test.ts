@@ -230,6 +230,82 @@ describe('unlearnOnCorrection', () => {
     expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE)
   })
 
+  /** A client that holds verifikat rows by id, so the correction_of_id chain is read as production reads it. */
+  function makeChainClient(entries: Record<string, { source_type: string; source_id: string | null; correction_of_id: string | null; lines: unknown[] }>) {
+    const from = vi.fn((table: string) => {
+      const filters: Record<string, unknown> = {}
+      const chain = {
+        select: () => chain,
+        eq: (col: string, val: unknown) => {
+          filters[col] = val
+          return chain
+        },
+        maybeSingle: async () => {
+          if (table === 'transactions') return { data: filters.id === 'tx-1' ? BANK_ROW : null, error: null }
+          const row = entries[String(filters.id)]
+          return { data: row ? { id: filters.id, source_type: row.source_type, source_id: row.source_id, correction_of_id: row.correction_of_id } : null, error: null }
+        },
+        then: (resolve: (v: unknown) => void) => resolve({ data: entries[String(filters.journal_entry_id)]?.lines ?? [], error: null }),
+      }
+      return chain
+    })
+    return { from } as never
+  }
+
+  it('a second correction reaches the bank booking through correction_of_id and takes its occurrence back', async () => {
+    const amountOnly = REVERSE_CHARGE.map((l) => ({ ...l, debit_amount: l.debit_amount ? l.debit_amount + 1 : 0, credit_amount: l.credit_amount ? l.credit_amount + 1 : 0 }))
+    const client = makeChainClient({
+      'je-orig': { source_type: 'bank_transaction', source_id: 'tx-1', correction_of_id: null, lines: REVERSE_CHARGE },
+      'je-fix1': { source_type: 'correction', source_id: null, correction_of_id: 'je-orig', lines: amountOnly },
+    })
+    mockServiceClient.mockReturnValue(client)
+    mockUnlearn.mockResolvedValue('decremented')
+
+    await unlearnOnCorrection({
+      original: { ...makeJournalEntry({ id: 'je-fix1', source_type: 'correction', source_id: null }), correction_of_id: 'je-orig', lines: amountOnly } as never,
+      storno: makeJournalEntry({ source_type: 'storno' }) as never,
+      corrected: { ...makeJournalEntry({ id: 'je-fix2', source_type: 'correction', source_id: null }), lines: DOMESTIC_MOMS } as never,
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+
+    expect(mockUnlearn).toHaveBeenCalledTimes(1)
+    expect(mockUnlearn).toHaveBeenCalledWith(client, 'company-1', BANK_ROW, REVERSE_CHARGE)
+  })
+
+  it('a second correction after one that already changed the kontering takes nothing back again', async () => {
+    const client = makeChainClient({
+      'je-orig': { source_type: 'bank_transaction', source_id: 'tx-1', correction_of_id: null, lines: REVERSE_CHARGE },
+      'je-fix1': { source_type: 'correction', source_id: null, correction_of_id: 'je-orig', lines: DOMESTIC_MOMS },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const otherCost = DOMESTIC_MOMS.map((l) => (l.account_number === '5420' ? { ...l, account_number: '6540' } : l))
+
+    await unlearnOnCorrection({
+      original: { ...makeJournalEntry({ id: 'je-fix1', source_type: 'correction', source_id: null }), correction_of_id: 'je-orig', lines: DOMESTIC_MOMS } as never,
+      storno: makeJournalEntry({ source_type: 'storno' }) as never,
+      corrected: { ...makeJournalEntry({ id: 'je-fix2', source_type: 'correction', source_id: null }), lines: otherCost } as never,
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+
+    expect(mockUnlearn).not.toHaveBeenCalled()
+  })
+
+  it('a correction the system made (kontantmetod cut-off) keeps the template', async () => {
+    const { client, from } = makeClient({ transaction: BANK_ROW })
+    mockServiceClient.mockReturnValue(client)
+    const clearing = [
+      { account_number: '2440', debit_amount: 156.1, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 156.1 },
+    ]
+
+    await unlearnOnCorrection({ ...corrected(DOMESTIC_MOMS, clearing), keepLearnedTemplates: true })
+
+    expect(from).not.toHaveBeenCalled()
+    expect(mockUnlearn).not.toHaveBeenCalled()
+  })
+
   it('runs on every journal_entry.corrected once registered', async () => {
     const { client } = makeClient({ transaction: BANK_ROW })
     mockServiceClient.mockReturnValue(client)

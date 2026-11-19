@@ -41,12 +41,66 @@ export async function unlearnOnReversal({ originalEntry, companyId }: EventPaylo
  * accounts on the same sides (a new date, amount or text) rejected nothing the
  * booking taught, so the template keeps its occurrence. One that changed the
  * kontering (another cost account, other moms) takes the original's
- * occurrence back, as a reversal does.
+ * occurrence back, as a reversal does. A correction the system made
+ * (keepLearnedTemplates: the kontantmetod cut-off) rejected nothing either.
  */
-export async function unlearnOnCorrection({ original, corrected, companyId }: EventPayload<'journal_entry.corrected'>): Promise<void> {
+export async function unlearnOnCorrection({ original, corrected, companyId, keepLearnedTemplates }: EventPayload<'journal_entry.corrected'>): Promise<void> {
+  if (keepLearnedTemplates) return
   const supabase = createServiceClientNoCookies()
-  if (sameKontering(await entryLines(supabase, original), await entryLines(supabase, corrected))) return
-  await unlearnReversedBankBooking(supabase, companyId, original)
+  // The verifikat corrected here may itself be a correction (source_type
+  // 'correction', no bank identity): the occurrence was taught by the bank
+  // booking at the start of its correction_of_id chain.
+  const chain = await correctionChain(supabase, companyId, original)
+  const booking = chain[chain.length - 1]
+  const taught = konteringKey(await entryLines(supabase, booking))
+  if (konteringKey(await entryLines(supabase, corrected)) === taught) return
+  // An earlier correction that changed the kontering already took the
+  // occurrence back; a second withdrawal would take one the booking never gave.
+  for (const link of chain.slice(0, -1)) {
+    if (konteringKey(await entryLines(supabase, link)) !== taught) return
+  }
+  await unlearnReversedBankBooking(supabase, companyId, booking)
+}
+
+type ChainEntry = Pick<JournalEntry, 'id' | 'source_type' | 'source_id' | 'lines'> & { correction_of_id?: string | null }
+
+/** Longer than any real run of corrections; a guard against a cycle in the links. */
+const MAX_CORRECTION_CHAIN = 50
+
+/** The entry, then each verifikat it corrects through correction_of_id, ending at the first booking. */
+async function correctionChain(
+  supabase: SupabaseClient,
+  companyId: string,
+  entry: ChainEntry,
+): Promise<ChainEntry[]> {
+  const chain: ChainEntry[] = [entry]
+  let current = entry
+  while (current.source_type === 'correction') {
+    if (chain.length > MAX_CORRECTION_CHAIN) throw new Error(`corrected bank booking: correction chain of ${current.id} too long`)
+    let parentId = current.correction_of_id
+    if (parentId === undefined) {
+      const { data, error } = await supabase
+        .from('journal_entries')
+        .select('correction_of_id')
+        .eq('id', current.id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (error) throw new Error(`corrected bank booking: correction link read failed: ${error.message}`)
+      parentId = (data as { correction_of_id: string | null } | null)?.correction_of_id ?? null
+    }
+    if (!parentId) break
+    const { data: parent, error } = await supabase
+      .from('journal_entries')
+      .select('id, source_type, source_id, correction_of_id')
+      .eq('id', parentId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (error) throw new Error(`corrected bank booking: corrected verifikat read failed: ${error.message}`)
+    if (!parent) break
+    current = parent as ChainEntry
+    chain.push(current)
+  }
+  return chain
 }
 
 async function entryLines(
@@ -70,10 +124,6 @@ function konteringKey(lines: ReadonlyArray<VerifikatLine>): string {
     if (Number(l.credit_amount) > 0) sides.add(`K${l.account_number}`)
   }
   return [...sides].sort().join(',')
-}
-
-function sameKontering(a: ReadonlyArray<VerifikatLine>, b: ReadonlyArray<VerifikatLine>): boolean {
-  return konteringKey(a) === konteringKey(b)
 }
 
 export async function unlearnReversedBankBooking(
