@@ -71,6 +71,7 @@ import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
 import { ombudAppointment } from '@/lib/skatteverket/ombud-appointment'
 import { ombudVerifyRetryAfterSeconds } from '@/lib/skatteverket/ombud-verify-retry'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
+import { readSkattekontoOpeningDate } from '@/lib/skatteverket/skattekonto-open-rows'
 import { createUtseOmbudDeepLink, OMBUD_COMPANY_GUIDE_URL, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import type {
@@ -2222,6 +2223,9 @@ export const skatteverketExtension: Extension = {
     // Ignored rows (is_ignored) are excluded from the work buckets and only
     // reported as `ignored_count`; pass `include_ignored=1` to also get the
     // rows themselves (the "Ignorerade" band). Never silently dropped.
+    // `opening_balance_date` is the date of the ingående balans on the
+    // skattekonto account (null without one): the pages read the open rows
+    // with it (lib/skatteverket/skattekonto-open-rows.ts).
     {
       method: 'GET',
       path: '/skattekonto/transaktioner',
@@ -2296,6 +2300,29 @@ export const skatteverketExtension: Extension = {
           match_suggestion: suggestions.get(r.id) ?? null,
         }))
 
+        // The date of the ingående balans on the skattekonto account: an
+        // unbooked row dated before it is carried by the IB and is no work
+        // (isOpenSkattekontoRow, crm#2010). Read only when such a row can
+        // exist. Unreadable: null, so every unbooked row shows as work.
+        const firstRowDate = booked.reduce<string | null>(
+          (first, r) => (first === null || r.transaktionsdatum < first ? r.transaktionsdatum : first),
+          null,
+        )
+        let openingBalanceDate: string | null = null
+        if (firstRowDate) {
+          try {
+            openingBalanceDate = await readSkattekontoOpeningDate(ctx.supabase, ctx.companyId, {
+              account: skattekontoAccount,
+              through: today,
+            })
+          } catch (error) {
+            log.warn('skattekonto opening balance read failed; every unbooked row shows as work', {
+              companyId: ctx.companyId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
+
         return NextResponse.json({
           data: {
             booked: bookedEnriched,
@@ -2304,6 +2331,7 @@ export const skatteverketExtension: Extension = {
             ignored_count: ignored.length,
             ...(includeIgnored ? { ignored } : {}),
             skattekonto_account: skattekontoAccount,
+            opening_balance_date: openingBalanceDate,
           },
         })
       },

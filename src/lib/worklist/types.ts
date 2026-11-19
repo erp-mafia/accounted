@@ -28,14 +28,17 @@ export const WORKLIST_CATEGORIES = [
    * Unbooked skattekonto rows ("N st skattekontohändelser att bokföra").
    * Pending:  skattekonto_transactions with status = 'booked' (Skatteverket's
    *           "tidigare": the event has happened on the tax account),
-   *           journal_entry_id IS NULL and is_ignored = false. Rows with
+   *           journal_entry_id IS NULL, is_ignored = false, dated on or
+   *           after the ingående balans on the skattekonto account (a row
+   *           before it is carried by the IB, crm#2010). Rows with
    *           status = 'upcoming' are future charges with nothing to book
    *           yet and never reach the Transaktioner inbox, so they are not
    *           pending work either.
    * Done:     the skattekonto booking flows set journal_entry_id (here it IS
    *           the booked marker, unlike bank transactions), or the user
-   *           ignores the row (is_ignored = true). Same predicate as the
-   *           Transaktioner inbox's Skatteverket rows.
+   *           ignores the row (is_ignored = true). One reading with the
+   *           Transaktioner inbox's Skatteverket rows:
+   *           lib/skatteverket/skattekonto-open-rows.ts.
    */
   'book_skattekonto',
   /**

@@ -41,6 +41,7 @@ import { COLLECTIONS_BATCH_TYPE, collectionWorkCounts, type BatchItem, type Batc
 import { DAILY_BATCH_TYPES_FILTER } from '@/lib/pending-operations/daily-batches'
 import { readPendingReminderBatch } from '@/lib/reminders/pending-batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { readSkattekontoOpeningDate, whereSkattekontoRowOpen } from '@/lib/skatteverket/skattekonto-open-rows'
 import { parseEntityType } from '@/lib/company/entity-type'
 import { readCompanyOrgNumber } from '@/lib/company/org-number'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
@@ -155,25 +156,43 @@ export async function countUnbookedTransactions(
 }
 
 /**
- * Unbooked skattekonto rows: every Skatteverket-side event the Transaktioner
- * inbox lists (status = 'booked', i.e. "tidigare") that has no verifikat and
- * was not ignored. `status` is Skatteverket's status, not booking status:
- * 'upcoming' rows are future charges with nothing to book. journal_entry_id
- * is the booked marker here (unlike bank transactions, which use is_business).
+ * Unbooked skattekonto rows: the open rows of lib/skatteverket/skattekonto-open-rows.ts,
+ * the same reading the Transaktioner inbox lists. A row dated before the
+ * ingående balans on the skattekonto account is carried by it and never
+ * counted (crm#2010). Most companies have no open row at all, so the IB is
+ * read only when there is a row to date. When it cannot be read every open
+ * row counts: work is never hidden on a failed read.
  */
 export async function countUnbookedSkattekontoRows(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<number> {
-  const { count, error } = await supabase
-    .from('skattekonto_transactions')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('status', 'booked')
-    .is('journal_entry_id', null)
-    .eq('is_ignored', false)
-  if (error) return logAndZero('book_skattekonto', companyId, error)
-  return count ?? 0
+  const countOpen = (openingDate: string | null) =>
+    whereSkattekontoRowOpen(
+      supabase
+        .from('skattekonto_transactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId),
+      openingDate,
+    )
+  const undated = await countOpen(null)
+  if (undated.error) return logAndZero('book_skattekonto', companyId, undated.error)
+  if (!undated.count) return 0
+
+  let openingDate: string | null = null
+  try {
+    openingDate = await readSkattekontoOpeningDate(supabase, companyId)
+  } catch (err) {
+    log.warn('book_skattekonto: opening balance read failed; counting every open row', {
+      companyId,
+      error: toError(err).message,
+    })
+  }
+  if (!openingDate) return undated.count
+
+  const dated = await countOpen(openingDate)
+  if (dated.error) return logAndZero('book_skattekonto', companyId, dated.error)
+  return dated.count ?? 0
 }
 
 /**

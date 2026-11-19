@@ -3130,10 +3130,11 @@ function skattekontoEntryPreview(
 
 /**
  * Open skattekonto rows dated before history_start: the 1630 IB carries
- * them, so no bridge line, count or opening difference holds them, while Att
- * göra still counts them as unbooked (crm#1153, crm#1155). Both
- * reconciliation reads say so with the same block, so an agent that sees 0
- * open rows on the bridge learns where the rest are and what to do.
+ * them, so no bridge line, count or opening difference holds them, and Att
+ * göra leaves them out by the same reading (crm#1153, crm#1155, crm#2010).
+ * Both reconciliation reads say so with the same block, so an agent that
+ * sees 0 open rows on the bridge learns where the rest are and that they
+ * need nothing.
  */
 /**
  * The next call when every pair of a skattekonto reconcile_match was refused
@@ -3175,9 +3176,9 @@ function skattekontoBeforeHistoryBlock(summary: {
   return {
     ...summary,
     note:
-      `${summary.count} open Skatteverket row(s) are dated before history_start ${summary.history_start ?? ''}: the ingående balans on 1630 carries that time, so they are in no bridge line, count or opening difference, while Att göra (Bokför skattekontohändelser) still counts them as unbooked. ` +
-      'List them with gnubok_list_reconciliation_items, account_key "skattekonto", bucket "before_history". ' +
-      'When skattekonto.opening_difference is 0 the ledger already agrees with Skatteverket through that date, so do not book them: link each row to the imported verifikat on 1630 that holds it (the proposal on the row, when there is one) with gnubok_reconcile_match (allow_remainder for a summarised verifikat), or, when the user agrees it is no event of the company, ignore it with gnubok_ignore_transaction (transaction_id = the item_id).',
+      `${summary.count} open Skatteverket row(s) are dated before history_start ${summary.history_start ?? ''}: the ingående balans on 1630 carries that time, so they are in no bridge line, count or opening difference, and Att göra (Bokför skattekontohändelser) does not count them. ` +
+      'They need no action: do not book, link or ignore them to clear a list. List them with gnubok_list_reconciliation_items, account_key "skattekonto", bucket "before_history". ' +
+      'When skattekonto.opening_difference is not 0, the ingående balans on 1630 disagrees with Skatteverket at that date: that is the bridge line Ingående skillnad, to settle with the user.',
   }
 }
 

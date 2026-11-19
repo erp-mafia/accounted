@@ -66,6 +66,7 @@ import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { SKATTEKONTO_ACCOUNT_DEFAULT, isSkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
+import { isOpenSkattekontoRow, isSkattekontoRowBeforeHistory } from '@/lib/skatteverket/skattekonto-open-rows'
 import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
 
@@ -110,6 +111,8 @@ interface TransaktionerEnvelope {
     ignored?: StoredSkattekontoTransaction[]
     /** The company's skattekonto account: 1630, or 2012 for an enskild firma that runs it there. */
     skattekonto_account?: string
+    /** The date of the ingående balans on that account: an unbooked row before it is carried by it. */
+    opening_balance_date?: string | null
   }
 }
 
@@ -1147,6 +1150,10 @@ function SkattekontoTable({
   onUnignore: (row: StoredSkattekontoTransaction) => void
 }) {
   const t = useTranslations('skattekonto')
+  // Unbooked rows dated before the ingående balans on the skattekonto
+  // account are carried by it: no work, so the band count leaves them out
+  // and the row says so (isOpenSkattekontoRow, the reading Att göra counts).
+  const openingDate = tx?.opening_balance_date ?? null
 
   const allSections: TableSection[] = [
     { key: 'upcoming', label: t('band_upcoming'), rows: tx?.upcoming ?? [] },
@@ -1210,9 +1217,9 @@ function SkattekontoTable({
                   className="px-4 py-2 text-xs font-semibold text-muted-foreground"
                 >
                   {section.label}
-                  {section.key === 'booked' && section.rows.some((r) => !r.journal_entry_id) && (
+                  {section.key === 'booked' && section.rows.some((r) => isOpenSkattekontoRow(r, openingDate)) && (
                     <span className="ml-2 font-normal normal-case tracking-normal">
-                      · {t('band_not_booked_count', { count: section.rows.filter((r) => !r.journal_entry_id).length })}
+                      · {t('band_not_booked_count', { count: section.rows.filter((r) => isOpenSkattekontoRow(r, openingDate)).length })}
                     </span>
                   )}
                 </td>
@@ -1229,6 +1236,7 @@ function SkattekontoTable({
                   onIgnore={onIgnore}
                   onUnignore={onUnignore}
                   showInterestDate={section.interestDateRowIds.has(row.id)}
+                  inOpeningBalance={section.key === 'booked' && isSkattekontoRowBeforeHistory(row, openingDate)}
                 />
               ))}
             </Fragment>
@@ -1249,6 +1257,7 @@ function SkattekontoRow({
   onIgnore,
   onUnignore,
   showInterestDate,
+  inOpeningBalance,
 }: {
   row: SkattekontoTransactionWithSuggestion
   section: TableSection['key']
@@ -1259,6 +1268,8 @@ function SkattekontoRow({
   onIgnore: (row: StoredSkattekontoTransaction) => void
   onUnignore: (row: StoredSkattekontoTransaction) => void
   showInterestDate: boolean
+  /** Unbooked but dated before the ingående balans, which carries it. */
+  inOpeningBalance: boolean
 }) {
   const t = useTranslations('skattekonto')
   // Whether shift was held on the checkbox click, for range selection.
@@ -1326,8 +1337,11 @@ function SkattekontoRow({
               </Badge>
             ) : (
               /* Plain fact, not an exception: quiet text, and the band
-                 header carries the count once. */
-              <span className="text-xs text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
+                 header carries the count once (a row the IB carries is
+                 not in it). */
+              <span className="text-xs text-muted-foreground">
+                {inOpeningBalance ? t('chip_in_opening_balance') : t('chip_not_booked').toLowerCase()}
+              </span>
             )
           )}
         </span>

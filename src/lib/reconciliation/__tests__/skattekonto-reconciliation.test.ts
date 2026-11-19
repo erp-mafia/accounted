@@ -966,8 +966,8 @@ describe('getSkattekontoReconciliationStatus', () => {
 // crm#1153 / crm#1155. A company migrated by SIE: last year is in the ledger
 // as imported verifikat, this year opens with an IB on 1630, and the
 // Skatteverket rows from last year were never linked. The IB carries them, so
-// they belong to no bridge figure, but Att göra counts them as unbooked and an
-// agent needs their ids. All figures here are made up.
+// they belong to no bridge figure and no Att göra count; they are listed so an
+// agent can find them. All figures here are made up.
 describe('open rows before the history start (crm#1153)', () => {
   const Z1 = head('Z1', IB_DATE, { source_type: 'opening_balance', voucher_series: 'Z' })
   // Last year's events, imported by SIE as detail before the IB.

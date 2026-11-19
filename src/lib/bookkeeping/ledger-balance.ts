@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
@@ -109,7 +110,7 @@ export interface OpeningBalanceFloor {
  * floor decides what the balance is, so a caller must not guess it.
  */
 export async function findOpeningBalanceFloor(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   accountNumber: string,
   cutoffDate: string,

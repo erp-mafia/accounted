@@ -21,6 +21,7 @@ export default {
     'app/(dashboard)/transactions/page.tsx': 'list rows already read through withLivePointer, and skattekonto rows, which keep their own pointer.',
     'extensions/general/mcp-server/server.ts': 'skattekonto rows, which keep their own pointer.',
     'lib/reconciliation/skattekonto-reconciliation.ts': 'skattekonto rows, which keep their own pointer.',
+    'lib/skatteverket/skattekonto-open-rows.ts': 'skattekonto rows, which keep their own pointer: the home of skattekonto-row-open.',
     'lib/documents/bank-match/refresh.ts': 'rows that have just arrived: no verifikat can book them yet, and the proposal is read again before it is shown.',
     'lib/inkorg/expectations-read.ts': 'purchase history, booked or not: only the private rows leave it.',
   },

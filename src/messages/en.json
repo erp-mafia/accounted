@@ -14380,6 +14380,7 @@
     "band_booked": "Completed",
     "no_transactions": "No transactions yet. Sync to fetch the tax account.",
     "chip_not_booked": "Not booked",
+    "chip_in_opening_balance": "in the opening balance",
     "band_not_booked_count": "{count, plural, one {1 not booked} other {# not booked}}",
     "interest_from": "interest from {date}",
     "chip_possible_duplicate": "Possible duplicate of {voucher}",

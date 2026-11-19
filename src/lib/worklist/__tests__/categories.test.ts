@@ -203,6 +203,39 @@ describe('countUnbookedSkattekontoRows', () => {
     enqueue({ error: { message: 'boom' } })
     await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(0)
   })
+
+  it('reads no IB when there is no open row', async () => {
+    enqueue({ count: 0 })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(0)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  // crm#2010: a migrated company's skattekonto rows from before its IB on
+  // 1630 are carried by that IB, so Att göra does not ask to book them.
+  it('leaves out the rows dated before the ingående balans on the skattekonto account', async () => {
+    enqueue({ count: 102 }) // every open row
+    enqueue({ data: '1630' }) // company_skattekonto_account
+    enqueue({ data: { floor_date: '2026-09-01', amount: 5000, entry_ids: ['ib-1'] } }) // account_ib_floor
+    enqueue({ count: 8 }) // the open rows from the IB on
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(8)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('account_ib_floor', expect.objectContaining({ p_account_number: '1630' }))
+    expect(findCalls('skattekonto_transactions', 'gte')).toEqual([['transaktionsdatum', '2026-09-01']])
+  })
+
+  it('counts every open row when the account has no IB', async () => {
+    enqueue({ count: 5 })
+    enqueue({ data: '1630' })
+    enqueue({ data: null })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(5)
+    expect(findCalls('skattekonto_transactions', 'gte')).toEqual([])
+  })
+
+  it('counts every open row when the IB cannot be read: work is never hidden on a failed read', async () => {
+    enqueue({ count: 5 })
+    enqueue({ data: '1630' })
+    enqueue({ error: { message: 'boom' } })
+    await expect(countUnbookedSkattekontoRows(supabase, COMPANY)).resolves.toBe(5)
+  })
 })
 
 describe('countInboxDocuments', () => {

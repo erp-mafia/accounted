@@ -403,8 +403,8 @@ export const SkattekontoStatusBlockSchema = z.object({
   /**
    * Open Skatteverket rows (not linked, not ignored) dated before
    * history_start: what the item bucket before_history lists. Outside every
-   * bridge line and count, although Att göra counts them as unbooked
-   * (crm#1153). Set by the skattekonto engine on every status.
+   * bridge line and count, and out of Att göra: the IB carries them
+   * (crm#1153, crm#2010). Set by the skattekonto engine on every status.
    */
   before_history_count: z.number().int().optional(),
   before_history_total: z.number().optional(),

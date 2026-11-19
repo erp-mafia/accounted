@@ -21,6 +21,7 @@
  * Client-safe: the async functions only take a client as an argument.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { legalFormProfile, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { EntityType } from '@/types'
 
@@ -90,7 +91,7 @@ function isMissingFunction(error: { code?: string | null } | null): boolean {
  * account.
  */
 export async function resolveSkattekontoAccount(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<SkattekontoLedgerAccount> {
   const { data, error } = await supabase.rpc('company_skattekonto_account', { p_company_id: companyId })

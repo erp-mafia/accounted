@@ -191,8 +191,8 @@ describe('reconciliation MCP tools', () => {
       expect(out.before_history.note).toMatch(/^34 open Skatteverket row\(s\) are dated before history_start 2026-01-01/)
       expect(out.before_history.note).toContain('Att göra')
       expect(out.before_history.note).toContain('bucket "before_history"')
-      expect(out.before_history.note).toContain('gnubok_reconcile_match')
-      expect(out.before_history.note).toContain('do not book them')
+      expect(out.before_history.note).toContain('does not count them')
+      expect(out.before_history.note).toContain('do not book, link or ignore them')
     })
 
     it('items: no block when no row is before the history', async () => {

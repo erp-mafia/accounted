@@ -32,6 +32,7 @@ import {
   isSkattekontoLedgerAccount,
   type SkattekontoLedgerAccount,
 } from '@/lib/skatteverket/skattekonto-account'
+import { isOpenSkattekontoRow } from '@/lib/skatteverket/skattekonto-open-rows'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import { cashAccountKontoLabel, cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
 import type { RowProposal } from '@/components/transactions/TransactionInboxCard'
@@ -766,6 +767,10 @@ export default function TransactionsPage() {
   // The company's skattekonto account (1630, or 2012 for an enskild firma that
   // runs it there), as the rows' list route reports it.
   const [skvAccount, setSkvAccount] = useState<SkattekontoLedgerAccount>(SKATTEKONTO_ACCOUNT_DEFAULT)
+  // The date of the ingående balans on that account, as the same route
+  // reports it: a row dated before it is carried by the IB and is no work
+  // here (isOpenSkattekontoRow, the reading Att göra counts with).
+  const [skvOpeningDate, setSkvOpeningDate] = useState<string | null>(null)
   const [skvMatchTarget, setSkvMatchTarget] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -1015,8 +1020,8 @@ export default function TransactionsPage() {
     | { source: 'skatteverket'; date: string; data: SkattekontoTransactionWithSuggestion }
 
   const skvUnmatched = useMemo(
-    () => skvRows.filter((row) => !row.journal_entry_id && !row.is_ignored),
-    [skvRows],
+    () => skvRows.filter((row) => isOpenSkattekontoRow(row, skvOpeningDate)),
+    [skvRows, skvOpeningDate],
   )
   // Booking, matching or ignoring a skattekonto row here changes the nav
   // badge, which counts these rows too; skattekonto has no realtime channel,
@@ -1200,12 +1205,13 @@ export default function TransactionsPage() {
       }
     }
     if (skattekontoInSource(effectiveSourceFilter)) {
-      // Inbox only shows SKV rows that need action (no verifikat yet).
+      // Inbox only shows SKV rows that need action: no verifikat yet, and
+      // not carried by the IB on the skattekonto account.
       for (const r of skvRows) {
         // Exiting rows stay rendered for the exit animation, even if a
         // refetch already gave them a journal_entry_id (or an ignore) mid-
         // window (see above).
-        if ((r.journal_entry_id || r.is_ignored) && !exitingIds.has(r.id)) continue
+        if (!isOpenSkattekontoRow(r, skvOpeningDate) && !exitingIds.has(r.id)) continue
         // SKV rows live client-side only, so the period filter applies here.
         if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
         if (
@@ -1225,7 +1231,7 @@ export default function TransactionsPage() {
       if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
       return 0
     })
-  }, [effectiveSourceFilter, exitingIds, periodBounds, searchTerm, skvRows, uncategorizedTransactions])
+  }, [effectiveSourceFilter, exitingIds, periodBounds, searchTerm, skvOpeningDate, skvRows, uncategorizedTransactions])
 
   // Rows the bulkbar's "Markera alla" can select: the visible bank rows
   // (they feed the /api/transactions/* batch handlers) ...
@@ -1357,8 +1363,9 @@ export default function TransactionsPage() {
       if (skvFetchSeqRef.current !== seq) return
       const booked = (json.data?.booked ?? []) as SkattekontoTransactionWithSuggestion[]
       if (isSkattekontoLedgerAccount(json.data?.skattekonto_account)) setSkvAccount(json.data.skattekonto_account)
-      // Keep all booked SKV rows in state: inbox view filters to obokförda
-      // (journal_entry_id null), history view shows all of them (matched
+      setSkvOpeningDate(typeof json.data?.opening_balance_date === 'string' ? json.data.opening_balance_date : null)
+      // Keep all booked SKV rows in state: inbox view filters to the open
+      // rows (isOpenSkattekontoRow), history view shows all of them (matched
       // and unmatched) interleaved with bank tx by date.
       setSkvRows(booked)
     } catch {

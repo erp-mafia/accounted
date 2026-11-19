@@ -19,6 +19,7 @@ import type { IntakeSourceId } from '@/lib/intake/sources'
 import { INKORG_FOCUS_QUERY, INKORG_HREF } from '@/lib/inkorg/flag'
 import { PAYMENT_STATUSES_TO_BOOK, SETTLEMENT_STATUSES_TO_BOOK } from '@/lib/collections/settlements-ui'
 import { filterOpenDeadlines } from '@/lib/deadlines/open'
+import { readSkattekontoOpeningDate, whereSkattekontoRowOpen } from '@/lib/skatteverket/skattekonto-open-rows'
 
 /**
  * What stands behind a count row, inside its Börja step: the first few items
@@ -261,20 +262,28 @@ async function loadFromTables(kind: StepItemsKind, companyId: string, href: stri
         href: `/transactions?highlight=${r.id}`,
       }))
     }
-    case 'skattekonto':
+    case 'skattekonto': {
+      // The count's own reading: a row before the IB on the skattekonto
+      // account is carried by it, so it is never listed as work. An IB that
+      // cannot be read lists every open row, as the count does.
+      const openingDate = await readSkattekontoOpeningDate(supabase, companyId).catch((err: unknown) => {
+        console.warn('[StepItems] skattekonto opening balance read failed; listing every open row', err)
+        return null
+      })
       return (
         await rows(
-          supabase
-            .from('skattekonto_transactions')
-            .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket')
-            .eq('company_id', companyId)
-            .eq('status', 'booked')
-            .is('journal_entry_id', null)
-            .eq('is_ignored', false)
+          whereSkattekontoRowOpen(
+            supabase
+              .from('skattekonto_transactions')
+              .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket')
+              .eq('company_id', companyId),
+            openingDate,
+          )
             .order('transaktionsdatum', { ascending: true })
             .limit(STEP_ITEMS_CAP),
         )
       ).map((r) => ({ id: String(r.id), name: text(r.transaktionstext), date: text(r.transaktionsdatum) || null, amount: num(r.belopp_skatteverket), currency: null, href }))
+    }
     case 'settlements':
       return (
         await rows(

@@ -5,6 +5,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { readSkatteverketConnection, type SkatteverketConnectionState } from '@/lib/skatteverket/connection-state'
 import { loadImportedStornoPairs } from '@/lib/skatteverket/skattekonto-cancelled-entries'
+import { isSkattekontoRowBeforeHistory } from '@/lib/skatteverket/skattekonto-open-rows'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { planSkattekontoLedgerLinks, type PlannedLedgerLink } from './skattekonto-ledger-plan'
@@ -582,10 +583,12 @@ function inWindow(date: string, from: string | null | undefined, to: string | nu
  * IB itself is the opening balance, never a row to match. Without an IB both
  * sums run over all history, as before. Open rows from before history_start
  * (a migrated company's last year, already in its imported books) are still
- * listed in `before_history`, outside every sum and count: Att göra counts
- * them as unbooked, and an agent needs their ids to link or ignore them
- * (crm#1153). Ignoring one, or linking it to a verifikat dated before
- * history_start, moves no figure of the bridge.
+ * listed in `before_history`, outside every sum and count, so an agent can
+ * find them (crm#1153). They are no work: the IB carries them, and Att göra
+ * leaves them out by the same reading (isSkattekontoRowBeforeHistory,
+ * lib/skatteverket/skattekonto-open-rows.ts, crm#2010). Ignoring one, or
+ * linking it to a verifikat dated before history_start, moves no figure of
+ * the bridge.
  *
  * A storno pair settles itself: in-app (reversed original + storno) and
  * imported (two posted verifikat that mirror each other, "Annullering av
@@ -677,12 +680,10 @@ export async function getSkattekontoReconciliationStatus(
     return head?.status === 'posted' && head.entry_date >= historyStart && head.entry_date <= cutoffDate
   })
   // The open rows the line above leaves out: before the history, no link,
-  // not ignored. The IB carries them, so they stay out of every sum below;
-  // they are only listed, because Att göra counts them as unbooked and an
-  // agent needs their ids to link or ignore them (crm#1153).
-  const beforeHistory = historyStart
-    ? bookedToCutoff.filter((r) => r.transaktionsdatum < historyStart && openRow(r))
-    : []
+  // not ignored. The IB carries them, so they stay out of every sum below
+  // and out of Att göra; they are only listed, so an agent can find them
+  // (crm#1153, crm#2010).
+  const beforeHistory = bookedToCutoff.filter((r) => isSkattekontoRowBeforeHistory(r, historyStart))
 
   // Rows that point at a verifikat without being counted below: still
   // "kommande" at Skatteverket, dated after the fetched saldo, or from
