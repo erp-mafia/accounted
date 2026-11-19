@@ -90,7 +90,7 @@ Errors return an \`error\` object instead of \`data\` (and carry no \`meta\` blo
     "message_en": "The selected period is locked.",
     "details": { "fiscal_period_id": "..." },
     "recovery_hint": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.",
-    "docs_url": "https://app.accounted.se/docs/api/errors/PERIOD_LOCKED",
+    "docs_url": "https://docs.accounted.se/errors#period_locked",
     "request_id": "req_..."
   }
 }

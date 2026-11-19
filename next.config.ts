@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
+import { ERROR_CODE_SEGMENT } from "./src/lib/api/v1/error-docs";
 import { LEGACY_HOST_REDIRECT_EXCLUSIONS } from "./src/lib/domains/legacy-redirect";
 import {
   STATIC_POLICY_SOURCE,
@@ -244,18 +245,20 @@ const nextConfig: NextConfig = {
         destination: '/accounts',
         permanent: false,
       },
-      // Docs canonicalised to docs.accounted.se. Every `docs_url` field on the
-      // v1 error envelope still points at this host; the 308 forwards both
-      // humans and agents to the docs subdomain without us needing to
-      // mass-update structured-errors.
+      // Docs canonicalised to docs.accounted.se: the 308 forwards both
+      // humans and agents to the docs subdomain. One path is left out: an
+      // error code's old per-code address (/docs/api/errors/<CODE>, the v1
+      // envelope's `docs_url` until 2026-11), which the docs site has no
+      // page for. src/app/docs/api/errors/[code]/route.ts forwards it to the
+      // code's anchor in the error catalogue.
       {
         source: '/docs/api',
         destination: 'https://docs.accounted.se/',
         permanent: true,
       },
       {
-        source: '/docs/api/:path*',
-        destination: 'https://docs.accounted.se/:path*',
+        source: `/docs/api/:path((?!errors/${ERROR_CODE_SEGMENT}$).*)`,
+        destination: 'https://docs.accounted.se/:path',
         permanent: true,
       },
       {

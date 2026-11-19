@@ -11,16 +11,17 @@ replace `data` with `error` (no `meta`; `request_id` moves inside `error`).
 
 ```json
 { "error": { "code": "PERIOD_LOCKED", "message": "Svenska", "message_en": "English",
-  "details": {}, "recovery_hint": "next step", "docs_url": "...",
+  "details": {}, "recovery_hint": "next step",
+  "docs_url": "https://docs.accounted.se/errors#period_locked",
   "valid_alternatives": {}, "request_id": "req_..." } }
 ```
 
 React to `code`, read `message_en` and `recovery_hint`, follow
 `valid_alternatives` when present (e.g. `next_open_period`). Standard codes on
 every endpoint: `400` validation, `401` bad key, `403` missing scope, `404`,
-`429` rate limited (honor `Retry-After`), `500`. Full catalogue:
-https://app.accounted.se/docs/api/errors. Only endpoint-specific codes are
-mentioned per endpoint below.
+`429` rate limited (honor `Retry-After`), `500`. Full catalogue, one entry
+per code (`docs_url` links it): https://docs.accounted.se/errors. Only
+endpoint-specific codes are mentioned per endpoint below.
 
 **Typed handles.** Responses add `handle` next to the id of the resources
 they return (the endpoint schemas show where):

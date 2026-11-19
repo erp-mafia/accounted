@@ -11,7 +11,7 @@
  *       message_en:         English prose (agents prefer this)
  *       details:            structured context (pgCode, field issues, period_id...)
  *       recovery_hint:      natural-language next step the agent can act on
- *       docs_url:           canonical error-doc URL
+ *       docs_url:           the code's entry in the error catalogue (error-docs.ts)
  *       valid_alternatives: hints like { unlock_endpoint, next_open_period, ...}
  *       request_id:         correlation id, echoed in X-Request-Id header
  *     }
@@ -30,11 +30,8 @@ import {
   type StructuredErrorRemediation,
 } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
+import { docsUrlFor } from './error-docs'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
-
-const DOCS_BASE = process.env.NEXT_PUBLIC_APP_URL
-  ? `${process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/docs/api/errors`
-  : '/docs/api/errors'
 
 export interface V1ErrorBody {
   error: {
@@ -62,10 +59,6 @@ export interface V1ErrorContext {
    * unattended client can pace itself instead of backing off blindly.
    */
   retryAfterSeconds?: number
-}
-
-function docsUrlFor(code: string): string {
-  return `${DOCS_BASE}/${code}`
 }
 
 /**

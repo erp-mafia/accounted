@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Errors: docs_url links the code's catalogue entry (2026-11)
+
+- **Fix: \`docs_url\` on every error response is the code's entry in the error catalogue** (2026-11-19), \`https://docs.accounted.se/errors#<code>\` with the code in lowercase (\`PERIOD_LOCKED\` is \`#period_locked\`). **Before**, it was \`https://app.accounted.se/docs/api/errors/<CODE>\`, which forwarded to a page per code that does not exist (404). A stored link in the old form now forwards to the same entry. \`code\` and every other field are unchanged. The API version date is unchanged.
+
 ### Webshop orders: a booking links the bank row that paid it (2026-11)
 
 - **New: \`transaction_id\` on \`POST /webshop-orders/{orderId}/book\`** (2026-11-19), optional: the bank row that paid the order (a Swish payment on the bank account, a Stripe charge on 1686) is linked to the verifikat once it is posted, in the same call or approval. Before anything is posted it is refused unless the row is the company's, unbooked, unlinked and not ignored (\`404 TX_CATEGORIZE_TX_NOT_FOUND\`, \`400 LINK_TX_TX_ALREADY_LINKED\`, \`409 BANK_ROW_IGNORED\`), its amount is the order total in its currency (\`409 WEBSHOP_ORDER_TRANSACTION_AMOUNT_MISMATCH\`), and the lines book exactly that amount on the row's own account (\`409 WEBSHOP_ORDER_TRANSACTION_ACCOUNT_MISMATCH\`). The dry run previews the row (\`transaction_date\`, \`transaction_amount\`, \`transaction_currency\`, \`transaction_description\`, \`bank_account\`). The answer has \`transaction_link\`: \`linked: true\`, or \`linked: false\` with the link's \`refusal\` (and warning \`WEBSHOP_ORDER_TRANSACTION_NOT_LINKED\`) when the link is refused after posting; the booking stands then, and the row is linked with \`POST /transactions/{id}/link-journal-entry\`. Without \`transaction_id\` nothing changes. Additive; the API version date is unchanged.

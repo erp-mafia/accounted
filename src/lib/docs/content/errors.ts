@@ -3,7 +3,8 @@
  *
  * The registry lives in lib/errors/structured-errors.ts; we re-import it here
  * and build a Stripe-style catalogue page where every code is anchorable
- * (the docs_url field on every error envelope already points at this page).
+ * (the docs_url field on every error envelope points at its code's anchor on
+ * this page: lib/api/v1/error-docs.ts).
  *
  * Adding a new error code in the registry automatically surfaces here on the
  * next build: no manual edits to keep in sync.
@@ -85,13 +86,13 @@ export function buildErrorReferenceMd(): string {
   lines.push('    "message_en": "The selected period is locked.",')
   lines.push('    "details": { "fiscal_period_id": "..." },')
   lines.push('    "recovery_hint": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.",')
-  lines.push('    "docs_url": "https://app.accounted.se/docs/api/errors/PERIOD_LOCKED",')
+  lines.push('    "docs_url": "https://docs.accounted.se/errors#period_locked",')
   lines.push('    "request_id": "req_..."')
   lines.push('  }')
   lines.push('}')
   lines.push('```')
   lines.push('')
-  lines.push(`The \`message\` field is Swedish (matches the dashboard); \`message_en\` is English (for agent and developer logs). \`recovery_hint\` (when present) is a one-line description of the canonical fix. \`request_id\` echoes the request for support and log correlation - note it lives inside \`error\` on failures (there is no top-level \`meta\` block on an error response, unlike the success envelope). \`docs_url\` is built from the code (\`…/docs/api/errors/<CODE>\`).`)
+  lines.push(`The \`message\` field is Swedish (matches the dashboard); \`message_en\` is English (for agent and developer logs). \`recovery_hint\` (when present) is a one-line description of the canonical fix. \`request_id\` echoes the request for support and log correlation - note it lives inside \`error\` on failures (there is no top-level \`meta\` block on an error response, unlike the success envelope). \`docs_url\` links the code's entry on this page: \`https://docs.accounted.se/errors#<code>\`, with the code in lowercase.`)
   lines.push('')
 
   for (const label of orderedLabels) {
