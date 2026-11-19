@@ -41,7 +41,7 @@ import {
 import { orgNumberFromVatNumber } from './identifiers'
 import type { KivraProvider } from './kivra'
 import { getDigitalMailboxProviders, isDigitalMailboxEnabled } from './providers'
-import type { DigitalMailboxProviderId, SenderRegistration } from './types'
+import { DIGITAL_MAILBOX_PROVIDERS, type DigitalMailboxProviderId, type MailboxSender, type SenderRegistration } from './types'
 
 /** Why connecting cannot start; each maps to a structured error code in the route. */
 export type ConnectRefusal =
@@ -442,7 +442,7 @@ export async function activateSending(
 
   // A request already waiting is asked about, not made again.
   const waiting = senderRequestOf(existing)
-  const sender = provider.sender
+  const sender: MailboxSender = provider.sender
   let registration: SenderRegistration
   try {
     registration =
@@ -523,10 +523,11 @@ export interface SenderRequestSweep {
 export async function checkPendingSenderRequests(service: SupabaseClient, args: { log: Logger }): Promise<SenderRequestSweep> {
   const summary: SenderRequestSweep = { checked: 0, activated: 0, rejected: 0, errors: [] }
   const providers = getDigitalMailboxProviders()
-  if (!providers.kivra?.sender?.checkSenderRequest && !providers.billo?.sender?.checkSenderRequest) return summary
+  const senderOf = (id: DigitalMailboxProviderId): MailboxSender | null => providers[id]?.sender ?? null
+  if (!DIGITAL_MAILBOX_PROVIDERS.some((id) => senderOf(id)?.checkSenderRequest)) return summary
   const rows = await listPendingSenderConnections(service)
   for (const row of rows) {
-    const sender = providers[row.provider]?.sender
+    const sender = senderOf(row.provider)
     const request = senderRequestOf(row)
     if (!sender?.checkSenderRequest || request?.status !== 'pending' || !isDigitalMailboxEnabled(row.company_id)) continue
     summary.checked++
