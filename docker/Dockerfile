@@ -50,17 +50,19 @@ ENV NEXT_PUBLIC_BRANDING_APP_NAME=__NEXT_PUBLIC_BRANDING_APP_NAME__
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# `next build` type-checks the whole production project (tsconfig.build.json)
-# after compiling, and that step now needs more heap than Node gives itself by
-# default. V8 caps its default old-space at about 4 GB on 64-bit whatever the
-# machine has, so a self-hosted build fails with "Ineffective mark-compacts
-# near heap limit" on a 32 GB host exactly as it would on a 4 GB one: more RAM
-# does not raise the ceiling, only this does. Measured on the current tree
-# (2026-10-19): the check no longer fits in 6144 MiB (two production builds
-# died there), so the builder gets 8192, as CI's checks job does.
-#
-# Only the builder stage sets this. The runner is a separate FROM and its
-# runtime heap stays whatever the deployment chooses.
+# The image build compiles and does not type-check. `next build` would run a
+# type check of the whole production project after compiling, and that check
+# no longer fits in an 8 GiB heap: the build died there with "Ineffective
+# mark-compacts near heap limit". CI type-checks every change before it reaches
+# main (`npm run check:types`), so the check here repeated that work on a tree
+# that had already passed it. A local build needs less memory without it.
+ENV SKIP_BUILD_TYPECHECK=1
+
+# Compiling still wants more heap than Node gives itself by default (V8 caps
+# its default old-space at about 4 GB on 64-bit, whatever the machine has).
+# Same ceiling as CI's build job. Only the builder stage sets it: the runner
+# is a separate FROM and its runtime heap stays whatever the deployment
+# chooses.
 ENV NODE_OPTIONS=--max-old-space-size=8192
 
 RUN npm run build
