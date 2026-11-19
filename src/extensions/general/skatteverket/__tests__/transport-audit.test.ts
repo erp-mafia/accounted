@@ -79,7 +79,8 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
 
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
-import { skvRequestWithAuth, SkatteverketAuthError } from '../lib/api-client'
+import { skvRequestWithAuth, SkatteverketAuthError, skvUnreachable } from '../lib/api-client'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { getSaldo, getTransaktioner } from '../lib/skattekonto-client'
 import { listOmbudGrants } from '../lib/ombud-client'
 import { runValidateAgiUppgift } from '../lib/core-actions'
@@ -244,6 +245,34 @@ describe('transport: one audit row per outbound call', () => {
     expect(rows()).toEqual([
       expect.objectContaining({ outcome: 'internal_error', responseStatus: null, errorMessage: 'socket hang up' }),
     ])
+  })
+
+  it('names a fetch fault waiting does not cure: in the thrown error, the row and an error log line', async () => {
+    const platform = Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') })
+    answers = [platform]
+    const thrown = await skvRequestWithAuth(USER, 'GET', '/x', TARGET).catch((e: unknown) => e)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).not.toBeInstanceOf(TypeError)
+    expect((thrown as Error).message).toContain('(unexpected redirect)')
+    expect((thrown as Error).cause).toBe(platform)
+    expect(skvUnreachable(thrown)).toBe(false)
+    // The agent reads a fault, not a retryable "fetch failed".
+    expect(getStructuredError(thrown).retryable).toBe(false)
+    expect(rows()).toEqual([
+      expect.objectContaining({ outcome: 'internal_error', errorMessage: expect.stringContaining('(unexpected redirect)') }),
+    ])
+    expect(records).toContainEqual(
+      expect.objectContaining({ level: 'error', endpoint: 'probe', cause: 'unexpected redirect' }),
+    )
+  })
+
+  it('rethrows a fetch failure waiting can cure as the platform raised it, with no error log line', async () => {
+    const platform = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) })
+    answers = [platform]
+    await expect(skvRequestWithAuth(USER, 'GET', '/x', TARGET)).rejects.toBe(platform)
+    expect(skvUnreachable(platform)).toBe(true)
+    expect(records.filter((r) => r.level === 'error')).toEqual([])
   })
 
   it('writes no row when nothing left: no token, or the kill switch', async () => {

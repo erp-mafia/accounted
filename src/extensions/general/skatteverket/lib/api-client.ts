@@ -723,8 +723,9 @@ export async function skvRequestWithAuth(
     if (auth.mode === 'user' && err instanceof SkatteverketAuthError) {
       err.tokenRow = { userId: auth.userId, version: err.tokenRow?.version ?? trace.tokenVersion }
     }
-    if (trace.sent) await recordCall(audit, auth.mode, trace, outcomeOfError(err, trace))
-    throw err
+    const thrown = withFetchFaultNamed(err, audit)
+    if (trace.sent) await recordCall(audit, auth.mode, trace, outcomeOfError(thrown, trace))
+    throw thrown
   }
   await recordCall(audit, auth.mode, trace, await outcomeOfResponse(response, audit))
   return response
@@ -1246,10 +1247,65 @@ export function isApigwClientRefusal(err: unknown): err is SkatteverketAuthError
 }
 
 /**
+ * Causes of a failed fetch that waiting does not cure: a fault on our side or
+ * in configuration (a mistyped base URL, a gateway that redirects, a
+ * certificate the runtime refuses), not an outage. Read from the cause the
+ * runtime attaches to its TypeError('fetch failed'): `cause.code` where it
+ * has one, otherwise the cause's message (a refused redirect has no code).
+ */
+const FETCH_FAULT_CODES = new Set([
+  'ENOTFOUND',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+])
+const FETCH_FAULT_MESSAGES = new Set(['unexpected redirect'])
+
+/**
+ * The cause of a failed fetch when it is one that waiting does not cure
+ * (FETCH_FAULT_CODES, any CERT_* code), as the runtime states it; null for
+ * anything else, including a failed fetch whose cause is unknown or missing.
+ */
+function skvFetchFault(err: unknown): string | null {
+  if (!(err instanceof TypeError && err.message === 'fetch failed')) return null
+  const cause = err.cause as { code?: unknown; message?: unknown } | null | undefined
+  const code = typeof cause?.code === 'string' ? cause.code : null
+  if (code !== null && (FETCH_FAULT_CODES.has(code) || code.startsWith('CERT_'))) return code
+  const message = typeof cause?.message === 'string' ? cause.message : null
+  if (message !== null && FETCH_FAULT_MESSAGES.has(message)) return message
+  return null
+}
+
+/**
+ * The error the transport throws for a failed fetch skvFetchFault names: the
+ * cause in the message (logs, the audit row, the agent's error), the
+ * platform's error as `cause`, and one error-level log line. The platform's
+ * "fetch failed" would otherwise read as a transient failure to every reader
+ * that matches the words. Anything else is returned as it was raised.
+ */
+function withFetchFaultNamed(err: unknown, audit: SkvAudit): unknown {
+  const fault = skvFetchFault(err)
+  if (fault === null) return err
+  const endpoint = 'unaudited' in audit ? audit.operation : audit.endpoint
+  log.error('Skatteverket call failed without an answer, for a cause waiting does not cure', { endpoint, cause: fault })
+  return new Error(
+    `Skatteverket call failed without an answer (${fault}): check the Skatteverket base URL and the network path to it.`,
+    { cause: err },
+  )
+}
+
+/**
  * No answer at all: the call's timeout ran out, or no connection (undici's
- * "fetch failed"). The transport rethrows either as the platform raised it,
- * so every door that words a failure asks here whether it was this one.
+ * "fetch failed" for a cause that waiting can cure, or one the runtime does
+ * not state). A failed fetch skvFetchFault names is a fault, not this. The
+ * transport rethrows a timeout and an unreachable host as the platform
+ * raised them, so every door that words a failure asks here whether it was
+ * this one.
  */
 export function skvUnreachable(err: unknown): boolean {
-  return isTimeoutError(err) || (err instanceof TypeError && err.message === 'fetch failed')
+  if (isTimeoutError(err)) return true
+  return err instanceof TypeError && err.message === 'fetch failed' && skvFetchFault(err) === null
 }
