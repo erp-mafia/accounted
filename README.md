@@ -8,7 +8,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE) [![Docker](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml)
 
-[Use Accounted](https://app.accounted.se) · [Self-host](docs/SELF-HOSTING.md) · [Documentation](docs/README.md) · [Contribute](.github/CONTRIBUTING.md)
+[Use Accounted](https://app.accounted.se) · [Self-host](docs/SELF-HOSTING.md) · [Documentation](docs/README.md) · [What's new](https://github.com/erp-mafia/accounted/releases) · [Contribute](.github/CONTRIBUTING.md)
 
 ## Why Accounted?
 
@@ -31,6 +31,9 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **E-invoicing (Peppol)**: Send and receive Peppol BIS Billing 3 e-invoices through Qvalia, a certified Swedish Access Point; received documents land in the supplier invoice inbox
 - **Skattekonto**: Tax account transactions synced from Skatteverket or imported from statement files, linked to the booked 1630 movements for reconciliation
 - **Document archive**: SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
+- **Inkorg**: One inbox for receipts, supplier invoices and emailed documents; an invoice and its receipt become one purchase, booked in one step
+- **Digital mailboxes**: Kivra and Billo: read incoming mail into the Inkorg, send invoices and payslips
+- **Document signing**: Send a PDF for signing with BankID; every signature gets a signeringsbevis
 - **SIE import/export**: Standard Swedish accounting interchange format
 - **Agent access (MCP)**: 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok, Gemini and Cursor over OAuth 2.1
 - **Claude connector and plugin**: Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md); the same plugin installs in Codex and Cursor

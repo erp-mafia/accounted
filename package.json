@@ -1,6 +1,7 @@
 {
-  "name": "erp-base",
+  "name": "accounted-app",
   "version": "0.1.0",
+  "description": "Open-source Swedish accounting software, built to be operated by you or by your AI agent.",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "scripts": {
