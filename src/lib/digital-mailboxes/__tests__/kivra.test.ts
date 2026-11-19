@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  KIVRA_SENDER_ELSEWHERE,
   KivraPartnerClient,
   KivraTenantClient,
   createKivraProvider,
@@ -160,9 +161,84 @@ describe('KivraTenantClient', () => {
   it('registers a tenant by VAT number and takes the key from kivra-objkey', async () => {
     responder = () => json({}, { status: 201, headers: { 'kivra-objkey': 'tk1' } })
     const client = new KivraTenantClient(BASE, CLIENT)
-    await expect(client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })).resolves.toEqual({ tenantRef: 'tk1' })
+    await expect(client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })).resolves.toEqual({ status: 'active', tenantRef: 'tk1' })
     const body = JSON.parse(String(calls[1]!.init.body))
     expect(body).toEqual({ name: 'Säljare AB', company_id: [{ name: 'Säljare AB', orgnr: 'SE442005920801' }] })
+  })
+
+  describe('a company that is already a Kivra sender through another service', () => {
+    // Kivra's documented 409 on POST /v2/tenant (Error40915).
+    const conflict = () =>
+      json({ code: '40915', short_message: 'Orgnumber already exist', long_message: 'Tenant outside your scope' }, { status: 409 })
+    const authCalls = () => calls.filter((c) => c.url.endsWith('/v1/auth'))
+
+    it('asks Kivra for access to the existing sender instead of failing, and waits for the answer', async () => {
+      responder = (url) => {
+        if (url.endsWith('/v2/tenant')) return conflict()
+        if (url.endsWith('/v2/tenant/request_access')) {
+          return json({ status: 'pending', tenant_key: 'tk-other' }, { status: 201, headers: { 'kivra-objkey': 'req-1' } })
+        }
+        return json({}, { status: 500 })
+      }
+      const client = new KivraTenantClient(BASE, CLIENT)
+      await expect(client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })).resolves.toEqual({
+        status: 'pending',
+        requestRef: 'req-1',
+      })
+      const request = calls.find((c) => c.url === `${BASE}/v2/tenant/request_access`)!
+      expect(request.init.method).toBe('POST')
+      expect(JSON.parse(String(request.init.body))).toEqual({ vat_number: 'SE442005920801' })
+    })
+
+    it('takes the existing tenant at once when Kivra already accepted the request', async () => {
+      responder = (url) => {
+        if (url.endsWith('/v2/tenant')) return conflict()
+        return json({ status: 'accepted', tenant_key: 'tk-other' }, { status: 201, headers: { 'kivra-objkey': 'req-1' } })
+      }
+      const client = new KivraTenantClient(BASE, CLIENT)
+      await expect(client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })).resolves.toEqual({
+        status: 'active',
+        tenantRef: 'tk-other',
+      })
+    })
+
+    it('follows the request up, with a token issued after it, until Kivra accepts or rejects it', async () => {
+      let status = 'pending'
+      responder = (url) => {
+        if (url.endsWith('/v2/tenant')) return conflict()
+        if (url.endsWith('/v2/tenant/request_access')) return json({ status }, { status: 201, headers: { 'kivra-objkey': 'req-1' } })
+        return json({ status, tenant_key: 'tk-other' }, { headers: { 'kivra-objkey': 'req-1' } })
+      }
+      const client = new KivraTenantClient(BASE, CLIENT)
+      await client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })
+      const tokensBefore = authCalls().length
+
+      await expect(client.checkSenderRequest('req-1')).resolves.toEqual({ status: 'pending', requestRef: 'req-1' })
+      expect(calls.at(-1)!.url).toBe(`${BASE}/v2/tenant/request_access/req-1`)
+      expect(calls.at(-1)!.init.method).toBe('GET')
+      // The request's status scope comes with a token issued after the request.
+      expect(authCalls().length).toBe(tokensBefore + 1)
+
+      status = 'accepted'
+      await expect(client.checkSenderRequest('req-1')).resolves.toEqual({ status: 'active', tenantRef: 'tk-other' })
+      status = 'rejected'
+      await expect(client.checkSenderRequest('req-1')).resolves.toEqual({ status: 'rejected', requestRef: 'req-1' })
+    })
+
+    it('reports a refused access request as the standing conflict, not as a failure to retry', async () => {
+      responder = (url) => (url.endsWith('/v2/tenant') ? conflict() : json({ code: '40300' }, { status: 403 }))
+      const client = new KivraTenantClient(BASE, CLIENT)
+      await expect(client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })).rejects.toMatchObject({
+        kind: 'conflict',
+        providerCode: KIVRA_SENDER_ELSEWHERE,
+      })
+    })
+
+    it('keeps Kivra being down a failure worth retrying', async () => {
+      responder = (url) => (url.endsWith('/v2/tenant') ? conflict() : json({}, { status: 503 }))
+      const client = new KivraTenantClient(BASE, CLIENT)
+      await expect(client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })).rejects.toMatchObject({ kind: 'unavailable' })
+    })
   })
 
   it('matches a company recipient by VAT number', async () => {

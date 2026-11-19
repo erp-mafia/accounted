@@ -26,17 +26,22 @@ import type { Logger } from '@/lib/logger'
 import { BILLO_ALREADY_ENROLLED, type BilloProvider } from './billo'
 import { isDigitalMailboxApiError } from './http'
 import {
+  SENDER_REQUEST_KEY,
   connectionError,
   getConnection,
+  listPendingSenderConnections,
   receiveSinceFrom,
+  senderRequestOf,
   updateConnection,
   upsertConnection,
+  withoutSenderRequest,
   type DigitalMailboxConnection,
+  type SenderRequest,
 } from './connections'
 import { orgNumberFromVatNumber } from './identifiers'
 import type { KivraProvider } from './kivra'
 import { getDigitalMailboxProviders, isDigitalMailboxEnabled } from './providers'
-import type { DigitalMailboxProviderId } from './types'
+import type { DigitalMailboxProviderId, SenderRegistration } from './types'
 
 /** Why connecting cannot start; each maps to a structured error code in the route. */
 export type ConnectRefusal =
@@ -49,6 +54,8 @@ export type ConnectRefusal =
   | 'DIGITAL_MAILBOX_ALREADY_CONNECTED'
   | 'DIGITAL_MAILBOX_PROVIDER_FAILED'
   | 'DIGITAL_MAILBOX_ALREADY_ENROLLED_ELSEWHERE'
+  | 'DIGITAL_MAILBOX_SENDER_ELSEWHERE'
+  | 'DIGITAL_MAILBOX_SENDER_REQUEST_REJECTED'
 
 export type ConnectOutcome<T> = { ok: true; data: T } | { ok: false; code: ConnectRefusal; reason?: string }
 
@@ -433,29 +440,133 @@ export async function activateSending(
   const existing = await getConnection(service, args.companyId, args.provider)
   if (existing?.send_state === 'active' && existing.tenant_ref) return { ok: true, data: existing }
 
-  let tenantRef: string
+  // A request already waiting is asked about, not made again.
+  const waiting = senderRequestOf(existing)
+  const sender = provider.sender
+  let registration: SenderRegistration
   try {
-    ;({ tenantRef } = await provider.sender.registerSender({ orgNumber: identity.orgNumber, name: identity.name }))
+    registration =
+      waiting?.status === 'pending' && sender.checkSenderRequest
+        ? await sender.checkSenderRequest(waiting.ref)
+        : await sender.registerSender({ orgNumber: identity.orgNumber, name: identity.name })
   } catch (err) {
     const reason = errorReason(err)
     args.log.warn('digital mailbox sender registration failed', { companyId: args.companyId, provider: args.provider, reason })
-    return { ok: false, code: 'DIGITAL_MAILBOX_PROVIDER_FAILED', reason }
+    // The company sends through another service and the provider would not take the access request: retrying will not help.
+    const elsewhere = isDigitalMailboxApiError(err) && err.kind === 'conflict'
+    return { ok: false, code: elsewhere ? 'DIGITAL_MAILBOX_SENDER_ELSEWHERE' : 'DIGITAL_MAILBOX_PROVIDER_FAILED', reason }
   }
-  const connection = await upsertConnection(service, args.companyId, args.provider, {
-    send_state: 'active',
-    tenant_ref: tenantRef,
-    send_activated_by: args.userId,
-    send_activated_at: new Date().toISOString(),
+  const connection = await recordSenderRegistration(service, {
+    companyId: args.companyId,
+    provider: args.provider,
+    existing,
+    registration,
+    requestedBy: args.userId,
   })
+  if (registration.status === 'rejected') return { ok: false, code: 'DIGITAL_MAILBOX_SENDER_REQUEST_REJECTED' }
   return { ok: true, data: connection }
 }
 
-/** Stop sending through the provider. The tenant stays at the provider; nothing more goes through it from Accounted. */
+/**
+ * Write where the sender registration stands. Active switches sending on and
+ * drops any access request; pending and rejected keep send_state as it was
+ * and record the request in provider_meta, the rest of which is kept.
+ */
+async function recordSenderRegistration(
+  service: SupabaseClient,
+  args: {
+    companyId: string
+    provider: DigitalMailboxProviderId
+    existing: DigitalMailboxConnection | null
+    registration: SenderRegistration
+    /** Who asked for sending: the admin, or for the cron the admin who made the request. */
+    requestedBy: string | null
+  },
+): Promise<DigitalMailboxConnection> {
+  const { registration, existing } = args
+  const meta = existing?.provider_meta ?? {}
+  if (registration.status === 'active') {
+    return upsertConnection(service, args.companyId, args.provider, {
+      send_state: 'active',
+      tenant_ref: registration.tenantRef,
+      send_activated_by: args.requestedBy,
+      send_activated_at: new Date().toISOString(),
+      provider_meta: withoutSenderRequest(meta),
+    })
+  }
+  const earlier = senderRequestOf(existing)
+  const ref = registration.requestRef
+  const request: SenderRequest = {
+    ref,
+    status: registration.status,
+    // The same request keeps the time it was first made.
+    requested_at: earlier?.ref === ref && earlier.requested_at ? earlier.requested_at : new Date().toISOString(),
+    requested_by: args.requestedBy,
+  }
+  return upsertConnection(service, args.companyId, args.provider, {
+    provider_meta: { ...meta, [SENDER_REQUEST_KEY]: request },
+  })
+}
+
+export interface SenderRequestSweep {
+  checked: number
+  activated: number
+  rejected: number
+  errors: Array<{ companyId: string; provider: string; reason: string }>
+}
+
+/**
+ * The cron's follow-up of access requests that wait for the provider: an
+ * accepted one switches sending on, as if the admin had switched it on then.
+ * Kivra has no webhook for these, so asking is the only way to learn.
+ */
+export async function checkPendingSenderRequests(service: SupabaseClient, args: { log: Logger }): Promise<SenderRequestSweep> {
+  const summary: SenderRequestSweep = { checked: 0, activated: 0, rejected: 0, errors: [] }
+  const providers = getDigitalMailboxProviders()
+  if (!providers.kivra?.sender?.checkSenderRequest && !providers.billo?.sender?.checkSenderRequest) return summary
+  const rows = await listPendingSenderConnections(service)
+  for (const row of rows) {
+    const sender = providers[row.provider]?.sender
+    const request = senderRequestOf(row)
+    if (!sender?.checkSenderRequest || request?.status !== 'pending' || !isDigitalMailboxEnabled(row.company_id)) continue
+    summary.checked++
+    try {
+      const registration = await sender.checkSenderRequest(request.ref)
+      if (registration.status === 'pending') continue
+      await recordSenderRegistration(service, {
+        companyId: row.company_id,
+        provider: row.provider,
+        existing: row,
+        registration,
+        requestedBy: request.requested_by,
+      })
+      if (registration.status === 'active') summary.activated++
+      else summary.rejected++
+      args.log.info('digital mailbox sender access request decided', {
+        companyId: row.company_id,
+        provider: row.provider,
+        status: registration.status,
+      })
+    } catch (err) {
+      summary.errors.push({ companyId: row.company_id, provider: row.provider, reason: errorReason(err) })
+    }
+  }
+  return summary
+}
+
+/**
+ * Stop sending through the provider. The tenant stays at the provider;
+ * nothing more goes through it from Accounted. An access request still
+ * waiting is dropped, so an acceptance later does not switch sending on.
+ */
 export async function deactivateSending(
   service: SupabaseClient,
   args: { companyId: string; provider: DigitalMailboxProviderId },
 ): Promise<DigitalMailboxConnection | null> {
   const connection = await getConnection(service, args.companyId, args.provider)
+  if (connection && senderRequestOf(connection)) {
+    return upsertConnection(service, args.companyId, args.provider, { provider_meta: withoutSenderRequest(connection.provider_meta) })
+  }
   if (!connection || connection.send_state !== 'active') return connection
   return upsertConnection(service, args.companyId, args.provider, { send_state: 'ended' })
 }

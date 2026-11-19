@@ -135,6 +135,55 @@ export async function findReceivingConnection(
   return (data as DigitalMailboxConnection | null) ?? null
 }
 
+/**
+ * provider_meta key for an access request to a sender the company already
+ * has at the provider through another service (Kivra's request_access):
+ * { ref, status: 'pending' | 'rejected', requested_at, requested_by }. Kept
+ * beside send_state, which stays off until the provider accepts: everything
+ * that sends reads send_state 'active' and nothing else.
+ */
+export const SENDER_REQUEST_KEY = 'sender_request'
+
+export interface SenderRequest {
+  ref: string
+  status: 'pending' | 'rejected'
+  requested_at: string
+  requested_by: string | null
+}
+
+/** The connection's sender access request, when one was made and the sender is not active. */
+export function senderRequestOf(connection: Pick<DigitalMailboxConnection, 'provider_meta' | 'send_state'> | null): SenderRequest | null {
+  if (!connection || connection.send_state === 'active') return null
+  const value = connection.provider_meta?.[SENDER_REQUEST_KEY]
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const request = value as Record<string, unknown>
+  if (typeof request.ref !== 'string' || !request.ref) return null
+  if (request.status !== 'pending' && request.status !== 'rejected') return null
+  return {
+    ref: request.ref,
+    status: request.status,
+    requested_at: typeof request.requested_at === 'string' ? request.requested_at : '',
+    requested_by: typeof request.requested_by === 'string' ? request.requested_by : null,
+  }
+}
+
+/** provider_meta without the sender access request. */
+export function withoutSenderRequest(meta: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const { [SENDER_REQUEST_KEY]: _request, ...rest } = meta ?? {}
+  return rest
+}
+
+/** The rows whose sender access request waits for the provider: the cron follows them up. */
+export async function listPendingSenderConnections(service: SupabaseClient): Promise<DigitalMailboxConnection[]> {
+  const { data, error } = await service
+    .from('digital_mailbox_connections')
+    .select('*')
+    .eq(`provider_meta->${SENDER_REQUEST_KEY}->>status`, 'pending')
+    .neq('send_state', 'active')
+  if (error) throw new Error(`digital mailbox connections read failed: ${error.message}`)
+  return (data as DigitalMailboxConnection[] | null) ?? []
+}
+
 /** The error a person or operator reads on the connection, cut to the column's limit. */
 export function connectionError(message: string): Pick<ConnectionPatch, 'last_error' | 'last_error_at'> {
   return { last_error: message.slice(0, 500), last_error_at: new Date().toISOString() }
@@ -212,6 +261,8 @@ export interface ConnectionSummary {
   last_synced_at: string | null
   send_state: SendState
   send_activated_at: string | null
+  /** The company is a sender through another service: Accounted's access request waits for the provider, or was rejected. */
+  send_request: SenderRequest['status'] | null
   last_error: string | null
   last_error_at: string | null
   /** Billo: the postal address that scans to the mailbox, when Billo gave one. */
@@ -226,6 +277,7 @@ export function summariseConnection(row: DigitalMailboxConnection): ConnectionSu
     last_synced_at: row.last_synced_at,
     send_state: row.send_state,
     send_activated_at: row.send_activated_at,
+    send_request: senderRequestOf(row)?.status ?? null,
     last_error: row.last_error,
     last_error_at: row.last_error_at,
     postal_address: row.provider_meta?.billo_address ?? null,
