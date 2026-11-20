@@ -96,7 +96,21 @@ describe('GET /api/transactions/[id]/booking-duplicate-check', () => {
 
   it('returns the twin the booking guard would refuse on', async () => {
     enqueue({
-      data: { id: TX_UUID, date: '2026-10-23', amount: -42387, currency: 'SEK', amount_sek: null, exchange_rate: null, journal_entry_id: null, cash_account_id: 'ca-1' },
+      data: {
+        id: TX_UUID,
+        date: '2026-10-23',
+        amount: -42387,
+        currency: 'SEK',
+        amount_sek: null,
+        exchange_rate: null,
+        journal_entry_id: null,
+        cash_account_id: 'ca-1',
+        external_id: 'ext-1',
+        import_source: 'bank_file',
+        bank_connection_id: null,
+        provider_transaction_id: null,
+        bank_file_import_id: 'bfi-1',
+      },
       error: null,
     })
     mockDetect.mockResolvedValue(SALARY_TWIN)
@@ -105,8 +119,9 @@ describe('GET /api/transactions/[id]/booking-duplicate-check', () => {
     const { status, body } = await parseJsonResponse<{ candidate: unknown }>(response)
     expect(status).toBe(200)
     expect(body.candidate).toEqual(SALARY_TWIN)
-    // The guard's own target shape, FX trio and bank account included.
-    expect(mockDetect).toHaveBeenCalledWith(mockSupabase, 'company-1', {
+    // The booking doors' own target shape: FX trio, bank account and the
+    // feed identity that tells two entries of one feed apart.
+    expect(mockDetect).toHaveBeenCalledWith(mockSupabase, 'company-1', expect.objectContaining({
       id: TX_UUID,
       date: '2026-10-23',
       amount: -42387,
@@ -114,7 +129,12 @@ describe('GET /api/transactions/[id]/booking-duplicate-check', () => {
       amount_sek: null,
       exchange_rate: null,
       cash_account_id: 'ca-1',
-    })
+      external_id: 'ext-1',
+      import_source: 'bank_file',
+      bank_connection_id: null,
+      provider_transaction_id: null,
+      bank_file_import_id: 'bfi-1',
+    }))
   })
 
   it('fails open: a throwing detector answers null', async () => {

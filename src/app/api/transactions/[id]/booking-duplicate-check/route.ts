@@ -29,12 +29,19 @@ export const GET = withRouteContext(
     const { id: transactionId } = await params
     const { supabase, companyId, log, requestId } = ctx
 
-    // currency / amount_sek / exchange_rate: the detector compares in SEK and
-    // needs them to state a foreign bank line in kronor (see
-    // resolveTransactionAmountSek).
+    // The columns the booking doors hand the guard (BookingTarget), so the
+    // row read here is the guard's target as it is. currency / amount_sek /
+    // exchange_rate: the detector compares in SEK and needs them to state a
+    // foreign bank line in kronor (resolveTransactionAmountSek). The feed
+    // identity (external_id ... bank_file_import_id) tells two entries of one
+    // feed apart (crm#1271, crm#1312): without it the probe flagged a second
+    // identical Swish the submit guard lets through, and the force bound to
+    // that twin then failed there.
     const { data: transaction, error } = await supabase
       .from('transactions')
-      .select('id, date, amount, currency, amount_sek, exchange_rate, journal_entry_id, cash_account_id')
+      .select(
+        'id, date, amount, currency, amount_sek, exchange_rate, journal_entry_id, cash_account_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id',
+      )
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -48,22 +55,14 @@ export const GET = withRouteContext(
     // nothing left to book, so no twin to warn about; the booking door
     // refuses it with its own message. A failed read answers null here too,
     // and the door, which fails closed, decides.
-    const bookable = await assertTransactionBookable(supabase, companyId!, transaction)
+    const bookable = await assertTransactionBookable(supabase, companyId, transaction)
     if (!bookable.ok) {
       return NextResponse.json({ candidate: null })
     }
 
     let candidate: BookedDuplicateCandidate | null = null
     try {
-      candidate = await detectBookingDuplicate(supabase, companyId!, {
-        id: transaction.id,
-        date: transaction.date,
-        amount: transaction.amount,
-        currency: transaction.currency ?? null,
-        amount_sek: transaction.amount_sek ?? null,
-        exchange_rate: transaction.exchange_rate ?? null,
-        cash_account_id: transaction.cash_account_id ?? null,
-      })
+      candidate = await detectBookingDuplicate(supabase, companyId, transaction)
     } catch (err) {
       log.warn('booking-duplicate detection failed', err as Error)
     }

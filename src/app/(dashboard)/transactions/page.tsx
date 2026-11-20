@@ -4475,14 +4475,19 @@ export default function TransactionsPage() {
     }
     if (!candidate) return proceed()
     const twin = candidate
-    setDuplicateWarning({
-      transactionId: transaction.id,
-      candidate: twin,
-      retry: async () => {
-        acknowledgedTwinRef.current = { transactionId: transaction.id, journalEntryId: twin.journal_entry_id }
-        proceed()
+    // A dialog another row's booking opened while this probe ran keeps the
+    // slot: this answer must not re-point it (and its Koppla) at this row.
+    // The person clicks Bokför here again once that one is answered.
+    setDuplicateWarning((prev) =>
+      prev ?? {
+        transactionId: transaction.id,
+        candidate: twin,
+        retry: async () => {
+          acknowledgedTwinRef.current = { transactionId: transaction.id, journalEntryId: twin.journal_entry_id }
+          proceed()
+        },
       },
-    })
+    )
   }
 
   function openCategoryDialog(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
@@ -4563,7 +4568,15 @@ export default function TransactionsPage() {
       counterpartyTemplateId: body.counterparty_template_id,
       proposalId: body.proposal_id,
       reviewShown: extras.reviewShown,
-      onReviewRequired: extras.onReviewRequired,
+      onReviewRequired: extras.onReviewRequired
+        ? () => {
+            // The server asked for the review instead of booking: the answer
+            // to the twin holds for the booking the review makes, so the
+            // person is not asked it twice.
+            if (acknowledgedTwin) acknowledgedTwinRef.current = ack
+            extras.onReviewRequired?.()
+          }
+        : undefined,
       dimensions: body.dimensions,
       vatAmount: body.vat_amount,
       confirmNoMatch: false,
@@ -5718,6 +5731,7 @@ export default function TransactionsPage() {
       />}
 
       {duplicateWarning && <DuplicateBookingDialog
+        key={`${duplicateWarning.transactionId}:${duplicateWarning.candidate.journal_entry_id}`}
         candidate={duplicateWarning.candidate}
         processing={duplicateProcessing}
         onCancel={() => setDuplicateWarning(null)}
