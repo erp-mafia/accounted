@@ -50,7 +50,11 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { SKATTEKONTO_LEDGER_ACCOUNT_SET, SKATTEKONTO_TAX_ACCOUNTS } from '@/lib/transactions/skattekonto-tax-accounts'
+import {
+  SKATTEKONTO_LEDGER_ACCOUNT_SET,
+  SKATTEKONTO_TAX_ACCOUNTS,
+  sameTaxEventAccounts,
+} from '@/lib/transactions/skattekonto-tax-accounts'
 import {
   detectBookingDuplicate,
   type BookedDuplicateCandidate,
@@ -170,18 +174,23 @@ export function pickSkattekontoTaxTwin(
   const skattekontoOf = (s: Seen) => [...SKATTEKONTO_LEDGER_ACCOUNT_SET].find((a) => (s.net.get(a) ?? 0) !== 0) ?? null
   const viaSkattekonto = [...byEntry.values()].filter((s) => skattekontoOf(s) !== null)
 
+  // The probe's net on every account that holds the same event (2510 and
+  // 2518 for F-skatt, sameTaxEventAccounts), so a booking on one finds a
+  // verifikat on the other.
+  const netOnEvent = (s: Seen, account: string) =>
+    sameTaxEventAccounts(account).reduce((sum, a) => sum + (s.net.get(a) ?? 0), 0)
   const day = (iso: string) => Date.parse(`${iso}T00:00:00Z`)
   const found: Array<{ seen: Seen; probe: BookingCounterLine; account: string }> = []
   for (const probe of probes) {
     const ore = toOre(probe.net)
     for (const s of viaSkattekonto) {
-      if ((s.net.get(probe.account_number) ?? 0) !== ore) continue
+      if (netOnEvent(s, probe.account_number) !== ore) continue
       const account = skattekontoOf(s)!
       const sk = s.net.get(account) ?? 0
       // An annulment pair: another verifikat of the month undoes this one on
       // both accounts, so neither books the tax.
       const annulled = viaSkattekonto.some(
-        (o) => o !== s && (o.net.get(probe.account_number) ?? 0) === -ore && (o.net.get(account) ?? 0) === -sk,
+        (o) => o !== s && netOnEvent(o, probe.account_number) === -ore && (o.net.get(account) ?? 0) === -sk,
       )
       if (!annulled) found.push({ seen: s, probe, account })
     }
@@ -212,7 +221,7 @@ export async function detectSkattekontoTaxDouble(
     if (probes.length === 0) return null
     const month = calendarMonthOf(target.date)
     if (!month) return null
-    const accounts = [...probes.map((p) => p.account_number), ...SKATTEKONTO_LEDGER_ACCOUNT_SET]
+    const accounts = [...new Set(probes.flatMap((p) => sameTaxEventAccounts(p.account_number))), ...SKATTEKONTO_LEDGER_ACCOUNT_SET]
 
     const lines = await fetchEntryLines<MonthEntryLine>({
       supabase,

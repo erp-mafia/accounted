@@ -420,7 +420,7 @@ type RuleMatchOutcome =
  */
 /**
  * A rule authored for `aktiebolag` describes juridisk-person tax mechanics
- * (bolagsskatt and preliminärskatt on 2510, arbetsgivaravgifter), which an
+ * (bolagsskatt, preliminärskatt on 2518, arbetsgivaravgifter), which an
  * ekonomisk förening shares (IL 65 kap. 10 §); an `enskild_firma` rule keys
  * on the owner's private tax and stays with that form. Unknown forms match
  * `all` only.
