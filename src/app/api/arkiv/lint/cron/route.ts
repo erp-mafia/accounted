@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
-import { arkivRollout } from '@/lib/arkiv/flag'
+import { arkivBrainRollout } from '@/lib/arkiv/flag'
 import { lintCompanies } from '@/lib/arkiv/lint/run'
 import { markCompanyGraphStale, refreshStaleGraphs } from '@/lib/arkiv/graph/snapshot'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
@@ -12,6 +12,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * Arkiv phase 6, nightly: for every company in the rollout, compares what
  * the archive knows with the settings and the agreements, files findings a
  * person can act on, and recomputes the autonomy level per document type.
+ * A company whose lint failed is a warning per company (lintCompanies) and
+ * one error per run here, with the companies named; the run answers 500 only
+ * when every company failed.
  */
 export const maxDuration = 300
 
@@ -29,7 +32,7 @@ async function everyCompany(supabase: ReturnType<typeof createServiceRoleClient>
 export const GET = withCronContext('arkiv.lint', async (_request, ctx) => {
   const supabase = createServiceRoleClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
   try {
-    const rollout = arkivRollout()
+    const rollout = arkivBrainRollout()
     const companies = rollout === 'all' ? await everyCompany(supabase) : rollout
     const results = await lintCompanies(supabase, companies, todayIso())
     const totals = Object.values(results).reduce(
@@ -41,7 +44,16 @@ export const GET = withCronContext('arkiv.lint', async (_request, ctx) => {
     for (const id of companies) await markCompanyGraphStale(supabase, id)
     const graphs = await refreshStaleGraphs(supabase, companies, MAX_GRAPH_REBUILDS, todayIso())
     ctx.log.info('arkiv lint', { ...totals, graphs })
-    return NextResponse.json({ ok: true, ...totals, graphs })
+    if (totals.failed > 0) {
+      const failed = Object.entries(results).filter(([, r]) => 'error' in r)
+      ctx.log.error('arkiv lint failed for some companies', {
+        failed: totals.failed,
+        companies: failed.slice(0, 20).map(([id]) => id),
+        firstReason: (failed[0]?.[1] as { error: string } | undefined)?.error ?? null,
+      })
+    }
+    const allFailed = companies.length > 0 && totals.failed === companies.length
+    return NextResponse.json({ ok: !allFailed, ...totals, graphs }, { status: allFailed ? 500 : 200 })
   } catch (err) {
     ctx.log.error('arkiv lint failed', { reason: err instanceof Error ? err.message : String(err) })
     return NextResponse.json({ ok: false, error: getErrorMessage(err) }, { status: 500 })

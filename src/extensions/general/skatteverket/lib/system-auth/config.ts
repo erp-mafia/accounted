@@ -7,13 +7,14 @@ import crypto from 'crypto'
  * itself with an organisationscertifikat via the OAuth2 Client Credentials
  * Grant: one token for the whole tenant, no per-user session, no 65-minute
  * refresh treadmill. Companies authorize it once by granting Accounted's org
- * number a behorighet ("Juridiskt lasombud", "Momsdeklaration, ombud") in
- * Skatteverket's Ombud och behorigheter e-service.
+ * number the behörigheter in OMBUD_ROLES (lib/ombud-client.ts: "Skattekonto,
+ * bara läsbehörighet", "Momsdeklaration, ombud") in Skatteverket's Ombud och
+ * behörigheter e-service.
  *
- * The exact token-endpoint mechanics (mTLS vs private_key_jwt, scope names)
- * are pending Skatteverket's CCG documentation: everything here is behind
- * SKATTEVERKET_SYSTEM_AUTH_MODE (default 'off') and the transport seam in
- * transport.ts, so the mechanism can be finalized without touching callers.
+ * Skatteverket's org flow is "CCG sysorg": mTLS at the token endpoint (the
+ * mtls transport), proven against the test service on 2026-11-03.
+ * Everything here is behind SKATTEVERKET_SYSTEM_AUTH_MODE (default 'off')
+ * and the transport seam in transport.ts.
  *
  * Modes:
  *   off    : system auth never used (default; behavior identical to before)
@@ -46,14 +47,45 @@ export function getSystemClientId(): string | null {
 }
 
 /**
- * Default scopes for the system token. `obr` is Ombudshantering (confirmed
- * by Skatteverket 2026-09-01 when they added it to application id
- * arcimtechnologyab_gnubok_1); the other names are pending SKV's org-flow
- * docs. Override via env when they land.
+ * OAuth2 client secret for the system token request, sent only when set.
+ * Skatteverket registers a CCG sysorg application one of two ways:
+ * "valfritt certifikat" authenticates the client with client_id +
+ * client_secret and takes any org certificate on the TLS handshake (the
+ * test application, arcimtechnologyab_gnubok_1); "utpekat certifikat"
+ * sends client_id and the named certificate, no secret.
+ */
+export function getSystemClientSecret(): string | null {
+  return process.env.SKATTEVERKET_SYSTEM_CLIENT_SECRET || null
+}
+
+/**
+ * Default scopes for the system token: exactly the APIs the ombud path calls,
+ * under SKV's real scope names (the same ones the BankID flow requests, see
+ * src/lib/connect/upstreams/skatteverket-oauth.ts).
+ *   ska             Skattekonto (lasombud reads and the grant probe)
+ *   momsdeklaration Momsdeklaration (moms_ombud reads)
+ *   obr             Ombudshantering (confirmed by Skatteverket 2026-09-01)
+ * No AGI scope: AGI kvittens reads always run on a member's own token. Add a
+ * scope here only together with the system-mode read that needs it. Override
+ * via env.
  */
 export function getSystemScopes(): string[] {
-  const raw = process.env.SKATTEVERKET_SYSTEM_SCOPES ?? 'skattekonto agd:lasa momsdeklaration obr'
+  const raw = process.env.SKATTEVERKET_SYSTEM_SCOPES ?? 'ska momsdeklaration obr'
   return raw.split(/\s+/).filter(Boolean)
+}
+
+/**
+ * API gateway keys (the Client_Id/Client_Secret headers) for system-mode
+ * calls. Skatteverket issues gateway keys per application, and the Client
+ * Credentials connection with an utpekad organisationslegitimation is an
+ * application of its own: its calls must carry its keys, not the BankID
+ * application's. Both or neither: a lone id or secret falls back to the
+ * shared SKATTEVERKET_APIGW_* pair rather than mixing two applications.
+ */
+export function getSystemApiGwCredentials(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_ID
+  const clientSecret = process.env.SKATTEVERKET_SYSTEM_APIGW_CLIENT_SECRET
+  return clientId && clientSecret ? { clientId, clientSecret } : null
 }
 
 /** Accounted's own org number: what the end company grants behorighet to. */

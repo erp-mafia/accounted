@@ -83,6 +83,20 @@ export function serializeAgentPanelPrefs(prefs: ResolvedAgentPanelPrefs): AgentP
   }
 }
 
+const PX_LENGTH_RE = /^\s*(\d+(?:\.\d+)?)px\s*$/
+
+/**
+ * The nav column's width (the CSS --nav-w: where the page starts) from the
+ * two lengths it is the sum of, as the stylesheet hands them over ("96px",
+ * "220px"). --nav-w is a calc() of the two (app/globals.css), which a script
+ * cannot parse, so the panel adds the same two instead of keeping a number of
+ * its own beside the rail's. NaN when either is missing or not a pixel length.
+ */
+export function navWidthFromParts(railWidth: string, sidebarWidth: string): number {
+  const px = (value: string) => Number(PX_LENGTH_RE.exec(value)?.[1] ?? NaN)
+  return px(railWidth) + px(sidebarWidth)
+}
+
 /**
  * Clamp a docked width so the page keeps MIN_PAGE_WIDTH beside the panel.
  * `navWidth` is the sidebar column (--nav-w); on viewports too small for

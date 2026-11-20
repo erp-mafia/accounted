@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { getPool, withUserContext } from './setup'
-import { insertPostedJournalEntry, insertTransaction, seedCompany } from './fixtures'
+import { insertFiscalPeriod, insertPostedJournalEntry, insertTransaction, seedCompany } from './fixtures'
 import { ledgerKey } from '@/lib/parties/ledger-key'
 import { LEDGER_KEY_CASES } from '@/lib/parties/__tests__/ledger-key.test'
 
@@ -121,14 +121,61 @@ describe('get_observed_parties (pg)', () => {
   }, 60_000)
 
   it('retains invoker security and the authenticated/service grants without anonymous access', async () => {
+    // One function, no overload: PostgREST cannot choose between a 3- and a
+    // 4-argument version for a call naming three arguments (20261015160000).
     const { rows } = await getPool().query(`
-      SELECT p.prosecdef,
+      SELECT pg_get_function_identity_arguments(p.oid) AS args, p.prosecdef,
         has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated,
         has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_role,
         has_function_privilege('anon', p.oid, 'EXECUTE') AS anon
-      FROM pg_proc p WHERE p.oid = 'public.get_observed_parties(uuid,date,integer)'::regprocedure
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'get_observed_parties'
     `)
-    expect(rows).toEqual([{ prosecdef: false, authenticated: true, service_role: true, anon: false }])
+    expect(rows).toEqual([{
+      args: 'p_company_id uuid, p_from_date date, p_limit integer, p_keys text[]',
+      prosecdef: false, authenticated: true, service_role: true, anon: false,
+    }])
+  })
+
+  it('returns every key named in p_keys whatever its rank, with the stats the ranking gives it (accounted#16)', async () => {
+    const c = await seedCompany()
+    const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import' }
+    const previousYear = await insertFiscalPeriod({ userId: c.userId, companyId: c.companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
+    await insertPostedJournalEntry({ ...base, entryDate: '2026-01-10', description: 'Levfakt Beijer Byggmaterial AB (2089)', lines: expense('4000', 1000) })
+    await insertPostedJournalEntry({ ...base, entryDate: '2026-02-10', description: 'Telia Sverige AB', lines: expense('6212', 500) })
+    await insertPostedJournalEntry({ ...base, fiscalPeriodId: previousYear, entryDate: '2025-03-01', description: 'Kundfaktura Acme Konsult AB', lines: [
+      { accountNumber: '1510', debitAmount: 125, creditAmount: 0 },
+      { accountNumber: '3011', debitAmount: 0, creditAmount: 100 },
+      { accountNumber: '2611', debitAmount: 0, creditAmount: 25 },
+    ] })
+    await insertPostedJournalEntry({ ...base, entryDate: '2026-03-01', description: 'Kundfaktura Acme Konsult AB', lines: [
+      { accountNumber: '1510', debitAmount: 125, creditAmount: 0 },
+      { accountNumber: '3011', debitAmount: 0, creditAmount: 100 },
+      { accountNumber: '2611', debitAmount: 0, creditAmount: 25 },
+    ] })
+    const beijer = ledgerKey('Levfakt Beijer Byggmaterial AB (2089)')
+    const acme = ledgerKey('Kundfaktura Acme Konsult AB')
+
+    await withUserContext(c.userId, async (client) => {
+      const call = async (fromDate: string | null, limit: number, keys: string[] | null) =>
+        (await client.query<{ r: Observed[] }>('SELECT public.get_observed_parties($1, $2, $3, $4) AS r', [c.companyId, fromDate, limit, keys])).rows[0]!.r
+      const complete = await call(null, 200, null)
+      expect(complete.map((r) => r.key)).toEqual([beijer, 'telia sverige', acme])
+
+      // Ranked to one key, then the smallest named: both, once each, by money.
+      const named = await call(null, 1, [acme, beijer, 'no such key'])
+      expect(named.map((r) => r.key)).toEqual([beijer, acme])
+      expect(named[1]).toEqual(complete.find((r) => r.key === acme))
+      expect(named[1]).toMatchObject({ occurrences: 2, revenue_sek: 200, dominant_account_number: '3011', cadence_days: 365 })
+
+      // NULL and an empty list leave the ranked answer as it was.
+      expect(await call(null, 1, null)).toEqual(await call(null, 1, []))
+      expect((await call(null, 1, null)).map((r) => r.key)).toEqual([beijer])
+
+      // The window still applies to a named key.
+      const windowed = await call('2026-01-01', 1, [acme])
+      expect(windowed.find((r) => r.key === acme)).toMatchObject({ occurrences: 1, revenue_sek: 100 })
+    })
   })
 
   it('groups posted vouchers by ledger_key, sums expense SEK, and reports cadence and dominant account', async () => {
@@ -186,7 +233,8 @@ describe('get_observed_parties (pg)', () => {
   it('excludes storno, opening-balance, year-end and VAT-settlement vouchers, and honours the window', async () => {
     const c = await seedCompany()
     const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId }
-    await insertPostedJournalEntry({ ...base, sourceType: 'import', entryDate: '2025-06-01', description: 'Telia Sverige AB', lines: expense('6212', 100) })
+    const previousYear = await insertFiscalPeriod({ userId: c.userId, companyId: c.companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
+    await insertPostedJournalEntry({ ...base, fiscalPeriodId: previousYear, sourceType: 'import', entryDate: '2025-06-01', description: 'Telia Sverige AB', lines: expense('6212', 100) })
     await insertPostedJournalEntry({ ...base, sourceType: 'import', entryDate: '2026-06-01', description: 'Telia Sverige AB', lines: expense('6212', 100) })
     await insertPostedJournalEntry({ ...base, sourceType: 'storno', entryDate: '2026-06-02', description: 'Telia Sverige AB', lines: expense('6212', 100) })
     await insertPostedJournalEntry({ ...base, sourceType: 'opening_balance', entryDate: '2026-01-01', description: 'Ingående balans', lines: expense('4000', 100) })
@@ -204,8 +252,11 @@ describe('get_observed_parties (pg)', () => {
 
   it('leaves vouchers that carry a bank merchant name to the bank-keyed RPC', async () => {
     const c = await seedCompany()
-    const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'bank_transaction' }
-    const withBank = await insertPostedJournalEntry({ ...base, entryDate: '2026-05-01', description: 'Loopia AB', lines: expense('6542', 99) })
+    const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import' }
+    const withBank = await insertPostedJournalEntry({ ...base, entryDate: '2026-05-01', description: 'Loopia AB', lines: [
+      { accountNumber: '6542', debitAmount: 99, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 99 },
+    ] })
     await insertPostedJournalEntry({ ...base, entryDate: '2026-05-02', description: 'Loopia AB', lines: expense('6542', 99) })
     const txId = await insertTransaction({
       userId: c.userId,
@@ -224,7 +275,7 @@ describe('get_observed_parties (pg)', () => {
   it('does not leak across companies and returns [] for an empty company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
-    await insertPostedJournalEntry({ userId: a.userId, companyId: a.companyId, fiscalPeriodId: a.fiscalPeriodId, sourceType: 'import', description: 'Levfakt Dahls Bageri AB (167)', lines: expense('4000', 100) })
+    await insertPostedJournalEntry({ userId: a.userId, companyId: a.companyId, fiscalPeriodId: a.fiscalPeriodId, sourceType: 'import', description: 'Levfakt Exempelbageriet AB (167)', lines: expense('4000', 100) })
     expect(await observed(b.companyId, b.userId)).toEqual([])
     // A member of company b asking for company a's rows sees nothing: RLS.
     const cross = await withUserContext(b.userId, async (client) => {

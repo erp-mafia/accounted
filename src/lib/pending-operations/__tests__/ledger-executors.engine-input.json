@@ -1,0 +1,514 @@
+[
+  {
+    "name": "create_voucher: a manual voucher in a named period and series",
+    "calls": {
+      "createJournalEntry": [
+        [
+          5,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-03-12",
+            "description": "Skärm till kontoret",
+            "source_type": "manual",
+            "voucher_series": "B",
+            "notes": "Kvitto mejlat",
+            "lines": [
+              {
+                "account_number": "5410",
+                "debit_amount": 800,
+                "credit_amount": 0,
+                "line_description": "Skärm"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 200,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 1000
+              }
+            ]
+          },
+          "user_accept"
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "journal_entry_id": "00000000-0000-4000-8000-0000000e0001",
+        "voucher_number": 7,
+        "voucher_series": "A",
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "create_voucher: the period found from the date",
+    "calls": {
+      "createJournalEntry": [
+        [
+          5,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-03-13",
+            "description": "Bankavgift",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "5410",
+                "debit_amount": 800,
+                "credit_amount": 0,
+                "line_description": "Skärm"
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 800
+              }
+            ]
+          },
+          "user_accept"
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "journal_entry_id": "00000000-0000-4000-8000-0000000e0002",
+        "voucher_number": 7,
+        "voucher_series": "A",
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "create_voucher: an ingående balans",
+    "calls": {
+      "createJournalEntry": [
+        [
+          5,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-01-01",
+            "description": "Ingående balans 2026",
+            "source_type": "opening_balance",
+            "lines": [
+              {
+                "account_number": "1930",
+                "debit_amount": 10000,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "2081",
+                "debit_amount": 0,
+                "credit_amount": 10000
+              }
+            ]
+          },
+          "user_accept"
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "journal_entry_id": "00000000-0000-4000-8000-0000000e0003",
+        "voucher_number": 7,
+        "voucher_series": "A",
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "create_voucher: a kvitto from the inbox, claimed, its underlag attached",
+    "calls": {
+      "createJournalEntry": [
+        [
+          5,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-03-14",
+            "description": "Kvitto Clas Ohlson",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "5410",
+                "debit_amount": 800,
+                "credit_amount": 0,
+                "line_description": "Skärm"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 200,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 1000
+              }
+            ]
+          },
+          "user_accept"
+        ]
+      ]
+    },
+    "documentLinks": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000d001",
+        "00000000-0000-4000-8000-0000000e0004",
+        {
+          "link_basis": "agent_proposed_user_approved",
+          "link_evidence": {
+            "pending_operation_id": "00000000-0000-4000-8000-0000000c0004"
+          }
+        }
+      ]
+    ],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "journal_entry_id": "00000000-0000-4000-8000-0000000e0004",
+        "voucher_number": 7,
+        "voucher_series": "A",
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+        "inbox_item_id": "00000000-0000-4000-8000-00000000b001",
+        "inbox_linked": true
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "create_voucher: a kvitto whose inbox claim is lost, so the voucher is reversed",
+    "calls": {
+      "createJournalEntry": [
+        [
+          5,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-03-15",
+            "description": "Kvitto Clas Ohlson",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "5410",
+                "debit_amount": 800,
+                "credit_amount": 0,
+                "line_description": "Skärm"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 200,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 1000
+              }
+            ]
+          },
+          "user_accept"
+        ]
+      ],
+      "reverseEntry": [
+        [
+          4,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-0000000e0005"
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "failed",
+      "data": {
+        "posted_ids": {
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0005"
+        }
+      },
+      "error": "Underlaget bokfördes samtidigt i en annan verifikation. Verifikationen som skapades här har återförts med en storno.",
+      "code": "partial_commit"
+    }
+  },
+  {
+    "name": "create_voucher: the engine refuses",
+    "calls": {
+      "createJournalEntry": [
+        [
+          5,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          {
+            "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+            "entry_date": "2026-03-16",
+            "description": "Skärm",
+            "source_type": "manual",
+            "lines": [
+              {
+                "account_number": "5410",
+                "debit_amount": 800,
+                "credit_amount": 0,
+                "line_description": "Skärm"
+              },
+              {
+                "account_number": "2641",
+                "debit_amount": 200,
+                "credit_amount": 0
+              },
+              {
+                "account_number": "1930",
+                "debit_amount": 0,
+                "credit_amount": 1000
+              }
+            ]
+          },
+          "user_accept"
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "failed",
+      "data": null,
+      "error": "Accounts not enabled in chart of accounts: 5410",
+      "code": "ACCOUNTS_NOT_IN_CHART"
+    }
+  },
+  {
+    "name": "correct_entry: new lines and text, deep chain allowed",
+    "calls": {
+      "correctEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-00000000e100",
+          [
+            {
+              "account_number": "1220",
+              "debit_amount": 800,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 200,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            }
+          ],
+          {
+            "allowDeepChain": true,
+            "description": "Rättelse: inventarie"
+          }
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "original_entry_id": "00000000-0000-4000-8000-00000000e100",
+        "storno_entry_id": "storno-00000000-0000-4000-8000-0000000e0007",
+        "corrected_entry_id": "correction-00000000-0000-4000-8000-0000000e0007",
+        "storno_voucher_number": 7,
+        "corrected_voucher_number": 7
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "correct_entry: the storno service refuses",
+    "calls": {
+      "correctEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-00000000e100",
+          [
+            {
+              "account_number": "5410",
+              "debit_amount": 800,
+              "credit_amount": 0,
+              "line_description": "Skärm"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 200,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1000
+            }
+          ],
+          {
+            "allowDeepChain": false
+          }
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "failed",
+      "data": null,
+      "error": "Correction lines are identical to the original entry: nothing to correct.",
+      "code": null
+    }
+  },
+  {
+    "name": "reverse_entry: on a date in the year, deep chain allowed",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-00000000e100",
+          "2026-03-31",
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "original_entry_id": "00000000-0000-4000-8000-00000000e100",
+        "reversal_entry_id": "storno-00000000-0000-4000-8000-0000000e0009",
+        "reversal_voucher_number": 7,
+        "reversal_voucher_series": "A",
+        "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "reverse_entry: the engine refuses",
+    "calls": {
+      "reverseEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-00000000e100",
+          "<undefined>",
+          {
+            "allowDeepChain": false
+          }
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "failed",
+      "data": null,
+      "error": "Can only reverse posted entries",
+      "code": null
+    }
+  },
+  {
+    "name": "redate_entry: moved to the right year",
+    "calls": {
+      "recordateEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-00000000e999",
+          "2025-03-10",
+          {}
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "committed",
+      "data": {
+        "original_id": "00000000-0000-4000-8000-00000000e999",
+        "reversal_id": "storno-00000000-0000-4000-8000-0000000e0011",
+        "corrected_id": "correction-00000000-0000-4000-8000-0000000e0011",
+        "voucher_series": "A",
+        "reversal_voucher_number": 7,
+        "corrected_voucher_number": 7,
+        "new_entry_date": "2025-03-10"
+      },
+      "error": null,
+      "code": null
+    }
+  },
+  {
+    "name": "redate_entry: the storno service refuses",
+    "calls": {
+      "recordateEntry": [
+        [
+          6,
+          "<supabase>",
+          "00000000-0000-4000-8000-00000000c001",
+          "00000000-0000-4000-8000-00000000a001",
+          "00000000-0000-4000-8000-00000000e999",
+          "2025-03-11",
+          {
+            "allowDeepChain": true
+          }
+        ]
+      ]
+    },
+    "documentLinks": [],
+    "outcome": {
+      "status": "failed",
+      "data": null,
+      "error": "New date equals the current date: nothing to move.",
+      "code": null
+    }
+  }
+]

@@ -25,7 +25,7 @@
  * year or page) are reduced to the earliest opening and latest closing.
  */
 
-import { roundOre } from '@/lib/money'
+import { parseSwedishAmount, roundOre } from '@/lib/money'
 import { prepareContent } from '../shared/encoding'
 import { normalizeDate } from '../bank-file/date-utils'
 import { parseCSVLine } from '../bank-file/formats/nordea'
@@ -57,25 +57,6 @@ const SKV_VOCABULARY = [
   'inbetalning bokförd',
 ]
 
-/**
- * Parse a skattekonto amount: whole kronor or comma decimals, space/nbsp
- * thousands separators, optional trailing "kr", optional explicit "+".
- * Typographic minus variants (U+2212 MINUS SIGN, the CLDR sv-SE default,
- * plus hyphen/dash lookalikes) count as a minus. Returns null on non-amounts.
- */
-function parseAmount(value: string): number | null {
-  const cleaned = value
-    // \s covers regular space, nbsp (U+00A0) and narrow nbsp (U+202F).
-    .replace(/\s/g, '')
-    .replace(/kr$/i, '')
-    // U+2212 minus sign, U+2010..U+2013 hyphen/dash lookalikes.
-    .replace(/^[\u2212\u2010-\u2013]/, '-')
-    .replace(/^\+/, '')
-    .replace(',', '.')
-  if (cleaned === '' || cleaned === '-') return null
-  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return null
-  return roundOre(parseFloat(cleaned))
-}
 
 /**
  * Amount of a saldo marker row. The Kontoutdrag export puts it in the
@@ -85,7 +66,7 @@ function parseAmount(value: string): number | null {
  */
 function parseMarkerAmount(cells: string[]): number | null {
   for (let i = cells.length - 1; i >= 2; i--) {
-    const amount = parseAmount(cells[i])
+    const amount = parseSwedishAmount(cells[i])
     if (amount !== null) return amount
   }
   return null
@@ -139,7 +120,7 @@ export function detectSkattekontoFile(content: string, filename: string): boolea
   for (const line of lines) {
     const cells = splitRow(line)
     if (cells.length < 3) continue
-    if (normalizeDate(cells[0]) && cells[1] !== '' && parseAmount(cells[2]) !== null) {
+    if (normalizeDate(cells[0]) && cells[1] !== '' && parseSwedishAmount(cells[2]) !== null) {
       shapeMatches++
     }
   }
@@ -234,7 +215,7 @@ export function parseSkattekontoFile(
       continue
     }
 
-    const belopp = parseAmount(cells[2] ?? '')
+    const belopp = parseSwedishAmount(cells[2] ?? '')
     if (belopp === null) {
       issues.push({
         row: i + 1,

@@ -1,4 +1,4 @@
-/** The Arkiv graph colours (canvas artboards Arkiv and Avtal): one hue per cluster, terracotta for what waits on a person. */
+/** The Arkiv graph colours: one hue per cluster, terracotta for what waits on a person. */
 export const ARKIV = {
   hub: '#3d6bb3',
   hubGlow: 'rgba(61,107,179,0.14)',

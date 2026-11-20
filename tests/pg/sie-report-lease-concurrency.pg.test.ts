@@ -84,7 +84,7 @@ describe('SIE report leases coexist with ordinary bookkeeping', () => {
   it.each([false, true])('allows an imported bank-anchor edit with report-first=%s', async reportFirst => {
     const company = await seedCompany()
     const entry = await insertPostedJournalEntry({ ...company, sourceType: 'import' })
-    const transaction = await insertTransaction({ ...company, journalEntryId: entry })
+    const transaction = await insertTransaction({ ...company, amount: 1000, journalEntryId: entry })
     const edit = (client: PoolClient) => client.query("UPDATE transactions SET description = 'Synthetic bank metadata' WHERE id = $1", [transaction])
     await withSessions(async (report, writer) => {
       if (reportFirst) {
@@ -135,8 +135,8 @@ describe('SIE report leases coexist with ordinary bookkeeping', () => {
   it('continues checking both attachment and detachment of a bank pointer', async () => {
     const company = await seedCompany()
     const entry = await insertPostedJournalEntry({ ...company, sourceType: 'import' })
-    const linked = await insertTransaction({ ...company, journalEntryId: entry })
-    const unlinked = await insertTransaction(company)
+    const linked = await insertTransaction({ ...company, amount: 1000, journalEntryId: entry })
+    const unlinked = await insertTransaction({ ...company, amount: 1000 })
     await withSessions(async (report, writer) => {
       await report.query('SELECT id FROM fiscal_periods WHERE id = $1 FOR UPDATE', [company.fiscalPeriodId])
       for (const [transaction, nextEntry] of [[linked, null], [unlinked, entry]]) {

@@ -94,6 +94,25 @@ export function generateOcrReference(invoiceNumber: string): string {
 }
 
 /**
+ * The OCR reference with Bankgirot's length digit for an invoice number: its
+ * digits, then the length digit, then the Luhn check digit computed over
+ * both. The length digit is the whole reference's length (number, length
+ * digit and check digit) modulo 10, so invoice 316 is paid as 31658 (five
+ * digits, length digit 5, check digit 8). Null when the number has no digits
+ * or more than 23, the most a reference part may have.
+ *
+ * Source: Bankgirot, "Bankgiro Inbetalningar Användarmanual" (oktober 2023),
+ * 5.2.1 (the parts of an OCR reference) and 5.2.3 (Beräkna längdsiffra: the
+ * table of length digit to length, 3-25 positions).
+ */
+export function generateLengthDigitOcrReference(invoiceNumber: string): string | null {
+  const digits = invoiceNumber.replace(/\D/g, '')
+  if (digits.length === 0 || digits.length > 23) return null
+  const payload = digits + ((digits.length + 2) % 10).toString()
+  return payload + luhnCheckDigit(payload).toString()
+}
+
+/**
  * Validate a Swedish OCR reference number (2-25 digits, Luhn check digit).
  */
 export function validateOcrReference(ocr: string): boolean {

@@ -1,7 +1,7 @@
 /**
  * Deny-by-default masking for PostHog session replay.
  *
- * Everything is masked unless it is app chrome (founder-approved 2026-08-17,
+ * Everything is masked unless it is app chrome (approved 2026-08-17,
  * supersedes the 2026-08-06 pattern-based default where user content was
  * visible). Replays show layout, clicks and static UI text: headers, nav,
  * form labels, placeholders, buttons. They never show user data: not what a

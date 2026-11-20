@@ -7,6 +7,7 @@ import {
 } from '../lib/agi-submission-status'
 import { skatteverketExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { testRoutes } from '@/tests/helpers'
 
 /**
  * GET /agi/status feeds AGIPanel and the run page. The kvittens cron deletes
@@ -32,25 +33,45 @@ const SIGNED_ROW = {
   },
 }
 
-/** Supabase stub whose agi_declarations read resolves to `row`, recording the filters. */
-function makeSupabase(row: unknown) {
+/**
+ * Supabase stub whose agi_declarations read resolves to `row` and whose
+ * agi_kvittenser read resolves to `receipts`, recording the filters.
+ */
+function makeSupabase(row: unknown, receipts: unknown[] = []) {
   const filters: Record<string, unknown> = {}
   const reads: string[] = []
-  const chain: any = {}
-  chain.select = vi.fn(() => chain)
-  chain.eq = vi.fn((col: string, val: unknown) => {
-    filters[col] = val
-    return chain
-  })
-  chain.maybeSingle = vi.fn(async () => ({ data: row, error: null }))
   const supabase = {
     from: vi.fn((table: string) => {
       reads.push(table)
+      const chain: any = {}
+      chain.select = vi.fn(() => chain)
+      chain.eq = vi.fn((col: string, val: unknown) => {
+        filters[col] = val
+        return chain
+      })
+      chain.order = vi.fn(() => chain)
+      chain.maybeSingle = vi.fn(async () => ({ data: row, error: null }))
+      chain.then = (resolve: (v: unknown) => void) =>
+        resolve({ data: table === 'agi_kvittenser' ? receipts : null, error: null })
       return chain
     }),
   } as any
   return { supabase, filters, reads }
 }
+
+/** agi_kvittenser rows for the period: the correction's receipt and the original's. */
+const RECEIPT_ROWS = [
+  {
+    uuid_kvittens: 'kvittens-correction',
+    signerad_tid: '2026-08-02T09:00:00+00:00',
+    receipt: { uuidKvittens: 'kvittens-correction', signeradAv: '191212121212', signeradTid: '2026-08-02T09:00:00Z' },
+  },
+  {
+    uuid_kvittens: 'e2f1a4c0-kvittens',
+    signerad_tid: '2026-07-14T08:30:00+00:00',
+    receipt: { uuidKvittens: 'e2f1a4c0-kvittens', signeradAv: '191212121212', signeradTid: '2026-07-14T08:30:00Z' },
+  },
+]
 
 describe('agiSubmissionFromDeclaration', () => {
   it('builds a signed record with kvittensnummer, signatory and signing time (estimated=false)', () => {
@@ -124,7 +145,7 @@ describe('readAgiSubmissionStatus', () => {
   it('cache deleted: serves the receipt from agi_declarations for the company and period', async () => {
     const { supabase, filters, reads } = makeSupabase(SIGNED_ROW)
     const record = await readAgiSubmissionStatus(supabase, 'company-1', PERIOD, null)
-    expect(reads).toEqual(['agi_declarations'])
+    expect(reads).toEqual(['agi_declarations', 'agi_kvittenser'])
     expect(filters).toEqual({ company_id: 'company-1', period_year: 2026, period_month: 6 })
     expect(record).toMatchObject({
       status: 'signed',
@@ -145,8 +166,25 @@ describe('readAgiSubmissionStatus', () => {
       updatedAt: '2026-07-20T09:00:00Z',
     }
     const record = await readAgiSubmissionStatus(supabase, 'company-1', PERIOD, JSON.stringify(cached))
-    expect(reads).toEqual([])
+    expect(reads).toEqual(['agi_kvittenser'])
     expect(record).toEqual({ ...cached, source: 'cache' })
+  })
+
+  it("carries the period's recorded receipts, newest signing first", async () => {
+    const { supabase } = makeSupabase({ ...SIGNED_ROW, kvittensnummer: 'kvittens-correction' }, RECEIPT_ROWS)
+    const record = await readAgiSubmissionStatus(supabase, 'company-1', PERIOD, null)
+    expect(record?.kvittensnummer).toBe('kvittens-correction')
+    expect(record?.receipts).toEqual([
+      { kvittensnummer: 'kvittens-correction', signeradAv: '191212121212', signeradTid: '2026-08-02T09:00:00Z' },
+      { kvittensnummer: 'e2f1a4c0-kvittens', signeradAv: '191212121212', signeradTid: '2026-07-14T08:30:00Z' },
+    ])
+  })
+
+  it('answers the receipts alone when the period record carries none', async () => {
+    const { supabase } = makeSupabase({ ...SIGNED_ROW, status: 'pending_signature', kvittensnummer: null }, RECEIPT_ROWS)
+    const record = await readAgiSubmissionStatus(supabase, 'company-1', PERIOD, null)
+    expect(record?.status).toBeUndefined()
+    expect(record?.receipts?.map((r) => r.kvittensnummer)).toEqual(['kvittens-correction', 'e2f1a4c0-kvittens'])
   })
 
   it('returns null without a DB read for a malformed period', async () => {
@@ -163,7 +201,7 @@ describe('readAgiSubmissionStatus', () => {
 
 describe('GET /agi/status', () => {
   function findRoute() {
-    const route = skatteverketExtension.apiRoutes?.find(
+    const route = testRoutes(skatteverketExtension).find(
       (r) => r.method === 'GET' && r.path === '/agi/status',
     )
     if (!route) throw new Error('/agi/status route not registered')
@@ -194,11 +232,6 @@ describe('GET /agi/status', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('returns 500 without an extension context', async () => {
-    const res = await findRoute().handler(makeRequest(`?period=${PERIOD}`))
-    expect(res.status).toBe(500)
   })
 
   it('returns 400 without a period', async () => {
@@ -252,7 +285,7 @@ describe('GET /agi/status', () => {
     const res = await findRoute().handler(makeRequest(`?period=${PERIOD}`), ctx)
     const body = await res.json()
     expect(body.data).toEqual({ ...cached, source: 'cache' })
-    expect(ctx.supabase.from).not.toHaveBeenCalled()
+    expect(ctx.supabase.from).not.toHaveBeenCalledWith('agi_declarations')
   })
 
   it('returns null data when nothing has been filed for the period', async () => {

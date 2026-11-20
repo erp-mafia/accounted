@@ -1,17 +1,15 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MarkOpeningBalanceSchema } from '@/lib/api/schemas'
-
-ensureInitialized()
 
 /**
  * Re-tag a posted manual/import voucher on a bank account as an opening balance
  * (source_type='opening_balance') so bank reconciliation stops counting it as a
  * phantom difference. Delegates to the mark_entry_as_opening_balance RPC, which
  * enforces owner/admin role, the manual/import precondition, a bank-line check,
- * and the period lock. We only translate its errors to Swedish here.
+ * no bank link, a date on the fiscal year's first day, and the period lock. We
+ * only translate its errors to Swedish here.
  */
 export const POST = withRouteContext(
   'reconciliation.bank.mark_opening_balance',
@@ -38,6 +36,14 @@ export const POST = withRouteContext(
         message = 'Bara bokförda verifikationer kan markeras som ingående balans.'
       } else if (/bank\/cash account/i.test(raw)) {
         message = 'Verifikationen saknar rad på ett bankkonto (19xx) och kan inte vara en ingående balans.'
+      } else if (/first day of its fiscal period/i.test(raw)) {
+        // A mid-year verifikat (a rättelse, a payment) is a movement in the
+        // year, never an IB (agent feedback seq 878478).
+        message =
+          'Bara en verifikation daterad på räkenskapsårets första dag kan markeras som ingående balans. En verifikation under året är en händelse i perioden: koppla den mot banken eller rätta den i stället.'
+      } else if (/linked bank transactions/i.test(raw)) {
+        message =
+          'Verifikationen är kopplad till en banktransaktion och kan därför inte vara en ingående balans. Ta bort kopplingen först om den är fel.'
       } else if (/closed fiscal period/i.test(raw)) {
         message = 'Perioden är stängd. Öppna perioden innan du ändrar verifikationen.'
       } else if (/locked fiscal period/i.test(raw)) {

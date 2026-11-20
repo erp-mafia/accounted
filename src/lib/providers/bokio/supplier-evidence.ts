@@ -1,6 +1,7 @@
 import type { SupplierInvoiceDto, SupplierInvoiceEvidenceDto } from '../dto'
 import type { BokioVoucherEvidence } from './attachments'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { roundOre } from '@/lib/money'
 
 const same = (a: number, b: number) => Number.isFinite(a) && Number.isFinite(b) && Math.round(a * 100) === Math.round(b * 100)
@@ -28,7 +29,7 @@ export function enrichBokioSupplierInvoice(dto: SupplierInvoiceDto, entry?: Boki
     line.quantity !== undefined && Number.isFinite(line.quantity) && line.quantity > 0)
   const net = roundOre(lines.reduce((n, line) => n + line.lineExtensionAmount.value, 0))
   const stated = monetary.every(line => line.taxPercent != null && Number.isFinite(line.taxPercent) && line.taxPercent >= 0)
-  const statedVat = roundOre(lines.reduce((n, line) => n + roundOre(line.lineExtensionAmount.value * (line.taxPercent ?? 0) / 100), 0))
+  const statedVat = roundOre(lines.reduce((n, line) => n + computeLineVat(line.lineExtensionAmount.value, line.taxPercent ?? 0), 0))
 
   const accept = (vat: number, source: 'invoice_lines' | 'voucher') => {
     result.taxTotal = { taxAmount: { value: vat, currencyCode: dto.currencyCode } }
@@ -42,7 +43,7 @@ export function enrichBokioSupplierInvoice(dto: SupplierInvoiceDto, entry?: Boki
       // even when their blended rate happens to equal a statutory rate.
       if (unknown.length === 1) {
         const residual = roundOre(vat - statedVat)
-        const rates = [0, 6, 12, 25].filter(rate => same(roundOre(unknown[0].lineExtensionAmount.value * rate / 100), residual))
+        const rates = [0, 6, 12, 25].filter(rate => same(computeLineVat(unknown[0].lineExtensionAmount.value, rate), residual))
         if (rates.length === 1) {
           result.lines = lines.map(line => line === unknown[0]
             ? { ...line, taxPercent: rates[0], taxAmount: { value: residual, currencyCode: dto.currencyCode } } : line)

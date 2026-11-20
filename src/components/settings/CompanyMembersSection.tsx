@@ -5,18 +5,22 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
-import {
-  SettingsGroup,
-  SettingsInput,
-  SettingsRowNote,
-  SettingsSelect,
-} from '@/components/settings/SettingsRows'
-import { parseCompanyMembersPayload } from '@/components/settings/members-payload'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { SettingsGroup, SettingsRowNote, SettingsSelect } from '@/components/settings/SettingsRows'
+import { SettingsTopBarPortal, useSettingsTopBarSlots } from '@/components/settings/SettingsTopBar'
+import { parseCompanyMembersPayload, type MembersProfileChoice } from '@/components/settings/members-payload'
+import { PACKAGES } from '@/lib/modules/packages'
+import { PROFILES, isProfileId, latestProfile, packagesOffIn, type ProfileId } from '@/lib/modules/profiles'
+import { isInviteExpired } from '@/components/settings/invite-expiry'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatDateLong } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Mail } from 'lucide-react'
+import { ArrowPathIcon, EnvelopeIcon, PlusIcon, TrashIcon } from '@/components/icons'
 
 interface CompanyMemberItem {
   id: string
@@ -38,11 +42,11 @@ interface CompanyInvitation {
 }
 
 /**
- * The shareable accept link from the latest invite response. Raw tokens are
- * never stored server-side (only their hash), so the link exists exactly
- * once: here, until the next navigation. Kept visible so a failed or absent
- * mail send (self-hosted without a mail provider, #1710) never dead-ends the
- * inviter. There is no re-send for company invites: revoke and re-invite.
+ * The shareable accept link from the latest invite or re-send response. Raw
+ * tokens are never stored server-side (only their hash), so the link exists
+ * exactly once: here, until the next navigation. Kept visible so a failed or
+ * absent mail send (self-hosted without a mail provider, #1710) never
+ * dead-ends the inviter. A lost link is renewed with the row's re-send action.
  * provisioned = GoTrue created the account and sent its own invite mail
  * (AUTH_SIGNUPS_DISABLED path), so email_sent=false is not a failure there.
  */
@@ -55,7 +59,8 @@ interface ShareableInvite {
 
 export function CompanyMembersSection() {
   const t = useTranslations('settings_company')
-  const errorLocale = useLocale() as ErrorLocale
+  const locale = useLocale()
+  const errorLocale = locale as ErrorLocale
   const { toast } = useToast()
   const { company } = useCompany()
 
@@ -64,7 +69,20 @@ export function CompanyMembersSection() {
     admin: t('members_role_admin'),
     member: t('members_role_member'),
     viewer: t('members_role_viewer'),
+    invoicer: t('members_role_invoicer'),
   }
+  const profileName = (id: ProfileId) => {
+    const profile = latestProfile(id)
+    return locale === 'en' ? profile.name : profile.nameSv
+  }
+  // One muted sentence under the pick: what the client will not see at first.
+  const profileOffNote = (id: ProfileId) => {
+    const off = packagesOffIn(latestProfile(id))
+    if (off.length === 0) return t('members_invite_profile_all_on')
+    const names = PACKAGES.filter((p) => off.includes(p.id)).map((p) => (locale === 'en' ? p.name : p.nameSv))
+    return t('members_invite_profile_off', { packages: names.join(', ') })
+  }
+
   // null = the roster is not known: still loading, or the read failed
   // (loadError). A failed read must never render an apparently member-less
   // company: a consultant looking at an empty list re-invites people who are
@@ -77,16 +95,25 @@ export function CompanyMembersSection() {
   const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteOpen, setInviteOpen] = useState(false)
+  const topBar = useSettingsTopBarSlots()
   const [inviteRole, setInviteRole] = useState<string>('viewer')
   const [isSending, setIsSending] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [resendingId, setResendingId] = useState<string | null>(null)
   const [canInvite, setCanInvite] = useState(false)
   // Multi-user seat gate: true when inviting requires the paid plan
   // (multi_user frozen). The form is swapped for the upsell line; the POST's
   // own 403 stays the real enforcement.
   const [inviteRequiresUpgrade, setInviteRequiresUpgrade] = useState(false)
   const [shareInvite, setShareInvite] = useState<ShareableInvite | null>(null)
+  // The byrå's profile pick for a client company (Profiles and Suggestions):
+  // null for every other company, whose invite form is unchanged. The pick
+  // starts at what the server preselects (the stored profile, else the one
+  // derived from the legal form, else Standard) and travels with the invite.
+  const [profileChoice, setProfileChoice] = useState<MembersProfileChoice | null>(null)
+  const [inviteProfile, setInviteProfile] = useState<ProfileId | null>(null)
 
   const fetchMembers = useCallback(async () => {
     setLoadError(null)
@@ -124,6 +151,8 @@ export function CompanyMembersSection() {
       setInvitations(parsed.invitations)
       setCanInvite(parsed.canInvite)
       setInviteRequiresUpgrade(parsed.inviteRequiresUpgrade)
+      setProfileChoice(parsed.profileChoice)
+      setInviteProfile(parsed.profileChoice?.preselected ?? null)
     } catch {
       setMembers(null)
       setInvitations(null)
@@ -146,7 +175,11 @@ export function CompanyMembersSection() {
       const res = await fetch('/api/company/members/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, role: inviteRole }),
+        body: JSON.stringify({
+          email,
+          role: inviteRole,
+          ...(profileChoice && inviteProfile ? { profile_id: inviteProfile } : {}),
+        }),
       })
       const data = await res.json()
 
@@ -179,6 +212,7 @@ export function CompanyMembersSection() {
       })
       setInviteEmail('')
       setInviteRole('viewer')
+      setInviteOpen(false)
       fetchMembers()
     } catch {
       toast({ title: t('members_invite_failed'), variant: 'destructive' })
@@ -238,6 +272,48 @@ export function CompanyMembersSection() {
     }
   }
 
+  // Re-send issues a fresh token and expiry (reviving an expired invitation)
+  // and mails it again; the previous link stops working.
+  const handleResendInvite = async (invite: CompanyInvitation) => {
+    setResendingId(invite.id)
+    try {
+      const res = await fetch(`/api/company/members/invite/${invite.id}`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+
+      if (!res.ok) {
+        const message = (data as { error?: unknown } | null)?.error
+        toast({
+          title:
+            typeof message === 'string' && message.length > 0
+              ? message
+              : t('members_invite_resend_failed'),
+          variant: 'destructive',
+        })
+        return
+      }
+
+      const payload = (
+        data as { data?: { email_sent?: boolean; inviteUrl?: string } } | null
+      )?.data
+      const sent = payload?.email_sent !== false
+      if (payload?.inviteUrl) {
+        setShareInvite({ email: invite.email, url: payload.inviteUrl, sent, provisioned: false })
+      }
+      // Same rule as the first send: never claim a mail that did not go out.
+      toast({
+        title: sent ? t('members_invite_resent_title') : t('members_invite_renewed_title'),
+        description: sent
+          ? t('members_invite_sent_description', { email: invite.email })
+          : t('members_invite_mail_not_sent'),
+      })
+      fetchMembers()
+    } catch {
+      toast({ title: t('members_invite_resend_failed'), variant: 'destructive' })
+    } finally {
+      setResendingId(null)
+    }
+  }
+
   if (members === null || invitations === null) {
     return (
       <div>
@@ -259,21 +335,31 @@ export function CompanyMembersSection() {
           )}
         </div>
         {!loadError && (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div aria-busy className="space-y-3 py-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
           </div>
         )}
       </div>
     )
   }
 
+  const inviteButton = (
+    <Button size={topBar ? 'toolbar' : 'default'} onClick={() => setInviteOpen(true)}>
+      <PlusIcon className="h-4 w-4" aria-hidden />
+      {t('members_invite_button')}
+    </Button>
+  )
+
+  // On the settings page the top bar already names the section; the group heading would be a second title.
   return (
-    <SettingsGroup label={t('members_title')} help={t('members_invite_description')}>
+    <SettingsGroup wide label={topBar ? undefined : t('members_title')} help={topBar ? undefined : t('members_invite_description')}>
       {/* Member rows: flat hairline list, no cards. */}
       {members.map((member) => (
         <div
           key={member.id}
-          className="flex items-center gap-3 border-b border-border px-1 py-3"
+          className="flex items-center gap-3 border-b-hairline px-1 py-3"
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted/60">
             <span className="text-xs font-medium text-muted-foreground">
@@ -294,53 +380,67 @@ export function CompanyMembersSection() {
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              className="shrink-0 text-muted-foreground hover:text-destructive"
               aria-label={t('members_remove_aria')}
               onClick={() => handleRemoveMember(member.id)}
-              disabled={removingId === member.id}
+              loading={removingId === member.id}
             >
-              {removingId === member.id ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
+              {removingId !== member.id && <TrashIcon className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
       ))}
 
-      {/* Pending invitations continue the same list, visually quieter. */}
+      {/* Pending invitations continue the same list, visually quieter. A
+          pending row past its expiry is an expired invitation (the status
+          only flips when someone tries the dead link), so the date is never
+          shown as a future one. */}
       {invitations.map((inv) => (
         <div
           key={inv.id}
-          className="flex items-center gap-3 border-b border-border px-1 py-3"
+          className="flex items-center gap-3 border-b-hairline px-1 py-3"
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border">
-            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+            <EnvelopeIcon className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
           <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {inv.email}
             <span className="ml-1 text-xs">
-              · {t('invitations_expires', { date: formatDateLong(inv.expires_at) })}
+              ·{' '}
+              {isInviteExpired(inv.expires_at)
+                ? t('invitations_expired')
+                : t('invitations_expires', { date: formatDateLong(inv.expires_at) })}
             </span>
           </p>
           <span className="shrink-0 text-xs text-muted-foreground">
             {roleLabels[inv.role] || inv.role}
           </span>
+          {/* Re-send is inviting again, so it follows the invite form's
+              seat gate: hidden while the paid-plan upsell replaces the form. */}
+          {canInvite && !inviteRequiresUpgrade && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label={t('members_resend_aria', { email: inv.email })}
+              onClick={() => void handleResendInvite(inv)}
+              disabled={revokingId === inv.id}
+              loading={resendingId === inv.id}
+            >
+              {resendingId !== inv.id && <ArrowPathIcon className="h-3.5 w-3.5" />}
+            </Button>
+          )}
           {canInvite && (
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              className="shrink-0 text-muted-foreground hover:text-destructive"
               aria-label={t('members_revoke_aria')}
               onClick={() => handleRevokeInvite(inv)}
-              disabled={revokingId === inv.id}
+              disabled={resendingId === inv.id}
+              loading={revokingId === inv.id}
             >
-              {revokingId === inv.id ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
+              {revokingId !== inv.id && <TrashIcon className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
@@ -357,7 +457,7 @@ export function CompanyMembersSection() {
         <div className={shareInvite ? 'px-1 pt-3' : undefined} role="status" aria-live="polite">
           {shareInvite &&
             (shareInvite.sent || shareInvite.provisioned ? (
-              <p className="text-[12.5px] leading-5 text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 {t('members_invite_link_sent', { email: shareInvite.email })}{' '}
                 <button
                   type="button"
@@ -383,7 +483,7 @@ export function CompanyMembersSection() {
       {/* Multi-user seat gate: no invite form without the paid plan. One
           muted sentence with the billing link, not a dead form. */}
       {canInvite && inviteRequiresUpgrade && (
-        <p className="px-1 pt-3 text-[12.5px] leading-5 text-muted-foreground">
+        <p className="px-1 pt-3 text-xs leading-5 text-muted-foreground">
           {t('members_invite_upgrade')}{' '}
           <Link
             href="/settings/billing"
@@ -394,42 +494,82 @@ export function CompanyMembersSection() {
         </p>
       )}
 
-      {/* Inline invite: the list's own last row instead of a separate card. */}
+      {/* Bjud in is the page's one primary, in the settings top bar; outside
+          the settings layout it is the list's own last row. The form opens
+          in a drawer over the list (V7 creation forms): same fields, same
+          submit. */}
       {canInvite && !inviteRequiresUpgrade && (
-        <form onSubmit={handleInvite} className="flex flex-col gap-3 px-1 pt-3 sm:flex-row sm:items-center">
-          <label htmlFor="company-invite-email" className="sr-only">
-            {t('members_invite_email_label')}
-          </label>
-          <SettingsInput
-            id="company-invite-email"
-            type="email"
-            placeholder={t('members_invite_email_placeholder')}
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-            disabled={isSending}
-            required
-            className="border-border sm:flex-1"
-          />
-          <SettingsSelect
-            value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value)}
-            aria-label={t('members_role_label')}
+        <>
+          {topBar ? (
+            <SettingsTopBarPortal slot="action">{inviteButton}</SettingsTopBarPortal>
+          ) : (
+            <div className="px-1 pt-3">{inviteButton}</div>
+          )}
+          <CreateDrawer
+            open={inviteOpen}
+            onOpenChange={setInviteOpen}
+            title={t('members_invite_drawer_title')}
+            formId="company-invite-form"
+            submitLabel={t('members_invite_button')}
+            submitting={isSending}
           >
-            <option value="viewer">{t('members_role_viewer')}</option>
-            <option value="member">{t('members_role_member')}</option>
-            <option value="admin">{t('members_role_admin')}</option>
-          </SettingsSelect>
-          <Button type="submit" size="sm" disabled={isSending || !inviteEmail.trim()}>
-            {isSending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('members_invite_button')}
-              </>
-            )}
-          </Button>
-        </form>
+            <form id="company-invite-form" onSubmit={handleInvite} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="company-invite-email">{t('members_invite_email_label')}</Label>
+                <Input
+                  id="company-invite-email"
+                  type="email"
+                  placeholder={t('members_invite_email_placeholder')}
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  disabled={isSending}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="company-invite-role">{t('members_role_label')}</Label>
+                <SettingsSelect
+                  id="company-invite-role"
+                  wrapperClassName="w-full"
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value)}
+                >
+                  <option value="viewer">{t('members_role_viewer')}</option>
+                  <option value="invoicer">{t('members_role_invoicer')}</option>
+                  <option value="member">{t('members_role_member')}</option>
+                  <option value="admin">{t('members_role_admin')}</option>
+                </SettingsSelect>
+                {inviteRole === 'invoicer' && <SettingsRowNote>{t('members_role_invoicer_note')}</SettingsRowNote>}
+              </div>
+              {/* The byrå's client: the profile is part of the invitation, picked
+                  here and shown to the client when the invitation opens. */}
+              {profileChoice && inviteProfile && (
+                <div className="space-y-1.5">
+                  <span className="flex items-center gap-2">
+                    <Label htmlFor="company-invite-profile">{t('members_invite_profile_label')}</Label>
+                    <HelpPopover className="shrink-0">{t('members_invite_profile_help')}</HelpPopover>
+                  </span>
+                  <SettingsSelect
+                    id="company-invite-profile"
+                    wrapperClassName="w-full"
+                    value={inviteProfile}
+                    onChange={(e) => {
+                      if (isProfileId(e.target.value)) setInviteProfile(e.target.value)
+                    }}
+                    disabled={isSending}
+                  >
+                    {PROFILES.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {profileName(p.id)}
+                      </option>
+                    ))}
+                  </SettingsSelect>
+                  <SettingsRowNote>{profileOffNote(inviteProfile)}</SettingsRowNote>
+                </div>
+              )}
+            </form>
+          </CreateDrawer>
+        </>
       )}
 
       <p className="px-1 pt-3">

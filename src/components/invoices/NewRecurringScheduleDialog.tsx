@@ -1,8 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
-import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useTranslations, useLocale } from 'next-intl'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -11,7 +10,10 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  holdEscapeWhileUnsaved,
+  useEditedSinceOpen,
 } from '@/components/ui/dialog'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -25,20 +27,18 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { Plus, Trash2, Type } from 'lucide-react'
-import { CURRENCIES, type Customer, type Currency, type RecurringInvoiceSchedule } from '@/types'
+import { Bars3BottomLeftIcon, HashtagIcon, PlusIcon, TrashIcon } from '@/components/icons'
+import { CURRENCIES, type Currency, type RecurringInvoiceSchedule } from '@/types'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import {
   alignRunDateToDay,
-  getStockholmDateHour,
-  isoFromParts,
-  lastDayOfMonth,
+  firstRunDateOnOrAfter,
   parseIsoDate,
   projectRunDates,
   runDateMatchesDayOfMonth,
@@ -47,35 +47,37 @@ import {
   RECURRING_PLACEHOLDER_KEYS,
   mentionsPeriodPlaceholder,
 } from '@/lib/invoices/recurring-placeholders'
-import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
-import UnitDatalist from '@/components/invoices/UnitDatalist'
+import UnitPicker from '@/components/invoices/UnitPicker'
+import ArticleCombobox from '@/components/invoices/ArticleCombobox'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useArticles, useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
+import { sortArticles } from '@/lib/articles/sort'
+import { articleLineName, documentLanguageOf } from '@/lib/articles/line-name'
+import { hasDimensionValues } from '@/lib/invoices/editor-payload'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const currencies: readonly Currency[] = CURRENCIES
 
-/**
- * Today as yyyy-mm-dd in Europe/Stockholm: the calendar the server validates
- * against. The browser's own zone must not leak in, or a user west of Sweden
- * late in the evening would pass client validation and get a 400.
- */
-function stockholmTodayIso(): string {
-  return getStockholmDateHour(new Date()).date
+// Compact display of a dimensions bag, e.g. "KS01 · P001" (dim-number order).
+function compactDims(dims: Record<string, string>): string {
+  return Object.entries(dims)
+    .filter(([, v]) => v)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, v]) => v)
+    .join(' · ')
 }
 
 /**
- * Client-side twin of computeInitialRunDate on Stockholm's calendar: this
- * month's occurrence of day_of_month if it has not passed, otherwise next
- * month's. Prefills the date field so the default is "no offset", exactly
- * what the server would pick when start_date is omitted.
+ * The create dialog's first run date for a day of the month: the shared rule
+ * (firstRunDateOnOrAfter, what the server picks when start_date is omitted)
+ * from Stockholm's today, or from the start of a later month the user picked
+ * in the date field, so a yearly schedule billed in February keeps February
+ * when the day changes. Never in the past.
  */
-function defaultRunDate(dayOfMonth: number): string {
-  const today = parseIsoDate(stockholmTodayIso())
-  if (!today) return ''
-  const { year: y, month0: m, day: todayDay } = today
-  const thisMonthDay = Math.min(dayOfMonth, lastDayOfMonth(y, m))
-  if (todayDay <= thisMonthDay) return isoFromParts(y, m, thisMonthDay)
-  const ny = m === 11 ? y + 1 : y
-  const nm = (m + 1) % 12
-  return isoFromParts(ny, nm, Math.min(dayOfMonth, lastDayOfMonth(ny, nm)))
+function createRunDate(dayOfMonth: number, pickedMonth: string | null): string {
+  const today = todayIsoStockholm()
+  const monthStart = pickedMonth ? `${pickedMonth}-01` : ''
+  return firstRunDateOnOrAfter(monthStart > today ? monthStart : today, dayOfMonth)
 }
 
 interface Props {
@@ -94,27 +96,40 @@ interface Props {
  */
 export default function NewRecurringScheduleDialog({ open, onOpenChange, onSaved, schedule }: Props) {
   const t = useTranslations('invoice_recurring_new')
+  const { edited, editProps } = useEditedSinceOpen()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-4xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
-        // A half-typed schedule must survive an accidental backdrop click or
-        // a stray Escape (the customer/currency selects portal outside the
-        // dialog). Closing is explicit: the header X or Avbryt. Same
-        // convention as NewInvoiceDialog.
-        onEscapeKeyDown={(e) => e.preventDefault()}
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
+      <DialogContent size="document"
+
+ // Escape closes an untouched dialog, like every other overlay, but a
+ // half-typed schedule must survive a stray Escape (the customer and
+ // currency selects portal outside the dialog): then closing is
+ // explicit, the header X or Avbryt. Edit mode opens filled and the
+ // default dimensions live outside the form state, so "changed since
+ // open" decides (useEditedSinceOpen). A backdrop click never closes it.
+ onEscapeKeyDown={(e) => holdEscapeWhileUnsaved(e, edited())}
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
         <DialogHeader>
           <DialogTitle>{schedule ? t('edit_title') : t('title')}</DialogTitle>
+          {/* What the schedule's last run left for the person, in full: the
+              list shows it only as a mark, and a schedule held for a person
+              says here which of its two cases calls for which action. */}
+          {schedule?.last_run_warning && (
+            <div data-ph-mask="">
+              <AttnLine>{schedule.last_run_warning}</AttnLine>
+            </div>
+          )}
         </DialogHeader>
-        <NewRecurringScheduleForm
-          schedule={schedule}
-          onSaved={onSaved}
-          onCancel={() => onOpenChange(false)}
-        />
+        <div className="contents" {...editProps}>
+          <NewRecurringScheduleForm
+            schedule={schedule}
+            onSaved={onSaved}
+            onCancel={() => onOpenChange(false)}
+          />
+        </div>
       </DialogContent>
     </Dialog>
   )
@@ -133,11 +148,30 @@ function NewRecurringScheduleForm({
   onCancel: () => void
 }) {
   const { toast } = useToast()
-  const { company } = useCompany()
-  const supabase = createClient()
   const t = useTranslations('invoice_recurring_new')
-  const [customers, setCustomers] = useState<Customer[]>([])
+  const errorLocale = useLocale() as ErrorLocale
+  // The per-row dimension affordances share the invoice editor's wording: a
+  // schedule's default bag becomes each generated invoice's default.
+  const tInvoice = useTranslations('invoice_editor')
+  // The shared customer cache (/api/customers, personnummer masked); a
+  // schedule being edited keeps its customer even when it was archived.
+  const { customers } = useCustomers({ keepId: schedule?.customer_id })
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Dimension tagging (kostnadsställe/projekt). The pickers render only when
+  // company_settings.dimensions_enabled, but the stored bags always round-trip:
+  // PATCH replaces the item list wholesale, so an item sent without its bag
+  // would lose it. defaultDims is the schedule's default_dimensions (copied
+  // onto every generated invoice); per-item bags live on the form items, and a
+  // defined bag (possibly empty) means that row's panel is open.
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
+  const [defaultDims, setDefaultDims] = useState<Record<string, string>>(
+    () => ({ ...(schedule?.default_dimensions ?? {}) }),
+  )
+  // The article register (accounted#52), numeric-aware order like the
+  // invoice editor's picker.
+  const { articles: articleRows } = useArticles()
+  const articles = useMemo(() => sortArticles(articleRows), [articleRows])
 
   const schema = useMemo(() => {
     const itemSchema = z
@@ -147,10 +181,20 @@ function NewRecurringScheduleForm({
         quantity: z.number(),
         unit: z.string(),
         unit_price: z.number(),
+        // The dialog has no Moms field: new lines carry null, which follows
+        // the customer's VAT treatment at spawn (25 % domestic, 0 % export or
+        // reverse charge). A stored rate round-trips untouched (crm#1285).
         vat_rate: z
           .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
           .nullable()
           .optional(),
+        // Must be declared: the resolver strips undeclared keys, and a bag
+        // dropped here is erased by the wholesale item replace on save. The
+        // server validates the codes (DimensionsBagSchema).
+        dimensions: z.record(z.string(), z.string()).optional(),
+        // The article the line was picked from; declared for the same reason
+        // as dimensions (the save replaces every line).
+        article_id: z.string().uuid().nullable().optional(),
       })
       .superRefine((item, ctx) => {
         // A text row is description-only (may be blank for a spacer).
@@ -218,7 +262,7 @@ function NewRecurringScheduleForm({
           })
           return
         }
-        const today = stockholmTodayIso()
+        const today = todayIsoStockholm()
         if (schedule) {
           // The stored date, moved onto the grid for the (possibly edited)
           // day, is the "unchanged" reference: a day-only edit keeps the
@@ -278,42 +322,37 @@ function NewRecurringScheduleForm({
                     unit: it.unit,
                     unit_price: it.unit_price,
                     vat_rate: (it.vat_rate as 0 | 6 | 12 | 25 | null) ?? null,
+                    // Carried whether or not the pickers show: the save sends
+                    // the full item list back and would otherwise erase it.
+                    dimensions: hasDimensionValues(it.dimensions) ? { ...it.dimensions } : undefined,
+                    article_id: it.article_id ?? null,
                   }))
-              : [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
+              : [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null }],
         }
       : {
           customer_id: '',
           name: '',
           day_of_month: 15,
           interval_months: 1,
-          run_date: defaultRunDate(15),
+          run_date: createRunDate(15, null),
           send_hour: 8,
           payment_terms_days: 30,
           currency: 'SEK',
           auto_send: false,
           period_start: '',
-          items: [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
+          items: [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null }],
         },
   })
 
   const { fields, append, remove } = useFieldArray({ control, name: 'items' })
 
-  useEffect(() => {
-    if (!company) return
-    // Archived customers (v1 API soft-delete) are not offered in the picker,
-    // but a schedule being edited keeps its current customer visible.
-    const base = supabase.from('customers').select('*').eq('company_id', company.id)
-    const query = schedule?.customer_id
-      ? base.or(`archived_at.is.null,id.eq.${schedule.customer_id}`)
-      : base.is('archived_at', null)
-    query.order('name').then(({ data }) => setCustomers(data ?? []))
-  }, [company, schedule?.customer_id])
-
   async function onSubmit(data: FormData) {
     setIsSubmitting(true)
     try {
       const { run_date, period_start, ...restFields } = data
-      const rest = { ...restFields, period_start: period_start || null }
+      // default_dimensions replaces the stored bag, so it is always sent (the
+      // state starts from the stored one, making an untouched save a no-op).
+      const rest = { ...restFields, period_start: period_start || null, default_dimensions: defaultDims }
       // Create: the chosen date is the first run. Edit: only send it when the
       // user re-phased the schedule (a different month/year than the stored
       // date aligned to the chosen day), so an unrelated edit, a day-only
@@ -336,10 +375,7 @@ function NewRecurringScheduleForm({
         const body = (await res.json().catch(() => ({}))) as {
           error?: string | { message?: string }
         }
-        // errorResponse() returns the nested envelope { error: { code, message } },
-        // so reading body.error directly would stringify to "[object Object]".
-        const message = typeof body.error === 'string' ? body.error : body.error?.message
-        throw new Error(message || t('create_failed_fallback'))
+          throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('create_failed_fallback') }))
       }
       toast({ title: schedule ? t('updated_title') : t('created_title') })
       onSaved()
@@ -374,13 +410,31 @@ function NewRecurringScheduleForm({
   const watchDay = watch('day_of_month')
   const watchInterval = watch('interval_months')
   const watchRunDate = watch('run_date')
-  // Keep the date on the schedule grid when the day field changes: same
-  // month, day moved to the new day_of_month (clamped). The reverse sync
-  // (date -> day) lives in the date field's onChange.
+  // The month (yyyy-mm) last picked in the date field. Create mode derives
+  // the date from it rather than from the current date value, so typing
+  // "25" one digit at a time cannot ratchet the month forward via day 2.
+  const pickedMonthRef = useRef<string | null>(null)
+  // Keep the date on the schedule grid when the day field changes. Edit:
+  // same month, day moved to the new day_of_month (clamped); the stored month
+  // is the schedule's phase and the server recomputes a day-only edit.
+  // Create: the first occurrence of the new day on or after today (or the
+  // picked later month), so a day that already passed this month moves to
+  // next month instead of leaving a past date the validation refuses. A date
+  // the user just picked (the date field synced the day from it) is kept.
+  // The reverse sync (date -> day) lives in the date field's onChange.
   useEffect(() => {
     if (!Number.isInteger(watchDay) || watchDay < 1 || watchDay > 31) return
-    const aligned = alignRunDateToDay(watchRunDate, watchDay)
-    if (aligned !== watchRunDate) setValue('run_date', aligned, { shouldValidate: true })
+    if (
+      !schedule &&
+      watchRunDate.slice(0, 7) === pickedMonthRef.current &&
+      runDateMatchesDayOfMonth(watchRunDate, watchDay)
+    ) {
+      return
+    }
+    const next = schedule
+      ? alignRunDateToDay(watchRunDate, watchDay)
+      : createRunDate(watchDay, pickedMonthRef.current)
+    if (next !== watchRunDate) setValue('run_date', next, { shouldValidate: true })
     // watchRunDate is deliberately not a dependency: the effect exists to
     // react to the day, not to re-run on every date keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -412,6 +466,60 @@ function NewRecurringScheduleForm({
   )
   // Round to öre using the project monetary rule, then format.
   const subtotal = Math.round(subtotalRaw * 100) / 100
+
+  // --- Dimension tagging (same model as the supplier-invoice form) ---
+  // Closing a row's panel clears its bag so the item inherits the default.
+  function isDimOpen(index: number): boolean {
+    return items[index]?.dimensions != null
+  }
+
+  function toggleItemDimensions(index: number) {
+    setValue(`items.${index}.dimensions`, isDimOpen(index) ? undefined : {}, { shouldDirty: true })
+  }
+
+  // A line picked from an article keeps the link: every generated invoice
+  // books it to the article's revenue account and, since the dialog has no
+  // Moms field, at the article's rate when the customer may carry it (both
+  // read at each run). Picking fills text, unit and price like the invoice
+  // editor; "Egen rad" drops the link and keeps what was typed.
+  function applyArticle(index: number, value: string) {
+    if (value === 'none') {
+      if (items[index]?.article_id) setValue(`items.${index}.vat_rate`, null, { shouldDirty: true })
+      setValue(`items.${index}.article_id`, null, { shouldDirty: true })
+      return
+    }
+    const article = articles.find((a) => a.id === value)
+    if (!article) return
+    setValue(`items.${index}.article_id`, article.id, { shouldDirty: true })
+    setValue(`items.${index}.description`, articleLineName(article, documentLanguageOf(selectedCustomer)), {
+      shouldValidate: true,
+      shouldDirty: true,
+    })
+    if (article.unit) setValue(`items.${index}.unit`, article.unit, { shouldDirty: true })
+    setValue(`items.${index}.unit_price`, Number(article.price_excl_vat) || 0, { shouldValidate: true, shouldDirty: true })
+    // A stored rate would win over the article's at each run.
+    setValue(`items.${index}.vat_rate`, null, { shouldDirty: true })
+  }
+
+  function updateItemDimension(index: number, dimNo: string, code: string | null) {
+    const current = { ...(items[index]?.dimensions ?? {}) }
+    const trimmed = code?.trim()
+    if (trimmed) current[dimNo] = trimmed
+    else delete current[dimNo]
+    setValue(`items.${index}.dimensions`, current, { shouldDirty: true })
+  }
+
+  function setDefaultDimension(dimNo: string, code: string | null) {
+    setDefaultDims((prev) => {
+      const next = { ...prev }
+      const trimmed = code?.trim()
+      if (trimmed) next[dimNo] = trimmed
+      else delete next[dimNo]
+      return next
+    })
+  }
+
+  const defaultDimsSummary = compactDims(defaultDims)
 
   return (
     <form onSubmit={handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-6">
@@ -544,6 +652,7 @@ function NewRecurringScheduleForm({
                       // that month means the user changed the day too, so
                       // follow it. Feb 28 with day 31 stays 31 (clamped hit).
                       const parsed = parseIsoDate(next)
+                      pickedMonthRef.current = parsed ? next.slice(0, 7) : null
                       if (parsed && !runDateMatchesDayOfMonth(next, watchDay)) {
                         setValue('day_of_month', parsed.day, { shouldValidate: true })
                       }
@@ -622,7 +731,7 @@ function NewRecurringScheduleForm({
             </div>
           </div>
 
-          <div className="rounded-lg border border-border p-4">
+          <div className="rounded-lg p-4 bg-control shadow-raised">
             <div className="flex items-start gap-3">
               <Controller
                 control={control}
@@ -672,7 +781,7 @@ function NewRecurringScheduleForm({
               className="grid grid-cols-12 gap-2 items-start"
             >
               <div className="col-span-10 sm:col-span-11 flex items-center gap-2">
-                <Type className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
+                <Bars3BottomLeftIcon className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
                 <Input
                   placeholder={t('text_row_placeholder')}
                   aria-label={t('text_row_label')}
@@ -687,7 +796,7 @@ function NewRecurringScheduleForm({
                   onClick={() => remove(index)}
                   aria-label={t('remove_row')}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <TrashIcon className="h-4 w-4" />
                 </Button>
               </div>
             </div>
@@ -696,7 +805,7 @@ function NewRecurringScheduleForm({
               key={field.id}
               className="grid grid-cols-12 gap-2 items-start"
             >
-              <div className="col-span-12 sm:col-span-5">
+              <div className="col-span-12 sm:col-span-4">
                 <Input
                   placeholder={t('description_placeholder')}
                   {...register(`items.${index}.description`)}
@@ -705,6 +814,33 @@ function NewRecurringScheduleForm({
                   <p className="text-sm text-destructive mt-1">
                     {errors.items[index].description?.message}
                   </p>
+                )}
+                {articles.length > 0 && (
+                  <div className="mt-1">
+                    <ArticleCombobox
+                      value={items[index]?.article_id ?? null}
+                      articles={articles}
+                      onChange={(v) => applyArticle(index, v)}
+                      freeTextLabel={tInvoice('article_free_text')}
+                      placeholder={tInvoice('article_placeholder')}
+                      emptyLabel={tInvoice('article_search_empty')}
+                      ariaLabel={tInvoice('article_label')}
+                    />
+                  </div>
+                )}
+                {dimensionsEnabled && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="mt-1 -ml-2 text-muted-foreground"
+                    onClick={() => toggleItemDimensions(index)}
+                    aria-expanded={isDimOpen(index)}
+                  >
+                    <HashtagIcon className="h-4 w-4" />
+                    {isDimOpen(index)
+                      ? tInvoice('row_menu_remove_dimensions')
+                      : tInvoice('row_menu_set_dimensions')}
+                  </Button>
                 )}
               </div>
               <div className="col-span-3 sm:col-span-2">
@@ -721,16 +857,28 @@ function NewRecurringScheduleForm({
                   </p>
                 )}
               </div>
-              <div className="col-span-3 sm:col-span-1">
-                {/* Free text with suggestions, not a closed list: the API
-                    stores any unit, so an item copied from an article with an
-                    unlisted unit keeps it instead of rendering blank. */}
-                <Input
-                  list={UNIT_DATALIST_ID}
-                  maxLength={UNIT_MAX_LENGTH}
-                  placeholder={t('unit_placeholder')}
-                  aria-label={t('unit_placeholder')}
-                  {...register(`items.${index}.unit`)}
+              {/* Two columns, not one: the picker shows the unit beside its
+                  chevron, and "månad" did not fit in one. */}
+              <div className="col-span-3 sm:col-span-2">
+                {/* Every suggested unit plus free text under "Annan enhet":
+                    the API stores any unit, so an item copied from an article
+                    with an unlisted unit keeps it instead of rendering blank. */}
+                <Controller
+                  name={`items.${index}.unit`}
+                  control={control}
+                  render={({ field: unitField }) => (
+                    <UnitPicker
+                      ref={unitField.ref}
+                      name={unitField.name}
+                      value={unitField.value}
+                      onChange={unitField.onChange}
+                      onBlur={unitField.onBlur}
+                      variant="field"
+                      aria-label={t('unit_placeholder')}
+                      invalid={Boolean(errors.items?.[index]?.unit)}
+                      className="gap-1 px-3"
+                    />
+                  )}
                 />
                 {errors.items?.[index]?.unit && (
                   <p className="text-sm text-destructive mt-1">
@@ -755,32 +903,48 @@ function NewRecurringScheduleForm({
                   onClick={() => fields.length > 1 && remove(index)}
                   aria-label={t('remove_row')}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <TrashIcon className="h-4 w-4" />
                 </Button>
               </div>
+              {/* Per-item dims override: merged over the schedule default on
+                  the revenue line this item books to. */}
+              {dimensionsEnabled && isDimOpen(index) && (
+                <div className="col-span-12 space-y-1 rounded-lg p-3 bg-control shadow-raised">
+                  <div className="max-w-md">
+                    <LineDimensionFields
+                      dimensions={items[index]?.dimensions}
+                      onChange={(dimNo, code) => updateItemDimension(index, dimNo, code)}
+                      inputClassName="h-8"
+                    />
+                  </div>
+                  {defaultDimsSummary && (
+                    <p className="text-xs text-muted-foreground">
+                      {tInvoice('row_dimensions_inherit_hint', { dims: defaultDimsSummary })}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
-              variant="secondary"
-              size="sm"
+              variant="outline"
               onClick={() =>
-                append({ line_type: 'product', description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 })
+                append({ line_type: 'product', description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null })
               }
             >
-              <Plus className="mr-2 h-4 w-4" />
+              <PlusIcon className="h-4 w-4" />
               {t('add_row')}
             </Button>
             <Button
               type="button"
               variant="ghost"
-              size="sm"
               onClick={() =>
                 append({ line_type: 'text', description: '', quantity: 0, unit: '', unit_price: 0, vat_rate: null })
               }
             >
-              <Type className="mr-2 h-4 w-4" />
+              <Bars3BottomLeftIcon className="h-4 w-4" />
               {t('add_text_row')}
             </Button>
           </div>
@@ -800,9 +964,6 @@ function NewRecurringScheduleForm({
               {RECURRING_PLACEHOLDER_KEYS.map((key) => `{${key}}`).join(' ')}
             </span>
           </p>
-          {/* Last child on purpose: a datalist renders nothing, but space-y
-              would still count it as a sibling and offset the first row. */}
-          <UnitDatalist />
         </CardContent>
       </Card>
 
@@ -847,11 +1008,18 @@ function NewRecurringScheduleForm({
               )}
             </div>
           </div>
+          {/* Schedule-level default dims (kostnadsställe/projekt): copied onto
+              every generated invoice's default_dimensions. */}
+          {dimensionsEnabled && (
+            <div className="max-w-md">
+              <LineDimensionFields dimensions={defaultDims} onChange={setDefaultDimension} />
+            </div>
+          )}
         </CardContent>
       </Card>
 
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="secondary" onClick={onCancel}>
+        <Button type="button" variant="outline" onClick={onCancel}>
           {t('cancel')}
         </Button>
         <Button type="submit" disabled={isSubmitting}>

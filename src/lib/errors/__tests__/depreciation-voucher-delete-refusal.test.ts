@@ -36,7 +36,9 @@ describe('getErrorMessage: deleting a depreciation voucher', () => {
     expect(en).toMatch(/storno/i)
   })
 
-  it('is keyed on this one constraint: another foreign key refusal is handled exactly as before', () => {
+  it('is keyed on this one constraint: another foreign key refusal gets its own sentence', () => {
+    // Until #2831 this pinned the raw Postgres text for every other
+    // constraint. The others are covered in foreign-key-refusals.test.ts.
     const other = {
       ...REFUSAL,
       message:
@@ -45,9 +47,7 @@ describe('getErrorMessage: deleting a depreciation voucher', () => {
     }
     const msg = getErrorMessage(other, { context: 'journal_entry', statusCode: 400 })
     expect(msg).not.toBe(SV)
-    // Deliberately unchanged by this fix (scope): whatever the mapper did for
-    // other constraints before, it still does.
-    expect(msg).toBe(other.message)
+    expect(msg).not.toBe(other.message)
   })
 
   it('is keyed on 23503: the constraint name in some other error does not trigger it', () => {

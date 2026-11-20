@@ -1,21 +1,22 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
+import { Switch } from '@/components/ui/switch'
 import {
   SettingsInput,
   SettingsRow,
   SettingsRowNote,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { parseAmountInput } from '@/lib/money'
 
 interface SalaryOverridePanelProps {
   runId: string
@@ -36,15 +37,11 @@ interface SalaryOverridePanelProps {
 // covers values, not attributes.
 const FIELD_CLASS = 'max-w-44 flex-none tabular-nums ph-no-capture'
 
-function num(v: string): number | null {
-  const trimmed = v.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed.replace(',', '.'))
-  return Number.isFinite(n) ? n : null
-}
+const num = parseAmountInput
 
 export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
   const t = useTranslations('salary_override')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [expanded, setExpanded] = useState(
     props.taxOverride !== null ||
@@ -52,11 +49,16 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       props.avgifterBasisOverride !== null,
   )
   const [taxStr, setTaxStr] = useState(props.taxOverride !== null ? String(props.taxOverride) : '')
+  // The avgiftsunderlag override is a switch (#91): on stores underlag 0 and
+  // avgift 0, which the AGI declares as pay that is no underlag for
+  // socialavgifter (FK131-FK134). A partial underlag cannot be declared, so
+  // there is no amount to type. The avgift 0 that comes with the switch is
+  // not a separate value, so the amount field starts empty under it.
+  const [noUnderlag, setNoUnderlag] = useState(props.avgifterBasisOverride === 0)
   const [avgStr, setAvgStr] = useState(
-    props.avgifterOverride !== null ? String(props.avgifterOverride) : '',
-  )
-  const [basisStr, setBasisStr] = useState(
-    props.avgifterBasisOverride !== null ? String(props.avgifterBasisOverride) : '',
+    props.avgifterOverride !== null && props.avgifterBasisOverride !== 0
+      ? String(props.avgifterOverride)
+      : '',
   )
   const [reason, setReason] = useState(props.reason ?? '')
   const [saving, setSaving] = useState(false)
@@ -75,8 +77,8 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       const taxOverride = num(taxStr)
       const body = {
         tax_withheld_override: taxOverride === null ? null : Math.trunc(taxOverride),
-        avgifter_amount_override: num(avgStr),
-        avgifter_basis_override: num(basisStr),
+        avgifter_amount_override: noUnderlag ? 0 : num(avgStr),
+        avgifter_basis_override: noUnderlag ? 0 : null,
         reason: reason.trim() || null,
       }
       const res = await fetch(`/api/salary/runs/${props.runId}/employees/${props.employeeId}`, {
@@ -88,7 +90,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       if (!res.ok) {
         toast({
           title: t('save_failed'),
-          description: typeof data?.error === 'string' ? data.error : t('unknown_error'),
+          description: getUserErrorMessage(data, { locale: errorLocale, fallback: t('unknown_error') }),
           variant: 'destructive',
         })
         return
@@ -123,14 +125,14 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
         const data = await res.json()
         toast({
           title: t('clear_failed'),
-          description: typeof data?.error === 'string' ? data.error : t('unknown_error'),
+          description: getUserErrorMessage(data, { locale: errorLocale, fallback: t('unknown_error') }),
           variant: 'destructive',
         })
         return
       }
       setTaxStr('')
       setAvgStr('')
-      setBasisStr('')
+      setNoUnderlag(false)
       setReason('')
       toast({ title: t('cleared') })
       props.onSaved()
@@ -153,7 +155,6 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
           <Button
             type="button"
             variant="outline"
-            size="sm"
             onClick={() => setExpanded((v) => !v)}
             disabled={props.disabled}
           >
@@ -184,9 +185,9 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
               id="avgifter_override"
               inputMode="decimal"
               placeholder={String(props.avgifterAmount)}
-              value={avgStr}
+              value={noUnderlag ? '0' : avgStr}
               onChange={(e) => setAvgStr(e.target.value)}
-              disabled={fieldDisabled}
+              disabled={fieldDisabled || noUnderlag}
               className={FIELD_CLASS}
             />
             <SettingsRowNote>
@@ -194,19 +195,20 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
             </SettingsRowNote>
           </SettingsRow>
 
-          <SettingsRow label={t('basis_label')} htmlFor="avgifter_basis_override" align="baseline">
-            <SettingsInput
-              id="avgifter_basis_override"
-              inputMode="decimal"
-              placeholder={String(props.avgifterBasis)}
-              value={basisStr}
-              onChange={(e) => setBasisStr(e.target.value)}
-              disabled={fieldDisabled}
-              className={FIELD_CLASS}
-            />
+          <SettingsRow
+            label={t('no_underlag_label')}
+            htmlFor="avgifter_no_underlag"
+            help={t('no_underlag_help')}
+          >
             <SettingsRowNote>
-              {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
+              {t('basis_calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
             </SettingsRowNote>
+            <Switch
+              id="avgifter_no_underlag"
+              checked={noUnderlag}
+              onCheckedChange={setNoUnderlag}
+              disabled={fieldDisabled}
+            />
           </SettingsRow>
 
           <SettingsRow label={t('reason_label')} htmlFor="override_reason" align="baseline" borderless>
@@ -221,13 +223,11 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
           </SettingsRow>
 
           <div className="flex flex-wrap gap-2 pt-3">
-            <Button size="sm" onClick={handleSave} disabled={fieldDisabled}>
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={handleSave} disabled={fieldDisabled} loading={saving}>
               {t('save')}
             </Button>
             {hasOverride && (
               <Button
-                size="sm"
                 variant="outline"
                 onClick={handleClear}
                 disabled={fieldDisabled}

@@ -8,7 +8,10 @@ import { insertDraftJournalEntry, insertPostedJournalEntry, seedCompany } from '
  * one live (draft or posted) source_type = 'system' entry per (company_id,
  * source_id). The skattekonto Bokför path writes source_id = the skattekonto
  * row id, so the index is what stops two concurrent Bokför clicks from
- * producing two verifikat for one Skatteverket event.
+ * producing two verifikat for one Skatteverket event. Migration
+ * 20261109170200 (#172) widened it to 'tax_account', the source type
+ * skattekonto bookings carry since; tax-account-source-type.pg.test.ts covers
+ * the two types together.
  *
  * The skattekonto side carries no unique index on purpose: Koppla links
  * several rows to one existing summary verifikat (N:1), see the last case.
@@ -165,7 +168,9 @@ describe('skattekonto booking invariants (#1302)', () => {
     )
     expect(rows).toHaveLength(1)
     expect(rows[0].indexdef).toMatch(/UNIQUE INDEX/)
-    expect(rows[0].indexdef).toMatch(/source_type = 'system'/)
+    expect(rows[0].indexdef).toMatch(/\(company_id, source_id\)/)
+    // source_type IN ('system', 'tax_account') since 20261109170200.
+    expect(rows[0].indexdef).toMatch(/source_type = ANY \(ARRAY\['system'::text, 'tax_account'::text\]\)/)
     expect(rows[0].indexdef).toMatch(/status = ANY/)
   })
 })

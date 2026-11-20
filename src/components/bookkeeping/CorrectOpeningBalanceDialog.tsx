@@ -294,7 +294,7 @@ export default function CorrectOpeningBalanceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>Korrigera ingående balanser</DialogTitle>
           <DialogDescription>
@@ -305,7 +305,7 @@ export default function CorrectOpeningBalanceDialog({
         </DialogHeader>
 
         {/* Inline rättelse (BFL 5 kap 5 §): edited in place, original logged */}
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+        <div className="flex items-start gap-3 rounded-lg px-4 py-3 bg-control shadow-raised">
           <p className="text-sm text-muted-foreground">
             Ändringen sparas som en spårbar rättelse i samma verifikation (Bokföringslagen 5 kap
             5 §): de ursprungliga raderna bevaras i rättelseloggen.
@@ -316,7 +316,7 @@ export default function CorrectOpeningBalanceDialog({
             it is) locked, closed, or has a bokslut. Instead of a dead end,
             point at the earliest year that still accepts corrections. */}
         {(currentPeriodBlocked || showBlockedGuidance) && (
-          <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 space-y-1">
+          <div className="rounded-lg px-4 py-3 space-y-1 bg-control shadow-raised">
             <p className="text-sm">
               Det här räkenskapsåret är låst, stängt eller har ett bokslut, så dess ingående
               balanser kan inte korrigeras här.
@@ -348,7 +348,7 @@ export default function CorrectOpeningBalanceDialog({
         {/* Cascade opt-out: later years imported from SIE carry their own IB
             verifikat with the old figures; without this they stay wrong. */}
         {laterPeriodsWithIB.length > 0 && (
-          <label className="flex items-start gap-3 rounded-lg border border-border px-4 py-3 cursor-pointer">
+          <label className="flex items-start gap-3 rounded-lg px-4 py-3 cursor-pointer bg-control shadow-raised">
             <Checkbox
               checked={cascade}
               onCheckedChange={(v) => setCascade(v === true)}

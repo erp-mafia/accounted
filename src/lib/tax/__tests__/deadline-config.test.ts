@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { TAX_DEADLINE_CONFIGS } from '../deadline-config'
+import { TAX_DEADLINE_CONFIGS, getAgiPaymentDueDate } from '../deadline-config'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
 function getConfig(type: string) {
@@ -151,6 +151,38 @@ describe('monthly tax and employer deadlines', () => {
     expect(config.condition(makeSettings({ employer_registered: false, pays_salaries: true }))).toBe(false)
   })
 
+  it('counts an active salaried employee as an employer while neither flag is attested (crm#1790)', () => {
+    const config = getConfig('arbetsgivardeklaration')
+    expect(config.condition(makeSettings({ salaried_employee_since: '2026-03-01' }))).toBe(true)
+    expect(config.condition(makeSettings({ salaried_employee_since: null }))).toBe(false)
+    // Unresolved evidence is no evidence.
+    expect(config.condition(makeSettings({ salaried_employee_since: undefined }))).toBe(false)
+    // An explicit "not registered" stays the user's answer.
+    expect(config.condition(makeSettings({
+      employer_registered: false,
+      salaried_employee_since: '2026-03-01',
+    }))).toBe(false)
+  })
+
+  it('starts employee-derived AGI rows at the first employment month', () => {
+    const config = getConfig('arbetsgivardeklaration')
+    const derived = config.generateDates(2026, makeSettings({ salaried_employee_since: '2026-05-20' }))
+    expect(derived.map((date) => date.period)).toEqual([
+      '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12',
+    ])
+    // Not a year at all before the employment starts.
+    expect(config.generateDates(2026, makeSettings({ salaried_employee_since: '2027-01-15' }))).toEqual([])
+    // An attested flag files every month, whatever the employees say.
+    expect(config.generateDates(2026, makeSettings({
+      employer_registered: true,
+      salaried_employee_since: '2026-05-20',
+    }))).toHaveLength(12)
+    expect(config.generateDates(2026, makeSettings({
+      pays_salaries: true,
+      salaried_employee_since: '2026-05-20',
+    }))).toHaveLength(12)
+  })
+
   it('generates only the December-period AGI row for seasonal employers', () => {
     const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
       employer_registered: true,
@@ -206,6 +238,10 @@ describe('storföretag tax payment deadline', () => {
       pays_salaries: true,
       vat_taxable_base_over_40m: true,
     }))).toBe(false)
+    // And the same employee evidence (crm#1790), from the same first month.
+    const derived = makeSettings({ salaried_employee_since: '2026-11-03', vat_taxable_base_over_40m: true })
+    expect(config.condition(derived)).toBe(true)
+    expect(config.generateDates(2026, derived).map((date) => date.period)).toEqual(['2026-11', '2026-12'])
   })
 
   it('is due the 12th of the following month, the 17th in January', () => {
@@ -567,5 +603,102 @@ describe('arsredovisning: 7 months after FY end (ÅRL 8:3)', () => {
     expect(dates.length).toBe(1)
     expect(dates[0].month).toBe(1) // Feb
     expect(dates[0].day).toBe(28) // 2025 is not a leap year
+  })
+})
+
+describe('ekonomisk förening: juridisk person deadlines with the association wording', () => {
+  const ekf = (over: Partial<Parameters<typeof makeSettings>[0]> = {}) =>
+    makeSettings({ entity_type: 'ekonomisk_forening', ...over })
+
+  it('files INK2 on the same digital schedule as an aktiebolag, under its own rule', () => {
+    const ab = getConfig('inkomstdeklaration_ab')
+    const forening = getConfig('inkomstdeklaration_ekonomisk_forening')
+    expect(ab.condition(ekf())).toBe(false)
+    expect(forening.condition(ekf())).toBe(true)
+    expect(forening.condition(makeSettings({ entity_type: 'aktiebolag' }))).toBe(false)
+    expect(forening.condition(makeSettings({ entity_type: 'ideell_forening' }))).toBe(false)
+    for (const month of [1, 5, 7, 9]) {
+      expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: month }))).toEqual(
+        ab.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', fiscal_year_start_month: month })),
+      )
+    }
+    expect(forening.titleTemplate).toContain('Inkomstdeklaration 2')
+  })
+
+  it('sends årsredovisning and revisionsberättelse to Bolagsverket seven months after year end (ÅRL 8 kap. 3 §)', () => {
+    const ab = getConfig('arsredovisning')
+    const forening = getConfig('arsredovisning_ekonomisk_forening')
+    expect(ab.condition(ekf())).toBe(false)
+    expect(forening.condition(ekf())).toBe(true)
+    expect(forening.generateDates(2027, ekf())[0]).toMatchObject({ day: 31, month: 6, year: 2027, period: '2026' })
+    expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: 7 }))).toEqual(
+      ab.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', fiscal_year_start_month: 7 })),
+    )
+    expect(forening.titleTemplate).toContain('revisionsberättelse')
+    expect(forening.description).toContain('ÅRL 8 kap. 3 §')
+  })
+
+  it('starts the Bolagsverket filing duty with fiscal years beginning 1 January 2025', () => {
+    const forening = getConfig('arsredovisning_ekonomisk_forening')
+    const ab = getConfig('arsredovisning')
+    // Calendar year 2024 (deadline July 2025) predates the general duty.
+    expect(forening.generateDates(2025, ekf())).toEqual([])
+    expect(ab.generateDates(2025, makeSettings({ entity_type: 'aktiebolag' }))).toHaveLength(1)
+    // Calendar year 2025 (deadline July 2026) is the first one filed.
+    expect(forening.generateDates(2026, ekf())[0]).toMatchObject({ day: 31, month: 6, year: 2026, period: '2025' })
+    // Brutet räkenskapsår 2024-07-01..2025-06-30 (deadline January 2026)
+    // started before the cut-off; 2025-07-01..2026-06-30 (January 2027) did not.
+    expect(forening.generateDates(2026, ekf({ fiscal_year_start_month: 7 }))).toEqual([])
+    expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: 7 }))).toHaveLength(1)
+  })
+
+  it('holds the ordinarie föreningsstämma within six months of year end (EFL 6 kap. 9 §)', () => {
+    const ab = getConfig('arsstamma')
+    const forening = getConfig('foreningsstamma')
+    expect(ab.condition(ekf())).toBe(false)
+    expect(forening.condition(ekf())).toBe(true)
+    expect(forening.generateDates(2027, ekf())[0]).toMatchObject({ day: 30, month: 5, year: 2027, period: '2026' })
+    expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: 5 }))).toEqual(
+      ab.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', fiscal_year_start_month: 5 })),
+    )
+    expect(forening.description).toContain('EFL 6 kap. 9 §')
+  })
+
+  it('never offers the enskild firma or ideell förening rules to an ekonomisk förening', () => {
+    expect(getConfig('inkomstdeklaration_ef').condition(ekf())).toBe(false)
+    // Helårsmoms follows the juridisk person schedule (SFL 26 kap. 33 §).
+    const yearly = getConfig('moms_yearly')
+    expect(yearly.generateDates(2027, ekf({ moms_period: 'yearly', vat_filing_method: 'paper' }))[0]).toMatchObject(
+      yearly.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', moms_period: 'yearly', vat_filing_method: 'paper' }))[0],
+    )
+  })
+})
+
+describe('getAgiPaymentDueDate (the tax payment panel and Betala via banken)', () => {
+  const SMALL = { vat_registered: true, vat_taxable_base_over_40m: false }
+  const LARGE = { vat_registered: true, vat_taxable_base_over_40m: true }
+
+  it('is the 12th of the following month on a banking day', () => {
+    expect(getAgiPaymentDueDate(2026, 9, SMALL)).toBe('2026-10-12')
+  })
+
+  it('moves a 12th on a Saturday to the Monday', () => {
+    // 12 September 2026 is a Saturday.
+    expect(getAgiPaymentDueDate(2026, 8, SMALL)).toBe('2026-09-14')
+  })
+
+  it('is the 17th in August up to the SEK 40M VAT taxable base, the 12th above it', () => {
+    expect(getAgiPaymentDueDate(2026, 7, SMALL)).toBe('2026-08-17')
+    expect(getAgiPaymentDueDate(2026, 7, LARGE)).toBe('2026-08-12')
+  })
+
+  it('is the 17th in January for everyone, moved off a Sunday', () => {
+    // 17 January 2027 is a Sunday.
+    expect(getAgiPaymentDueDate(2026, 12, SMALL)).toBe('2027-01-18')
+    expect(getAgiPaymentDueDate(2026, 12, LARGE)).toBe('2027-01-18')
+  })
+
+  it('has no answer for a month that does not exist', () => {
+    expect(getAgiPaymentDueDate(2026, 13, SMALL)).toBeNull()
   })
 })

@@ -6,6 +6,7 @@ import {
   insertFiscalPeriod,
   insertTransaction,
   insertDraftJournalEntry,
+  insertCashAccount,
 } from '@/tests/pg/fixtures'
 import { getClient, getPool, withUserContext } from '@/tests/pg/setup'
 
@@ -30,9 +31,10 @@ async function insertPostedEntry(params: {
   fiscalPeriodId: string
   voucherNumber: number
   sourceType?: string
+  entryDate?: string
   lines?: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
-  const id = await insertDraftJournalEntry({...params,entryDate:'2026-01-01',description:'Ingående balanser 2026'})
+  const id = await insertDraftJournalEntry({...params,entryDate:params.entryDate ?? '2026-01-01',description:'Ingående balanser 2026'})
   const lines = params.lines ?? [
     { account: '1930', debit: 5000, credit: 0 },
     { account: '2099', debit: 0, credit: 5000 },
@@ -144,7 +146,7 @@ describe('mark_entry_as_opening_balance RPC', () => {
     await insertCompanyMember({ companyId, userId, role: 'owner' })
     const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
     const entryId = await insertPostedEntry({
-      userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'bank_transaction',
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'supplier_invoice_registered',
     })
 
     await withUserContext(userId, async (client) => {
@@ -171,9 +173,74 @@ describe('mark_entry_as_opening_balance RPC', () => {
         { account: '1940', debit: 0, credit: 2500 },
       ],
     })
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1940' })
     await insertTransaction({
-      companyId, userId, amount: -2500, journalEntryId: entryId,
+      companyId, userId, amount: -2500, cashAccountId, journalEntryId: entryId,
     })
+
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(`SELECT mark_entry_as_opening_balance($1, $2)`, [companyId, entryId]),
+      ).rejects.toThrow(/linked bank transactions/i)
+    })
+  })
+
+  it('refuses a mid-year entry: a dated rättelse is a movement, never an IB (20261006121003)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const entryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, entryDate: '2026-09-21',
+    })
+
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(`SELECT mark_entry_as_opening_balance($1, $2)`, [companyId, entryId]),
+      ).rejects.toThrow(/first day of its fiscal period/i)
+    })
+    // Read outside the user transaction: the refusal aborted it.
+    const after = await getPool().query<{ source_type: string }>(
+      `SELECT source_type FROM public.journal_entries WHERE id = $1`,
+      [entryId],
+    )
+    expect(after.rows[0]!.source_type).toBe('manual')
+  })
+
+  it('accepts the first day of a broken fiscal year, not only 1 January', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId, companyId, periodStart: '2025-07-01', periodEnd: '2026-06-30', name: '2025/2026',
+    })
+    const entryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, entryDate: '2025-07-01',
+    })
+
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ mark_entry_as_opening_balance: { retagged: boolean } }>(
+        `SELECT mark_entry_as_opening_balance($1, $2)`,
+        [companyId, entryId],
+      )
+      expect(r.rows[0]!.mark_entry_as_opening_balance.retagged).toBe(true)
+    })
+  })
+
+  it('refuses an entry linked only through transaction_voucher_links (a 1:N slice)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1930' })
+    const txId = await insertTransaction({ companyId, userId, amount: 1000, cashAccountId, date: '2026-01-01' })
+    await getPool().query(
+      `INSERT INTO public.transaction_voucher_links
+         (company_id, user_id, transaction_id, journal_entry_id, allocated_amount, role)
+       VALUES ($1, $2, $3, $4, 1000, 'bank_line')`,
+      [companyId, userId, txId, entryId],
+    )
 
     await withUserContext(userId, async (client) => {
       await expect(
@@ -285,7 +352,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
     })
 
     await expect(
-      insertTransaction({ companyId, userId, amount: -2500, journalEntryId: entryId }),
+      insertTransaction({ companyId, userId, amount: 5000, journalEntryId: entryId }),
     ).rejects.toThrow(/opening balance entry/i)
   })
 
@@ -294,7 +361,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
     const obEntryId = await insertPostedEntry({
       userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'opening_balance',
     })
-    const txId = await insertTransaction({ companyId, userId, amount: -2500 })
+    const txId = await insertTransaction({ companyId, userId, amount: 5000 })
 
     await expect(
       getPool().query(
@@ -307,7 +374,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
   it('allows linking to an ordinary entry and unlinking back to NULL', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedOwner()
     const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
-    const txId = await insertTransaction({ companyId, userId, amount: -2500 })
+    const txId = await insertTransaction({ companyId, userId, amount: 5000 })
 
     await getPool().query(
       `UPDATE public.transactions SET journal_entry_id = $1 WHERE id = $2`,
@@ -333,7 +400,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
   it('leaves updates that do not change journal_entry_id alone', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedOwner()
     const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
-    const txId = await insertTransaction({ companyId, userId, amount: -2500, journalEntryId: entryId })
+    const txId = await insertTransaction({ companyId, userId, amount: 5000, journalEntryId: entryId })
 
     // Same-value SET (e.g. a generic column-list UPDATE) must not raise even
     // though the trigger's UPDATE OF column list matches.

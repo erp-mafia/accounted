@@ -29,7 +29,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as unknown as ExtensionContext
@@ -54,7 +53,7 @@ function fullExtraction(): InvoiceExtractionResult {
     suggestedTemplateId: 'tmpl-representation',
     pages: { total: 1, analyzed: 1 },
     supplier: {
-      name: 'Restaurang Riddaren AB',
+      name: 'Restaurang Exempel AB',
       orgNumber: '556812-9930',
       vatNumber: null,
       address: null,
@@ -94,7 +93,7 @@ describe('PATCH /items/:id/fields', () => {
 
     const ctx = buildCtx(mock.supabase)
     // The smallest possible edit: one character of the supplier name.
-    const res = await fieldsRoute.handler(makeReq({ supplier: { name: 'Restaurang Riddaren' } }), ctx)
+    const res = await fieldsRoute.handler(makeReq({ supplier: { name: 'Restaurang Exempel' } }), ctx)
     expect(res.status).toBe(200)
 
     const update = mock.calls.find((c) => c.method === 'update')
@@ -141,7 +140,7 @@ describe('PATCH /items/:id/fields', () => {
     expect(merged.totals?.total).toBe(2500)
     // A partial edit to one sub-object leaves its siblings intact.
     expect(merged.totals?.vatAmount).toBe(135.85)
-    expect(merged.supplier?.name).toBe('Restaurang Riddaren AB')
+    expect(merged.supplier?.name).toBe('Restaurang Exempel AB')
   })
 
   it('clears totalSource when the user edits TOTALT', async () => {
@@ -175,6 +174,32 @@ describe('PATCH /items/:id/fields', () => {
     expect(merged.totalSource).toBe('prominent')
   })
 
+  it('lets a person say what the document is, and name the invoice a credit note credits (issue #2980)', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: { id: 'item-1', extracted_data: { ...fullExtraction(), documentKind: 'credit_note' }, created_supplier_invoice_id: null },
+    })
+    mock.enqueue({ data: { id: 'item-1', extracted_data: {} } })
+
+    const res = await fieldsRoute.handler(
+      makeReq({ documentKind: 'supplier_invoice', invoice: { creditedInvoiceNumber: '10234' } }),
+      buildCtx(mock.supabase),
+    )
+    expect(res.status).toBe(200)
+
+    const update = mock.calls.find((c) => c.method === 'update')
+    const merged = (update?.args?.[0] as { extracted_data: InvoiceExtractionResult }).extracted_data
+    expect(merged.documentKind).toBe('supplier_invoice')
+    expect(merged.invoice?.creditedInvoiceNumber).toBe('10234')
+    expect(merged.invoice?.invoiceNumber).toBe('8841')
+  })
+
+  it('refuses a document kind outside the vocabulary', async () => {
+    const mock = createQueuedMockSupabase()
+    const res = await fieldsRoute.handler(makeReq({ documentKind: 'parking_ticket' }), buildCtx(mock.supabase))
+    expect(res.status).toBe(400)
+  })
+
   it('returns 409 when the row changed under the edit (optimistic concurrency)', async () => {
     // The handler is read-merge-write over the whole jsonb blob; a racing
     // autosave would otherwise restore stale fields (including a
@@ -194,8 +219,10 @@ describe('PATCH /items/:id/fields', () => {
     const ctx = buildCtx(mock.supabase)
     const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
     expect(res.status).toBe(409)
-    const { body } = await parseJsonResponse<{ error: string }>(res)
-    expect(body.error).toContain('samtidigt')
+    // Failures ride the structured envelope now (sessionFailureResponse).
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(body.error.code).toBe('INBOX_ITEM_EDIT_CONFLICT')
+    expect(body.error.message).toContain('samtidigt')
   })
 
   it('refuses once the item became a supplier invoice', async () => {
@@ -206,7 +233,8 @@ describe('PATCH /items/:id/fields', () => {
     const ctx = buildCtx(mock.supabase)
     const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
     expect(res.status).toBe(409)
-    const { body } = await parseJsonResponse<{ error: string }>(res)
-    expect(body.error).toContain('leverantörsfaktura')
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(body.error.code).toBe('INBOX_ITEM_EDIT_LOCKED')
+    expect(body.error.message).toContain('leverantörsfaktura')
   })
 })

@@ -2,14 +2,17 @@
 
 import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DetailColumns } from '@/components/ui/detail-columns'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
+import { PageHeader, PageHeaderParent, PageHeaderBelow } from '@/components/ui/page-header'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { RecordAction } from '@/components/ui/record-header'
 import ArticleForm from '@/components/articles/ArticleForm'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import {
@@ -18,12 +21,13 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { ArrowLeft, Loader2, Lock } from 'lucide-react'
+import { TrashIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
-import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_TYPE_LABEL_KEYS, articleDeductionPrefill, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 const ARTICLE_TYPE_KEY: Record<ArticleType, string> = {
   vara: 'type_vara',
@@ -40,9 +44,17 @@ export default function ArticleDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('article_detail')
+  const tArticles = useTranslations('articles')
+  const tCommon = useTranslations('common')
+  const tInvoices = useTranslations('invoices')
   const errorLocale = useLocale() as ErrorLocale
   const [article, setArticle] = useState<Article | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no article on screen the page says so in
+  // place of it; an article already on screen stays, with one line above.
+  const [loadFailed, setLoadFailed] = useState(false)
+  // An article that does not exist (404) is not a failure to retry.
+  const [notFound, setNotFound] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isTogglingActive, setIsTogglingActive] = useState(false)
@@ -57,18 +69,18 @@ export default function ArticleDetailPage({
     setIsLoading(true)
     try {
       const response = await fetch(`/api/articles/${id}`)
+      if (response.status === 404) {
+        setNotFound(true)
+        return
+      }
       if (!response.ok) {
-        throw new Error('Not found')
+        throw new Error('Load failed')
       }
       const { data } = await response.json()
       setArticle(data)
+      setLoadFailed(false)
     } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-      router.push('/articles')
+      setLoadFailed(true)
     } finally {
       setIsLoading(false)
     }
@@ -103,6 +115,8 @@ export default function ArticleDetailPage({
         description: data.name,
       })
       setIsEditOpen(false)
+      // Every article picker reads the cached register: refresh it now.
+      void invalidateReferenceData('ref:articles')
       fetchArticle()
     } catch (err) {
       // The user closing the activation dialog is not an error worth toasting.
@@ -148,6 +162,7 @@ export default function ArticleDetailPage({
       const { data } = (await throwOnStructuredError(response)) as { data: Article }
 
       setArticle(data)
+      void invalidateReferenceData('ref:articles')
       toast({
         title: nextActive ? t('activated_title') : t('deactivated_title'),
         description: article.name,
@@ -186,6 +201,7 @@ export default function ArticleDetailPage({
         title: t('deleted_title'),
         description: article.name,
       })
+      void invalidateReferenceData('ref:articles')
       router.push('/articles')
     } catch (err) {
       const body = (err as { body?: unknown }).body
@@ -203,90 +219,76 @@ export default function ArticleDetailPage({
     return <DetailPageSkeleton />
   }
 
-  if (!article) return null
+  if (!article) {
+    if (!loadFailed && !notFound) return null
+    return (
+      <div className="space-y-8">
+        <PageHeader title={tArticles('title')} />
+        {notFound ? (
+          <NotFoundState title={t('not_found')} backHref="/articles" backLabel={tCommon('back_to_list')} />
+        ) : (
+          <LoadError title={t('load_failed_title')} onRetry={() => void fetchArticle()} />
+        )}
+      </div>
+    )
+  }
 
   // "RUT · Städning" for a work-type code, "RUT" for a legacy kind-only row,
-  // nothing for values that are not a housework flag (mis-mapped imports).
+  // "Grön teknik · Installation av solceller" for an installation type,
+  // nothing for values that are not a housework flag (mis-mapped imports) or
+  // that the article's type cannot carry (ROT/RUT on goods): the same rule as
+  // the invoice pre-fill.
   const houseworkDisplay = (() => {
-    const { deductionType, workType } = parseArticleHouseworkType(article.housework_type)
+    const { deductionType, workType } = articleDeductionPrefill(article)
     if (!deductionType) return null
+    const kind = tInvoices(DEDUCTION_TYPE_LABEL_KEYS[deductionType])
     const label = workTypeLabel(workType)
-    return label ? `${deductionType.toUpperCase()} · ${label}` : deductionType.toUpperCase()
+    return label ? `${kind} · ${label}` : kind
   })()
+
+  const articleFacts = (
+    <>
+      <span className="tabular-nums">
+        {t(ARTICLE_TYPE_KEY[article.type])}
+        {article.article_number ? ` · #${article.article_number}` : ''}
+      </span>
+      {!article.active && (
+        <Badge variant="outline" className="font-normal">
+          {t('status_inactive')}
+        </Badge>
+      )}
+    </>
+  )
 
   return (
     <div className="space-y-8 stagger-enter">
-      {/* Header: serif name over a quiet type/status kicker, quiet actions right */}
-      <div>
-        <Link
-          href="/articles"
-          className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back')}
-        </Link>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
-            <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span className="tabular-nums">
-                {t(ARTICLE_TYPE_KEY[article.type])}
-                {article.article_number ? ` · #${article.article_number}` : ''}
-                {article.active ? ` · ${t('status_active')}` : ''}
-              </span>
-              {!article.active && (
-                <Badge variant="outline" className="font-normal">
-                  {t('status_inactive')}
-                </Badge>
-              )}
-            </p>
-          </div>
-
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsEditOpen(true)}
-              className="min-h-10 text-muted-foreground hover:text-foreground"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
-              {t('edit')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleToggleActive}
-              className="min-h-10 text-muted-foreground hover:text-foreground"
-              disabled={isTogglingActive || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {isTogglingActive ? (
-                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="h-4 w-4 mr-1" />
-              ) : null}
-              {article.active ? t('deactivate') : t('activate')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleDelete}
-              className="min-h-10 text-muted-foreground hover:text-destructive"
-              disabled={isDeleting || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {isDeleting ? (
-                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="h-4 w-4 mr-1" />
-              ) : null}
-              {t('delete')}
-            </Button>
-          </div>
+      {/* Header: the page-header hooks make it the panel's top bar
+          (convention 2), like the customer and supplier detail pages: name,
+          a quiet type/status kicker, quiet actions right. The sidebar says
+          where we are, so there is no back link. */}
+      <div className="page-header page-header-wrap flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
+          <PageHeaderParent label={tArticles('title')} href="/articles" />
+          <h1 className="page-header-title">{article.name}</h1>
+          {/* On a phone the bar has no room for this: it is the first line under the bar (PageHeaderBelow). */}
+          <p data-below="" className="page-header-meta mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            {articleFacts}
+          </p>
         </div>
+
+        <PageHeaderActions className="page-header-action flex shrink-0 flex-wrap items-center justify-end gap-1">
+          <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={() => setIsEditOpen(true)}>{t('edit')}</RecordAction>
+          <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={handleToggleActive} loading={isTogglingActive}>{article.active ? t('deactivate') : t('activate')}</RecordAction>
+          <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={handleDelete} destructive loading={isDeleting} icon={<TrashIcon className="h-4 w-4" />}>{t('delete')}</RecordAction>
+        </PageHeaderActions>
       </div>
+      <PageHeaderBelow>{articleFacts}</PageHeaderBelow>
+
+      {loadFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchArticle() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
 
       <DetailColumns>
         <DetailSection kicker={t('section_pricing')}>
@@ -316,7 +318,7 @@ export default function ArticleDetailPage({
               <span className="text-muted-foreground">{t('revenue_account_auto')}</span>
             )}
           </DefRow>
-          {article.type === 'tjanst' && houseworkDisplay && (
+          {houseworkDisplay && (
             <DefRow label={t('label_housework')}>{houseworkDisplay}</DefRow>
           )}
         </DetailSection>
@@ -354,7 +356,7 @@ export default function ArticleDetailPage({
 
       {/* Edit dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('edit_dialog_title')}</DialogTitle>
           </DialogHeader>

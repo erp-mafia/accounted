@@ -1,7 +1,9 @@
 import { searchCompaniesByName, searchCompanyByOrgNumber } from './tic-client'
+import type { TicCallContext } from '@/lib/tic-budget/budget'
+import { isLensDocumentCeased } from './lens-status'
 import type { TICCompanyDocument } from './tic-types'
 import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
-import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
+import { normalizeOrgNumber, registrationNumberKey } from '@/lib/invariants/org-number'
 
 /**
  * Shared org-number → CompanyLookupResult lookup, used by both the /lookup
@@ -66,7 +68,7 @@ export function pickCompanyName(names: TICCompanyDocument['names']): string {
 export function mapDocumentToLookupResult(doc: TICCompanyDocument): CompanyLookupResult {
   const companyName = pickCompanyName(doc.names)
 
-  const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
+  const isCeased = isLensDocumentCeased(doc)
 
   const address = doc.mostRecentRegisteredAddress
     ? {
@@ -124,9 +126,10 @@ export function mapDocumentToLookupResult(doc: TICCompanyDocument): CompanyLooku
 
 /** Null means no company matched the org number (a clean "not found"). */
 export async function lookupCompanyByOrgNumber(
-  orgNumber: string
+  orgNumber: string,
+  ctx: TicCallContext = {}
 ): Promise<CompanyLookupResult | null> {
-  const doc = await searchCompanyByOrgNumber(orgNumber)
+  const doc = await searchCompanyByOrgNumber(orgNumber, ctx)
   if (!doc) return null
   return mapDocumentToLookupResult(doc)
 }
@@ -140,8 +143,11 @@ export const COMPANY_SEARCH_LIMIT = 5
  * call per distinct query; a picked hit reuses its result, so the whole
  * search-and-pick flow costs the same as an org-number lookup.
  */
-export async function searchCompaniesForLookup(query: string): Promise<CompanySearchHit[]> {
-  const docs = await searchCompaniesByName(query, COMPANY_SEARCH_LIMIT)
+export async function searchCompaniesForLookup(
+  query: string,
+  ctx: TicCallContext = {}
+): Promise<CompanySearchHit[]> {
+  const docs = await searchCompaniesByName(query, COMPANY_SEARCH_LIMIT, ctx)
   const hits: CompanySearchHit[] = []
   for (const doc of docs) {
     const orgNumber = lensRegistrationToOrgNumber(doc.registrationNumber)
@@ -160,14 +166,12 @@ export async function searchCompaniesForLookup(query: string): Promise<CompanySe
  * typed), so this is the first place a Lens identifier enters settings. Lens
  * shapes: an AB is 10 digits or 16-prefixed 12; an enskild firma is 16
  * digits, the century-prefixed personnummer plus a 4-digit serial
- * (`2002011732750001` for personnummer `0201173275`, see
+ * (`2002010112360001` for personnummer `0201011236`, see
  * searchCompanyByOrgNumber). createCompany refuses anything normalizeOrgNumber
  * rejects, so a hit that does not reduce to a valid number is dropped here
  * rather than dead-ending the journey at submit.
  */
 export function lensRegistrationToOrgNumber(registrationNumber: string): string | null {
-  const digits = registrationNumber.replace(/\D/g, '')
-  const candidate = /^(18|19|20)\d{14}$/.test(digits) ? digits.slice(0, 12) : digits
-  const key = orgNumberKey(candidate)
+  const key = registrationNumberKey(registrationNumber.replace(/\D/g, ''))
   return key && normalizeOrgNumber(key) ? key : null
 }

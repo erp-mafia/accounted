@@ -1,25 +1,29 @@
 'use client'
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { useTranslations } from 'next-intl'
-import { CalendarClock } from 'lucide-react'
+import { CalendarDaysIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { BookingBlockNotice } from '@/components/rules/BookingBlockNotice'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
-import {
-  resolveReverseChargeRate,
-  isReverseChargeBasisAccount,
-  generateReverseChargeBasisLines,
-  generateReverseChargeLines,
-} from '@/lib/bookkeeping/vat-entries'
-import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
+import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
+import {
+  supplierInvoiceRegistrationLines,
+  type SupplierInvoiceBookingItem,
+} from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
-import { isSupplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
-import { debitNatural } from '@/lib/bookkeeping/line-side'
+import { reverseChargeRateOf } from '@/lib/supplier-invoices/reverse-charge-rate'
+import type { StatedRateVat } from '@/lib/vat/document-vat'
+import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { roundOre } from '@/lib/money'
-import { resolveBookingAccount, itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
-import type { Supplier } from '@/types'
+import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
+import type { InvoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
+import type { Supplier, SupplierInvoiceReverseChargeKind } from '@/types'
 
 interface ReviewLineItem {
   description: string
@@ -35,8 +39,11 @@ interface ReviewLineItem {
   // Särskild löneskatt på pensionskostnader: previews the self-balancing
   // 7533 D / 2514 K pair the engine injects for flagged 741x lines.
   apply_slp?: boolean
+  // Per-row dimensions bag: two rows on one account with different tags
+  // book as two lines.
+  dimensions?: Record<string, string>
   // Periodisering: when both dates are set, the registration entry books the
-  // net to the 17xx interim account instead of account_number (mirrored via
+  // net to the 17xx/29xx interim account instead of account_number (mirrored via
   // resolveBookingAccount so this preview matches the saved verifikat).
   accrual_period_start?: string | null
   accrual_period_end?: string | null
@@ -54,188 +61,66 @@ interface SupplierInvoiceReviewContentProps {
   currency: string
   exchangeRate?: string
   reverseCharge: boolean
+  /** Goods or services under an EU supplier's reverse charge, as the payload sends it. */
+  reverseChargeKind?: SupplierInvoiceReverseChargeKind
   paymentReference?: string
   items: ReviewLineItem[]
   /** Include the invoice rounding in both the payable and journal preview. */
   oreRounding: boolean
+  /**
+   * When the registration verifikat is posted (booking-mode.ts). Only 'issue'
+   * posts it on confirm; under kontantmetoden ('payment') the invoice is
+   * booked at payment as a cash entry with no 2440, and under deferred
+   * booking ('manual') by the explicit Bokför step, so no preview is shown.
+   */
+  bookingMoment: InvoiceBookingMoment
+  /**
+   * The company's momskoder (chartVatTreatmentsOf over the kontoplan): an
+   * item on an account that reports ruta 20-24 itself previews no basis pair
+   * and that account's momssats, as the registration books it.
+   */
+  chartVatTreatments: ChartVatTreatments
+  /** The invoice's default dimensions bag (kostnadsställe/projekt), when picked. */
+  defaultDimensions?: Record<string, string>
+  /** The invoice's own moms per rate, as the payload sends it (vat_breakdown). */
+  statedVat?: StatedRateVat[] | null
 }
 
-interface JournalPreviewLine {
-  account_number: string
-  description: string
-  debit: number
-  credit: number
-}
-
-function buildJournalPreview(
+/**
+ * The rows as the create paths store them (lib/supplier-invoices/create.ts
+ * over buildSupplierInvoicePayload): the line total and its moms as the
+ * editor totals them, a reverse charge with no supplier moms and its
+ * self-assessed rate, periodisering and SLP only where the payload sends
+ * them, and the invoice's rounding as its own zero-VAT row.
+ */
+function bookingItems(
   items: ReviewLineItem[],
-  subtotal: number,
-  totalVat: number,
-  total: number,
+  itemTotals: Array<{ lineTotal: number; vatAmount: number }>,
   reverseCharge: boolean,
-  supplierType: string | undefined,
-  currency: string,
-  // FX multiplier applied to every amount. 1 when the invoice is in SEK or
-  // when no rate is set. Matches what the backend writes: items go through
-  // resolveSekAmount(item.line_total, null, currency, exchange_rate), so the
-  // saved verifikation is always in SEK, never in invoice currency.
-  fxRate: number,
-  // The verifikat description the engine will write to EVERY line of this
-  // entry (createSupplierInvoiceRegistrationEntry builds one `desc` and reuses
-  // it). The preview showed the bare account number here instead, so a user
-  // reviewing "Verifikation som bokförs" saw "5615" where the books would say
-  // "Leverantörsfaktura 123, ACME AB".
-  desc: string,
-): JournalPreviewLine[] {
-  const lines: JournalPreviewLine[] = []
-  const toSek = (n: number) => Math.round(n * fxRate * 100) / 100
-
-  // Aggregate expense amounts by booking account (in SEK). Periodiserade
-  // lines book their net to the 17xx interim account instead of the cost
-  // account: same resolveBookingAccount the entry generator uses, so the
-  // preview matches the saved verifikat.
-  const expenseByAccount = new Map<string, number>()
-  for (const item of items) {
-    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
-    const current = expenseByAccount.get(bookingAccount) || 0
-    expenseByAccount.set(bookingAccount, current + toSek(item.amount))
-  }
-
-  // Debit: Expense accounts
-  for (const [accountNumber, amount] of expenseByAccount) {
-    if (roundOre(amount) === 0) continue
-    const sides = debitNatural(amount)
-    lines.push({
-      account_number: accountNumber,
-      description: desc,
-      debit: sides.debit_amount,
-      credit: sides.credit_amount,
-    })
-  }
-
-  // Per-line effective VAT: manual override wins over computed amount × rate.
-  // The engine reads stored vat_amount; the preview must reflect the same.
-  const itemVat = (item: ReviewLineItem) =>
-    item.vat_amount != null
-      ? Math.round(item.vat_amount * 100) / 100
-      : Math.round(item.amount * item.vat_rate * 100) / 100
-
-  // Särskild löneskatt på pensionskostnader: same self-balancing pair the
-  // engine injects (7533 D / 2514 K at 24.26 % of flagged 741x lines), via
-  // the same generator, so this preview matches the saved verifikat. The
-  // pair nets to zero and never moves the 2440 credit below.
-  const slpBase = items.reduce(
-    (sum, item) =>
-      item.apply_slp && isSlpPensionAccount(item.account_number)
-        ? sum + toSek(item.amount)
-        : sum,
-    0,
-  )
-  const slpPreviewLines: JournalPreviewLine[] = generateSlpLines(slpBase).map((sl) => ({
-    account_number: sl.account_number,
-    description: sl.line_description ?? sl.account_number,
-    debit: sl.debit_amount,
-    credit: sl.credit_amount,
+  roundingItem: { account_number: string; amount: number } | null,
+): SupplierInvoiceBookingItem[] {
+  const rows: SupplierInvoiceBookingItem[] = items.map((item, index) => ({
+    account_number: item.account_number,
+    line_total: itemTotals[index].lineTotal,
+    vat_rate: reverseCharge ? 0 : item.vat_rate,
+    vat_amount: reverseCharge ? 0 : itemTotals[index].vatAmount,
+    reverse_charge_rate: reverseCharge ? reverseChargeRateOf(item) : null,
+    accrual_period_start: itemHasAccrual(item) ? item.accrual_period_start : null,
+    accrual_period_end: itemHasAccrual(item) ? item.accrual_period_end : null,
+    accrual_balance_account: itemHasAccrual(item) ? (item.accrual_balance_account ?? null) : null,
+    dimensions: item.dimensions,
+    apply_slp: item.apply_slp === true && !itemHasAccrual(item),
   }))
-
-  if (reverseCharge) {
-    // Reverse charge: the supplier charges no VAT, so the buyer self-assesses at
-    // the Swedish statutory rate (resolveReverseChargeRate: 25% huvudregel
-    // default, or the per-item reverse_charge_rate). We book BOTH the fiktiv-moms
-    // pair (2645/2647 + 2614/2624/2634) AND the basbeloppsrader (44xx/45xx +
-    // 4598), exactly as the engine does, so this preview matches the saved
-    // verifikat. ML 16 kap requires both sides reported; silent netting is
-    // prohibited (Skatteverket felkod FK004). Driving off the resolved rate (not
-    // item.vat_rate) is what makes a 0%-rate RC line book its VAT at all.
-    const isDomesticRC = supplierType === 'swedish_business'
-    const rcSupplierType: 'eu_business' | 'non_eu_business' | 'swedish_business' =
-      supplierType === 'non_eu_business' || supplierType === 'swedish_business'
-        ? supplierType
-        : 'eu_business'
-
-    // Base per self-assessed rate, plus the non-basis-account portion that needs
-    // parallel basbeloppsrader (items booked straight to a 44xx/45xx basis
-    // account already populate ruta 20-24 via the expense line, so they're
-    // excluded there to avoid double-counting).
-    const baseByRate = new Map<number, number>()
-    const nonBasisBaseByRate = new Map<number, number>()
-    for (const item of items) {
-      if (isSupplierInvoiceRoundingItem(item, item.amount, currency)) continue
-      const rate = resolveReverseChargeRate(item)
-      const sek = toSek(item.amount)
-      baseByRate.set(rate, (baseByRate.get(rate) || 0) + sek)
-      if (!isReverseChargeBasisAccount(item.account_number)) {
-        nonBasisBaseByRate.set(rate, (nonBasisBaseByRate.get(rate) || 0) + sek)
-      }
-    }
-
-    for (const [rate, netAmount] of baseByRate) {
-      if (netAmount <= 0) continue
-      // Same generator the engine calls, so the account pair AND the
-      // "Fiktiv in-/utgående moms" wording come from one place instead of
-      // being re-derived here (they used to render as bare account numbers).
-      for (const rcLine of generateReverseChargeLines(netAmount, rate, isDomesticRC)) {
-        lines.push({
-          account_number: rcLine.account_number,
-          description: rcLine.line_description ?? rcLine.account_number,
-          debit: rcLine.debit_amount,
-          credit: rcLine.credit_amount,
-        })
-      }
-      const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
-      if (nonBasisBase > 0) {
-        for (const bl of generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)) {
-          lines.push({
-            account_number: bl.account_number,
-            description: bl.line_description ?? bl.account_number,
-            debit: bl.debit_amount,
-            credit: bl.credit_amount,
-          })
-        }
-      }
-    }
-
-    lines.push(...slpPreviewLines)
-
-    // Credit: 2440 at subtotal (no real VAT for reverse charge)
-    lines.push({
-      account_number: '2440',
-      description: desc,
-      debit: 0,
-      credit: toSek(subtotal),
-    })
-  } else {
-    if (totalVat > 0) {
-      // Sum per-rate using effective (manual-or-computed) VAT, so the preview
-      // matches what groupVatByRate will write to 2641 server-side.
-      const vatByRate = new Map<number, number>()
-      for (const item of items) {
-        const v = itemVat(item)
-        if (v > 0) {
-          vatByRate.set(item.vat_rate, (vatByRate.get(item.vat_rate) || 0) + v)
-        }
-      }
-      for (const [rate, vat] of vatByRate) {
-        lines.push({
-          account_number: '2641',
-          description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-          debit: toSek(vat),
-          credit: 0,
-        })
-      }
-    }
-    lines.push(...slpPreviewLines)
-
-    // Credit: 2440 at total incl. VAT
-    lines.push({
-      account_number: '2440',
-      description: desc,
-      debit: 0,
-      credit: toSek(total),
+  if (roundingItem) {
+    rows.push({
+      account_number: roundingItem.account_number,
+      line_total: roundingItem.amount,
+      vat_rate: 0,
+      vat_amount: 0,
+      reverse_charge_rate: reverseCharge ? 0.25 : null,
     })
   }
-
-  return lines
+  return rows
 }
 
 export function SupplierInvoiceReviewContent({
@@ -247,13 +132,18 @@ export function SupplierInvoiceReviewContent({
   currency,
   exchangeRate,
   reverseCharge,
+  reverseChargeKind,
   paymentReference,
   items,
   oreRounding,
+  bookingMoment,
+  chartVatTreatments,
+  defaultDimensions,
+  statedVat,
 }: SupplierInvoiceReviewContentProps) {
   const t = useTranslations('supplier_invoice_editor')
   const { itemTotals, subtotal, totalVat, total, figures, roundingItem } = supplierInvoiceEditorAmounts(
-    items, currency, reverseCharge, oreRounding,
+    items, currency, reverseCharge, oreRounding, statedVat,
   )
   const parsedRate = exchangeRate ? parseFloat(exchangeRate) : NaN
   const fxRate = currency !== 'SEK' && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1
@@ -266,26 +156,32 @@ export function SupplierInvoiceReviewContent({
     invoiceNumber,
     supplier.name,
   )
-  // The payload normalizes reverse-charge supplier VAT to zero before saving.
-  const previewItems = items.map((item, index) => ({
-    ...item,
-    amount: itemTotals[index].lineTotal,
-    vat_rate: reverseCharge ? 0 : item.vat_rate,
-    vat_amount: reverseCharge ? 0 : itemTotals[index].vatAmount,
-  }))
-  const journalLines = buildJournalPreview(
-    roundingItem ? [...previewItems, roundingItem] : previewItems,
-    roundOre(subtotal + (roundingItem?.amount ?? 0)),
-    totalVat,
-    figures.toPay,
-    reverseCharge,
+  // Only a confirm that posts the registration verifikat gets its preview:
+  // under kontantmetoden or deferred booking the 2440 shape below is never
+  // written at registration.
+  const showsVoucher = bookingMoment === 'issue'
+  // The verifikat comes from supplierInvoiceRegistrationLines, the function
+  // createSupplierInvoiceRegistrationEntry posts, over the rows as they will
+  // be stored (crm#1190: a hand-kept copy here dropped the moms of every row
+  // below zero). A foreign invoice without a rate previews at 1, as before;
+  // the create paths refuse it. A line that nets to nothing on both sides is
+  // left out of the table: it books nothing anyone can read.
+  const journalLines = !showsVoucher ? [] : supplierInvoiceRegistrationLines(
+    {
+      currency,
+      exchange_rate: currency === 'SEK' ? null : fxRate,
+      reverse_charge: reverseCharge,
+      reverse_charge_kind: reverseChargeKind ?? null,
+      vat_treatment: inferVatTreatment(items, reverseCharge),
+      default_dimensions: defaultDimensions,
+      total,
+    },
+    bookingItems(items, itemTotals, reverseCharge, roundingItem),
     supplier.supplier_type,
-    currency,
-    fxRate,
     voucherDescription,
+    chartVatTreatments,
   )
-  const totalDebit = journalLines.reduce((sum, l) => sum + l.debit, 0)
-  const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)
+    .filter((line) => roundOre(line.debit_amount) !== 0 || roundOre(line.credit_amount) !== 0)
   const showingSek = fxRate !== 1
 
   // No account-label lookup any more: the BESKRIVNING column shows the
@@ -339,7 +235,7 @@ export function SupplierInvoiceReviewContent({
       {/* Line items: table on desktop, cards on mobile */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+          <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b text-left">
               <th className="py-2 w-20">{t('col_account')}</th>
               <th className="py-2">{t('col_description')}</th>
@@ -363,15 +259,15 @@ export function SupplierInvoiceReviewContent({
                   <td className="py-2">
                     {item.description}
                     {itemHasAccrual(item) && (
-                      <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                        <CalendarClock className="h-3 w-3 shrink-0" />
+                      <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                        <CalendarDaysIcon className="h-3 w-3 shrink-0" />
                         <span className="tabular-nums">
                           {t('review_accrual_line_info', {
                             from: accrualMonth(item.accrual_period_start!),
                             to: accrualMonth(item.accrual_period_end!),
                           })}
                         </span>
-                      </p>
+                      </div>
                     )}
                   </td>
                   <td className="py-2 text-right tabular-nums">{formatAmount(item.amount)}</td>
@@ -387,21 +283,21 @@ export function SupplierInvoiceReviewContent({
         {items.map((item, index) => {
           const { vatRate: displayRate, vatAmount } = itemTotals[index]
           return (
-            <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">
+            <div key={index} className="rounded-lg p-3 text-sm space-y-1.5 bg-control shadow-raised">
               <div className="flex items-center justify-between">
                 <p className="font-medium">{item.description}</p>
                 <AccountNumber number={item.account_number} size="sm" />
               </div>
               {itemHasAccrual(item) && (
-                <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <CalendarClock className="h-3 w-3 shrink-0" />
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <CalendarDaysIcon className="h-3 w-3 shrink-0" />
                   <span className="tabular-nums">
                     {t('review_accrual_line_info', {
                       from: accrualMonth(item.accrual_period_start!),
                       to: accrualMonth(item.accrual_period_end!),
                     })}
                   </span>
-                </p>
+                </div>
               )}
               <div className="flex items-center justify-between text-muted-foreground">
                 <span>{formatAmount(item.amount)} kr</span>
@@ -436,85 +332,42 @@ export function SupplierInvoiceReviewContent({
         {currency !== 'SEK' && exchangeRate && (
           <div className="flex justify-between text-muted-foreground">
             <span>{t('review_sek_amount_at_rate', { rate: exchangeRate })}</span>
-            <span className="tabular-nums">{formatCurrency(total * parseFloat(exchangeRate))}</span>
+            <span className="tabular-nums">{formatCurrency(sekOfForeign(total, parseFloat(exchangeRate)))}</span>
           </div>
         )}
       </div>
 
+      {/* A block (Spärr) this registration meets: the confirm is its review. */}
+      {showsVoucher && (
+        <BookingBlockNotice lines={journalLines} counterparty={supplier.name} amountSek={sekOfForeign(total, fxRate)} />
+      )}
+
       {/* Verifikation preview */}
-      <div className="bg-muted/50 border rounded-lg p-3 sm:p-4 space-y-2">
-        <p className="text-sm font-semibold text-muted-foreground">
-          {t('review_voucher_preview_title')}
-          {showingSek && (
-            <span className="ml-1.5 font-normal text-xs">{t('review_voucher_in_sek_suffix')}</span>
-          )}
-        </p>
-        <div className="hidden sm:block">
-          <table className="w-full text-sm">
-            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-              <tr className="text-left">
-                <th className="pb-1 w-16">{t('col_account')}</th>
-                <th className="pb-1">{t('col_description')}</th>
-                <th className="pb-1 w-24 text-right">{t('col_debit')}</th>
-                <th className="pb-1 w-24 text-right">{t('col_credit')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {journalLines.map((line, index) => (
-                <tr key={index} className="border-b border-dashed border-muted-foreground/20 last:border-0">
-                  <td className="py-1">
-                    <AccountNumber number={line.account_number} size="sm" />
-                  </td>
-                  <td className="py-1 text-xs">
-                    {line.description}
-                  </td>
-                  <td className="py-1 text-right tabular-nums">
-                    {line.debit > 0 ? formatAmount(line.debit) : ''}
-                  </td>
-                  <td className="py-1 text-right tabular-nums">
-                    {line.credit > 0 ? formatAmount(line.credit) : ''}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t font-semibold">
-                <td className="pt-1" colSpan={2}>{t('sum_label')}</td>
-                <td className="pt-1 text-right tabular-nums">{formatAmount(totalDebit)}</td>
-                <td className="pt-1 text-right tabular-nums">{formatAmount(totalCredit)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        <div className="sm:hidden space-y-1.5 text-sm">
-          {journalLines.map((line, index) => (
-            <div key={index} className="flex items-center justify-between py-1 border-b border-dashed border-muted-foreground/20 last:border-0">
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <AccountNumber number={line.account_number} size="sm" />
-                  <span className="text-xs text-muted-foreground truncate">
-                    {line.description}
-                  </span>
-                </div>
-              </div>
-              <span className="tabular-nums text-xs shrink-0 ml-2">
-                {line.debit > 0 ? t('debit_short', { amount: formatAmount(line.debit) }) : t('credit_short', { amount: formatAmount(line.credit) })}
-              </span>
-            </div>
-          ))}
-          <div className="flex justify-between pt-1 border-t font-semibold text-xs tabular-nums">
-            <span>{t('sum_label')}</span>
-            <span>{t('debit_credit_short', { debit: formatAmount(totalDebit), credit: formatAmount(totalCredit) })}</span>
-          </div>
-        </div>
-        {figures.rounding.applies && (
-          <p className="text-xs text-muted-foreground">
-            {t('review_ore_rounding_note', {
-              delta: formatCurrency(figures.rounding.roundingDelta, currency),
-            })}
+      {showsVoucher ? (
+        <div className="rounded-lg p-3 sm:p-4 space-y-2 bg-control shadow-raised">
+          <p className="text-sm font-semibold text-muted-foreground">
+            {t('review_voucher_preview_title')}
+            {showingSek && (
+              <span className="ml-1.5 font-normal text-xs">{t('review_voucher_in_sek_suffix')}</span>
+            )}
           </p>
-        )}
-      </div>
+          <VoucherLinesTable
+            lines={voucherLineViews(journalLines)}
+            showTotals
+          />
+          {figures.rounding.applies && (
+            <p className="text-xs text-muted-foreground">
+              {t('review_ore_rounding_note', {
+                delta: formatCurrency(figures.rounding.roundingDelta, currency),
+              })}
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {bookingMoment === 'payment' ? t('review_books_at_payment') : t('review_books_on_book_step')}
+        </p>
+      )}
 
       {/* Payment reference */}
       {paymentReference && (

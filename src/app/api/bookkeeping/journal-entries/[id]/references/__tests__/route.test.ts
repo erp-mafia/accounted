@@ -115,6 +115,40 @@ describe('GET /api/bookkeeping/journal-entries/[id]/references', () => {
     expect(body.data.references).toEqual([])
   })
 
+  it('names the object the verifikat books as owned_by', async () => {
+    enqueueMany([
+      ...NO_INVOICE_LINKS,
+      { data: { source_type: 'accrual', source_id: 'sched-1' } }, // journal_entries (references)
+      { data: { id: 'je-1', source_type: 'accrual', source_id: 'sched-1', correction_of_id: null, reverses_id: null } }, // journal_entries (owner)
+      { data: { id: 'sched-1', description: 'Hyra' } }, // accrual_schedules
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/bookkeeping/journal-entries/je-1/references'),
+      createMockRouteParams({ id: 'je-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { owned_by: Record<string, unknown> | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.owned_by).toMatchObject({ kind: 'accrual_schedule', owner_id: 'sched-1', action: 'open_accrual' })
+  })
+
+  it('answers owned_by null for a verifikat no object owns', async () => {
+    enqueueMany([
+      ...NO_INVOICE_LINKS,
+      { data: { source_type: 'manual', source_id: null } },
+      { data: { id: 'je-1', source_type: 'manual', source_id: null, correction_of_id: null, reverses_id: null } },
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/bookkeeping/journal-entries/je-1/references'),
+      createMockRouteParams({ id: 'je-1' }),
+    )
+    const { body } = await parseJsonResponse<{ data: { owned_by: unknown } }>(response)
+
+    expect(body.data.owned_by).toBeNull()
+  })
+
   it('marks the payload private, no-store: it carries financial identifiers', async () => {
     enqueueMany([...NO_INVOICE_LINKS, { data: null }])
 

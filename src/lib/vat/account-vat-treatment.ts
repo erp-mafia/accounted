@@ -63,7 +63,11 @@ export function resolveVatTreatmentRuta(
   if (treatment === 'reverse_charge_eu_services') return { box: 'ruta21', side: 'debit' }
   if (treatment === 'reverse_charge_non_eu_services') return { box: 'ruta22', side: 'debit' }
   if (treatment === 'reverse_charge_domestic') {
-    const isKnownServiceAccount = accountNumber != null && /^442[567]$/.test(accountNumber)
+    // BAS 2026 splits group 44 by what is bought: 4410 and 4415-4417 are
+    // råvaror och material (ruta 23), 4420 and 4425-4427 are tjänster (ruta
+    // 24). 4420 is the tjänster account without a stated sats; leaving it out
+    // of this check filed its basis as varor in ruta 23 (crm#1754).
+    const isKnownServiceAccount = accountNumber != null && /^442[0567]$/.test(accountNumber)
     return { box: accountClass === 4 && !isKnownServiceAccount ? 'ruta23' : 'ruta24', side: 'debit' }
   }
   return null
@@ -132,14 +136,33 @@ export function isAccountVatTreatment(value: unknown): value is AccountVatTreatm
  * OUTSIDE_UNION must be tested before UNION everywhere, since "utanför EU"
  * also satisfies UNION. Its trailing \b keeps "utanför Europa" from reading
  * as a sale outside the union.
+ *
+ * A negated union name says the same thing as "utanför": "IT-tjänster
+ * utlandet (ej EU)", "icke-EU", "exkl. EG" (crm#1146). Such a label used to
+ * miss OUTSIDE_UNION, hit UNION on the bare word and file a purchase from
+ * outside the union in ruta 21 instead of ruta 22. The negation has to sit
+ * directly in front of the union word, separated only by a space or a hyphen:
+ * "Inköp tjänster EU, ej avdragsgill moms" negates the deduction, not the
+ * union, and stays an EU label. So does "exkl. EU-moms", where the union
+ * word is half of a compound and it is the moms that is excluded. The
+ * lookbehind is the word boundary on the left, spelled with the Swedish
+ * letters \b does not know, so "Canon EU" does not read as "non EU".
  */
 const UNION = /\b(?:eu|eg)\b/
-const OUTSIDE_UNION = /utanför\s+(?:eu|eg)\b/
+const OUTSIDE_UNION =
+  /utanför\s+(?:eu|eg)\b|(?<![a-zåäö])(?:(?:ej|inte|icke|utom|non|exklusive|exkl)[\s-]+|exkl\.\s*)(?:eu|eg)\b(?!-moms)/
 
 export interface SuggestedVatTreatment {
   treatment: AccountVatTreatment
   rate: number | null
 }
+
+/**
+ * A Swedish sats as account labels spell it: "12%", "12 %", "12 procent",
+ * with or without "moms" after it. The lookbehind keeps a decimal ("0,6 %",
+ * "1.25%") from reading as 6 or 25 percent.
+ */
+const LABEL_RATE = /(?<![\d,.])\b(25|12|6)\s*(?:%|procent\b)/g
 
 /**
  * The momssats an account label spells out ("Inköp varor EU 12%", "Försäljning
@@ -149,9 +172,37 @@ export interface SuggestedVatTreatment {
  * 4516/4517-style 12% and 6% accounts under the same IVEU code as 4515.
  */
 export function vatRateFromLabel(label: string): 0.25 | 0.12 | 0.06 | null {
-  const percent = /\b(25|12|6)\s*%/.exec(label)
-  if (!percent) return null
-  return percent[1] === '25' ? 0.25 : percent[1] === '12' ? 0.12 : 0.06
+  const named = new Set(
+    [...label.toLocaleLowerCase('sv-SE').matchAll(LABEL_RATE)].map((match) => match[1]),
+  )
+  // Two different rates in one label ("Livsmedel 12% / övrigt 25%") name no
+  // single sats, so the label decides nothing.
+  if (named.size !== 1) return null
+  const [only] = named
+  return only === '25' ? 0.25 : only === '12' ? 0.12 : 0.06
+}
+
+/**
+ * Words that say a class 3 account is NOT a domestic taxable sale even when
+ * its label names a Swedish rate: exempt, zero-rated export, a supply taxed
+ * elsewhere in the union or by the buyer, or a margin scheme. The specific
+ * rules in suggestVatTreatment run first and give most of these their own
+ * treatment; this only stops a leftover from being filed in ruta 05 on the
+ * strength of its percentage. The one veto of the import suggestion and of
+ * the declaration's inference (inferDomesticSalesRate).
+ */
+export const NOT_DOMESTIC_SALE =
+  /momsfri|utan moms|\bej moms|undantag|momsbefri|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\boss\b|(?<![\d,.])\b0\s*%/i
+
+/**
+ * Renting out premises or a dwelling is exempt; it carries moms only under
+ * frivillig skattskyldighet (ML 12 kap), which files ruta 08, not ruta 05
+ * (swedish-vat skill, section 6). The frivillig rule in suggestVatTreatment
+ * handles a label that says so; any other premises rental with a rate stays
+ * for review rather than being suggested as an ordinary ruta 05 sale.
+ */
+function isPremisesRental(name: string): boolean {
+  return /hyr/.test(name) && /lokal|fastighet|bostad/.test(name)
 }
 
 /**
@@ -202,15 +253,31 @@ export function suggestVatTreatment(
     // After the momsfri rule on purpose: BAS 3404 "Momsfria uttag" is ruta 42,
     // not ruta 06, and it names uttag too.
     if (/uttag/.test(name)) return { treatment: 'own_use', rate }
-    if (/försälj|forsalj|intäkt|intakt/.test(name) && percent) {
+    // A label that states a Swedish sats is a domestic taxable supply at that
+    // sats, whatever the income is called. It used to also need försäljning
+    // or intäkt in the name, which left "Faktureringsavgift 12%" and
+    // "Fakturerade frakter 25%" without a suggestion: those are momspliktiga
+    // (the swedish-invoice-compliance reference books a faktureringsavgift on
+    // 3540 with moms), and a 35xx account the company numbered itself is in
+    // no static ruta map, so unconfigured it reaches no ruta at all while its
+    // moms still lands in ruta 10-12 through 2611/2621/2631. The rate is the
+    // one signal the label gives and the only one needed: ruta 05 is the same
+    // box for all three rates. A union or exempt marker that no rule above
+    // resolved means the label is not a domestic sale, so it stays for review.
+    if (percent && !UNION.test(name) && !NOT_DOMESTIC_SALE.test(name) && !isPremisesRental(name)) {
       return {
-        treatment: rate === 0.12 ? 'reduced_12' : rate === 0.06 ? 'reduced_6' : 'standard_25',
-        rate,
+        treatment: percent === 0.12 ? 'reduced_12' : percent === 0.06 ? 'reduced_6' : 'standard_25',
+        rate: percent,
       }
     }
     return null
   }
 
+  // Classes 4 to 6 get no suggestion from a rate alone. A domestic purchase
+  // has no base box in the momsdeklaration: its input VAT reaches ruta 48
+  // through 2641 by account number, so the treatment model deliberately has
+  // no domestic purchase treatment to propose, and "Inköp varor 12%" stays on
+  // the BAS default. Only the special purchases below own a base ruta.
   if (/omvänd/.test(name) && /sverige|svensk|inrikes/.test(name)) return { treatment: 'reverse_charge_domestic', rate }
   // Before the rule that declines import: an account whose name says
   // beskattningsunderlag IS the ruta 50 account, and nothing else is. A plain

@@ -1,21 +1,19 @@
-import { Puzzle } from 'lucide-react'
+'use client'
+
+import { PuzzlePieceIcon, type Icon } from '@/components/icons'
+import { EmptyState } from '@/components/ui/empty-state'
 
 interface EmptyExtensionStateProps {
   title?: string
   description?: string
-  icon?: React.ReactNode
+  icon?: Icon
 }
 
+/** An extension with nothing to show: the shared state block (Stil v3), in place of the first row. */
 export default function EmptyExtensionState({
   title = 'Ingen data ännu',
   description = 'Data kommer att visas här när det finns tillgängligt.',
-  icon,
+  icon = PuzzlePieceIcon,
 }: EmptyExtensionStateProps) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      {icon ?? <Puzzle className="h-12 w-12 text-muted-foreground/40 mb-4" />}
-      <h3 className="text-lg text-foreground">{title}</h3>
-      <p className="text-sm text-muted-foreground mt-1 max-w-md">{description}</p>
-    </div>
-  )
+  return <EmptyState icon={icon} title={title} description={description} />
 }

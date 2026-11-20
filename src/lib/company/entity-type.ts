@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import type { EntityType } from '@/types'
 import { flagEnabled } from '@/lib/env/public-flags'
 import { LEGAL_FORMS, PLANNED_LEGAL_FORMS } from '@/lib/company/forms'
@@ -26,6 +26,8 @@ export const ENTITY_TYPES = [
   'enskild_firma',
   'aktiebolag',
   'ideell_forening',
+  'ekonomisk_forening',
+  'bostadsrattsforening',
 ] as const satisfies readonly EntityType[]
 
 // Compile-time proof that ENTITY_TYPES lists every member of the union.
@@ -90,7 +92,7 @@ export function byEntityType<T>(entityType: EntityType, arms: Record<EntityType,
  * is read. Never defaults: a wrong form books to the wrong equity account.
  */
 export async function resolveCompanyEntityType(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   hint?: unknown,
 ): Promise<EntityType> {
@@ -107,6 +109,8 @@ export async function resolveCompanyEntityType(
 // ── Creation gate ────────────────────────────────────────────────────
 
 export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
+export const EKONOMISK_FORENING_FLAG = 'NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED'
+export const BOSTADSRATTSFORENING_FLAG = 'NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED'
 
 /**
  * One reader per `creationFlag` a profile declares. The literal
@@ -117,6 +121,8 @@ export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
  */
 const CREATION_FLAG_READERS: Readonly<Record<string, () => string | undefined>> = {
   [IDEELL_FORENING_FLAG]: () => process.env.NEXT_PUBLIC_IDEELL_FORENING_ENABLED,
+  [EKONOMISK_FORENING_FLAG]: () => process.env.NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED,
+  [BOSTADSRATTSFORENING_FLAG]: () => process.env.NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED,
 }
 
 export function creationFlagReader(flag: string): (() => string | undefined) | undefined {
@@ -164,6 +170,15 @@ export interface ResultClosingAccounts {
 export function resultClosingAccounts(entityType: EntityType): ResultClosingAccounts {
   const { closing, closingName, priorYearCarry } = legalFormProfile(entityType).equity
   return { closing, closingName, priorYearCarry }
+}
+
+/**
+ * Account earlier years' results are balanced to after the annual meeting's
+ * decision (balanserat resultat): AB 2091, förening 2067; an enskild firma
+ * keeps them on 2010.
+ */
+export function retainedResultAccount(entityType: EntityType): string {
+  return legalFormProfile(entityType).equity.retained
 }
 
 /**
@@ -216,9 +231,24 @@ export function preparesArsredovisning(entityType: EntityType): boolean {
   return legalFormProfile(entityType).filings.arsredovisning
 }
 
+/**
+ * The förenklat årsbokslut the product prepares for the form, by the BFN
+ * allmänt råd it follows (ideell förening: BFNAR 2010:1); null when none.
+ */
+export function preparesForenklatArsbokslut(
+  entityType: EntityType,
+): LegalFormProfile['filings']['forenklatArsbokslut'] {
+  return legalFormProfile(entityType).filings.forenklatArsbokslut
+}
+
 /** The income return the product prepares for the form; null when none is modelled. */
 export function filesIncomeReturn(entityType: EntityType): LegalFormProfile['filings']['incomeReturn'] {
   return legalFormProfile(entityType).filings.incomeReturn
+}
+
+/** Whether the form files Inkomstdeklaration 2 (aktiebolag, ekonomisk förening). */
+export function usesInk2(entityType: EntityType): boolean {
+  return filesIncomeReturn(entityType) === 'INK2'
 }
 
 /** Whether the year-end books the year's income tax as a liability (AB 2510/8910). */
@@ -237,6 +267,45 @@ export function supportsAccountingFramework(
   framework: LegalFormProfile['filings']['frameworks'][number],
 ): boolean {
   return legalFormProfile(entityType).filings.frameworks.includes(framework)
+}
+
+/** Whether the product's K3 årsredovisning document is built for the form (the aktiebolag today). */
+export function hasK3ArsredovisningDocument(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.k3Document
+}
+
+/** Whether a Bolagsverket iXBRL taxonomy covers the form (the K2 taxonomy is aktiebolag-only). */
+export function supportsIxbrl(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.ixbrl
+}
+
+/** A revisor is required whatever the size (ekonomisk förening, EFL 8 kap. 1 §). */
+export function requiresAuditorRegardlessOfSize(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.auditorAlwaysRequired
+}
+
+/** The company keeps an aktiebok (ABL 5 kap.): aktiebolag only. */
+export function keepsShareRegister(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).equity.shareRegister
+}
+
+/**
+ * The provision behind the revisorspåteckning (the revisor's hänvisning to
+ * the revisionsberättelse on the årsredovisning) for the form, as the PDF
+ * cites it; null when no statute has the form's revisor make one.
+ */
+export function revisorspateckningLagrum(entityType: EntityType): string | null {
+  return legalFormProfile(entityType).filings.revisorspateckningLagrum
+}
+
+/** Bound equity is member capital (2083/2084) rather than aktiekapital (2081). */
+export function supportsMemberCapital(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).equity.memberCapital
+}
+
+/** ÅRL 4 kap. 2 § andra stycket: capitalised own development needs a fond för utvecklingsutgifter. */
+export function requiresDevelopmentFund(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).equity.developmentFund
 }
 
 /** BFL 3 kap 1 §: a fysisk person (enskild firma) is bound to the calendar year. */
@@ -265,4 +334,28 @@ export function simplifiedYearEndRegelverk(entityType: EntityType): 'K1' | 'K2' 
 /** Swedish nouns that differ by law, for standalone labels. Sentences stay form-neutral. */
 export function legalFormGlossary(entityType: EntityType): LegalFormProfile['glossary'] {
   return legalFormProfile(entityType).glossary
+}
+
+/**
+ * Fond för yttre underhåll (K3 38.14-38.15): the bundet account its omföring
+ * moves to and from, or null for a form without one.
+ */
+export function maintenanceFundAccount(entityType: EntityType): string | null {
+  return legalFormProfile(entityType).equity.maintenanceFund
+}
+
+/**
+ * When the årsredovisning must hold a kassaflödesanalys (ÅRL 2 kap. 1 §
+ * andra stycket): always for a bostadsrättsförening, as a större företag
+ * otherwise, null when no årsredovisning is prepared.
+ */
+export function cashFlowStatementRequirement(
+  entityType: EntityType,
+): LegalFormProfile['filings']['cashFlowStatement'] {
+  return legalFormProfile(entityType).filings.cashFlowStatement
+}
+
+/** The förvaltningsberättelse carries the ÅRL 6 kap. 3 a § key ratios (bostadsrättsförening). */
+export function requiresHousingKeyRatios(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.housingKeyRatios
 }

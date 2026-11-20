@@ -4,10 +4,11 @@ import Image from 'next/image'
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 import { Button } from '@/components/ui/button'
-import { Loader2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDateLong } from '@/lib/utils'
 import {
@@ -32,7 +33,7 @@ export function BankIdSettings() {
 
   const fetchIdentity = useCallback(async () => {
     const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await fetchSessionUser()
     if (!user) { setIsLoading(false); return }
 
     const { data } = await supabase
@@ -84,7 +85,7 @@ export function BankIdSettings() {
   if (isLoading) {
     return (
       <SettingsRow label={t('title')}>
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <Skeleton aria-busy className="h-4 w-32" />
       </SettingsRow>
     )
   }
@@ -119,7 +120,6 @@ export function BankIdSettings() {
             <SettingsRowEnd>
               <Button
                 variant="outline"
-                size="sm"
                 onClick={handleUnlink}
                 disabled={isUnlinking}
                 className="text-destructive hover:text-destructive"
@@ -134,7 +134,7 @@ export function BankIdSettings() {
           <SettingsRowNote>{t('link_bankid_description')}</SettingsRowNote>
         ) : (
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={() => setIsLinking(true)}>
+            <Button variant="outline" onClick={() => setIsLinking(true)}>
               <Image
                 src="/logos/bankid-seeklogo.svg"
                 alt=""
@@ -152,11 +152,11 @@ export function BankIdSettings() {
       {/* QR flow: an expanding block below the row. Mounted only while
           linking so the BankID session starts exactly when requested. */}
       {isLinking && (
-        <div className="flex flex-col items-center gap-3 border-b border-border px-1 py-4">
+        <div className="flex flex-col items-center gap-3 border-b-hairline px-1 py-4">
           <BankIdAuth mode="link" onComplete={handleLinkComplete} />
           {/* BankIdAuth's own Avbryt only resets its internal session; give
               the row an exit so isLinking can't get stuck. */}
-          <Button variant="outline" size="sm" onClick={() => setIsLinking(false)}>
+          <Button variant="outline" onClick={() => setIsLinking(false)}>
             {t('cancel_linking')}
           </Button>
         </div>

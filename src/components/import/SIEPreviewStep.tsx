@@ -2,23 +2,18 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { AttnLine } from '@/components/ui/attn-line'
+import { DefList, DefRow } from '@/components/arkiv/DefList'
 import { formatCurrency } from '@/lib/utils'
-import {
-  Calendar,
-  FileText,
-  CheckCircle,
-  AlertCircle,
-  XCircle,
-  ArrowRight,
-  BarChart3,
-  Info,
-  Briefcase,
-} from 'lucide-react'
+import { roundOre } from '@/lib/money'
+import { ArrowRightIcon } from '@/components/icons'
 import type { ImportPreview, ParseIssue } from '@/lib/import/types'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { OpeningBalanceDifferencesTable } from '@/components/import/OpeningBalanceDifferencesTable'
 
 interface SIEPreviewStepProps {
   preview: ImportPreview
@@ -34,6 +29,13 @@ interface SIEPreviewStepProps {
    * unexplained amount to 2099 has somewhere to go other than support.
    */
   onOpenManualOpeningBalances?: () => void
+  /**
+   * The "only the accounts the file uses" switch (#63): shown when the file
+   * defines BAS accounts it never uses. `total` counts the file's mapped
+   * definitions, `unused` the unused BAS ones the switch leaves out of the
+   * chart, `own` the unused ones outside BAS that it keeps.
+   */
+  onlyUsedAccounts?: { on: boolean; onChange: (on: boolean) => void; unused: number; own: number; total: number }
 }
 
 export default function SIEPreviewStep({
@@ -45,8 +47,12 @@ export default function SIEPreviewStep({
   onContinue,
   onBack,
   onOpenManualOpeningBalances,
+  onlyUsedAccounts,
 }: SIEPreviewStepProps) {
   const t = useTranslations('import')
+  const tStep = useTranslations('import.preview_step')
+  const tCommon = useTranslations('common')
+  const tNotice = useTranslations('import_notices')
   const errors = issues.filter((i) => i.severity === 'error')
   const warnings = issues.filter((i) => i.severity === 'warning')
 
@@ -64,427 +70,391 @@ export default function SIEPreviewStep({
   // imbalance (incomplete export: missing liabilities / unappropriated prior-year
   // result) that would silently book a bogus amount to 2099. Mirrors the importer's
   // own `fileImbalance > 1.00` "serious" threshold (lib/import/sie-import.ts).
-  const ibDiff = Math.round((preview.trialBalance.totalDebit - preview.trialBalance.totalCredit) * 100) / 100
-  const significantImbalance = !preview.trialBalance.isBalanced && Math.abs(ibDiff) > 1
+  const ibDiff = roundOre(preview.trialBalance.totalDebit - preview.trialBalance.totalCredit)
   const [ackImbalance, setAckImbalance] = useState(false)
+
+  // crm#1099: a year imported on top of earlier bookkeeping opens on the
+  // carried-forward balance and never books the file's #IB, so the 2099 plug
+  // above does not happen, and where the two disagree the user sees the
+  // amounts and acknowledges them before continuing.
+  const continuity = preview.openingBalanceContinuity
+  const ibCarriedForward = continuity?.carriedForward === true
+  const ibDiffers = ibCarriedForward && continuity.differences.length > 0
+  const sourceEdits = !ibCarriedForward ? (continuity?.sourceEdits ?? []) : []
+  const showContinuity =
+    !!continuity && (ibDiffers || sourceEdits.length > 0 || continuity.missingYears.length > 0 || continuity.noVouchers)
+  const [ackContinuity, setAckContinuity] = useState(false)
+  const significantImbalance = !preview.trialBalance.isBalanced && Math.abs(ibDiff) > 1 && !ibCarriedForward
 
   // Only block on actual parsing errors, not unmapped accounts
   // (users need to proceed to mapping step to fix unmapped accounts).
-  // A significant IB imbalance is a soft block: the user must acknowledge it.
+  // A significant IB imbalance and an IB that differs from the books are
+  // soft blocks: the user must acknowledge them.
   const hasBlockingErrors = errors.length > 0
-  const blockContinue = hasBlockingErrors || (significantImbalance && !ackImbalance)
+  const blockContinue =
+    hasBlockingErrors || (significantImbalance && !ackImbalance) || (ibDiffers && !ackContinuity)
 
-  return (
-    <div className="space-y-6">
-      {/* Company info */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Briefcase className="h-5 w-5" />
-            Företagsinformation
-          </CardTitle>
-          <CardDescription>Information från SIE-filen</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <p className="text-sm text-muted-foreground">Företagsnamn</p>
-              <p className="font-medium">{preview.companyName || 'Ej angivet'}</p>
+  const unknown = t('sie_preview_unknown')
+  const mapping = preview.mappingStatus
+  const ibHelp = (
+    <>
+      <p>
+        {t('sie_preview_ib_totals', {
+          debit: formatCurrency(preview.trialBalance.totalDebit),
+          credit: formatCurrency(preview.trialBalance.totalCredit),
+        })}
+      </p>
+      <p className="mt-2">{tStep('ib_help')}</p>
+    </>
+  )
+  // What the chart row folds away: the full sentence, the accounts that are
+  // added, and the source accounts the import leaves out.
+  const chartHelp = (
+    <div className="space-y-2">
+      <p>
+        {chart
+          ? t('chart_summary', { toCreate: chart.toCreate, existing: chart.existing })
+          : tStep('chart_help_fallback')}
+      </p>
+      {chart && chart.sample.length > 0 && (
+        <div className="space-y-1">
+          {chart.sample.map((acc) => (
+            <div key={acc.number} className="flex gap-2 text-muted-foreground">
+              <span className="font-mono">{acc.number}</span>
+              <span>{acc.name}</span>
             </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Organisationsnummer</p>
-              <p className="font-medium">{preview.orgNumber || 'Ej angivet'}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Fiscal year */}
-      <Card className={fiscalYearRefused ? 'border-destructive/50' : undefined}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calendar className="h-5 w-5" />
-            Räkenskapsår
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Start</p>
-              <p className="font-medium">
-                {preview.fiscalYearStart ?? 'Okänt'}
-              </p>
-            </div>
-            <ArrowRight className="h-4 w-4 text-muted-foreground" />
-            <div>
-              <p className="text-sm text-muted-foreground">Slut</p>
-              <p className="font-medium">
-                {preview.fiscalYearEnd ?? 'Okänt'}
-              </p>
-            </div>
-            {fiscalYear && (fiscalYear.verdict === 'match' || fiscalYear.verdict === 'create') && (
-              <span className="ml-auto text-sm text-muted-foreground">
-                {fiscalYear.verdict === 'match'
-                  ? t('fiscal_year_match')
-                  : fiscalYear.replacesEmptyPeriodId
-                    ? t('fiscal_year_create_replaces')
-                    : t('fiscal_year_create')}
-              </span>
-            )}
-          </div>
-          {fiscalYear && (fiscalYear.verdict === 'conflict' || fiscalYear.verdict === 'invalid') && (
-            <div className="mt-4 flex items-start gap-2 text-sm text-destructive">
-              <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>{fiscalYear.message}</span>
+          ))}
+          {chart.toCreate > chart.sample.length && (
+            <div className="text-muted-foreground">
+              {t('chart_sample_more', { count: chart.toCreate - chart.sample.length })}
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Statistics */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <FileText className="h-4 w-4" />
-              <span className="text-sm">Konton</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{preview.accountCount}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <BarChart3 className="h-4 w-4" />
-              <span className="text-sm">Verifikationer</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{preview.voucherCount}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <span className="text-sm">Transaktionsrader</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{preview.transactionLineCount}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <span className="text-sm">IB, summa debet</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{formatCurrency(preview.openingBalanceTotal)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Summan av alla debetsaldon i ingående balans, inte ett enskilt kontosaldo.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Trial balance check */}
-      <Card className={preview.trialBalance.isBalanced ? 'border-success/50' : 'border-border'}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {preview.trialBalance.isBalanced ? (
-              <CheckCircle className="h-5 w-5 text-success" />
-            ) : (
-              <AlertCircle className="h-5 w-5 text-warning" />
-            )}
-            Balansräkning (IB)
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
-            <div>
-              <p className="text-sm text-muted-foreground">Total debet</p>
-              <p className="font-medium">{formatCurrency(preview.trialBalance.totalDebit)}</p>
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Total kredit</p>
-              <p className="font-medium">{formatCurrency(preview.trialBalance.totalCredit)}</p>
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Status</p>
-              {preview.trialBalance.isBalanced ? (
-                <Badge variant="success">Balanserar</Badge>
-              ) : (
-                <Badge variant="secondary">
-                  Diff: {formatCurrency(ibDiff)}
-                </Badge>
-              )}
-            </div>
-          </div>
-
-          {/* Significant imbalance: explain + require acknowledgement before continuing */}
-          {significantImbalance && (
-            <div className="mt-4 space-y-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-              <div className="flex items-start gap-2 text-sm">
-                <AlertCircle className="h-4 w-4 text-warning mt-0.5 flex-shrink-0" />
-                <div className="space-y-1">
-                  <p className="font-medium text-warning">
-                    Ingående balanser balanserar inte ({formatCurrency(Math.abs(ibDiff))})
-                  </p>
-                  <p className="text-muted-foreground">
-                    Vanligaste orsaken är att föregående års resultat aldrig fördes över till
-                    eget kapital i det gamla programmet. SpeedLedger parkerar det till exempel på
-                    egna 9xxx-konton (9030/9031 Obokat resultat), och då summerar inte filens
-                    ingående balanser till noll: differensen är det oförda resultatet. En annan
-                    orsak är en ofullständig export, till exempel att skulder saknas.
-                  </p>
-                  <p className="text-muted-foreground">
-                    Rätta i källsystemet och ladda upp filen på nytt, eller lägg in de ingående
-                    balanserna för hand i guiden Ingående balanser, där du kan rätta raderna
-                    själv innan de bokförs (den här filen importeras då inte). Fortsätter du ändå
-                    bokförs differensen på konto 2099 (Årets resultat), vilket nästan alltid blir
-                    fel.
-                  </p>
-                  {onOpenManualOpeningBalances && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="mt-1"
-                      onClick={onOpenManualOpeningBalances}
-                    >
-                      Lägg in ingående balanser för hand
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-              <label className="flex items-start gap-2 text-sm cursor-pointer">
-                <Checkbox
-                  checked={ackImbalance}
-                  onCheckedChange={(v) => setAckImbalance(v === true)}
-                  className="mt-0.5"
-                />
-                <span className="text-muted-foreground">
-                  Jag förstår att differensen bokförs på 2099 och vill fortsätta ändå.
-                </span>
-              </label>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Mapping status */}
-      <Card
-        className={
-          preview.mappingStatus.unmapped > 0
-            ? 'border-destructive/50'
-            : preview.mappingStatus.lowConfidence > 0
-            ? 'border-border'
-            : 'border-success/50'
-        }
-      >
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {preview.mappingStatus.unmapped > 0 ? (
-              <XCircle className="h-5 w-5 text-destructive" />
-            ) : preview.mappingStatus.lowConfidence > 0 ? (
-              <AlertCircle className="h-5 w-5 text-warning" />
-            ) : (
-              <CheckCircle className="h-5 w-5 text-success" />
-            )}
-            {t('chart_card_title')}
-          </CardTitle>
-          <CardDescription>
-            {chart
-              ? t('chart_summary', { toCreate: chart.toCreate, existing: chart.existing })
-              : 'Hur väl kunde kontona i filen matchas mot din kontoplan'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            {chart ? (
-              <>
-                <div>
-                  <p className="text-sm text-muted-foreground">{t('chart_to_create')}</p>
-                  <p className="font-medium tabular-nums">{chart.toCreate}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">{t('chart_existing')}</p>
-                  <p className="font-medium tabular-nums">{chart.existing}</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <p className="text-sm text-muted-foreground">Totalt</p>
-                  <p className="font-medium">{preview.mappingStatus.total}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Mappade</p>
-                  <p className="font-medium text-success">{preview.mappingStatus.mapped}</p>
-                </div>
-              </>
-            )}
-            <div>
-              <p className="text-sm text-muted-foreground">Ej mappade</p>
-              <p className={`font-medium tabular-nums ${preview.mappingStatus.unmapped > 0 ? 'text-destructive' : ''}`}>
-                {preview.mappingStatus.unmapped}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Osäkra</p>
-              <p className={`font-medium tabular-nums ${preview.mappingStatus.lowConfidence > 0 ? 'text-warning' : ''}`}>
-                {preview.mappingStatus.lowConfidence}
-              </p>
-            </div>
-          </div>
-          {chart && chart.sample.length > 0 && (
-            <div className="mt-4 space-y-1 text-sm">
-              {chart.sample.map((acc) => (
-                <div key={acc.number} className="flex gap-2 text-muted-foreground">
-                  <span className="font-mono">{acc.number}</span>
-                  <span>{acc.name}</span>
-                </div>
-              ))}
-              {chart.toCreate > chart.sample.length && (
-                <div className="text-muted-foreground">
-                  {t('chart_sample_more', { count: chart.toCreate - chart.sample.length })}
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Excluded system accounts info */}
-      {preview.excludedSystemAccounts.length > 0 && (
-        <div className="flex items-start gap-2 rounded-lg border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
-          <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
-          <span>
-            {preview.excludedSystemAccounts.length} internt systemkonto från källsystemet exkluderades ({preview.excludedSystemAccounts.map((a) => a.number).join(', ')}), inte bokföringskonton
-          </span>
         </div>
       )}
-
+      {preview.excludedSystemAccounts.length > 0 && (
+        <p>
+          {tStep('excluded_system_accounts', {
+            count: preview.excludedSystemAccounts.length,
+            accounts: preview.excludedSystemAccounts.map((a) => a.number).join(', '),
+          })}
+        </p>
+      )}
       {Boolean(preview.archivedOnlyAccounts?.length) && (
-        <p className="text-sm text-muted-foreground" data-ph-mask>
+        <p data-ph-mask>
           {t('archived_only_accounts', { accounts: preview.archivedOnlyAccounts!.map(account => account.number).join(', ') })}
         </p>
       )}
+    </div>
+  )
 
-      {/* Create missing accounts */}
-      {missingAccounts.length > 0 ? (
-        <Card className="border-primary/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5 text-primary" />
-              Skapa saknade konton
-            </CardTitle>
-            <CardDescription>
-              {missingAccounts.length} konton från SIE-filen finns inte i din kontoplan ännu.
-              Klicka nedan för att skapa dem: de kopplas sedan automatiskt i nästa steg.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="max-h-32 overflow-y-auto text-sm space-y-1">
-                {missingAccounts.slice(0, 10).map((acc) => (
-                  <div key={acc.number} className="flex gap-2 text-muted-foreground">
-                    <span className="font-mono">{acc.number}</span>
-                    <span>{acc.name}</span>
-                  </div>
-                ))}
-                {missingAccounts.length > 10 && (
-                  <div className="text-muted-foreground">
-                    ... och {missingAccounts.length - 10} till
-                  </div>
-                )}
-              </div>
-              <Button
-                onClick={onCreateAccounts}
-                disabled={isCreatingAccounts}
-                className="w-full"
-              >
-                {isCreatingAccounts ? (
-                  <>Skapar konton...</>
-                ) : (
-                  <>Skapa {missingAccounts.length} konton</>
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : preview.mappingStatus.mapped === preview.mappingStatus.total && preview.mappingStatus.total > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-success/50 bg-success/5 px-4 py-3 text-sm">
-          <CheckCircle className="h-4 w-4 text-success flex-shrink-0" />
-          <span>{t('accounts_mapped_ready')}</span>
+  return (
+    <div className="space-y-6">
+      {/* What the file holds as one definition list: normal states read as
+          plain values; only the deviations below get a line of their own. */}
+      <DefList>
+        <DefRow label={t('sie_preview_company')} labelWidth={180}>
+          {preview.companyName || t('sie_preview_not_set')}
+        </DefRow>
+        <DefRow label={t('sie_preview_org_number')} labelWidth={180}>
+          {preview.orgNumber || t('sie_preview_not_set')}
+        </DefRow>
+        <DefRow label={t('sie_preview_fiscal_year')} labelWidth={180}>
+          {t('sie_preview_range', {
+            start: preview.fiscalYearStart ?? unknown,
+            end: preview.fiscalYearEnd ?? unknown,
+          })}
+          {fiscalYear && (fiscalYear.verdict === 'match' || fiscalYear.verdict === 'create') && (
+            <span className="block text-xs text-muted-foreground">
+              {fiscalYear.verdict === 'match'
+                ? t('fiscal_year_match')
+                : fiscalYear.replacesEmptyPeriodId
+                  ? t('fiscal_year_create_replaces')
+                  : t('fiscal_year_create')}
+            </span>
+          )}
+          {fiscalYearRefused && (
+            <span className="block text-xs text-destructive">{fiscalYear.message}</span>
+          )}
+        </DefRow>
+        <DefRow label={t('sie_preview_contents_label')} labelWidth={180}>
+          {t('sie_preview_contents', {
+            accounts: preview.accountCount,
+            vouchers: preview.voucherCount,
+            lines: preview.transactionLineCount,
+          })}
+        </DefRow>
+        <DefRow
+          label={
+            <span className="inline-flex items-center gap-2">
+              {t('sie_preview_ib_label')}
+              <HelpPopover className="shrink-0">{ibHelp}</HelpPopover>
+            </span>
+          }
+          labelWidth={180}
+        >
+          {preview.trialBalance.isBalanced ? (
+            t('sie_preview_ib_balanced', { amount: formatCurrency(preview.trialBalance.totalDebit) })
+          ) : (
+            <span className={significantImbalance ? 'text-attn' : undefined}>
+              {t('sie_preview_ib_diff', { amount: formatCurrency(ibDiff) })}
+            </span>
+          )}
+        </DefRow>
+        <DefRow
+          label={
+            <span className="inline-flex items-center gap-2">
+              {t('chart_card_title')}
+              <HelpPopover className="shrink-0">{chartHelp}</HelpPopover>
+            </span>
+          }
+          labelWidth={180}
+        >
+          {chart
+            ? t('sie_preview_chart_value', { toCreate: chart.toCreate, existing: chart.existing })
+            : t('sie_preview_mapping_value', { mapped: mapping.mapped, total: mapping.total })}
+          {mapping.unmapped > 0 && (
+            <span className="text-destructive"> · {t('sie_preview_unmapped', { count: mapping.unmapped })}</span>
+          )}
+          {mapping.lowConfidence > 0 && (
+            <span className="text-attn"> · {t('sie_preview_low_confidence', { count: mapping.lowConfidence })}</span>
+          )}
+        </DefRow>
+      </DefList>
+
+      {/* Another organisation's file is said on the first screen after the
+          upload, not first at the review step after every account and VAT
+          code is mapped (PH 193). The confirmation stays at review. */}
+      {preview.orgNumberMismatch === true && (
+        <AttnLine>
+          {tNotice('sie_org_mismatch', {
+            fileOrg: preview.orgNumber ?? '?',
+            companyOrg: preview.companyOrgNumber ?? '?',
+          })}
+        </AttnLine>
+      )}
+
+      {/* #63: a provider's export carries its whole chart in #KONTO. The
+          line under the label says what the switch does in its current
+          position: its only other effect is the Kontoplan count above, out
+          of view, and users flipped it up to 20 times in 30 s looking for
+          one. */}
+      {onlyUsedAccounts && onlyUsedAccounts.unused > 0 && (
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-0.5">
+            <Label htmlFor="sie-only-used-accounts" className="font-medium">
+              {t('only_used_accounts_label')}
+            </Label>
+            <p id="sie-only-used-accounts-state" aria-live="polite" className="text-[13px]">
+              {t(onlyUsedAccounts.on ? 'only_used_accounts_state_on' : 'only_used_accounts_state_off', {
+                unused: onlyUsedAccounts.unused,
+              })}
+            </p>
+            <p className="text-[13px] text-muted-foreground">
+              {t('only_used_accounts_hint', {
+                used: onlyUsedAccounts.total - onlyUsedAccounts.unused - onlyUsedAccounts.own,
+                total: onlyUsedAccounts.total,
+              })}
+            </p>
+          </div>
+          <Switch
+            id="sie-only-used-accounts"
+            checked={onlyUsedAccounts.on}
+            onCheckedChange={onlyUsedAccounts.onChange}
+            aria-describedby="sie-only-used-accounts-state"
+          />
         </div>
       )}
 
-      {/* Errors */}
+      {/* Parsing errors block the import: the list stays in view. */}
       {errors.length > 0 && (
-        <Card className="border-destructive/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <XCircle className="h-5 w-5 text-destructive" />
-              Tolkningsfel ({errors.length})
-            </CardTitle>
-            <CardDescription>
-              Dessa fel hittades under tolkningen av SIE-filen och kan påverka importresultatet.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {errors.map((issue, i) => (
-                <div key={`error-${i}`} className="text-sm flex gap-2 text-destructive">
-                  <XCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                  <span>
-                    <span className="font-mono text-xs opacity-70">Rad {issue.line}</span>{' '}
-                    {issue.message}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-[13px] font-medium text-destructive">
+            {tStep('parse_errors', { count: errors.length })}
+            <HelpPopover className="shrink-0">
+              {tStep('parse_errors_help')}
+            </HelpPopover>
+          </p>
+          <ul className="max-h-48 space-y-1 overflow-y-auto text-[13px] text-destructive">
+            {errors.map((issue, i) => (
+              <li key={`error-${i}`}>
+                <span className="font-mono text-xs opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
+                {issue.message}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      {/* Warnings */}
-      {warnings.length > 0 && (
-        <Card className="border-border">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-warning" />
-              Varningar ({warnings.length})
-            </CardTitle>
-            <CardDescription>
-              Dessa varningar blockerar inte importen men bör granskas.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {warnings.map((issue, i) => (
-                <div key={`warning-${i}`} className="text-sm flex gap-2 text-warning">
-                  <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                  <span>
-                    <span className="font-mono text-xs opacity-70">Rad {issue.line}</span>{' '}
-                    {issue.message}
-                  </span>
+      {/* Significant imbalance: one sentence, the explanation behind the "?",
+          and the acknowledgement before continuing. */}
+      {significantImbalance && (
+        <div className="space-y-3">
+          <AttnLine
+            trailing={
+              <HelpPopover className="ml-2 inline-flex align-middle">
+                <div className="space-y-2">
+                  <p>{tStep('imbalance_cause')}</p>
+                  <p>{tStep('imbalance_fix')}</p>
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+              </HelpPopover>
+            }
+          >
+            {tStep('imbalance_title', { amount: formatCurrency(Math.abs(ibDiff)) })}
+          </AttnLine>
+          {onOpenManualOpeningBalances && (
+            <Button type="button" variant="outline" onClick={onOpenManualOpeningBalances}>
+              {tStep('manual_opening_balances')}
+              <ArrowRightIcon className="h-4 w-4" />
+            </Button>
+          )}
+          <label className="flex items-start gap-2 text-[13px] cursor-pointer">
+            <Checkbox
+              checked={ackImbalance}
+              onCheckedChange={(v) => setAckImbalance(v === true)}
+              className="mt-0.5"
+            />
+            <span className="text-muted-foreground">
+              {tStep('imbalance_ack')}
+            </span>
+          </label>
+        </div>
+      )}
+
+      {/* Opening balance against the books and the years next to the file (crm#1099) */}
+      {showContinuity && continuity && (
+        <div className="space-y-3 text-[13px] leading-5">
+          <AttnLine
+            trailing={
+              ibDiffers ? (
+                <HelpPopover className="ml-2 inline-flex align-middle">
+                  {t(continuity.fileOpeningOff
+                    ? 'ib_file_off_advice'
+                    : continuity.bookedOpeningBalance ? 'ib_continuity_booked_advice' : 'ib_continuity_advice')}
+                </HelpPopover>
+              ) : undefined
+            }
+          >
+            {t('ib_continuity_title')}
+          </AttnLine>
+          {continuity.missingYears.map((gap) => (
+            <p key={`${gap.from}-${gap.to}`} className="tabular-nums">
+              {t('ib_continuity_missing_years', { from: gap.from, to: gap.to })}
+            </p>
+          ))}
+          {continuity.noVouchers && <p>{t('ib_continuity_no_vouchers')}</p>}
+          {ibDiffers && (
+            <>
+              {/* crm#1272: a year with its own IB verifikat opens on it. */}
+              <p>
+                {continuity.bookedOpeningBalance
+                  ? t('ib_continuity_booked', {
+                      count: continuity.differences.length,
+                      voucher: continuity.bookedOpeningBalance.voucher,
+                    })
+                  : t('ib_continuity_carried', { count: continuity.differences.length })}
+              </p>
+              {continuity.fileOpeningOff && <p>{t('ib_continuity_file_off')}</p>}
+              <OpeningBalanceDifferencesTable
+                rows={continuity.differences.map((row) => ({
+                  account: row.account,
+                  left: row.file,
+                  right: row.books,
+                  difference: row.difference,
+                }))}
+                leftLabel={t('ib_continuity_col_file')}
+                rightLabel={t('ib_continuity_col_books')}
+              />
+              <label className="flex items-start gap-2 cursor-pointer">
+                <Checkbox
+                  checked={ackContinuity}
+                  onCheckedChange={(v) => setAckContinuity(v === true)}
+                  className="mt-0.5"
+                />
+                <span className="text-muted-foreground">{t('ib_continuity_ack')}</span>
+              </label>
+            </>
+          )}
+          {sourceEdits.length > 0 && (
+            <>
+              <p>{t('ib_continuity_source_edits', { count: sourceEdits.length })}</p>
+              <OpeningBalanceDifferencesTable
+                rows={sourceEdits.map((edit) => ({
+                  account: edit.account,
+                  left: edit.previousClosing,
+                  right: edit.opening,
+                  difference: edit.difference,
+                }))}
+                leftLabel={t('ib_continuity_col_previous_closing')}
+                rightLabel={t('ib_continuity_col_opening')}
+              />
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Accounts the chart lacks: one line with the action, the list behind the "?". */}
+      {missingAccounts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <AttnLine
+            trailing={
+              <HelpPopover className="ml-2 inline-flex align-middle">
+                <div className="space-y-2">
+                  <p>{t('sie_preview_missing_accounts_help')}</p>
+                  <div className="max-h-32 space-y-1 overflow-y-auto">
+                    {missingAccounts.slice(0, 10).map((acc) => (
+                      <div key={acc.number} className="flex gap-2 text-muted-foreground">
+                        <span className="font-mono">{acc.number}</span>
+                        <span>{acc.name}</span>
+                      </div>
+                    ))}
+                    {missingAccounts.length > 10 && (
+                      <div className="text-muted-foreground">
+                        {tStep('missing_more', { count: missingAccounts.length - 10 })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </HelpPopover>
+            }
+          >
+            {t('sie_preview_missing_accounts', { count: missingAccounts.length })}
+          </AttnLine>
+          <Button onClick={onCreateAccounts} loading={isCreatingAccounts}>
+            {isCreatingAccounts ? tStep('creating_accounts') : tStep('create_accounts', { count: missingAccounts.length })}
+          </Button>
+        </div>
+      )}
+
+      {/* Warnings do not block the import: the list stays, the note goes behind the "?". */}
+      {warnings.length > 0 && (
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-[13px] font-medium text-attn">
+            {tStep('warnings', { count: warnings.length })}
+            <HelpPopover className="shrink-0">
+              {tStep('warnings_help')}
+            </HelpPopover>
+          </p>
+          <ul className="max-h-48 space-y-1 overflow-y-auto text-[13px] text-muted-foreground">
+            {warnings.map((issue, i) => (
+              <li key={`warning-${i}`}>
+                <span className="font-mono text-xs opacity-70">{tStep('line', { line: issue.line })}</span>{' '}
+                {issue.message}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
-          Tillbaka
+        <Button variant="outline" onClick={onBack}>
+          {tCommon('back')}
         </Button>
-        <Button className="min-h-11" onClick={onContinue} disabled={blockContinue}>
+        <Button onClick={onContinue} disabled={blockContinue}>
           {preview.mappingStatus.lowConfidence > 0 || preview.mappingStatus.unmapped > 0
-            ? 'Granska mappningar'
-            : 'Fortsätt'}
-          <ArrowRight className="ml-2 h-4 w-4" />
+            ? tStep('review_mappings')
+            : tStep('continue')}
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>

@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { validateBody } from '@/lib/api/validate'
 import { MoveTransactionCashAccountSchema } from '@/lib/api/schemas'
 import { guardSandbox } from '@/lib/sandbox/guard'
-import { reenableIfUnused } from '@/lib/cash-accounts/service'
+import { updateTransaction } from '@/lib/transactions/manage'
 
 /**
  * PATCH /api/transactions/[id]/cash-account
@@ -37,121 +37,20 @@ export const PATCH = withRouteContext(
       operation: 'transaction.moveCashAccount',
     })
     if (!validation.success) return validation.response
-    const { account_number: accountNumber } = validation.data
 
-    const { data: transaction, error: fetchError } = await supabase
-      .from('transactions')
-      .select('id, currency, cash_account_id, journal_entry_id, invoice_id, supplier_invoice_id')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
+    // Rules (unbooked, unmatched, not voucher-linked, same currency, known
+    // account; a disabled unused target is re-enabled first) live in
+    // lib/transactions/manage.ts, shared with
+    // PATCH /api/v1/companies/{companyId}/transactions/{id}.
+    const outcome = await updateTransaction(
+      { supabase, companyId, userId: user.id, log },
+      id,
+      { account_number: validation.data.account_number },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
 
-    if (fetchError || !transaction) {
-      return errorResponseFromCode('TX_CATEGORIZE_TX_NOT_FOUND', log, { requestId })
-    }
-
-    // Gate: movable only when neither booked nor confirmed-matched (a confirmed
-    // invoice match also sets journal_entry_id, but check all three for
-    // defense-in-depth, mirroring the title route).
-    if (transaction.journal_entry_id || transaction.invoice_id || transaction.supplier_invoice_id) {
-      return errorResponseFromCode('TRANSACTION_MOVE_BOOKED', log, { requestId })
-    }
-
-    // Bulk-book (N>1) anchors a transaction to a verifikat via
-    // transaction_voucher_links WITHOUT setting journal_entry_id, so the gate
-    // above misses it. PostgREST cannot express NOT EXISTS in an update filter,
-    // so this runs as a pre-check query instead of being re-asserted in the
-    // UPDATE below. That leaves no extra TOCTOU risk: a tvl row appearing
-    // concurrently implies the booking flow ran, and that flow sets its own
-    // transaction state as part of the same operation.
-    const { data: voucherLinks, error: tvlError } = await supabase
-      .from('transaction_voucher_links')
-      .select('transaction_id')
-      .eq('company_id', companyId)
-      .eq('transaction_id', id)
-      .limit(1)
-
-    if (tvlError) {
-      return errorResponse(tvlError, log, { requestId })
-    }
-    if ((voucherLinks ?? []).length > 0) {
-      return errorResponseFromCode('TRANSACTION_MOVE_BOOKED', log, { requestId })
-    }
-
-    const { data: targetAccount, error: accountError } = await supabase
-      .from('cash_accounts')
-      .select('id, ledger_account, currency, enabled, bank_connection_id, invoice_payee')
-      .eq('company_id', companyId)
-      .eq('ledger_account', accountNumber)
-      .maybeSingle<{
-        id: string
-        ledger_account: string
-        currency: string
-        enabled: boolean | null
-        bank_connection_id: string | null
-        invoice_payee: boolean | null
-      }>()
-
-    if (accountError) {
-      return errorResponse(accountError, log, { requestId })
-    }
-    if (!targetAccount) {
-      return errorResponseFromCode('TRANSACTION_MOVE_UNKNOWN_ACCOUNT', log, { requestId })
-    }
-
-    // A cross-currency move would strand the row: every report scope pins
-    // .eq('currency', accountCurrency), so the row would vanish from BOTH the
-    // old and the new account's reconciliation. Hard-reject.
-    if (transaction.currency.toUpperCase() !== targetAccount.currency.toUpperCase()) {
-      return errorResponseFromCode('TRANSACTION_MOVE_CURRENCY_MISMATCH', log, { requestId })
-    }
-
-    // An unbooked row is about to land on this account, so an account the
-    // company turned off as unused comes back on first: the disable guard
-    // refuses open transactions on a hidden account, and this route must not
-    // be a way around it. Before the move, so a failed re-enable moves nothing.
-    try {
-      await reenableIfUnused(supabase, companyId, targetAccount)
-    } catch (err) {
-      return errorResponse(err, log, { requestId })
-    }
-
-    const { data: updated, error: updateError } = await supabase
-      .from('transactions')
-      .update({ cash_account_id: targetAccount.id })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      // Re-assert the movable gate atomically against a concurrent book or
-      // auto-match (ingest's supplier auto-match can set supplier_invoice_id
-      // WITHOUT journal_entry_id), mirroring PATCH /api/transactions/[id].
-      // The tvl part of the gate lives in the pre-check above; see the comment
-      // there for why that is safe.
-      .is('journal_entry_id', null)
-      .is('invoice_id', null)
-      .is('supplier_invoice_id', null)
-      .select('id, cash_account_id')
-      .maybeSingle<{ id: string; cash_account_id: string }>()
-
-    if (updateError) {
-      return errorResponse(updateError, log, { requestId })
-    }
-    if (!updated) {
-      // 0 rows updated: the row was booked/matched between read and write.
-      return errorResponseFromCode('TRANSACTION_MOVE_BOOKED', log, { requestId })
-    }
-
-    // Behandlingshistorik (BFNAR 2013:2 kap 8): light-touch for a pre-verifikat
-    // staging binding, same weight as the title route. updated_at (trigger)
-    // captures "when"; from/to ids record which way the row moved.
-    log.info('transaction moved to another cash account', {
-      transactionId: id,
-      actor: user.id,
-      fromCashAccountId: transaction.cash_account_id,
-      toCashAccountId: targetAccount.id,
-      toLedgerAccount: targetAccount.ledger_account,
-    })
-
-    return NextResponse.json({ data: updated })
+    return NextResponse.json({ data: { id: outcome.data.id, cash_account_id: outcome.data.cash_account_id } })
   },
   { requireWrite: true },
 )

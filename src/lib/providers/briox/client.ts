@@ -1,8 +1,10 @@
 import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
-import { TokenBucketRateLimiter } from '../rate-limiter';
+import { TokenBucketRateLimiter, connectionRateKey } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { BRIOX_BASE_URL, BRIOX_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
+import { cleanProviderPayload } from '../provider-text';
+import { todayIsoStockholm } from '@/lib/dates/iso';
 
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -67,7 +69,7 @@ export class BrioxClient {
   async get<T>(accessToken: string, path: string): Promise<T> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: this.authHeaders(accessToken),
@@ -83,7 +85,7 @@ export class BrioxClient {
           );
         }
 
-        return response.json() as Promise<T>;
+        return cleanProviderPayload(await response.json()) as T;
       },
       {
         maxAttempts: 3,
@@ -102,7 +104,7 @@ export class BrioxClient {
   async getBytes(accessToken: string, path: string): Promise<ArrayBuffer> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const url = `${this.baseUrl}${path}`;
         const response = await fetchInExecutionBudget(url, {
           headers: { Authorization: accessToken },
@@ -211,7 +213,7 @@ export class BrioxClient {
     if (years.length === 0) {
       throw new BrioxApiError('No financial years found in Briox', 404);
     }
-    const now = new Date().toISOString().slice(0, 10);
+    const now = todayIsoStockholm();
     const completed = years.filter((y) => y.todate < now);
     return completed.length > 0 ? completed[completed.length - 1]!.id : years[0]!.id;
   }

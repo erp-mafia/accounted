@@ -3,7 +3,9 @@
  *
  * GET: list all webhooks for the company. Secret never exposed.
  * POST: create. Returns the secret EXACTLY ONCE in the response. Idempotent
- *         via Idempotency-Key. Dry-runnable.
+ *         via Idempotency-Key. Dry-runnable. A new webhook starts with
+ *         verification_status 'pending': nothing is delivered until its URL
+ *         passes the ownership handshake (lib/webhooks/verification.ts).
  *
  * Phase 6 PR-1 ships the substrate; subsequent commits within this PR will:
  *   - Add full registry metadata (description, useWhen, pitfalls, example).
@@ -22,15 +24,30 @@ import { generateWebhookSecret } from '@/lib/webhooks/signing'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { hasScope } from '@/lib/auth/api-keys'
-import { PUBLIC_WEBHOOK_EVENTS } from '@/lib/webhooks/public-events'
+import {
+  WebhookEventTypeListSchema,
+  WebhookEventTypeSchema,
+  payrollEventTypesIn,
+  refineWebhookEventTypeFields,
+  resolveWebhookEventTypes,
+} from '@/lib/webhooks/subscription-event-types'
+import {
+  WEBHOOK_VERIFICATION_COLUMNS,
+  WEBHOOK_VERIFICATION_RESPONSE_FIELDS,
+  withVerificationStatus,
+  type VerificationTimestamps,
+} from '@/lib/webhooks/verification'
 
-// Derived from the single catalogue the fan-out handler and the docs page
-// also read, so the events an agent can subscribe to are exactly the events
-// that get delivered.
-const WEBHOOK_EVENT_TYPES = z.enum(PUBLIC_WEBHOOK_EVENTS)
-
+// The event type enums are derived from the single catalogue the fan-out
+// handler and the docs page also read, so the events an agent can subscribe
+// to are exactly the events that get delivered.
 const CreateWebhookSchema = z.object({
-  event_type: WEBHOOK_EVENT_TYPES,
+  event_types: WebhookEventTypeListSchema.optional().describe(
+    'Event types this webhook receives, one or more. Required unless event_type is sent.',
+  ),
+  event_type: WebhookEventTypeSchema.optional().describe(
+    'A single event type, accepted for clients written before event_types. When both are sent it must be one of event_types.',
+  ),
   // Schema-level guard rejects non-https before the SSRF DNS check runs.
   // The full safety check (private/loopback/link-local/metadata IP rejection)
   // happens at handler time via validateWebhookUrl() because it needs DNS.
@@ -43,18 +60,25 @@ const CreateWebhookSchema = z.object({
     }),
   name: z.string().min(1).max(120),
   description: z.string().max(500).optional(),
+}).superRefine((value, ctx) => {
+  refineWebhookEventTypeFields(value, ctx)
+  if (!value.event_types && !value.event_type) {
+    ctx.addIssue({ code: 'custom', path: ['event_types'], message: 'Send event_types (one or more event types).' })
+  }
 })
 
 const WebhookSummary = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  event_type: z.string(),
+  event_type: z.string().describe('The first of event_types, kept for clients that read a single type.'),
+  event_types: z.array(z.string()).describe('Every event type this webhook receives.'),
   webhook_url: z.string(),
   active: z.boolean(),
   api_version_pinned: z.string(),
   disabled_at: z.string().nullable(),
   disabled_reason: z.string().nullable(),
   created_at: z.string(),
+  ...WEBHOOK_VERIFICATION_RESPONSE_FIELDS,
 })
 
 const WebhookCreated = WebhookSummary.extend({
@@ -65,8 +89,18 @@ const WebhookCreated = WebhookSummary.extend({
 
 const WebhooksListResponse = dataEnvelope(z.object({ webhooks: z.array(WebhookSummary) }))
 
-const WEBHOOK_LIST_COLUMNS =
-  'id, name, event_type, webhook_url, active, api_version_pinned, disabled_at, disabled_reason, created_at'
+const WEBHOOK_LIST_COLUMNS = `id, name, event_type, event_types, webhook_url, active, api_version_pinned, disabled_at, disabled_reason, created_at, ${WEBHOOK_VERIFICATION_COLUMNS}`
+
+/** Example verification state of a live, verified webhook. */
+const EXAMPLE_VERIFIED = {
+  verification_status: 'verified' as const,
+  verified_at: '2026-05-15T12:01:02Z',
+  verification_grace_ends_at: null,
+  verification_attempts: 1,
+  verification_last_attempt_at: '2026-05-15T12:01:02Z',
+  verification_last_error: null,
+  verification_next_attempt_at: null,
+}
 
 // ──────────────────────────────────────────────────────────────────
 // GET: list webhooks
@@ -85,6 +119,7 @@ registerEndpoint({
     'Reading delivery history (use GET /webhooks/{id}/deliveries). Reading the secret (it is unrecoverable after the create response: generate a new webhook if lost).',
   pitfalls: [
     'Disabled webhooks (auto-disabled after HTTP 410, or manually disabled via PATCH) appear in the list with active=false and a disabled_reason.',
+    "verification_status tells whether events reach the URL: 'verified' and 'grace_period' receive events; 'pending' (new or changed URL) and 'paused' (a pre-verification endpoint whose grace window closed) receive nothing until the URL passes the handshake (POST /webhooks/{id}/verify).",
   ],
   example: {
     response: {
@@ -94,12 +129,14 @@ registerEndpoint({
             id: 'a8f1…',
             name: 'CRM sync',
             event_type: 'invoice.paid',
+            event_types: ['invoice.paid', 'credit_note.created'],
             webhook_url: 'https://example.com/hooks/gnubok',
             active: true,
             api_version_pinned: API_V1_VERSION,
             disabled_at: null,
             disabled_reason: null,
             created_at: '2026-05-15T12:00:00Z',
+            ...EXAMPLE_VERIFIED,
           },
         ],
       },
@@ -135,7 +172,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // documented `data: { webhooks: [...] }`. Cursor pagination on this
     // surface would require a fields-level array under the envelope:     // out of scope for the v1.0 contract since the webhook-count ceiling
     // per company is bounded.
-    return ok({ webhooks: data ?? [] }, { requestId: ctx.requestId })
+    const now = new Date()
+    const webhooks = ((data ?? []) as unknown as VerificationTimestamps[]).map((row) =>
+      withVerificationStatus(row, now),
+    )
+    return ok({ webhooks }, { requestId: ctx.requestId })
   },
 )
 
@@ -149,19 +190,22 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks',
   summary: 'Register a webhook subscription.',
   description:
-    'Creates a webhook subscription for one event type. The response includes a freshly generated HMAC signing secret, returned EXACTLY ONCE: store it on the receiver side immediately. The webhook is pinned to the current API version on creation; payload shapes for this webhook will not change until you explicitly upgrade.',
+    'Creates a webhook subscription for one or more event types (event_types; the single event_type is still accepted). Each delivery carries one event, named by its type field and the X-Gnubok-Event header. The response includes a freshly generated HMAC signing secret, returned EXACTLY ONCE: store it on the receiver side immediately. The webhook is pinned to the current API version on creation; payload shapes for this webhook will not change until you explicitly upgrade. The webhook starts with verification_status \'pending\': no event is delivered until the URL passes the ownership handshake. Accounted POSTs a signed webhook.verification event whose data.object.challenge your endpoint must return as {"challenge": "<value>"} with a 2xx within 10 seconds; call POST /webhooks/{id}/verify once your receiver answers it, or let the automatic attempts (after 1m, 5m, 30m, 2h, 12h, then daily, 8 in all) pick it up.',
   useWhen:
     'You are wiring a downstream integration that needs push notifications instead of polling.',
   doNotUseFor:
     'Subscribing to internal MCP telemetry events (mcp.tool_called etc. are not delivered as webhooks). Replacing an existing webhook URL: use PATCH instead.',
   pitfalls: [
     'The secret is returned exactly once. If lost, rotate it with POST /webhooks/{id}/rotate-secret: a fresh secret is issued in place, the webhook id and delivery history are kept.',
+    'Listing salary_run.* or agi.generated in event_types requires payroll:read in addition to webhooks:manage, as for a single event_type.',
+    'A receiver that missed deliveries catches up from GET /api/events (scope events:read), which serves every deliverable event type from a sequence cursor.',
     'Delivery is at-least-once with exponential backoff (1m / 5m / 30m / 2h / 12h / 24h / 48h). Receivers MUST be idempotent.',
     'HTTP 410 from your receiver auto-disables the webhook (sets active=false + disabled_reason).',
+    "Events emitted while verification_status is 'pending' are not delivered later: they are skipped, as for a disabled webhook. Verify before you depend on the webhook.",
   ],
   example: {
     request: {
-      event_type: 'invoice.paid',
+      event_types: ['invoice.paid', 'credit_note.created'],
       webhook_url: 'https://example.com/hooks/gnubok',
       name: 'CRM sync',
     },
@@ -170,6 +214,7 @@ registerEndpoint({
         id: 'a8f1…',
         name: 'CRM sync',
         event_type: 'invoice.paid',
+        event_types: ['invoice.paid', 'credit_note.created'],
         webhook_url: 'https://example.com/hooks/gnubok',
         active: true,
         api_version_pinned: API_V1_VERSION,
@@ -178,6 +223,13 @@ registerEndpoint({
         secret: 'whsec_…',
         description: null,
         created_at: '2026-05-15T12:00:00Z',
+        verification_status: 'pending',
+        verified_at: null,
+        verification_grace_ends_at: null,
+        verification_attempts: 0,
+        verification_last_attempt_at: null,
+        verification_last_error: null,
+        verification_next_attempt_at: '2026-05-15T12:00:00Z',
       },
       meta: { request_id: 'req_…', api_version: API_V1_VERSION },
     },
@@ -201,16 +253,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const parsed = CreateWebhookSchema.safeParse(rawBody)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
+    // The schema refuses a body with neither field, so this is never null.
+    const eventTypes = resolveWebhookEventTypes(body)!
 
     // Elevated-scope check for high-sensitivity payloads. Subscribing to
     // salary_run.* or agi.generated routes personnummer + lönesummor +
     // skatteavdrag to an external receiver: a payroll-grade exposure.
     // Require BOTH webhooks:manage AND payroll:read so a key minted only
-    // for webhook management can't reach the payroll surface. The same
-    // pattern will extend to other sensitive event families when they
-    // ship (e.g. document.uploaded with PII payloads).
-    const PAYROLL_SENSITIVE = /^(salary_run\.|agi\.)/
-    if (PAYROLL_SENSITIVE.test(body.event_type) && !hasScope(ctx.scopes, 'payroll:read')) {
+    // for webhook management can't reach the payroll surface. Any listed
+    // payroll type triggers it. The same pattern will extend to other
+    // sensitive event families when they ship (e.g. document.uploaded with
+    // PII payloads).
+    const payrollTypes = payrollEventTypesIn(eventTypes)
+    if (payrollTypes.length > 0 && !hasScope(ctx.scopes, 'payroll:read')) {
       return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
         requestId: ctx.requestId,
         // Art.5(1)(f): don't echo the API key's granted_scopes set back to
@@ -220,7 +275,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         // captures the error envelope (not acceptable).
         details: {
           required_scope: 'payroll:read',
-          reason: `Subscribing to ${body.event_type} requires payroll:read in addition to webhooks:manage.`,
+          reason: `Subscribing to ${payrollTypes.join(', ')} requires payroll:read in addition to webhooks:manage.`,
         },
       })
     }
@@ -242,7 +297,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         {
           id: null,
           name: body.name,
-          event_type: body.event_type,
+          event_type: eventTypes[0],
+          event_types: eventTypes,
           webhook_url: body.webhook_url,
           active: true,
           api_version_pinned: API_V1_VERSION,
@@ -252,6 +308,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           secret: null,
           description: body.description ?? null,
           created_at: null,
+          verification_status: 'pending',
+          verified_at: null,
+          verification_grace_ends_at: null,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
@@ -270,7 +329,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         company_id: ctx.companyId!,
         name: body.name,
         description: body.description ?? null,
-        event_type: body.event_type,
+        event_type: eventTypes[0],
+        event_types: eventTypes,
         webhook_url: body.webhook_url,
         secret,
         api_version_pinned: API_V1_VERSION,
@@ -298,10 +358,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       table_name: 'webhooks',
       record_id: created_row.id,
       actor_id: ctx.apiKeyId ?? null,
-      description: `Webhook created: "${body.name}" → ${body.webhook_url} (${body.event_type})`,
+      actor_type: ctx.actor.type,
+      actor_label: ctx.actor.label ?? null,
+      description: `Webhook created: "${body.name}" → ${body.webhook_url} (${eventTypes.join(', ')})`,
       new_state: {
         name: body.name,
-        event_type: body.event_type,
+        event_type: eventTypes[0],
+        event_types: eventTypes,
         webhook_url: body.webhook_url,
         api_version_pinned: API_V1_VERSION,
         active: true,
@@ -320,7 +383,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Art.25) so no intermediary (CDN / proxy / gateway log / browser
     // cache) persists the secret beyond the direct response chain.
     return created(
-      { ...created_row, secret },
+      { ...withVerificationStatus(created_row as unknown as VerificationTimestamps), secret },
       {
         requestId: ctx.requestId,
         headers: {

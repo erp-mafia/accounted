@@ -1,4 +1,4 @@
-import { AI_CLIENTS, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 
 /** How often the Done step asks whether an AI client has signed in, inside a polling window. */
 export const AI_POLL_MS = 4000
@@ -27,11 +27,12 @@ export interface AiStatusPoller {
  *
  * `fetchStatus` answers null when the status is unavailable. That never
  * reaches `onStatus`, so a failed read cannot make a connected client look
- * disconnected.
+ * disconnected. An attempt waits for the named client it started, so a key
+ * that names no client (see AiConnection) does not end it.
  */
 export function createAiStatusPoller(opts: {
-  fetchStatus: (signal: AbortSignal) => Promise<AiClient[] | null>
-  onStatus: (connected: AiClient[]) => void
+  fetchStatus: (signal: AbortSignal) => Promise<AiConnection | null>
+  onStatus: (connection: AiConnection) => void
   isHidden?: () => boolean
   intervalMs?: number
   windowMs?: number
@@ -55,18 +56,19 @@ export function createAiStatusPoller(opts: {
     if (opts.isHidden?.()) return
     const controller = new AbortController()
     inFlight = controller
-    let connected: AiClient[] | null = null
+    let connection: AiConnection | null = null
     try {
-      connected = await opts.fetchStatus(controller.signal)
+      connection = await opts.fetchStatus(controller.signal)
     } catch {
-      connected = null
+      connection = null
     }
     inFlight = null
     if (stopped || controller.signal.aborted) return
-    if (!connected) return
-    opts.onStatus(connected)
-    if (target && connected.includes(target)) target = null
-    if (!target || connected.length >= AI_CLIENTS.length) return
+    if (!connection) return
+    opts.onStatus(connection)
+    const { clients } = connection
+    if (target && clients.includes(target)) target = null
+    if (!target || clients.length >= AI_CLIENTS.length) return
     if (Date.now() + intervalMs <= deadline) timer = setTimeout(() => void read(), intervalMs)
   }
 

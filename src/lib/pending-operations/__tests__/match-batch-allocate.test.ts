@@ -1,8 +1,9 @@
 /**
- * Suggestion-pointer cleanup for the agent/MCP batch-allocation commit path
- * (`commitMatchBatchAllocate` in lib/pending-operations/commit.ts), the second
- * caller of the `match_batch_allocate` RPC next to
- * POST /api/transactions/[id]/match-batch.
+ * The approval of a staged match_batch_allocate: commitPendingOperation runs
+ * the operation transactions.match-batch (lib/transactions/match-batch.ts),
+ * the same service as POST /api/transactions/[id]/match-batch and v1. These
+ * cases pin that the approval door keeps every rule the hand-written
+ * executor had (it was deleted when the tool moved onto the operation).
  *
  * Issue #1259: the RPC nulls potential_invoice_id /
  * potential_supplier_invoice_id only on the source transaction
@@ -13,6 +14,43 @@
  * app/api/transactions/[id]/match-batch/__tests__/route.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+// The gate has its own door test (src/lib/transactions/__tests__/match-batch-booked-row.test.ts);
+// this suite queues what follows it.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebookingById: vi.fn(async () => ({ outcome: 'open' })),
+}))
+
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
+// The registration-first rule (defer_invoice_booking) has its own suites
+// (registration-first.test.ts and the deferred-door tests); here no invoice
+// needs its registration booked first.
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planRegistrationBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+  planRegistrationsBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+  bookRegistrationsBeforeBatchSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryIds: {},
+    postedJournalEntryIds: {},
+    warnings: [],
+  })),
+}))
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
@@ -37,8 +75,31 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: mockDetectExplaining,
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
+
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+// planBatchCashLines: unbooked invoices the samlingsverifikat cannot book
+// (here: an installment); its lines are pinned by
+// lib/invoices/__tests__/batch-cash-method-lines.test.ts.
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+  planBatchCashLines: vi.fn(async () => ({ ok: false, unsupported: 'partial_payment' })),
+}))
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: mockAppendProcessingHistory,
+}))
+
+// The befarad kundförlust reserve release after a payment: mocked so it takes
+// no slot in the queued Supabase mock; its own behaviour is pinned by
+// lib/customer-loss/__tests__/services.test.ts.
+const { mockReleaseReserve } = vi.hoisted(() => ({ mockReleaseReserve: vi.fn() }))
+vi.mock('@/lib/customer-loss/doubtful', () => ({
+  releaseDoubtfulReserveAfterChange: mockReleaseReserve,
 }))
 
 import { commitPendingOperation } from '../commit'
@@ -68,6 +129,11 @@ function makePendingOp(params: Record<string, unknown>): PendingOperation {
     updated_at: '2026-05-03T00:00:00Z',
   } as PendingOperation
 }
+
+// The samlingsverifikat as the engine door reloads it after the RPC, to
+// announce it with journal_entry.committed.
+const POSTED_ENTRY = { id: 'je-batch', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 44, lines: [] }
+const POSTED_RELOAD = { data: POSTED_ENTRY, error: null }
 
 const REQUEST_ALLOCATIONS = [
   { kind: 'supplier_invoice', supplier_invoice_id: SI_ID, amount: 1000 },
@@ -117,6 +183,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
       },
       error: null,
     }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations: REQUEST_ALLOCATIONS })
@@ -137,6 +204,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
   it('retires a fully settled customer invoice allocation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({
       data: {
         ok: true,
@@ -160,6 +228,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
       },
       error: null,
     }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({
@@ -175,7 +244,9 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
     })
   })
 
-  it('retires nothing when the RPC reports a structured failure', async () => {
+  it('retires nothing and announces no verifikat when the RPC reports a structured failure', async () => {
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { ok: false, code: 'BATCH_OVER_ALLOCATED' }, error: null }) // RPC
@@ -186,6 +257,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
 
     expect(result.status).toBe('failed')
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+    expect(committed).not.toHaveBeenCalled()
   })
 })
 
@@ -225,6 +297,8 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockResolvedValue(explainingSet)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
+    enqueue({ data: { cash_account_id: 'ca-1' }, error: null }) // the row's cash account, for the details
     enqueue({ data: null, error: null }) // dispatcher rejection update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations })
@@ -246,7 +320,9 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockResolvedValue(explainingSet)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: rpcOk, error: null }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({
@@ -275,7 +351,9 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
         dismissed_voucher_labels: ['A57', 'A58'],
         total_ore: 8825000,
         bank_account_number: '1930',
-        via: 'pending_operation_force',
+        // The operation's label: an approved staged force is a machine-door
+        // write, recorded like v1's (the actor stays the approving user).
+        via: 'api_force',
       },
     })
   })
@@ -284,6 +362,8 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockResolvedValue(explainingSet)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
+    enqueue({ data: { cash_account_id: 'ca-1' }, error: null }) // the row's cash account, for the details
     enqueue({ data: null, error: null }) // dispatcher rejection update
 
     // Staged when only A57 existed; A58 was posted before approval.
@@ -302,6 +382,7 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: null, error: null }) // dispatcher rejection update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations, force: true, expected_journal_entry_ids: [JE_A, JE_B] })
@@ -319,7 +400,9 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: rpcOk, error: null }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations })
@@ -328,5 +411,186 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     expect(result.status).toBe('committed')
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPendingOperation: match_batch_allocate kontantmetoden guard', () => {
+  const allocations = [{ kind: 'customer_invoice', invoice_id: INV_ID, amount: 1000 }]
+
+  it('refuses unbooked invoices under kontantmetoden without reaching the RPC', async () => {
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'customer_invoice', id: INV_ID, invoice_number: '231' }],
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
+    enqueue({ data: null, error: null }) // dispatcher rejection update
+
+    const op = makePendingOp({ transaction_id: TX_ID, allocations })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.code).toBe('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('kontantmetoden')
+    expect(result.error).toContain('Obokförda fakturor: 231.')
+    expect((result.data as { invoices: Array<{ id: string }> }).invoices[0].id).toBe(INV_ID)
+    expect(mockFindCashUnbooked).toHaveBeenCalledWith(supabase, 'company-1', allocations)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses when the kontantmetoden check cannot run', async () => {
+    mockFindCashUnbooked.mockResolvedValueOnce({ ok: false, error: new Error('down') })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
+    enqueue({ data: null, error: null }) // dispatcher update
+
+    const op = makePendingOp({ transaction_id: TX_ID, allocations })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+})
+
+// This door used to emit nothing at all, so a samlingsbetalning approved by an
+// agent never reached webhook subscribers. It now runs the same event helper
+// as the HTTP twin (lib/transactions/batch-allocation-events.ts).
+describe('commitPendingOperation: match_batch_allocate events', () => {
+  it('confirms every allocation and emits supplier_invoice.paid once, only for the one settled in full', async () => {
+    const matched = vi.fn()
+    const paid = vi.fn()
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
+    eventBus.on('supplier_invoice.match_confirmed', matched)
+    eventBus.on('supplier_invoice.paid', paid)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-batch-3',
+        voucher_series: 'A',
+        voucher_number: 44,
+        tx_id: TX_ID,
+        allocations: [
+          {
+            kind: 'supplier_invoice',
+            supplier_invoice_id: SI_ID,
+            payment_id: 'sip-1',
+            status: 'paid',
+            paid_amount: 1000,
+            remaining_amount: 0,
+            amount: 1000,
+          },
+          {
+            kind: 'supplier_invoice',
+            supplier_invoice_id: SI_PARTIAL_ID,
+            payment_id: 'sip-2',
+            status: 'partially_paid',
+            paid_amount: 400,
+            remaining_amount: 600,
+            amount: 400,
+          },
+        ],
+        total_allocated: 1400,
+        leftover: 0,
+      },
+      error: null,
+    }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
+    enqueue({ data: { id: TX_ID, amount: -1400, currency: 'SEK', date: '2026-05-20' }, error: null }) // tx re-read
+    enqueue({ data: { id: SI_ID, status: 'paid', remaining_amount: 0 }, error: null }) // settled SI re-read
+    enqueue({ data: { amount: 1000 }, error: null }) // its payment row (applied amount)
+    enqueue({ data: { id: SI_PARTIAL_ID, status: 'partially_paid', remaining_amount: 600 }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher finalize update
+
+    const op = makePendingOp({ transaction_id: TX_ID, allocations: REQUEST_ALLOCATIONS })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    // The samlingsverifikat itself is announced, as commitEntry announces one.
+    expect(committed).toHaveBeenCalledTimes(1)
+    expect(committed).toHaveBeenCalledWith({ entry: POSTED_ENTRY, userId: 'user-1', companyId: 'company-1' })
+    expect(findCalls('journal_entries', 'eq')).toEqual([
+      ['id', 'je-batch-3'],
+      ['company_id', 'company-1'],
+    ])
+    expect(matched).toHaveBeenCalledTimes(2)
+    expect(paid).toHaveBeenCalledTimes(1)
+    expect(paid).toHaveBeenCalledWith({
+      supplierInvoice: expect.objectContaining({ id: SI_ID, status: 'paid' }),
+      paymentAmount: 1000,
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+    // The applied amount comes from the row the RPC wrote, scoped to the company.
+    expect(findCalls('supplier_invoice_payments', 'eq')).toEqual([
+      ['id', 'sip-1'],
+      ['company_id', 'company-1'],
+    ])
+  })
+
+  it('emits invoice.paid once for a customer invoice the batch settled in full', async () => {
+    const matched = vi.fn()
+    const paid = vi.fn()
+    eventBus.on('invoice.match_confirmed', matched)
+    eventBus.on('invoice.paid', paid)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-batch-4',
+        voucher_series: 'A',
+        voucher_number: 45,
+        tx_id: TX_ID,
+        allocations: [
+          {
+            kind: 'customer_invoice',
+            invoice_id: INV_ID,
+            payment_id: 'ip-1',
+            status: 'paid',
+            paid_amount: 1000,
+            remaining_amount: 0,
+            amount: 1000,
+          },
+        ],
+        total_allocated: 1000,
+        leftover: 0,
+      },
+      error: null,
+    }) // match_batch_allocate RPC
+    enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
+    enqueue({ data: { id: TX_ID, amount: 1000, currency: 'SEK', date: '2026-05-21' }, error: null }) // tx re-read
+    enqueue({ data: { id: INV_ID, status: 'paid', remaining_amount: 0 }, error: null }) // invoice re-read
+    enqueue({ data: { amount: 1000 }, error: null }) // its payment row (applied amount)
+    enqueue({ data: null, error: null }) // dispatcher finalize update
+
+    const op = makePendingOp({
+      transaction_id: TX_ID,
+      allocations: [{ kind: 'customer_invoice', invoice_id: INV_ID, amount: 1000 }],
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(matched).toHaveBeenCalledTimes(1)
+    expect(paid).toHaveBeenCalledTimes(1)
+    expect(paid).toHaveBeenCalledWith({
+      invoice: expect.objectContaining({ id: INV_ID, status: 'paid' }),
+      paymentAmount: 1000,
+      paymentDate: '2026-05-21',
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+    // A befarad kundförlust reserve the payment made unnecessary comes back,
+    // dated at the bank transaction.
+    expect(mockReleaseReserve).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
+      invoiceId: INV_ID,
+      entryDate: '2026-05-21',
+      trigger: 'payment',
+    })
   })
 })

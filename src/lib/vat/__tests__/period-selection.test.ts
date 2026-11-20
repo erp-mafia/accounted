@@ -4,9 +4,19 @@ import { resolveInitialVatPeriodSelection } from '../period-selection'
 describe('resolveInitialVatPeriodSelection', () => {
   const today = new Date(2026, 7, 27) // 2026-08-27
 
-  it('seeds yearly cadence from a yearly setting', () => {
+  it('seeds a yearly setting with the most recently ended räkenskapsår', () => {
+    // Calendar räkenskapsår: 2025 is the one that has ended and can be filed.
     expect(
       resolveInitialVatPeriodSelection({ momsPeriod: 'yearly', over40m: false, today }),
+    ).toEqual({ periodType: 'yearly', year: 2025, period: 1 })
+    // Räkenskapsår ending in June: the one ending 2026-06-30 has ended.
+    expect(
+      resolveInitialVatPeriodSelection({
+        momsPeriod: 'yearly',
+        over40m: false,
+        fiscalYearEndMonth: 6,
+        today,
+      }),
     ).toEqual({ periodType: 'yearly', year: 2026, period: 1 })
   })
 

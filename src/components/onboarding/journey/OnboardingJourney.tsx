@@ -21,13 +21,15 @@ import {
   type CompanySuggestion,
 } from '@/lib/company-lookup/types'
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useBranding } from '@/lib/branding/brand-context'
 import { BOOKS_PATH } from '@/lib/onboarding/books-gate'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
+import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import {
   initJourney,
+  journeyBack,
   journeyReducer,
   stationOfStep,
   type JourneyState,
@@ -43,12 +45,25 @@ import {
   creatableEntityTypes,
   fiscalYearLockedToCalendar,
   isEntityType,
-  isEntityTypeCreatable,
   plannedLegalForms,
   usesPersonnummerAsOrgNumber,
 } from '@/lib/company/entity-type'
-import { suggestedFormForOrgNumber } from '@/lib/onboarding-journey/org-number-hint'
+import {
+  formSettledByOrgNumber,
+  readOrgFieldText,
+  suggestedFormForOrgNumber,
+} from '@/lib/onboarding-journey/org-number-hint'
+import {
+  existingCompanyMatch,
+  isSoleTraderMatch,
+  shouldGateDuplicate,
+  type ExistingCompany,
+  type ExistingCompanyMatch,
+} from '@/lib/onboarding-journey/duplicate-gate'
+import { companyRoleLabelKey, createdLabels, formatCreatedMoment } from '@/lib/company/company-copies'
+import { performCompanySwitch } from '@/lib/company/switch-client'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /** The two chips every picker shows (AB first, as before). */
 const FORM_PICKER_FIRST: readonly EntityType[] = ['aktiebolag', 'enskild_firma']
@@ -73,10 +88,19 @@ function pickerForms(orgNumber: string | null | undefined): { chips: EntityType[
 }
 
 /** i18n key per legal form for the picker chips and the summary card. */
-const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
+const FORM_LABEL_KEY: Record<
+  EntityType,
+  | 'journey_form_ab'
+  | 'journey_form_ef'
+  | 'journey_form_forening'
+  | 'journey_form_ekonomisk_forening'
+  | 'journey_form_bostadsrattsforening'
+> = {
   aktiebolag: 'journey_form_ab',
   enskild_firma: 'journey_form_ef',
   ideell_forening: 'journey_form_forening',
+  ekonomisk_forening: 'journey_form_ekonomisk_forening',
+  bostadsrattsforening: 'journey_form_bostadsrattsforening',
 }
 
 /**
@@ -87,6 +111,8 @@ const FORM_INFO_KEY: Record<EntityType, 'journey_form_info_forening' | null> = {
   aktiebolag: null,
   enskild_firma: null,
   ideell_forening: 'journey_form_info_forening',
+  ekonomisk_forening: null,
+  bostadsrattsforening: null,
 }
 
 /** Statutory label for a planned-form code the reducer stored, or null. */
@@ -103,6 +129,7 @@ import JourneyDatePicker from './JourneyDatePicker'
 import AddressFields from './AddressFields'
 import { InkText } from './ink'
 import './journey.css'
+import { Button } from '@/components/ui/button'
 
 /**
  * The journey onboarding flow. Renders the reducer's current step,
@@ -125,9 +152,10 @@ const SUGGEST_DEBOUNCE_MS = 300
 /** Pause after the last digit before a complete orgnr is looked up. */
 const PREVIEW_DEBOUNCE_MS = 350
 
-/** Digits, spaces and dashes only: the orgnr path, never a name search. */
+/** Digits, spaces and dashes only: the orgnr path, never a name search.
+ *  A typographic dash counts as the hyphen it stands for (readOrgFieldText). */
 function looksLikeOrgNumber(raw: string): boolean {
-  return /^[\d\s-]+$/.test(raw.trim())
+  return /^[\d\s-]+$/.test(readOrgFieldText(raw).trim())
 }
 
 const LOG = '[onboarding-journey]'
@@ -154,6 +182,11 @@ interface OnboardingJourneyProps {
   /** SCB credentials exist in this environment: the orgnr field suggests
    *  companies while a name is typed. Off: the field is orgnr-or-Enter. */
   companySearchEnabled?: boolean
+  /** Where Tillbaka on the first question leads in mode 'first': the BankID
+   *  picker or the company the user already has. Null when nothing comes
+   *  before it; the browser's previous page is no answer, since /login and
+   *  /select-company send this user straight back here. */
+  backHref?: string | null
 }
 
 export default function OnboardingJourney({
@@ -165,9 +198,12 @@ export default function OnboardingJourney({
   initialLegalName,
   hasPendingInvite = false,
   companySearchEnabled = false,
+  backHref = null,
 }: OnboardingJourneyProps) {
   const router = useRouter()
   const t = useTranslations('onboarding')
+  // Role labels as the company's member settings name them (the duplicate stop).
+  const tRoles = useTranslations('settings_company')
   const { appName } = useBranding()
   const locale = useLocale()
   const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
@@ -197,7 +233,17 @@ export default function OnboardingJourney({
   const [thinking, setThinking] = useState(false)
   const [narration, setNarration] = useState<string | null>(null)
   const [monogram, setMonogram] = useState<string | null>(null)
-  const [dupName, setDupName] = useState<string | null>(null)
+  // Säte as the register gave it at creation (SCB Säteskommun). The postal
+  // town in settings.city is never shown as säte.
+  const [registeredOffice, setRegisteredOffice] = useState<string | null>(null)
+  // The companies the user already has under the org number being set up
+  // (oldest first), and the org number they explicitly chose a separate copy
+  // for. Together they drive the duplicate stop (shouldGateDuplicate).
+  const [dupMatch, setDupMatch] = useState<ExistingCompanyMatch | null>(null)
+  const dupName = dupMatch?.companies[0]?.name ?? null
+  const [dupAckOrg, setDupAckOrg] = useState<string | null>(null)
+  const [dupOpening, setDupOpening] = useState(false)
+  const [dupSwitchFailed, setDupSwitchFailed] = useState(false)
   // The SCB picker: rows for the current text, whether SCB cut the list,
   // and the keyboard-highlighted row (-1: none, Enter runs the Enter path).
   const [suggestions, setSuggestions] = useState<CompanySuggestion[]>([])
@@ -217,6 +263,7 @@ export default function OnboardingJourney({
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
+  useOnboardingStepEvent({ journey: 'company', step: state.step, ready: navigation.ready, mode, entityType: entity })
   // Two capabilities drive every wording difference between the forms.
   // personOwned: the org number is the owner's personnummer (enskild
   // firma), so the company IS the person and the questions say "du" and
@@ -252,16 +299,31 @@ export default function OnboardingJourney({
     window.setTimeout(() => setOrgShake(false), 400)
   }, [])
 
+  const dupCheckedOrg = useRef<string | null>(null)
   const checkDuplicate = useCallback((orgNumber: string) => {
-    setDupName(null)
-    fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(orgNumber)}`)
+    setDupMatch(null)
+    const canonical = normalizeOrgNumber(orgNumber)
+    dupCheckedOrg.current = canonical
+    // In the body, never the URL: a sole trader's org number is a personnummer.
+    fetch('/api/company/check-org-number', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ org_number: orgNumber }),
+    })
       .then(async (res) => {
         if (!res.ok) return
         const { data } = await res.json()
-        setDupName(data?.companies?.[0]?.name ?? null)
+        setDupMatch(canonical ? existingCompanyMatch(canonical, data?.companies) : null)
       })
       .catch(() => {})
   }, [])
+
+  // A restored draft (Back/refresh) lands past the orgnr step without the
+  // submit that normally runs the check, which would skip the duplicate stop.
+  const draftOrg = state.step === 'orgnr' ? null : normalizeOrgNumber(state.settings.org_number ?? '')
+  useEffect(() => {
+    if (draftOrg && dupCheckedOrg.current !== draftOrg) checkDuplicate(draftOrg)
+  }, [draftOrg, checkDuplicate])
 
   const lookupFor = useCallback(
     (orgNumber: string): Promise<CompanyLookupOutcome> => {
@@ -285,17 +347,17 @@ export default function OnboardingJourney({
   const submitOrg = useCallback(
     (raw: string) => {
       const trimmed = raw.trim()
-      const looksNumeric = /^[\d\s-]+$/.test(trimmed)
-      if (looksNumeric) {
-        if (normalizeOrgNumber(trimmed) === null) {
+      if (looksLikeOrgNumber(trimmed)) {
+        const orgNumber = readOrgFieldText(trimmed)
+        if (normalizeOrgNumber(orgNumber) === null) {
           shakeOrg()
           return
         }
-        dispatch({ type: 'ORG_SUBMITTED', orgNumber: trimmed })
-        lookupFor(trimmed).then((outcome) => {
+        dispatch({ type: 'ORG_SUBMITTED', orgNumber })
+        lookupFor(orgNumber).then((outcome) => {
           dispatch({ type: 'LOOKUP_RESULT', outcome })
         })
-        checkDuplicate(trimmed)
+        checkDuplicate(orgNumber)
         return
       }
       if (!ticEnabled || trimmed.length < COMPANY_SEARCH_MIN_CHARS) {
@@ -304,14 +366,11 @@ export default function OnboardingJourney({
       }
       // A previous orgnr's "you already have X" note must not sit above the
       // chip row; the pick re-checks for the number it resolves to.
-      setDupName(null)
+      setDupMatch(null)
       lastConfirmed.current = trimmed
       dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
       fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
         dispatch({ type: 'SEARCH_RESULT', outcome })
-        if (outcome.status === 'found' && outcome.hits.length === 1) {
-          checkDuplicate(outcome.hits[0].orgNumber)
-        }
       })
     },
     [ticEnabled, shakeOrg, checkDuplicate, lookupFor],
@@ -381,7 +440,7 @@ export default function OnboardingJourney({
       setSuggestActive(-1)
       lastConfirmed.current = suggestion.name.trim()
       setOrgInput(suggestion.name)
-      setDupName(null)
+      setDupMatch(null)
       dispatch({ type: 'SUGGESTION_PICKED', suggestion })
       lookupFor(suggestion.orgNumber).then((outcome) => {
         dispatch({ type: 'LOOKUP_RESULT', outcome })
@@ -395,7 +454,7 @@ export default function OnboardingJourney({
   // company inks in under it, and Enter only confirms what is already
   // there. Same single TIC call as the Enter path, taken early.
   useEffect(() => {
-    const raw = orgInput.trim()
+    const raw = readOrgFieldText(orgInput.trim())
     const key = looksLikeOrgNumber(raw) ? normalizeOrgNumber(raw) : null
     if (state.step !== 'orgnr' || state.lookupPending || !key) {
       setPreview(null)
@@ -504,7 +563,6 @@ export default function OnboardingJourney({
         name: periodResult.periodName,
       },
       ticLookup: s.ticLookup,
-      booksGate: mode === 'first',
     })
       .then((result) => {
         timers.forEach((id) => window.clearTimeout(id))
@@ -514,10 +572,16 @@ export default function OnboardingJourney({
           logError('journey create company failed', { error: result.error })
           dispatch({
             type: 'SUBMIT_FAILED',
-            code: result.error === 'org_number_invalid' ? 'org_number_invalid' : 'generic',
+            code:
+              result.error === 'org_number_invalid'
+                ? 'org_number_invalid'
+                : result.error === 'period_invalid'
+                  ? 'period_invalid'
+                  : 'generic',
           })
           return
         }
+        setRegisteredOffice(result.registeredOffice ?? null)
         dispatch({ type: 'SUBMIT_SUCCEEDED' })
         const initial = (s.settings.company_name || 'A').trim().charAt(0).toUpperCase()
         window.setTimeout(() => setMonogram(initial), reduced ? 0 : 1600)
@@ -607,11 +671,77 @@ export default function OnboardingJourney({
     const mapped = mapEntityType(legalEntityType)
     return mapped && usesPersonnummerAsOrgNumber(mapped)
       ? t(FORM_LABEL_KEY[mapped])
-      : formatOrgNumber(orgNumber)
+      : formatOrgNumberDisplay(orgNumber)
   }
 
   function renderStep() {
     const s = state.settings
+    if (
+      dupMatch &&
+      shouldGateDuplicate({
+        match: dupMatch,
+        orgNumber: s.org_number,
+        acknowledgedOrgNumber: dupAckOrg,
+        step: state.step,
+      })
+    ) {
+      // More than one copy under this org number: each is a choice, told
+      // apart by when it was created and the user's role there. One copy
+      // keeps the single "Öppna" button.
+      const copies = dupMatch.companies
+      const many = copies.length > 1
+      const created = many
+        ? createdLabels(copies, (iso, precision) => formatCreatedMoment(iso, precision, locale))
+        : null
+      const detailOf = (c: ExistingCompany) => {
+        const date = created?.get(c.id)
+        const roleKey = c.role === 'owner' ? null : companyRoleLabelKey(c.role)
+        const parts = [date ? t('journey_dup_created', { date }) : null, roleKey ? tRoles(roleKey) : null]
+        return parts.filter(Boolean).join(' · ') || undefined
+      }
+      // A sole trader's firm has one bookkeeping for all its business:
+      // a part kept apart (a property) is a project there, not a copy.
+      const sub = isSoleTraderMatch(dupMatch)
+        ? t('journey_dup_ef_sub', { appName })
+        : many
+          ? t('journey_dup_many_sub')
+          : t('journey_dup_sub', { appName })
+      return (
+        <Question
+          title={many ? t('journey_dup_many_title', { count: copies.length }) : t('journey_dup_title', { name: copies[0].name })}
+          sub={sub}
+          attn={dupSwitchFailed ? t('journey_dup_open_failed') : undefined}
+        >
+          <ChipRow
+            options={[
+              ...copies.map((c) => ({
+                key: `open:${c.id}`,
+                label: t('journey_dup_open', { name: c.name }),
+                rec: many ? detailOf(c) : undefined,
+              })),
+              { key: 'copy', label: t('journey_dup_copy') },
+            ]}
+            disabled={dupOpening}
+            onPick={(k) => {
+              if (k === 'copy') {
+                setDupAckOrg(dupMatch.orgNumber)
+                return
+              }
+              const picked = copies.find((c) => `open:${c.id}` === k)
+              if (!picked) return
+              setDupOpening(true)
+              setDupSwitchFailed(false)
+              performCompanySwitch(picked.id).then((result) => {
+                if (result?.error) {
+                  setDupOpening(false)
+                  setDupSwitchFailed(true)
+                }
+              })
+            }}
+          />
+        </Question>
+      )
+    }
     switch (state.step) {
       case 'orgnr':
         return (
@@ -621,11 +751,13 @@ export default function OnboardingJourney({
             attn={
               state.serverError === 'org_number_invalid'
                 ? t('journey_err_org_invalid')
-                : state.lookupNote === 'error'
-                  ? t('journey_lookup_error')
+                : state.lookupNote === 'searcherror'
+                  ? t('journey_search_error')
                   : state.lookupNote === 'nomatch'
                     ? t('journey_search_nomatch')
-                    : undefined
+                    : state.serverError === 'vat_needs_org_number'
+                      ? t('journey_err_vat_needs_orgnr')
+                      : undefined
             }
           >
             <div className={`jny-biginput${orgShake ? ' is-err' : ''}`} style={{ marginTop: 26 }}>
@@ -685,9 +817,13 @@ export default function OnboardingJourney({
             ) : suggestTruncated ? (
               // SCB counted a flood for a short prefix and sent no rows.
               <p className="jny-enterhint">{t('journey_suggest_more')}</p>
-            ) : state.searchHits.length > 1 ? (
+            ) : state.searchHits.length > 0 ? (
               <>
-                <p className="jny-enterhint">{t('journey_search_pick')}</p>
+                {/* A lone hit is a guess too (fuzzy name ranking): it is
+                    confirmed like several, never applied by itself. */}
+                <p className="jny-enterhint">
+                  {state.searchHits.length === 1 ? t('journey_search_pick_one') : t('journey_search_pick')}
+                </p>
                 <ChipRow
                   options={state.searchHits.map((h) => {
                     const ident = identFor(h.result.legalEntityType, h.orgNumber)
@@ -704,10 +840,13 @@ export default function OnboardingJourney({
                   }}
                   {...flyProps}
                 />
+                {/* None of the hits may be theirs (a namesake's firm, theirs
+                    too new to be listed): the way on is the number. */}
+                <p className="jny-enterhint">{t('journey_search_pick_missing')}</p>
               </>
             ) : (
               <>
-                {preview && normalizeOrgNumber(orgInput.trim()) === preview.orgNumber ? (
+                {preview && normalizeOrgNumber(readOrgFieldText(orgInput.trim())) === preview.orgNumber ? (
                   <p className="jny-found" aria-live="polite">
                     <InkText text={preview.result.companyName} step={40} />
                     <span className="jny-found-sub">
@@ -723,14 +862,55 @@ export default function OnboardingJourney({
                 <p className="jny-enterhint">
                   {t('journey_press')} <b>Enter</b>
                 </p>
+                {/* A search that found nothing is where someone setting up
+                    books for something owned together (no org number, two
+                    personnummer) gets stuck (PH 216): say what works. */}
+                {state.lookupNote === 'nomatch' ? (
+                  <p className="jny-more">{t('journey_search_nomatch_joint')}</p>
+                ) : null}
+                {/* A sole trader has a number and often does not know it is
+                    this one: without the line, "no organisation number yet"
+                    reads as their case. */}
+                <p className="jny-more">{t('journey_orgnr_ef_hint')}</p>
               </>
+            )}
+            {/* The org number is optional until the company is VAT
+                registered: one not registered yet, or a test company, takes
+                the manual path without it, whatever the field shows (a test
+                company's name can match a registered one, crm#1909). Not
+                offered right after a VAT yes sent the user here for the
+                number. */}
+            {state.serverError === 'vat_needs_org_number' ? null : (
+              <p className="jny-more jny-more-next">
+                {t('journey_no_orgnr_pre')}{' '}
+                <button
+                  type="button"
+                  className="jny-link"
+                  disabled={state.lookupPending}
+                  onClick={() => {
+                    // A duplicate found for an earlier number is not this company's.
+                    setDupMatch(null)
+                    dispatch({ type: 'NO_ORG_CONTINUE' })
+                  }}
+                >
+                  {t('journey_no_orgnr_link')}
+                </button>
+                .
+              </p>
             )}
           </Question>
         )
 
-      case 'notfound':
+      case 'notfound': {
+        // A personnummer is an enskild firma (formSettledByOrgNumber): say
+        // why a new firm is missing and that the manual path is the same
+        // setup, instead of the Bolagsverket wording meant for a company.
+        const firmByPersonnummer = formSettledByOrgNumber(s.org_number) !== null
         return (
-          <Question title={t('journey_notfound_title')} sub={t('journey_notfound_sub')}>
+          <Question
+            title={firmByPersonnummer ? t('journey_notfound_ef_title') : t('journey_notfound_title')}
+            sub={firmByPersonnummer ? t('journey_notfound_ef_sub') : t('journey_notfound_sub')}
+          >
             <ChipRow
               options={[
                 { key: 'continue', label: t('journey_notfound_continue') },
@@ -743,6 +923,7 @@ export default function OnboardingJourney({
             />
           </Question>
         )
+      }
 
       case 'ceased':
         return (
@@ -787,11 +968,19 @@ export default function OnboardingJourney({
           t('journey_form_info_tail'),
         ].join(' ')
         const plannedLabel = plannedFormLabel(state.plannedForm)
+        // A failed orgnr lookup is why the picker is asked at all: its note
+        // shows here, on the manual path the lookup handed over to.
         return (
           <Question
             title={t('journey_form_title')}
             info={info}
-            attn={plannedLabel ? t('journey_planned_attn', { form: plannedLabel }) : undefined}
+            attn={
+              plannedLabel
+                ? t('journey_planned_attn', { form: plannedLabel })
+                : state.lookupNote === 'error'
+                  ? t('journey_lookup_error')
+                  : undefined
+            }
           >
             <ChipRow
               options={chips.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
@@ -807,7 +996,7 @@ export default function OnboardingJourney({
                   {t('journey_form_more_pre', { form: t(FORM_LABEL_KEY[form]) })}{' '}
                   <button
                     type="button"
-                    className="jny-btn-quiet"
+                    className="jny-link"
                     onClick={() => dispatch({ type: 'ENTITY_PICKED', entityType: form })}
                   >
                     {t('journey_form_more_link', { form: t(FORM_LABEL_KEY[form]).toLowerCase() })}
@@ -818,6 +1007,10 @@ export default function OnboardingJourney({
             ) : chips.length === FORM_PICKER_FIRST.length ? (
               <p className="jny-more">{t('journey_form_more_soon')}</p>
             ) : null}
+            {/* A handelsbolag or kommanditbolag has no chip and is a legal
+                person, so its owner picks Aktiebolag (PH 207): say what
+                holds and what does not before they do. */}
+            <p className="jny-more">{t('journey_form_hb_kb')}</p>
           </Question>
         )
       }
@@ -903,6 +1096,7 @@ export default function OnboardingJourney({
                 }
                 {...flyProps}
               />
+              <FirstYearLine t={t} onPick={() => dispatch({ type: 'FY_FIRST_SELECTED' })} />
             </Question>
           )
         }
@@ -953,6 +1147,7 @@ export default function OnboardingJourney({
               }}
               {...flyProps}
             />
+            <FirstYearLine t={t} onPick={() => dispatch({ type: 'FY_FIRST_SELECTED' })} />
           </Question>
         )
       }
@@ -964,6 +1159,7 @@ export default function OnboardingJourney({
             monthShort={monthShort}
             monthLong={monthLong}
             onUse={(m) => dispatch({ type: 'FY_END_MONTH_PICKED', endMonth: m })}
+            onFirstYear={() => dispatch({ type: 'FY_FIRST_SELECTED' })}
           />
         )
 
@@ -993,7 +1189,7 @@ export default function OnboardingJourney({
               />
             ) : (
               <JourneyDatePicker
-                years={[new Date().getFullYear() - 1, new Date().getFullYear()]}
+                years={[stockholmYearMonth().year - 1, stockholmYearMonth().year]}
                 onPick={(d) => dispatch({ type: 'FY_START_PICKED', date: d })}
               />
             )}
@@ -1018,6 +1214,7 @@ export default function OnboardingJourney({
         return (
           <Question
             title={personOwned ? t('journey_momsyn_ef_title') : t('journey_momsyn_ab_title')}
+            sub={s.org_number ? undefined : t('journey_momsyn_no_orgnr_sub')}
             info={t('journey_momsyn_info')}
           >
             <ChipRow
@@ -1083,6 +1280,7 @@ export default function OnboardingJourney({
             fyAnswer={fyAnswer}
             momsAnswer={momsAnswer}
             methodAnswer={methodAnswer}
+            registeredOffice={registeredOffice}
             onOpen={() => router.push('/')}
             // Act two (issue #2438): the books, the bank and Skatteverket
             // continue inside the journey chrome under the dashboard layout.
@@ -1093,6 +1291,11 @@ export default function OnboardingJourney({
   }
 
   /* ── composition ──────────────────────────────────────────────── */
+
+  // Tillbaka from the first question leaves the journey for a page that
+  // renders; the done screen has no Tillbaka at all (journeyBack).
+  const back = journeyBack(state, mode === 'add' ? '/' : backHref)
+  const canGoBack = back.kind !== 'none'
 
   return (
     <div className="jny jny-fixed" style={{ ['--jny-dawn' as string]: String(station / 4) }}>
@@ -1105,7 +1308,7 @@ export default function OnboardingJourney({
             onJump={
               state.submitting || state.step === 'done'
                 ? undefined
-                : (i) => navigation.backTo((saved) => stationOfStep(saved.journey.step) === i, () => dispatch({ type: 'STATION_JUMP', station: i as 0 | 1 | 2 | 3 }))
+                : (i) => navigation.backTo((saved) => stationOfStep(saved.journey.step) === i, () => navigation.stepBack(() => dispatch({ type: 'STATION_JUMP', station: i as 0 | 1 | 2 | 3 })))
             }
             orbLabel={t(`journey_orb_${orbState}`)}
           >
@@ -1151,9 +1354,9 @@ export default function OnboardingJourney({
 
         <div className="jny-balance" aria-hidden="true" />
         <div className="jny-backrow">
-            <button type="button" className="jny-btn-quiet" disabled={!navigation.ready || state.submitting || state.lookupPending} onClick={() => state.step === 'done' ? router.push('/') : navigation.back(() => state.history.length > 0 ? dispatch({ type: 'BACK' }) : mode === 'add' ? router.push('/') : router.back())}>
+            <Button variant="ghost" className={canGoBack ? 'text-muted-foreground' : 'invisible'} disabled={!canGoBack || !navigation.ready || state.submitting || state.lookupPending} onClick={() => navigation.back(() => back.kind === 'step' ? navigation.stepBack(() => dispatch({ type: 'BACK' })) : back.kind === 'exit' && router.push(back.href))}>
               &lsaquo; {t('back')}
-            </button>
+            </Button>
         </div>
       </div>
     </div>
@@ -1203,21 +1406,43 @@ function NameInput({
   )
 }
 
+/**
+ * One quiet line on the fiscal-year questions. A shortened or extended first
+ * year is set through the first-year dates, and nothing on these questions
+ * said so by name: someone looking for a "förlängt räkenskapsår" picked the
+ * calendar year, or "Annat räkenskapsår" (the end-month picker, which only
+ * makes twelve-month years), and never met the choice.
+ */
+function FirstYearLine({ t, onPick }: { t: TFn; onPick: () => void }) {
+  return (
+    <p className="jny-more">
+      {t('journey_fy_first_line')}{' '}
+      <button type="button" className="jny-link" onClick={onPick}>
+        {t('journey_fy_first_line_link')}
+      </button>
+      .
+    </p>
+  )
+}
+
 function FyMonthStep({
   t,
   monthShort,
   monthLong,
   onUse,
+  onFirstYear,
 }: {
   t: TFn
   monthShort: string[]
   monthLong: string[]
   onUse: (endMonth: number) => void
+  /** Leaves the end-month picker for the first year's own start and end. */
+  onFirstYear: () => void
 }) {
   const [sel, setSel] = useState(0)
   const [hover, setHover] = useState(0)
   const m = hover || sel
-  const year0 = new Date().getFullYear()
+  const year0 = stockholmYearMonth().year
   const span: [number, number] | null = m ? (m === 12 ? [0, 11] : [m, m + 11]) : null
   const label = m
     ? m === 12
@@ -1247,11 +1472,12 @@ function FyMonthStep({
           </button>
         ))}
       </div>
+      <FirstYearLine t={t} onPick={onFirstYear} />
       {sel ? (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={() => onUse(sel)}>
+          <Button size="lg" onClick={() => onUse(sel)}>
             {t('journey_fymonth_use')}
-          </button>
+          </Button>
         </div>
       ) : null}
     </Question>
@@ -1275,7 +1501,7 @@ function FyStartWithSuggestion({
   if (manual) {
     return (
       <JourneyDatePicker
-        years={[new Date().getFullYear() - 1, new Date().getFullYear()]}
+        years={[stockholmYearMonth().year - 1, stockholmYearMonth().year]}
         onPick={onPick}
       />
     )
@@ -1324,6 +1550,17 @@ function FyEndStep({
   const span: [number, number] | null = preview
     ? [sm - 1, (preview.year - sy) * 12 + preview.month - 1]
     : [sm - 1, sm - 1]
+  // "14 månader · förlängt första år", on the option itself and not only in
+  // the band's hover note: a touch screen has no hover, and the extended
+  // year went unnamed there.
+  const lengthLabel = (months: number) =>
+    `${t('journey_fyend_months', { count: months })}${
+      months > 12
+        ? ` · ${t('journey_fyend_extended')}`
+        : months < 12
+          ? ` · ${t('journey_fyend_short')}`
+          : ''
+    }`
   return (
     <Question
       title={t('journey_fyend_title')}
@@ -1339,19 +1576,7 @@ function FyEndStep({
             ? `${formatDate(startDate)} – ${formatDate(preview.date)}`
             : t('journey_fyend_start_label', { date: formatDate(startDate) })
         }
-        note={
-          preview
-            ? `${t('journey_fyend_months', { count: preview.months })}${
-                preview.months > 12
-                  ? ` · ${t('journey_fyend_extended')}`
-                  : preview.months < 12
-                    ? ` · ${t('journey_fyend_short')}`
-                    : ''
-              }`
-            : options.length === 0
-              ? t('journey_fyend_none')
-              : ''
-        }
+        note={preview ? lengthLabel(preview.months) : options.length === 0 ? t('journey_fyend_none') : ''}
       />
       <div className="jny-chips" style={{ marginTop: 20 }}>
         {options.map((o) => (
@@ -1363,7 +1588,7 @@ function FyEndStep({
             onClick={() => onPick(o)}
           >
             {formatDate(o.date)}
-            <span className="jny-rec">{t('journey_fyend_months', { count: o.months })}</span>
+            <span className="jny-rec">{lengthLabel(o.months)}</span>
           </button>
         ))}
         {!calendarOnly ? (
@@ -1401,6 +1626,7 @@ function DoneStep({
   fyAnswer,
   momsAnswer,
   methodAnswer,
+  registeredOffice,
   onOpen,
   onContinue,
 }: {
@@ -1410,6 +1636,8 @@ function DoneStep({
   fyAnswer: string | null
   momsAnswer: string | null
   methodAnswer: string | null
+  /** Säte from the register (SCB Säteskommun); null hides the row. */
+  registeredOffice: string | null
   onOpen: () => void
   onContinue: () => void
 }) {
@@ -1425,7 +1653,7 @@ function DoneStep({
       s.org_number,
     ])
   }
-  if (s.city) rows.push([t('journey_card_seat'), s.city])
+  if (registeredOffice) rows.push([t('journey_card_seat'), registeredOffice])
   if (fyAnswer) rows.push([t('journey_card_fy'), fyAnswer])
   if (s.f_skatt !== undefined) {
     rows.push([t('journey_card_fskatt'), s.f_skatt ? t('journey_card_fskatt_yes') : t('journey_card_fskatt_pending')])
@@ -1464,16 +1692,16 @@ function DoneStep({
       {mode === 'first' ? (
         <Reveal delay={notes.length > 0 ? 1400 + notes.length * 260 : 1200}>
           <div className="jny-qactions">
-            <button type="button" className="jny-btn" onClick={onContinue}>
+            <Button size="lg" onClick={onContinue}>
               {t('journey_done_continue')}
-            </button>
+            </Button>
           </div>
         </Reveal>
       ) : (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={onOpen}>
+          <Button size="lg" onClick={onOpen}>
             {t('journey_open_app', { appName })}
-          </button>
+          </Button>
         </div>
       )}
     </div>

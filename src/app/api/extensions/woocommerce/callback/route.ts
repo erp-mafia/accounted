@@ -1,9 +1,7 @@
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
 import {
@@ -11,12 +9,12 @@ import {
   isWooCommerceConfigured,
 } from '@/extensions/general/woocommerce/lib/credentials'
 import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
+import {
+  classifyProbeFailure,
+  probeFailureLogFields,
+  probeFailureMessage,
+} from '@/extensions/general/woocommerce/lib/probe-failure'
 import { activateIfComplete } from '@/extensions/general/woocommerce/lib/connect'
-
-// This route emits woocommerce.connected (audit trail). ensureInitialized()
-// must run at module load so the event_log handler has subscribed before the
-// first emit on a cold instance.
-ensureInitialized()
 
 const log = createLogger('woocommerce/callback')
 
@@ -48,8 +46,7 @@ export const maxDuration = 60
  * what is left; a stale pending row cannot flip and never syncs.
  */
 export async function POST(request: Request) {
-  loadExtensions()
-  if (!extensionRegistry.get('woocommerce')) {
+  if (!(await extensionRegistry.get('woocommerce'))) {
     return NextResponse.json(
       { error: 'WooCommerce extension is not enabled', code: 'EXTENSION_DISABLED' },
       { status: 503 },
@@ -152,9 +149,17 @@ export async function POST(request: Request) {
   } catch (probeError) {
     log.error('credential probe failed during handshake', {
       connectionId: pending.id,
-      message: probeError instanceof Error ? probeError.message : String(probeError),
+      ...probeFailureLogFields(probeError),
     })
-    await markError('Nycklarna kunde inte verifieras mot butiken.')
+    // The panel shows this on the failed row. A cause the merchant can act on
+    // (firewall, redirecting address, dead host) is named; a refused key is
+    // not theirs to fix here, WooCommerce minted it a second ago.
+    const kind = classifyProbeFailure(probeError)
+    await markError(
+      kind === 'credentials' || kind === 'unknown'
+        ? 'Nycklarna kunde inte verifieras mot butiken.'
+        : probeFailureMessage(kind).sv,
+    )
     return NextResponse.json({ error: 'Credential verification failed' }, { status: 502 })
   }
 

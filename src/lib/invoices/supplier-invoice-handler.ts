@@ -1,0 +1,150 @@
+import { eventBus } from '@/lib/events/bus'
+import type { EventPayload } from '@/lib/events/types'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
+import { logMatchEvent } from '@/lib/invoices/match-log'
+import { createLogger } from '@/lib/logger'
+import type { SupplierInvoice, Transaction } from '@/types'
+
+const log = createLogger('supplier-invoice-handler')
+
+/**
+ * Retroactive match: when a supplier invoice is registered or approved, scan
+ * recent unmatched expense transactions for the bank payment that settles it.
+ *
+ * The forward direction (a freshly imported tx scanning existing invoices) lives
+ * in lib/transactions/ingest.ts. This is the mirror: needed because a Bankgiro
+ * payment is often imported BEFORE the invoice is registered, and nothing
+ * re-matched it afterwards (a reported case). Reuses the same
+ * `findSupplierInvoiceMatch` scorer (one invoice, many txs) so the two
+ * directions can never score differently.
+ *
+ * Writes a SUGGESTION (potential_supplier_invoice_id), never an auto-link
+ * (supplier_invoice_id): the match card / confirm dialog only surfaces for the
+ * suggestion column (transactions page + lib/worklist), and the product choice
+ * is "pre-fill, confirm to book": the user reviews and posts the verifikat.
+ * Setting supplier_invoice_id directly would skip that confirmation and strand
+ * the payment unbooked. This handler therefore never creates a journal entry.
+ *
+ * Reads and writes on the service-role client, scoped by companyId on every
+ * query, like the other core event consumers: the event fires from whatever
+ * registered or approved the invoice, and only a dashboard request has a
+ * session cookie. The cookie client was the anon role under a v1 API key, an
+ * MCP bearer token or a webhook, found no invoice and silently skipped.
+ */
+export async function handleSupplierInvoiceRetroMatch(
+  // .registered and .approved share this payload shape.
+  payload: EventPayload<'supplier_invoice.registered'>
+): Promise<void> {
+  const { supplierInvoice, userId, companyId } = payload
+
+  try {
+    const supabase = createServiceClientNoCookies()
+
+    // Re-fetch with the supplier relation (the scorer reads bankgiro/plusgiro/
+    // name): the emitted payload can be stale or lack the join.
+    const { data: invoice, error: invoiceError } = await supabase
+      .from('supplier_invoices')
+      .select('*, supplier:suppliers(*)')
+      .eq('id', supplierInvoice.id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (invoiceError) throw new Error(`supplier invoice read failed: ${invoiceError.message}`)
+    if (!invoice) return
+    if (!['registered', 'approved'].includes(invoice.status)) return
+    if ((invoice.remaining_amount ?? invoice.total) <= 0) return
+    if (invoice.transaction_id) return // already settled by a bank tx
+
+    // Idempotency: if a tx already points at this invoice (a prior retro run, or
+    // ingest's forward match), don't add a competing suggestion.
+    const { count: linkedCount, error: linkedError } = await supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('supplier_invoice_id', invoice.id)
+    if (linkedError) throw new Error(`linked transaction count failed: ${linkedError.message}`)
+    if (linkedCount && linkedCount > 0) return
+
+    // Bound the scan: ~90 days before the invoice/due date covers normal terms
+    // and the early-payment case, without trawling the whole ledger.
+    const anchor = invoice.invoice_date || invoice.due_date
+    if (!anchor) return
+    const anchorMs = new Date(anchor).getTime()
+    const lowDate = new Date(anchorMs - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+    const { data: candidates, error: candidatesError } = await supabase
+      .from('open_bank_rows')
+      .select('*')
+      .eq('company_id', companyId)
+      .is('supplier_invoice_id', null)
+      .is('potential_supplier_invoice_id', null)
+      .lt('amount', 0)
+      .gte('date', lowDate)
+      .order('date', { ascending: false })
+      .limit(200)
+
+    if (candidatesError) throw new Error(`candidate transactions read failed: ${candidatesError.message}`)
+    if (!candidates || candidates.length === 0) return
+
+    // Pick the best candidate: highest confidence, tie-break on the payment
+    // closest to the invoice date.
+    let best: { tx: Transaction; confidence: number; matchMethod: string } | null = null
+    for (const tx of candidates) {
+      const match = findSupplierInvoiceMatch(tx as Transaction, [invoice as SupplierInvoice])
+      if (!match) continue
+      const closer =
+        best !== null &&
+        match.confidence === best.confidence &&
+        Math.abs(new Date(tx.date).getTime() - anchorMs) <
+          Math.abs(new Date(best.tx.date).getTime() - anchorMs)
+      if (!best || match.confidence > best.confidence || closer) {
+        best = { tx: tx as Transaction, confidence: match.confidence, matchMethod: match.matchMethod }
+      }
+    }
+
+    if (!best) return
+
+    // Suggestion only. The `.is('supplier_invoice_id', null)` guard avoids a
+    // race where the tx was linked between the scan and this write.
+    const { data: suggested, error: suggestError } = await supabase
+      .from('transactions')
+      .update({ potential_supplier_invoice_id: invoice.id })
+      .eq('id', best.tx.id)
+      .eq('company_id', companyId)
+      .is('supplier_invoice_id', null)
+      .select('id')
+    if (suggestError) throw new Error(`suggestion write failed: ${suggestError.message}`)
+    // Linked between the scan and the write: nothing was suggested, so nothing is logged as suggested.
+    if (!suggested || suggested.length === 0) return
+
+    await logMatchEvent(supabase, userId, best.tx.id, 'auto_suggested', {
+      supplierInvoiceId: invoice.id,
+      matchConfidence: best.confidence,
+      matchMethod: best.matchMethod,
+    })
+  } catch (err) {
+    // Never break invoice registration: this is a best-effort convenience.
+    log.error('Retroactive supplier-invoice match failed:', err)
+  }
+}
+
+/**
+ * Register the core supplier invoice handlers on the event bus.
+ * Returns a combined unsubscribe function. lib/init subscribes the same
+ * handler through EVENT_CONSUMERS (lib/composition/event-consumers.ts).
+ *
+ * No subscriber books on supplier_invoice.confirmed: the flow that creates
+ * the invoice posts its registration entry inline when booksInvoicesOnIssue()
+ * says so (lib/operations/inbox-convert.ts), and a deferred invoice is booked
+ * by the explicit Bokför step (lib/supplier-invoices/book-service.ts). A
+ * second booking path here decided on accounting_method alone and posted the
+ * entry for companies with defer_invoice_booking.
+ */
+export function registerSupplierInvoiceHandler(): () => void {
+  const unsubscribers = [
+    eventBus.on('supplier_invoice.registered', handleSupplierInvoiceRetroMatch),
+    eventBus.on('supplier_invoice.approved', handleSupplierInvoiceRetroMatch),
+  ]
+  return () => unsubscribers.forEach((unsub) => unsub())
+}

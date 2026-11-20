@@ -5,8 +5,8 @@
  * `formatCurrency(amount, currency = 'SEK')` (lib/utils.ts) defaults its second
  * argument, and that default is deliberate: `formatCurrency(amount)` is the
  * right call on the ~hundreds of values that ARE kronor, and sv-SE/SEK output
- * in both locales is a Swedish accounting convention rather than a UI string
- * (.claude/rules/i18n.md). What the default cannot do is notice when the number
+ * in both locales is a Swedish accounting convention rather than a UI string.
+ * What the default cannot do is notice when the number
  * handed to it came off a record that carries its own currency: there the
  * omitted argument silently relabels 100 EUR as "100,00 kr".
  *

@@ -19,15 +19,16 @@
  * standalone page this mirrors. Swedish-only, like the rest of the
  * enable-banking extension surfaces.
  *
- * Inline scripts are nonce-bound (ASVS V3.3): the route generates a
- * per-request nonce, stamps it on every <script> tag here, and sets a
- * response-level CSP with script-src 'nonce-...'. The global next.config CSP
- * (which still carries 'unsafe-inline' for the app bundle) also applies;
- * browsers enforce the intersection, so an injected inline script without
- * the nonce is blocked on this response.
+ * Inline scripts are nonce-bound (ASVS V3.3): the route takes the proxy's
+ * per-request nonce (lib/security/csp.ts requestCspNonce), stamps it on every
+ * <script> tag here, and sets a response-level CSP with script-src
+ * 'nonce-...'. The proxy's own CSP carries the same nonce and no
+ * 'unsafe-inline', so whichever of the two headers the browser receives (or
+ * both), an injected inline script without the nonce is blocked.
  */
 
 import { escapeHtml } from '@/lib/email/user-text'
+import { STANDALONE_HEADING_CSS } from '@/lib/branding/standalone-page-css'
 
 /**
  * Opening chunk: full document head, styles, spinner and heading, plus a
@@ -51,17 +52,17 @@ export function renderFinalizeShell(bankName: string | null, cspNonce: string): 
   <title>Slutf&ouml;r bankanslutningen</title>
   <style>
     :root {
-      --bg: hsl(0 0% 100%);
-      --border: hsl(45 5% 85%);
-      --fg: hsl(0 0% 9%);
-      --fg-muted: hsl(0 0% 40%);
-      --fg-faint: hsl(0 0% 55%);
+      --bg: hsl(43 26% 95%);
+      --border: hsl(36 22% 9% / 0.1);
+      --fg: hsl(38 21% 7%);
+      --fg-muted: hsl(40 3% 44%);
+      --fg-faint: hsl(40 3% 44%);
       --warm-accent: hsl(38 45% 52%);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { -webkit-text-size-adjust: 100%; }
     body {
-      font-family: 'Geist', -apple-system, system-ui, 'Segoe UI', sans-serif;
+      font-family: Inter, -apple-system, system-ui, 'Segoe UI', sans-serif;
       background: var(--bg);
       color: var(--fg);
       display: flex;
@@ -96,32 +97,7 @@ export function renderFinalizeShell(bankName: string | null, cspNonce: string): 
       /* Keep a slow spin: a frozen spinner reads as a hung page. */
       .spinner { animation-duration: 2.5s; }
     }
-    .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.375rem;
-      font-size: 0.6875rem;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--fg-faint);
-      margin-bottom: 0.875rem;
-    }
-    .eyebrow::before {
-      content: "";
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--warm-accent);
-    }
-    h1 {
-      font-family: 'Hedvig Letters Serif', Georgia, 'Times New Roman', serif;
-      font-size: 1.625rem;
-      font-weight: 400;
-      letter-spacing: -0.018em;
-      line-height: 1.15;
-      margin-bottom: 0.625rem;
-    }
+    ${STANDALONE_HEADING_CSS}
     .lede {
       font-size: 0.875rem;
       color: var(--fg-muted);

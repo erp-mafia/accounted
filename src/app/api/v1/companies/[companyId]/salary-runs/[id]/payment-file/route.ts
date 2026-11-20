@@ -30,11 +30,13 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import {
   buildSalaryPaymentFile,
   SALARY_PAYMENT_FILE_ALLOWED_STATUSES,
   SALARY_PAYMENT_FILE_FORMATS,
+  salaryPaymentFileRefusal,
   type SalaryPaymentFileError,
 } from '@/lib/salary/payment/build-payment-file'
 
@@ -46,6 +48,10 @@ const PaymentFileFormat = z.enum(SALARY_PAYMENT_FILE_FORMATS)
 const PaymentFileRequest = z
   .object({
     format: PaymentFileFormat.optional(),
+    // A new version of the run's pain.001 (crm#1219): refused unless
+    // confirm_previous_not_approved is true.
+    new_version: z.boolean().optional(),
+    confirm_previous_not_approved: z.boolean().optional(),
   })
   .strict()
 
@@ -54,6 +60,8 @@ const SalaryPaymentFile = z.object({
   /** Id of the archived copy (salary_payment_files); listable via GET /salary-runs/{id}/payment-files. */
   payment_file_id: z.string().uuid(),
   format: PaymentFileFormat,
+  /** The run's payment file version the file carries (always 1 for bg_lb). */
+  version: z.number().int(),
   filename: z.string(),
   content_type: z.enum(['application/xml', 'text/plain']),
   content: z.string(),
@@ -63,6 +71,19 @@ const SalaryPaymentFile = z.object({
   employee_count: z.number().int(),
   total_amount: z.number(),
   currency: z.literal('SEK'),
+  /**
+   * The company account a pain001 pays from: the cash account the salary
+   * verifikat credits (lib/payments/paying-account.ts). Null for bg_lb, which
+   * is sent from the company bankgiro.
+   */
+  paying_account: z
+    .object({
+      cash_account_id: z.string().uuid().nullable(),
+      name: z.string().nullable(),
+      ledger_account: z.string(),
+      iban_last4: z.string().nullable(),
+    })
+    .nullable(),
   warnings: z.array(z.string()),
   generated_at: z.string(),
 })
@@ -80,15 +101,17 @@ registerEndpoint({
     'Marking the run paid (use :mark-paid after the bank has executed the batch), posting the verifikationer (use :book), paying supplier invoices (use the supplier-invoice payment batch), or sending anything to the bank: this call only produces the file.',
   pitfalls: [
     `Run status must be one of ${SALARY_PAYMENT_FILE_ALLOWED_STATUSES.join(', ')}: a draft or review run returns 409 SALARY_RUN_PAYMENT_FILE_NOT_READY. Approve the run first (:approve).`,
-    'pain001 needs the company IBAN and a BIC (saved, or derived from the company clearing number / bank name) in company settings, plus clearing number and account number on every employee with a net payout. bg_lb needs a valid company bankgiro number. Missing company details return 422 SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS (details.problem names the field); missing employee accounts return 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING with details.employees.',
-    'An employee account the chosen format cannot carry returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID with details.employees (employee_id, name, problem) for every affected employee at once; the response never echoes an account number. problem is clearing_format or account_format (correct the employee\'s bank details: clearing 4 digits or 5 starting with 8, account 5-10 digits without the clearing number) or bg_lb_account_too_long (a 5-digit clearing with a 10-digit account does not fit the fixed-width Bankgirot LB account field: request format pain001 instead). A dry run reports the same error, so preview before payday.',
+    'pain001 pays from the bank account the salary is booked on: for a booked run the account its salary verifikat credits, for any other run the company\'s primary bank account (the one :book will credit). paying_account names it. The file uses that account\'s IBAN (the bank-reported one for a connected account, the entered one for a manual account) and its BIC (saved on the account, named by the bank connection, or derived from the IBAN, clearing number or bank name); a company with a single SEK bank account and no IBAN on it, or with no cash accounts, falls back to the IBAN and BIC in company settings. Every employee with a net payout needs clearing number and account number. bg_lb needs a valid company bankgiro number. Missing company details return 422 SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS (details.problem names the field, details.account the paying account for iban_missing and bic_missing); missing employee accounts return 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING with details.employees.',
+    'An employee account that names no payable account returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID with details.employees (employee_id, name, problem) for every affected employee at once; the response never echoes an account number. problem is clearing_format or account_format (correct the employee\'s bank details: clearing 4 digits or 5 starting with 8, account 5-10 digits without the clearing number). Both formats carry every account that passes entry, including a 5-digit Swedbank clearing with a 10-digit account. A dry run reports the same error, so preview before payday.',
     'The file comes back inline as `content` (a string). Write it to disk under `filename` (pain001 as UTF-8, bg_lb as ISO 8859-1 with CRLF line endings, exactly as returned) and upload it in the bank\'s file channel. Nothing is transmitted to the bank by this call.',
     'Generating the file does NOT mark the run paid and moves no money. Call :mark-paid once the bank has executed the batch, then :book to post the verifikationer.',
     'Bankgirot LB is being retired by the banks during 2026: prefer pain001. `format` defaults to company_settings.preferred_payment_format, which is pain001 unless the company changed it.',
     'Employees with a zero net payout (nollkörning, or net consumed by a nettolöneavdrag) are left out of the file and need no bank account; employee_count and total_amount cover only the paid lines. Regenerating is harmless: each call rebuilds the file, archives it as a new salary_payment_files row and re-stamps payment_file_generated_at.',
+    'A correction run (is_correction, from :correct) pays only the difference: each employee\'s corrected net payout minus what the run it corrects already paid them (a new employee gets the full net). An employee with no difference is left out; one the correction paid too much (a lower corrected net, or removed from the run) is never paid or deducted and is named in warnings, so the person handles it. A correction with no positive difference returns 422 SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY with details.correction.overpaid.',
     'Every generated file is archived and listable: the response carries payment_file_id (the archived row) and sha256 (over the bytes as encoded for the bank: UTF-8 for pain001, ISO 8859-1 for bg_lb). Compare it with the checksum of what you uploaded, and use GET /salary-runs/{id}/payment-files to retrieve exactly what was generated earlier instead of regenerating: a regeneration after a bank-detail change (new employee account, changed company IBAN) is a different file, and the archive is the record of what the bank actually received. An archive failure returns an error and no file.',
     'The file always uses the run\'s payment_date as the requested execution date; the body accepts no execution date (unknown fields return 400). Change the run\'s payment_date (PATCH while draft) if the transfer day must move.',
-    'Dry run (?dry_run=true) validates every precondition and returns format, filename, payment_date, employee_count, total_amount and warnings without the content, without archiving and without stamping the run.',
+    'Dry run (?dry_run=true) validates every precondition and returns format, filename, payment_date, employee_count, total_amount, paying_account and warnings without the content, without archiving and without stamping the run.',
+    'Every call returns the run\'s current file version with the same MsgId and EndToEndIds, so the bank refuses a second upload of the month as a duplicate. If the bank refused or never approved the earlier pain001 file (for example a corrected bank account), send new_version: true with confirm_previous_not_approved: true: the file gets new ids and becomes the run\'s version from then on. Only confirm when the earlier file was NOT approved at the bank; two approved files pay the salaries twice. Without the confirmation the call returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED; bg_lb returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED.',
   ],
   example: {
     request: { format: 'pain001' },
@@ -97,6 +120,7 @@ registerEndpoint({
         salary_run_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         payment_file_id: 'f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0',
         format: 'pain001',
+        version: 1,
         filename: 'pain001_lon_2026-05.xml',
         content_type: 'application/xml',
         content:
@@ -106,6 +130,12 @@ registerEndpoint({
         employee_count: 3,
         total_amount: 76500,
         currency: 'SEK',
+        paying_account: {
+          cash_account_id: 'abababab-abab-4bab-8bab-abababababab',
+          name: 'Företagskonto',
+          ledger_account: resolveAccountRole(PINNED_JURISDICTION, 'bank'),
+          iban_last4: '0123',
+        },
         warnings: [],
         generated_at: '2026-05-20T08:00:00.000Z',
       },
@@ -121,59 +151,30 @@ registerEndpoint({
   response: { success: dataEnvelope(SalaryPaymentFile) },
 })
 
-/** Map the shared builder's outcome onto the structured-error catalogue. */
+/**
+ * Map the shared builder's outcome onto the structured-error catalogue. The
+ * code per failure is salaryPaymentFileRefusal's, which the MCP operation
+ * shares, so both doors answer the same code for the same state.
+ */
 function paymentFileError(result: SalaryPaymentFileError, ctx: ApiV1Context) {
   const base = { requestId: ctx.requestId }
-  switch (result.code) {
-    case 'RUN_NOT_FOUND':
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, base)
-    case 'RUN_NOT_READY':
-      return v1ErrorResponseFromCode('SALARY_RUN_PAYMENT_FILE_NOT_READY', ctx.log, {
-        ...base,
-        details: result.details,
-      })
-    case 'COMPANY_NOT_FOUND':
-      return v1ErrorResponseFromCode('COMPANY_NOT_FOUND', ctx.log, base)
-    case 'SETTINGS_MISSING':
-    case 'IBAN_MISSING':
-    case 'BIC_MISSING':
-    case 'BANKGIRO_MISSING':
-    case 'BANKGIRO_INVALID':
-      return v1ErrorResponseFromCode('SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS', ctx.log, {
-        ...base,
-        reason: result.code,
-        details: { format: result.format, problem: result.code.toLowerCase(), ...result.details },
-      })
-    case 'NO_EMPLOYEES':
-      return v1ErrorResponseFromCode('SALARY_RUN_NO_EMPLOYEES', ctx.log, base)
-    case 'EMPLOYEE_BANK_MISSING':
-      return v1ErrorResponseFromCode('SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING', ctx.log, {
-        ...base,
-        details: { format: result.format, ...result.details },
-      })
-    case 'EMPLOYEE_BANK_INVALID':
-      return v1ErrorResponseFromCode('SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID', ctx.log, {
-        ...base,
-        reason: String(result.details.message ?? ''),
-        details: { format: result.format, ...result.details },
-      })
-    case 'GENERATOR_FAILED':
-      return v1ErrorResponseFromCode('SALARY_RUN_PAYMENT_FILE_GENERATION_FAILED', ctx.log, {
-        ...base,
-        reason: String(result.details.message ?? ''),
-        details: { format: result.format, ...result.details },
-      })
-    case 'ARCHIVE_FAILED':
-      // The file is räkenskapsinformation and is never handed out
-      // unarchived: the archive INSERT failure is the response.
-      ctx.log.error('payment file archive failed; file withheld', {
-        format: result.format,
-        error: result.cause,
-      })
-      return v1ErrorResponse(result.cause, ctx.log, base)
-    case 'DB_ERROR':
-      return v1ErrorResponse(result.cause, ctx.log, base)
+  const refusal = salaryPaymentFileRefusal(result)
+  if (refusal) {
+    return v1ErrorResponseFromCode(refusal.code, ctx.log, {
+      ...base,
+      ...(refusal.reason !== undefined ? { reason: refusal.reason } : {}),
+      ...(refusal.details ? { details: refusal.details } : {}),
+    })
   }
+  if (result.code === 'ARCHIVE_FAILED') {
+    // The file is räkenskapsinformation and is never handed out
+    // unarchived: the archive INSERT failure is the response.
+    ctx.log.error('payment file archive failed; file withheld', {
+      format: result.format,
+      error: result.cause,
+    })
+  }
+  return v1ErrorResponse(result.cause, ctx.log, base)
 }
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
@@ -213,6 +214,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       userId: ctx.userId,
       format: parsed.data.format,
       dryRun: ctx.dryRun,
+      newVersion: parsed.data.new_version,
+      confirmPreviousNotApproved: parsed.data.confirm_previous_not_approved,
     })
 
     if (!result.ok) return paymentFileError(result, ctx)
@@ -220,12 +223,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const summary = {
       salary_run_id: salaryRunId,
       format: result.format,
+      version: result.version,
       filename: result.filename,
       content_type: result.contentType,
       payment_date: result.paymentDate,
       employee_count: result.employeeCount,
       total_amount: result.totalAmount,
       currency: 'SEK' as const,
+      paying_account: result.payer.cashAccount,
       warnings: result.warnings,
     }
 

@@ -7,7 +7,10 @@ import { DeadlineRow, deadlineDateLabel } from './DeadlineRow'
 import { DeadlineGroupCard, isSkattekontoDeadline } from './DeadlineGroupCard'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
+import { EmptyState } from '@/components/ui/empty-state'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { isDeadlineOverdue } from '@/lib/calendar/utils'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type TypeSegment = 'all' | 'tax' | 'invoicing' | 'own'
 
@@ -24,9 +27,9 @@ interface DeadlineListProps {
 }
 
 /**
- * Viktiga datum as the concept thread (scene 17): a type seg, borderless
- * rows under hairline section headers, and a "Närmast" countdown pane on the
- * right. Marking done confirms up front via ConfirmDialog.
+ * Viktiga datum as the concept thread (scene 17): a type seg and borderless
+ * rows under hairline section headers. Done deadlines wait behind one
+ * "Visa klara" line. Marking done confirms up front via ConfirmDialog.
  */
 export function DeadlineList({
   deadlines,
@@ -36,6 +39,9 @@ export function DeadlineList({
   const t = useTranslations('deadlines')
   const [segment, setSegment] = useState<TypeSegment>('all')
   const [confirmTarget, setConfirmTarget] = useState<Deadline | null>(null)
+  // Klara has no time window (every deadline ever marked done), so it stays
+  // folded until asked for.
+  const [showCompleted, setShowCompleted] = useState(false)
 
   const filteredDeadlines = useMemo(() => {
     if (segment === 'all') return deadlines
@@ -44,7 +50,7 @@ export function DeadlineList({
   }, [deadlines, segment])
 
   const groupedDeadlines = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const overdue: Deadline[] = []
     const todayDeadlines: Deadline[] = []
     const upcoming: Deadline[] = []
@@ -65,26 +71,6 @@ export function DeadlineList({
     return { overdue, today: todayDeadlines, upcoming, completed }
   }, [filteredDeadlines])
 
-  // "Närmast" pane: days to the nearest pending deadline (across the
-  // unfiltered list: the countdown is page context, not a filter readout).
-  const nearest = useMemo(() => {
-    const pending = deadlines
-      .filter((d) => !d.is_completed && !isDeadlineOverdue(d))
-      .sort((a, b) => a.due_date.localeCompare(b.due_date))
-    const first = pending[0]
-    if (!first) return null
-    const today = startOfDay(new Date())
-    const days = Math.round(
-      (parseDate(first.due_date).getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
-    )
-    return { deadline: first, days: Math.max(0, days) }
-  }, [deadlines])
-
-  const overdueCount = useMemo(
-    () => deadlines.filter((d) => !d.is_completed && isDeadlineOverdue(d)).length,
-    [deadlines],
-  )
-
   const handleRequestToggle = (deadline: Deadline) => {
     // Un-completing is a harmless revert: no confirmation (matches the undo
     // toast the page already offers).
@@ -99,8 +85,8 @@ export function DeadlineList({
     { key: 'overdue', label: t('section_overdue'), items: groupedDeadlines.overdue },
     { key: 'today', label: t('section_today'), items: groupedDeadlines.today },
     { key: 'upcoming', label: t('section_upcoming'), items: groupedDeadlines.upcoming },
-    { key: 'completed', label: t('section_completed'), items: groupedDeadlines.completed },
   ].filter((s) => s.items.length > 0)
+  const completed = groupedDeadlines.completed
 
   // Skattekonto obligations legally share the same due date (moms + AGI +
   // preliminärskatt all fall on "den 12:e"): collapse 2+ such rows into one
@@ -134,98 +120,86 @@ export function DeadlineList({
     return entries
   }
 
+  const renderSection = ({ key, label, items }: { key: string; label: string; items: Deadline[] }) => (
+    <section key={key}>
+      <div className="mb-1 flex items-center gap-3 px-1">
+        <h2 className="text-xs text-muted-foreground">
+          {label}
+        </h2>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {items.length}
+        </span>
+        <div className="h-px flex-1 bg-border/60" />
+      </div>
+      <div>
+        {toEntries(items).map((entry) =>
+          entry.kind === 'group' ? (
+            <DeadlineGroupCard
+              key={`skattekonto-${entry.date}`}
+              deadlines={entry.items}
+              onEdit={onDeadlineEdit}
+              onRequestToggle={handleRequestToggle}
+            />
+          ) : (
+            <DeadlineRow
+              key={entry.deadline.id}
+              deadline={entry.deadline}
+              onEdit={onDeadlineEdit}
+              onRequestToggle={handleRequestToggle}
+            />
+          ),
+        )}
+      </div>
+    </section>
+  )
+
+  // First time: one sentence where the first row would be, and no toolbar
+  // while there is nothing to filter (design.md convention 17).
+  if (deadlines.length === 0) {
+    return <EmptyState title={t('empty_title')} />
+  }
+
   return (
     <div className="space-y-6">
-      {/* Toolbar: the type seg (concept: Alla / Skatt / Fakturering / Egna) */}
+      {/* Toolbar: the type seg, "Alla" last and still the default (V7 list
+          toolbars T2). */}
       <SegmentedControl
         value={segment}
         onChange={setSegment}
         options={[
-          { value: 'all', label: t('seg_all') },
           { value: 'tax', label: t('seg_tax') },
           { value: 'invoicing', label: t('seg_invoicing') },
           { value: 'own', label: t('seg_own') },
+          { value: 'all', label: t('seg_all') },
         ]}
       />
 
-      <div className="gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_240px] lg:items-start">
-        {/* The thread */}
-        {filteredDeadlines.length === 0 ? (
-          <p className="py-16 text-center text-sm text-muted-foreground">
-            {segment !== 'all' ? t('empty_filtered') : t('empty_title')}
-          </p>
-        ) : (
-          <div className="stagger-enter space-y-8">
-            {sections.map(({ key, label, items }) => (
-              <section key={key}>
-                <div className="mb-1 flex items-center gap-3 px-1">
-                  <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
-                    {label}
-                  </h2>
-                  <span className="text-xs tabular-nums text-muted-foreground/50">
-                    {items.length}
-                  </span>
-                  <div className="h-px flex-1 bg-border/60" />
-                </div>
-                <div>
-                  {toEntries(items).map((entry) =>
-                    entry.kind === 'group' ? (
-                      <DeadlineGroupCard
-                        key={`skattekonto-${entry.date}`}
-                        deadlines={entry.items}
-                        onEdit={onDeadlineEdit}
-                        onRequestToggle={handleRequestToggle}
-                      />
-                    ) : (
-                      <DeadlineRow
-                        key={entry.deadline.id}
-                        deadline={entry.deadline}
-                        onEdit={onDeadlineEdit}
-                        onRequestToggle={handleRequestToggle}
-                      />
-                    ),
-                  )}
-                </div>
-              </section>
-            ))}
-          </div>
-        )}
-
-        {/* "Närmast" pane (concept aside) */}
-        <aside className="mt-8 lg:mt-0">
-          <div className="rounded-lg border border-border">
-            <div className="border-b border-border px-4 py-2.5">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                {t('nearest_title')}
-              </p>
-            </div>
-            <div className="px-4 py-6 text-center">
-              {nearest ? (
-                <>
-                  <p className="font-display text-4xl leading-none tracking-tight tabular-nums">
-                    {nearest.days === 0 ? t('rel_today') : nearest.days}
-                  </p>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {nearest.days === 0
-                      ? nearest.deadline.title
-                      : t('nearest_days_to', { title: nearest.deadline.title })}
-                  </p>
-                  <p className="mt-1 text-xs tabular-nums text-muted-foreground/60">
-                    {deadlineDateLabel(nearest.deadline.due_date)}
-                  </p>
-                </>
-              ) : (
-                <p className="py-4 text-xs text-muted-foreground">{t('nearest_empty')}</p>
-              )}
-              {overdueCount > 0 && (
-                <p className="mt-3 text-xs font-medium text-destructive">
-                  {t('nearest_overdue', { count: overdueCount })}
-                </p>
-              )}
-            </div>
-          </div>
-        </aside>
-      </div>
+      {/* The thread */}
+      {filteredDeadlines.length === 0 ? (
+        <p className="px-1 py-3 text-[13px] text-muted-foreground">
+          {t('empty_filtered')}{' '}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSegment('all')}>
+            {t('empty_filtered_clear')}
+          </button>
+        </p>
+      ) : (
+        <div className="stagger-enter space-y-8">
+          {sections.map(renderSection)}
+          {completed.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowCompleted((open) => !open)}
+              aria-expanded={showCompleted}
+              className="px-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            >
+              {showCompleted ? t('hide_completed') : t('show_completed', { count: completed.length })}
+            </button>
+          )}
+          {showCompleted &&
+            completed.length > 0 &&
+            renderSection({ key: 'completed', label: t('section_completed'), items: completed })}
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmTarget !== null}

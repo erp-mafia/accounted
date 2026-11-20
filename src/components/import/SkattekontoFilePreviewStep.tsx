@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { ImportNotices } from '@/components/import/ImportNotices'
+import { ImportStatRow } from '@/components/import/ImportStatRow'
 import { noticesFromParseIssues } from '@/lib/import/notices'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,8 +16,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ArrowLeft, ArrowRight, AlertTriangle, Calendar, FileText, Scale } from 'lucide-react'
-import { formatCurrency, cn } from '@/lib/utils'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { ArrowLeftIcon, ArrowRightIcon, ExclamationTriangleIcon } from '@/components/icons'
+import { formatCurrency, cn, formatRowAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 
@@ -73,52 +75,37 @@ export default function SkattekontoFilePreviewStep({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <FileText className="h-4 w-4" />
-              <span className="text-sm">{t('skattekonto_preview_rows')}</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{stats.parsed_rows}</p>
-            {stats.skipped_rows > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('skattekonto_preview_skipped', { count: stats.skipped_rows })}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <Calendar className="h-4 w-4" />
-              <span className="text-sm">{t('skattekonto_preview_period')}</span>
-            </div>
-            <p className="text-sm font-medium tabular-nums">
-              {date_from || '-'} – {date_to || '-'}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <Scale className="h-4 w-4" />
-              <span className="text-sm">{t('skattekonto_preview_closing_saldo')}</span>
-            </div>
-            <p className="text-lg font-display tabular-nums">
-              {closing_saldo !== null ? formatCurrency(closing_saldo) : '-'}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Summary: flat label/number pairs, no boxed tiles */}
+      <ImportStatRow
+        stats={[
+          {
+            key: 'rows',
+            label: t('skattekonto_preview_rows'),
+            value: stats.parsed_rows,
+            note:
+              stats.skipped_rows > 0
+                ? t('skattekonto_preview_skipped', { count: stats.skipped_rows })
+                : undefined,
+          },
+          {
+            key: 'period',
+            label: t('skattekonto_preview_period'),
+            value: `${date_from || '-'} - ${date_to || '-'}`,
+            plain: true,
+          },
+          {
+            key: 'closing',
+            label: t('skattekonto_preview_closing_saldo'),
+            value: closing_saldo !== null ? formatCurrency(closing_saldo) : '-',
+          },
+        ]}
+      />
 
       {orgNumberMismatch && (
-        <Card className="border-destructive/40">
-          <CardHeader className="py-3">
+        <Card>
+          <CardHeader>
             <CardTitle className="text-sm flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-4 w-4" />
+              <ExclamationTriangleIcon className="h-4 w-4" />
               {t('skattekonto_org_mismatch_title')}
             </CardTitle>
           </CardHeader>
@@ -143,10 +130,10 @@ export default function SkattekontoFilePreviewStep({
       )}
 
       {sumGap && (
-        <Card className="border-destructive/40">
-          <CardHeader className="py-3">
+        <Card>
+          <CardHeader>
             <CardTitle className="text-sm flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-4 w-4" />
+              <ExclamationTriangleIcon className="h-4 w-4" />
               {t('skattekonto_sum_gap_title')}
             </CardTitle>
           </CardHeader>
@@ -191,17 +178,21 @@ export default function SkattekontoFilePreviewStep({
         </p>
       )}
 
-      {/* What happens after import: nothing is booked automatically, and an
-          event that already has a 1630 verifikat (a deposit booked from the
-          bank side) is offered as a link, not a second booking. Answers the
-          "some of these are already booked" question before the click. */}
-      <p className="text-sm text-muted-foreground">{t('skattekonto_after_import_note')}</p>
+      {/* What happens after import: nothing is booked automatically. The
+          "?" says the rest: an event that already has a 1630 verifikat (a
+          deposit booked from the bank side) is offered as a link, not a
+          second booking, which answers "some of these are already booked"
+          before the click. */}
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span>{t('skattekonto_after_import_note')}</span>
+        <HelpPopover className="shrink-0">{t('skattekonto_after_import_help')}</HelpPopover>
+      </div>
 
       {/* Rows the parser could not fully read: folded, all of them. */}
       <ImportNotices notices={noticesFromParseIssues(warnings)} />
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
@@ -224,7 +215,7 @@ export default function SkattekontoFilePreviewStep({
                         row.belopp < 0 ? 'text-destructive' : undefined,
                       )}
                     >
-                      {formatCurrency(row.belopp)}
+                      {formatRowAmount(row.belopp)}
                     </TableCell>
                     <TableCell className="text-right">
                       {isDuplicate ? (
@@ -251,12 +242,12 @@ export default function SkattekontoFilePreviewStep({
 
       <div className="flex justify-between">
         <Button variant="outline" onClick={onBack} disabled={isLoading}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           {t('skattekonto_back')}
         </Button>
         <Button onClick={onExecute} disabled={isLoading || importBlocked || newCount === 0}>
           {t('skattekonto_import_button', { count: newCount })}
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="h-4 w-4" />
         </Button>
       </div>
     </div>

@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The period's unlinked IB verifikat has its own tests
+// (opening-balance/unlinked.test.ts, opening-balances.test.ts); here the
+// year has none, so the queued journal reads stay the report's own.
+vi.mock('@/lib/import/opening-balance/unlinked', () => ({
+  findUnlinkedOpeningBalance: vi.fn(async () => null),
+}))
+
 // ============================================================
 // Mock: sequential result queue
 // ============================================================
@@ -21,6 +28,7 @@ function makeBuilder(table: string) {
     return b
   })
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
+  b.maybeSingle = b.single
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
 }
@@ -40,7 +48,8 @@ function makeClient() {
   } as any
 }
 
-import { generateSIEExport } from '../sie-export'
+import { encodeSIEToCP437, generateSIEExport } from '../sie-export'
+import { createLedgerFakeDb } from '@/tests/ledger-fake-db'
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -61,7 +70,8 @@ const baseOptions = {
 
 // Queue consumption order (dimensions registry replaced cost_centers/projects):
 //   0: fiscal_periods.single()
-//   1: previous fiscal period .single() (#RAR -1)
+//   1: previous fiscal period .maybeSingle() (#RAR -1, the period ending the
+//      day before this one starts)
 //   2: chart_of_accounts        (fetchAllRows)
 //   3: journal_entries          (fetchAllRows)
 //   4: journal_entry_lines      (fetchLinesByEntryIds; SKIPPED when slot 3
@@ -108,6 +118,26 @@ describe('generateSIEExport', () => {
     expect(lines[5]).toBe('#ORGNR 556677-8899')
     expect(lines[6]).toBe('#FNAMN "Test AB"')
     expect(lines[7]).toBe('#RAR 0 20240101 20241231')
+  })
+
+  it("stamps #GEN with the Swedish day, also on New Year's night", async () => {
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: [], error: null }, // journal_entries
+      { data: [], error: null }, // dimensions
+      { data: [], error: null }, // dimension_values
+      { data: [], error: null }, // opening balances RPC
+    ]
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+      expect(output.split('\r\n')[4]).toBe('#GEN 20270101')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('hyphenates a bare 10-digit org_number in #ORGNR', async () => {
@@ -309,6 +339,46 @@ describe('generateSIEExport', () => {
     // that is the exact filter that caused the undeclared-#OBJEKT bug.
     expect(eqCallsByTable['dimensions'] ?? []).not.toContainEqual(['is_active', true])
     expect(eqCallsByTable['dimension_values'] ?? []).not.toContainEqual(['is_active', true])
+  })
+
+  it('declares registry values past the 1000-row page with their registry names', async () => {
+    // PostgREST caps a read at 1000 rows. The registry read used to be one
+    // unpaginated query, so every code past the cap was declared with a
+    // synthesized name = code: a placeholder in a file kept seven years.
+    const firstPage = Array.from({ length: 1000 }, (_, i) => ({
+      dimension_id: 'dim-6',
+      code: `P${String(i).padStart(4, '0')}`,
+      name: `Projekt ${i}`,
+    }))
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      {
+        data: [
+          { id: 'e1', entry_date: '2024-05-02', voucher_number: 1, voucher_series: 'A', description: 'Late code', status: 'posted' },
+        ],
+        error: null,
+      },
+      {
+        data: [
+          { journal_entry_id: 'e1', account_number: '5010', debit_amount: 500, credit_amount: 0, line_description: null, dimensions: { '6': 'P1500' } },
+          { journal_entry_id: 'e1', account_number: '1930', debit_amount: 0, credit_amount: 500, line_description: null, dimensions: {} },
+        ],
+        error: null,
+      },
+      { data: [dimProjekt], error: null }, // dimensions
+      { data: firstPage, error: null }, // dimension_values, a full first page
+      { data: [{ dimension_id: 'dim-6', code: 'P1500', name: 'Villa Almgren' }], error: null }, // page 2
+      { data: [], error: null }, // RPC fallback
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#OBJEKT 6 "P1500" "Villa Almgren"')
+    expect(output).not.toContain('#OBJEKT 6 "P1500" "P1500"')
+    expect(output).toContain('#OBJEKT 6 "P0999" "Projekt 999"')
+    expect(output).toContain('\t#TRANS 5010 {6 "P1500"} 500.00 20240502')
   })
 
   it('synthesizes #DIM and #OBJEKT for orphan line codes with no registry rows', async () => {
@@ -871,5 +941,375 @@ describe('generateSIEExport', () => {
     expect(output).not.toContain('"IB 2024"')
     // The real transfer entry must appear
     expect(output).toContain('"Stängning Bokio"')
+  })
+})
+
+// Agent feedback seq 852586: the file wrote #RAR -1 but no #IB -1, #UB -1 or
+// #RES -1, so an importing årsredovisning program read an empty prior year.
+describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', () => {
+  // 2024 opens from the compute_prior_opening_balances fallback (no IB
+  // pointer) over 2023's one voucher. It sells 500 on 3001, books 100 of
+  // planenlig avskrivning (source_type year_end, NOT the closing) and is
+  // closed by the resultatavslut e-close, which zeroes 3001 and 7832 into
+  // 2099. 2025 opens from the IB entry that close created, and has one sale
+  // of its own. The year -1 read goes through the trial balance in parallel
+  // with other reads, so these books live in the in-memory ledger rather
+  // than in an ordered result queue.
+  const COMPANY = 'company-1'
+  const entry = (id: string, period: string, date: string, extra: Record<string, unknown> = {}) => ({
+    id, company_id: COMPANY, fiscal_period_id: period, entry_date: date, description: id,
+    voucher_series: 'A', voucher_number: Number(id.replace(/\D/g, '')) || 1, status: 'posted',
+    source_type: 'manual', reverses_id: null, correction_of_id: null, ...extra,
+  })
+  const line = (id: string, entryId: string, account: string, debit: number, credit: number) => ({
+    id, journal_entry_id: entryId, account_number: account, debit_amount: debit, credit_amount: credit,
+    line_description: null, dimensions: {},
+  })
+  function twoYearLedger() {
+    return createLedgerFakeDb({
+      companyId: COMPANY,
+      tables: {
+        fiscal_periods: [
+          { id: 'period-0', company_id: COMPANY, period_start: '2023-01-01', period_end: '2023-12-31', opening_balance_entry_id: null, closing_entry_id: null, is_closed: false },
+          { id: 'period-1', company_id: COMPANY, period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null, closing_entry_id: 'e-close', is_closed: true },
+          { id: 'period-2', company_id: COMPANY, period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-2025', closing_entry_id: null, is_closed: false },
+        ],
+        journal_entries: [
+          entry('e-2023', 'period-0', '2023-06-01'),
+          entry('e-sale', 'period-1', '2024-03-01'),
+          entry('e-dep', 'period-1', '2024-12-31', { source_type: 'year_end' }),
+          entry('e-close', 'period-1', '2024-12-31', { source_type: 'year_end' }),
+          entry('ob-2025', 'period-2', '2025-01-01', { source_type: 'opening_balance' }),
+          entry('e-2025', 'period-2', '2025-02-01', { description: 'Sale 2025' }),
+        ],
+        journal_entry_lines: [
+          line('a1', 'e-2023', '1930', 1000, 0),
+          line('a2', 'e-2023', '2081', 0, 1000),
+          line('p1', 'e-sale', '1930', 500, 0),
+          line('p2', 'e-sale', '3001', 0, 500),
+          line('p3', 'e-dep', '7832', 100, 0),
+          line('p4', 'e-dep', '1229', 0, 100),
+          line('p5', 'e-close', '3001', 500, 0),
+          line('p6', 'e-close', '7832', 0, 100),
+          line('p7', 'e-close', '2099', 0, 400),
+          line('o1', 'ob-2025', '1930', 1500, 0),
+          line('o2', 'ob-2025', '2081', 0, 1000),
+          line('o3', 'ob-2025', '1229', 0, 100),
+          line('o4', 'ob-2025', '2099', 0, 400),
+          line('y1', 'e-2025', '1930', 200, 0),
+          line('y2', 'e-2025', '3001', 0, 200),
+        ],
+      },
+    })
+  }
+
+  it.each([false, true])(
+    'with exclude_year_end_closing=%s: #UB -1 equals #IB 0 for every balance account and #RES -1 keeps the depreciation',
+    async (excludeClosing) => {
+      const ledger = twoYearLedger()
+
+      const output = await generateSIEExport(ledger.supabase as never, COMPANY, {
+        ...baseOptions,
+        fiscal_period_id: 'period-2',
+        exclude_year_end_closing: excludeClosing,
+      })
+      const records = output.split('\r\n')
+
+      expect(records).toContain('#RAR -1 20240101 20241231')
+      expect(records).toContain('#IB -1 1930 1000.00')
+      expect(records).toContain('#IB -1 2081 -1000.00')
+
+      // IB/UB continuity: UB(year -1) = IB(year 0), account by account,
+      // whatever the flag says (it shapes year 0 only).
+      const ib0 = records.filter((r) => r.startsWith('#IB 0 '))
+      expect(ib0).toHaveLength(4)
+      for (const record of ib0) {
+        const [, , account, amount] = record.split(' ')
+        expect(records).toContain(`#UB -1 ${account} ${amount}`)
+      }
+      expect(records.filter((r) => r.startsWith('#UB -1 '))).toHaveLength(4)
+
+      // The prior-year result before the resultatavslut: the sale AND the
+      // year_end depreciation, not the zeros the closing leaves behind.
+      expect(records).toContain('#RES -1 3001 -500.00')
+      expect(records).toContain('#RES -1 7832 100.00')
+
+      // The year -1 read is never narrowed by the flag: its trial balance
+      // keeps every entry, and only the resultatavslut is taken out of #RES.
+      const priorYearReads = ledger.supabase.rpc.mock.calls
+        .filter(([name, args]) => name === 'get_trial_balance_aggregates' && args?.p_fiscal_period_id === 'period-1')
+        .map(([, args]) => args?.p_closing_mode)
+      expect(priorYearReads).toEqual(['include'])
+      expect(ledger.supabase.rpc).toHaveBeenCalledWith('result_closing_entry_ids', {
+        p_company_id: COMPANY,
+        p_fiscal_period_id: 'period-1',
+      })
+    },
+  )
+
+  it('writes every balance item before the first #VER (SIE 4 record order)', async () => {
+    const output = await generateSIEExport(twoYearLedger().supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-2',
+    })
+    const records = output.split('\r\n')
+
+    const firstVer = records.findIndex((r) => r.startsWith('#VER '))
+    expect(firstVer).toBeGreaterThan(0)
+    const balanceIdx = records
+      .map((r, i) => (/^#(IB|UB|RES) (0|-1) /.test(r) ? i : -1))
+      .filter((i) => i >= 0)
+    expect(balanceIdx.length).toBeGreaterThan(0)
+    expect(Math.max(...balanceIdx)).toBeLessThan(firstVer)
+    // Grouped by record type: #IB, then #UB, then #RES.
+    const kinds = balanceIdx.map((i) => records[i].split(' ')[0])
+    expect(kinds).toEqual([...kinds].sort((a, b) => ['#IB', '#UB', '#RES'].indexOf(a) - ['#IB', '#UB', '#RES'].indexOf(b)))
+    expect(records).toContain('#UB 0 1930 1700.00')
+    expect(records).toContain('#RES 0 3001 -200.00')
+  })
+
+  // crm#1727: the export year closed by the resultatavslut e-close. #RES 0 is
+  // the result before it (as #RES -1 already was), while #UB 0 and #VER keep
+  // the closing as booked.
+  it('writes #RES 0 of a closed year before the resultatavslut, keeping it in #UB and #VER', async () => {
+    const ledger = twoYearLedger()
+
+    const records = (await generateSIEExport(ledger.supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-1',
+    })).split('\r\n')
+
+    expect(records).toContain('#RES 0 3001 -500.00')
+    expect(records).toContain('#RES 0 7832 100.00')
+    // The closing stays in the books' view: 2099 carries the result.
+    expect(records).toContain('#UB 0 2099 -400.00')
+    expect(records.some((r) => r.startsWith('#VER ') && r.endsWith('"e-close"'))).toBe(true)
+    // The year's result in #RES equals what the closing moved to 2099.
+    const resTotal = records
+      .filter((r) => r.startsWith('#RES 0 '))
+      .reduce((sum, r) => sum + Number(r.split(' ')[3]), 0)
+    expect(Math.round(resTotal * 100) / 100).toBe(-400)
+    expect(ledger.supabase.rpc).toHaveBeenCalledWith('result_closing_entry_ids', {
+      p_company_id: COMPANY,
+      p_fiscal_period_id: 'period-1',
+    })
+  })
+
+  it('leaves #RES 0 as it was when the closed year is exported without its year-end entries', async () => {
+    const records = (await generateSIEExport(twoYearLedger().supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-1',
+      exclude_year_end_closing: true,
+    })).split('\r\n')
+
+    expect(records).toContain('#RES 0 3001 -500.00')
+    expect(records.some((r) => r.startsWith('#RES 0 7832 '))).toBe(false)
+    expect(records.some((r) => r.endsWith('"e-close"'))).toBe(false)
+  })
+
+  it('does not look for a resultatavslut in an open year without an entry on its last day', async () => {
+    const ledger = twoYearLedger()
+
+    const records = (await generateSIEExport(ledger.supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-2',
+    })).split('\r\n')
+
+    expect(records).toContain('#RES 0 3001 -200.00')
+    expect(ledger.supabase.rpc).not.toHaveBeenCalledWith('result_closing_entry_ids', {
+      p_company_id: COMPANY,
+      p_fiscal_period_id: 'period-2',
+    })
+  })
+
+  it('writes no year -1 records when there is no previous fiscal year', async () => {
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: [], error: null }, // journal_entries
+      { data: [], error: null }, // dimensions
+      { data: [], error: null }, // dimension_values
+      { data: [{ account_number: '1930', debit: 200, credit: 0 }, { account_number: '2081', debit: 0, credit: 200 }], error: null }, // RPC
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#UB 0 1930 200.00')
+    expect(output).not.toMatch(/^#(RAR|IB|UB|RES) -1 /m)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('result_closing_entry_ids', expect.anything())
+  })
+})
+
+// An undone bokslut leaves its year_end entries reversed and a storno of each
+// in the year. With exclude_year_end_closing the export dropped the reversed
+// originals by source_type but kept their storno, so #VER, #UB and #RES carried
+// the negation of a bokslut that, net, never happened.
+describe('generateSIEExport: exclude_year_end_closing with an undone bokslut', () => {
+  type Row = Record<string, unknown>
+
+  // 2025: one sale (A1); a wrong cost reversed by an ordinary storno (A2, A3);
+  // the bokslut depreciation J1, undone by its storno J2.
+  const entries: Row[] = [
+    { id: 'e-sale', entry_date: '2025-03-01', voucher_series: 'A', voucher_number: 1, description: 'Sale', status: 'posted', source_type: 'manual', reverses_id: null, correction_of_id: null },
+    { id: 'e-wrong', entry_date: '2025-04-01', voucher_series: 'A', voucher_number: 2, description: 'Wrong cost', status: 'reversed', source_type: 'manual', reverses_id: null, correction_of_id: null },
+    { id: 'e-wrong-storno', entry_date: '2025-04-02', voucher_series: 'A', voucher_number: 3, description: 'Storno A2', status: 'posted', source_type: 'storno', reverses_id: 'e-wrong', correction_of_id: null },
+    { id: 'e-ye', entry_date: '2025-12-31', voucher_series: 'J', voucher_number: 1, description: 'Avskrivning', status: 'reversed', source_type: 'year_end', reverses_id: null, correction_of_id: null },
+    { id: 'e-ye-storno', entry_date: '2025-12-31', voucher_series: 'J', voucher_number: 2, description: 'Storno J1', status: 'posted', source_type: 'storno', reverses_id: 'e-ye', correction_of_id: null },
+  ]
+  const line = (id: string, entry: string, account: string, debit: number, credit: number): Row => ({
+    id, journal_entry_id: entry, account_number: account, debit_amount: debit, credit_amount: credit, line_description: null, dimensions: {},
+  })
+  const lines: Row[] = [
+    line('l1', 'e-sale', '1930', 1000, 0),
+    line('l2', 'e-sale', '3001', 0, 1000),
+    line('l3', 'e-wrong', '6110', 50, 0),
+    line('l4', 'e-wrong', '1930', 0, 50),
+    line('l5', 'e-wrong-storno', '1930', 50, 0),
+    line('l6', 'e-wrong-storno', '6110', 0, 50),
+    line('l7', 'e-ye', '7832', 100, 0),
+    line('l8', 'e-ye', '1229', 0, 100),
+    line('l9', 'e-ye-storno', '1229', 100, 0),
+    line('l10', 'e-ye-storno', '7832', 0, 100),
+  ]
+
+  // Applies the filters the export puts on journal_entries and
+  // journal_entry_lines, so the test reads what the query would return. A
+  // filter on a column the fixture rows do not carry (company_id) passes.
+  function ledgerClient() {
+    function builder(table: string) {
+      const filters: Array<(row: Row) => boolean> = []
+      let page: [number, number] | null = null
+      let priorYearRead = false
+      const has = (row: Row, col: string) => Object.prototype.hasOwnProperty.call(row, col)
+      const b: Row = {}
+      const add = (f: (row: Row) => boolean) => {
+        filters.push(f)
+        return b
+      }
+      b.select = () => b
+      b.order = () => b
+      b.limit = () => b
+      b.lt = () => {
+        priorYearRead = true
+        return b
+      }
+      b.range = (from: number, to: number) => {
+        page = [from, to]
+        return b
+      }
+      b.eq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] === val)
+      b.neq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] !== val)
+      b.in = (col: string, vals: unknown[]) => add((r) => !has(r, col) || vals.includes(r[col]))
+      b.not = (col: string, operator: string, list: string) => {
+        const m = /^\((.*)\)$/.exec(list)
+        if (operator !== 'in' || !m) throw new Error(`unsupported not(): ${col} ${operator} ${list}`)
+        const ids = m[1].split(',')
+        return add((r) => !ids.includes(String(r[col])))
+      }
+      b.single = async () => ({
+        data: table === 'fiscal_periods' && !priorYearRead
+          ? { id: 'period-2025', period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: null }
+          : null,
+        error: null,
+      })
+      // The previous fiscal year (resolvePreviousFiscalPeriod): none here.
+      b.maybeSingle = async () => ({ data: null, error: null })
+      b.then = (resolve: (v: unknown) => void) => {
+        const source = table === 'journal_entries' ? entries : table === 'journal_entry_lines' ? lines : []
+        const rows = source.filter((r) => filters.every((f) => f(r)))
+        resolve({ data: page ? rows.slice(page[0], page[1] + 1) : rows, error: null })
+      }
+      return b
+    }
+    // year_end_chain_entry_ids on these books: the bokslut J1 (reversed) and
+    // its storno J2.
+    const yearEndIds = ['e-ye', 'e-ye-storno']
+    return {
+      from: vi.fn((table: string) => builder(table)),
+      rpc: vi.fn(async (name: string, args?: Record<string, unknown>) => {
+        if (name === 'acquire_sie_period_read') return { data: 'read-lease', error: null }
+        if (name === 'year_end_chain_entry_ids') {
+          expect(args).toEqual({ p_company_id: 'company-1', p_fiscal_period_id: 'period-2025' })
+          return { data: yearEndIds, error: null }
+        }
+        return { data: [], error: null }
+      }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+  }
+
+  const options = { ...baseOptions, fiscal_period_id: 'period-2025', exclude_year_end_closing: true }
+
+  it('drops the undone bokslut together with its storno', async () => {
+    const records = (await generateSIEExport(ledgerClient(), 'company-1', options)).split('\r\n')
+
+    expect(records.filter((r) => r.startsWith('#VER "J"'))).toEqual([])
+    expect(records.some((r) => r.startsWith('#RES 0 7832 '))).toBe(false)
+    expect(records.some((r) => r.startsWith('#UB 0 1229 '))).toBe(false)
+  })
+
+  it('keeps everything else, an ordinary storno pair included', async () => {
+    const records = (await generateSIEExport(ledgerClient(), 'company-1', options)).split('\r\n')
+
+    expect(records.filter((r) => r.startsWith('#VER '))).toEqual([
+      '#VER "A" 1 20250301 "Sale"',
+      '#VER "A" 2 20250401 "Wrong cost"',
+      '#VER "A" 3 20250402 "Storno A2"',
+    ])
+    expect(records).toContain('#UB 0 1930 1000.00')
+    expect(records).toContain('#RES 0 3001 -1000.00')
+    expect(records).toContain('#RES 0 6110 0.00')
+  })
+
+  it('keeps the bokslut and its storno when the year-end entries are not excluded', async () => {
+    const records = (await generateSIEExport(ledgerClient(), 'company-1', { ...options, exclude_year_end_closing: false })).split('\r\n')
+
+    expect(records).toContain('#VER "J" 1 20251231 "Avskrivning"')
+    expect(records).toContain('#VER "J" 2 20251231 "Storno J1"')
+    expect(records).toContain('#RES 0 7832 0.00')
+    expect(records).toContain('#UB 0 1229 0.00')
+  })
+})
+
+// The CP437 file (#FORMAT PC8) the routes serve with encoding=cp437.
+describe('encodeSIEToCP437', () => {
+  const bytesOf = (text: string) => [...encodeSIEToCP437(text)]
+
+  it('passes ASCII through unchanged', () => {
+    expect(bytesOf('#VER "A" 1 20250101 "Hyra"')).toEqual([...Buffer.from('#VER "A" 1 20250101 "Hyra"', 'ascii')])
+  })
+
+  it('writes the Swedish letters on their CP437 bytes', () => {
+    expect(bytesOf('åäöÅÄÖéü')).toEqual([0x86, 0x84, 0x94, 0x8f, 0x8e, 0x99, 0x82, 0x81])
+  })
+
+  // crm#1869: a "·" in a verifikat text came out as "?". Every character of
+  // the code page has its byte; the anchors sit one or two per row of 16.
+  it.each<[string, number]>([
+    ['·', 0xfa],
+    ['°', 0xf8],
+    ['²', 0xfd],
+    ['÷', 0xf6],
+    ['ß', 0xe1],
+    ['µ', 0xe6],
+    ['█', 0xdb],
+    ['─', 0xc4],
+    ['│', 0xb3],
+    ['½', 0xab],
+    ['á', 0xa0],
+    ['£', 0x9c],
+    ['É', 0x90],
+    ['Ç', 0x80],
+    ['\u00A0', 0xff],
+  ])('carries %s as byte %i', (char, byte) => {
+    expect(bytesOf(char)).toEqual([byte])
+  })
+
+  it('writes "?" only for what the code page cannot represent', () => {
+    expect(bytesOf('€')).toEqual([0x3f])
+    expect(bytesOf('Hyra · mars € 10')).toEqual([
+      ...Buffer.from('Hyra ', 'ascii'), 0xfa, ...Buffer.from(' mars ? 10', 'ascii'),
+    ])
   })
 })

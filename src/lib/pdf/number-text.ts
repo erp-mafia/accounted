@@ -40,6 +40,25 @@ export function pdfText(text: string): string {
 }
 
 /**
+ * pdfText on every string inside plain report data (objects, arrays,
+ * primitives), returned as a copy. For a template that prints many free-text
+ * fields a person or an agent typed (crm#1887: a negative amount written
+ * with U+2212 in the resultatdisposition printed without its sign): the data
+ * is made safe once, where it enters the template, so a field added later
+ * cannot be missed.
+ */
+export function pdfTextDeep<T>(value: T): T {
+  if (typeof value === 'string') return pdfText(value) as T
+  if (Array.isArray(value)) return value.map((item) => pdfTextDeep(item)) as T
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, pdfTextDeep(item)]),
+    ) as T
+  }
+  return value
+}
+
+/**
  * Two-decimal sv-SE amount for a react-pdf <Text>: the same Intl call as
  * lib/utils formatAmount, run through pdfNumberText so a negative årets
  * resultat or a credit note never prints unsigned (issue #1982).

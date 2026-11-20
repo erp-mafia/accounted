@@ -55,6 +55,7 @@ vi.mock('@/lib/reports/financial-statement-pdf-template', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as incomeStatementPdf } from '../income-statement/pdf/route'
 import { GET as balanceSheetPdf } from '../balance-sheet/pdf/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -63,29 +64,6 @@ interface TableResp {
   data?: unknown
   error?: unknown
   count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_t, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -130,11 +108,11 @@ function companyParams(companyId: string) {
 
 function mockClientWith(settings: TableResp = { data: { company_id: COMPANY_ID, company_name: 'Testbolaget AB' }, error: null }) {
   mockServiceClient.mockReturnValue(
-    makeFlexibleSupabase({
+    createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       fiscal_periods: { data: PERIOD_ROW, error: null },
       company_settings: settings,
-    }),
+    }).supabase,
   )
 }
 

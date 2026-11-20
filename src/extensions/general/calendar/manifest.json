@@ -3,7 +3,7 @@
   "sector": "general",
   "exportName": "calendarExtension",
   "entryPoint": "@/extensions/general/calendar",
-  "workspace": "@/components/extensions/general/CalendarWorkspace",
+  "workspace": null,
   "requiredEnvVars": [],
   "optionalEnvVars": [],
   "npmDependencies": ["ics"],
@@ -13,7 +13,7 @@
     "icon": "Calendar",
     "dataPattern": "core",
     "readsCoreTables": ["invoices", "deadlines", "customers"],
-    "description": "Fullständig kalendervy med månads-, vecko- och dagsvisning",
-    "longDescription": "Se alla fakturadatum och deadlines i en interaktiv kalender med månads-, vecko- och dagsvy."
+    "description": "Synka deadlines och fakturornas förfallodagar med Apple Calendar, Google Calendar eller Outlook",
+    "longDescription": "Prenumerera på deadlines och fakturornas förfallodagar i Apple Calendar, Google Calendar eller Outlook. Länken skapar du under Inställningar, Ditt konto."
   }
 }

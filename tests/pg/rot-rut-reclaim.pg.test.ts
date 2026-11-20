@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from './setup'
-import { insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertPostedJournalEntry, seedCompany, withSwedishToday } from './fixtures'
 
 /**
  * Migration 20260907160000_rot_rut_reclaim:
@@ -226,6 +226,23 @@ describe('apply / revert rot_rut_reclaim RPCs (migration 20260907160400)', () =>
     ).rejects.toThrow(/not found in company/)
     const row = await readInvoice(c.invoiceId)
     expect(row.reclaimed_amount).toBeNull()
+  })
+
+  it.each([
+    ['the due date itself', '2026-02-14', 'sent'],
+    ['the day after it', '2026-02-15', 'overdue'],
+  ])('with nothing paid, on %s the revert writes %s', async (_when, today, status) => {
+    const c = await seedReclaimCase({ decidedTotal: 5000, itemDecided: 5000, status: 'partially_paid' })
+    await getPool().query(`UPDATE public.invoices SET status = 'sent', paid_amount = 0 WHERE id = $1`, [c.invoiceId])
+    await getPool().query(`SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500)`, [c.itemId, c.invoiceId, c.companyId])
+
+    await withSwedishToday(today, async () => {
+      const { rows } = await getPool().query<{ r: { reverted: boolean; status: string } }>(
+        `SELECT public.revert_rot_rut_reclaim_invoice($1, $2, $3) AS r`,
+        [c.itemId, c.invoiceId, c.companyId],
+      )
+      expect(rows[0].r).toMatchObject({ reverted: true, status })
+    })
   })
 
   it('revert hands the share back, closes the invoice, and is a no-op the second time', async () => {

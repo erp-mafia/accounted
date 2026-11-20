@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { OpeningBalanceCorrectInlineSchema } from '@/lib/api/schemas'
@@ -10,9 +9,8 @@ import {
   type CascadeResult,
 } from '@/lib/import/opening-balance/cascade'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /**
  * POST /api/import/opening-balance/correct-inline
@@ -107,7 +105,7 @@ export const POST = withRouteContext(
       await backfillStandardBASAccounts(supabase, companyId!, user.id, accountNumbers)
     }
 
-    const { data: rpcData, error: rpcError } = await supabase.rpc('correct_entry_lines_inline', {
+    const { data: rpcData, error: rpcError } = await rpcWithActor(supabase, 'correct_entry_lines_inline', {
       p_company_id: companyId,
       p_entry_id: entryId,
       p_strike_line_ids: strike_line_ids,

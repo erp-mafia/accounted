@@ -24,26 +24,35 @@
 
 import { useMemo } from 'react'
 import useSWR, { type SWRConfiguration } from 'swr'
+import { useIsInvoicer } from '@/lib/hooks/use-is-invoicer'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { paymentBankRow } from '@/lib/cash-accounts/primary'
 import type {
   Article,
+  EmployeeMasked,
   BASAccount,
-  CashAccount,
   Customer,
   FiscalPeriod,
   Supplier,
 } from '@/types'
 import type { DimensionDto } from '@/components/dimensions/types'
+import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { refKeys } from './keys'
+import { isFirstLoadPending } from './first-load'
+import { missingKeepId, withKeptRow } from './keep-row'
 import {
   fetchAccounts,
   fetchArticles,
   fetchBookingTemplates,
   fetchCashAccounts,
+  fetchCustomer,
   fetchCustomers,
   fetchDimensions,
+  fetchEmployees,
   fetchFiscalPeriods,
   fetchSuppliers,
+  selectAccounts,
   type BookingTemplateWithUsage,
 } from './fetchers'
 
@@ -83,7 +92,9 @@ function useReferenceList<T, K extends readonly unknown[] | null>(
   )
   return {
     items: data ?? (EMPTY as T[]),
-    isLoading: key !== null && isLoading,
+    // A seeded key revalidates on mount with the seed already in `data`:
+    // that is not a first load (lib/reference-data/first-load.ts).
+    isLoading: key !== null && isFirstLoadPending(isLoading, data),
     error,
     refresh: mutate,
   }
@@ -99,7 +110,7 @@ export function useFiscalPeriods(): ReferenceListState & { periods: FiscalPeriod
 
 export function useCashAccounts(
   options: { enabledOnly?: boolean } = {},
-): ReferenceListState & { cashAccounts: CashAccount[] } {
+): ReferenceListState & { cashAccounts: CashAccountWithBank[] } {
   const companyId = useActiveCompanyId()
   const { items, ...state } = useReferenceList(refKeys.cashAccounts(companyId), ([, id]) =>
     fetchCashAccounts(id),
@@ -114,12 +125,30 @@ export function useCashAccounts(
   return { cashAccounts, ...state }
 }
 
+/**
+ * The bank account a dialog starts from when it books a payment with no bank
+ * row of its own and nothing else names one: what the server books on
+ * (resolvePrimaryBankAccount), the bank role until the accounts have loaded.
+ */
+export function usePaymentBankLedger(): string {
+  const { cashAccounts } = useCashAccounts()
+  return paymentBankRow(cashAccounts)?.ledger_account ?? resolveAccountRole(PINNED_JURISDICTION, 'bank')
+}
+
 export function useAccounts(activeOnly = true): ReferenceListState & { accounts: BASAccount[] } {
   const companyId = useActiveCompanyId()
-  const { items, ...state } = useReferenceList(refKeys.accounts(companyId, activeOnly), ([, , active]) =>
-    fetchAccounts(active),
+  // The invoicing-only role never reaches the chart of accounts
+  // (lib/auth/invoicer-role.ts): no key, so no request the server refuses
+  // and SWR then retries without end (for #206). Its pickers get no accounts.
+  const invoicer = useIsInvoicer()
+  // One cache entry serves both variants, as for cash accounts: a page with
+  // an account picker (active) and account labels (all) paid two requests to
+  // the same route per load. Inactive rows are under 1% of prod charts.
+  const { items, ...state } = useReferenceList(invoicer ? null : refKeys.accounts(companyId, false), () =>
+    fetchAccounts(false),
   )
-  return { accounts: items, ...state }
+  const accounts = useMemo(() => selectAccounts(items, activeOnly), [items, activeOnly])
+  return { accounts, ...state }
 }
 
 export function useDimensions(): ReferenceListState & { dimensions: DimensionDto[] } {
@@ -136,16 +165,49 @@ export function useBookingTemplates(): ReferenceListState & { templates: Booking
   return { templates: items, ...state }
 }
 
-export function useCustomers(): ReferenceListState & { customers: Customer[] } {
+/**
+ * The company's customers. /api/customers leaves archived customers out, so a
+ * form editing a draft, schedule, order or deadline that points at one passes
+ * its id as `keepId`: that one customer is fetched on its own and kept in the
+ * list (CustomerCombobox's `keepId` then keeps it selectable), or the picker
+ * would render blank.
+ */
+export function useCustomers(
+  options: { keepId?: string | null } = {},
+): ReferenceListState & { customers: Customer[] } {
   const companyId = useActiveCompanyId()
   const { items, ...state } = useReferenceList(refKeys.customers(companyId), () => fetchCustomers())
-  return { customers: items, ...state }
+  const { data: kept } = useSWR<Customer | null>(
+    refKeys.customer(companyId, missingKeepId(items, options.keepId, state.isLoading)),
+    ([, , id]: readonly [string, string, string]) =>
+      // A customer that no longer resolves simply leaves the picker unselected.
+      fetchCustomer(id).catch(() => null),
+    REFERENCE_SWR_OPTIONS,
+  )
+  const customers = useMemo(() => withKeptRow(items, kept), [items, kept])
+  return { customers, ...state }
 }
 
 export function useSuppliers(): ReferenceListState & { suppliers: Supplier[] } {
   const companyId = useActiveCompanyId()
   const { items, ...state } = useReferenceList(refKeys.suppliers(companyId), () => fetchSuppliers())
   return { suppliers: items, ...state }
+}
+
+/**
+ * The salary roster, active employees unless `includeInactive`. Invalidate
+ * 'ref:employees' after creating, editing or removing an employee.
+ */
+export function useEmployees(
+  options: { includeInactive?: boolean } = {},
+): ReferenceListState & { employees: EmployeeMasked[] } {
+  const companyId = useActiveCompanyId()
+  const includeInactive = options.includeInactive ?? false
+  const { items, ...state } = useReferenceList(
+    refKeys.employees(companyId, includeInactive),
+    ([, , inactive]) => fetchEmployees(inactive),
+  )
+  return { employees: items, ...state }
 }
 
 export function useArticles(

@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.uncategorize',
@@ -44,9 +44,18 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Journal entry is not posted' }, { status: 400 })
     }
 
-    // Storno reversal (legally compliant: never deletes)
+    // Storno reversal (legally compliant: never deletes), through the posting
+    // port (step 2e): while POSTING_EVENTS is on, it records ledger.storno of
+    // the bank line, which the person asked for (user_created), dated the day.
     try {
-      await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
+      await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId: user.id,
+        entryId: transaction.journal_entry_id,
+        event: () => bankLineStornoBusinessEvent(id, todayIsoStockholm(), linkBasisColumns('user_created')),
+        role: 'reversal',
+      })
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed

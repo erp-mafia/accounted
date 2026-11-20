@@ -69,33 +69,10 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as runPOST } from '../run/route'
 import { GET as statusGET } from '../status/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
@@ -134,10 +111,10 @@ describe('POST /reconciliation/bank/run', () => {
 
   it('runs the matcher and applies results', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await runPOST(
       postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
@@ -174,10 +151,10 @@ describe('POST /reconciliation/bank/run', () => {
       skippedBelowThreshold: 2,
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await runPOST(
       postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
@@ -198,10 +175,10 @@ describe('POST /reconciliation/bank/run', () => {
 
   it('rejects an out-of-range confidence_threshold with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
-      }),
+      }).supabase,
     )
     for (const bad of [-0.1, 1.5]) {
       const res = await runPOST(
@@ -217,11 +194,11 @@ describe('POST /reconciliation/bank/run', () => {
 
   it('rejects an unknown settlement account', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // No matching cash_accounts row for the requested account_number.
         cash_accounts: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await runPOST(
       postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
@@ -238,10 +215,10 @@ describe('POST /reconciliation/bank/run', () => {
     // reconciles via the currency fallback, so a company without a 1930
     // cash_accounts row is not blocked from running reconciliation.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         cash_accounts: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await runPOST(
       postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
@@ -260,10 +237,10 @@ describe('POST /reconciliation/bank/run', () => {
 
   it('dry-run passes dryRun: true into the matcher', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await runPOST(
       postRequest(
@@ -289,7 +266,7 @@ describe('POST /reconciliation/bank/run', () => {
       scopes: ['transactions:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await runPOST(
       postRequest(
         `https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`,
@@ -314,10 +291,10 @@ describe('GET /reconciliation/bank/status', () => {
 
   it('returns the status snapshot', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await statusGET(
       getRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/status`),
@@ -335,10 +312,10 @@ describe('GET /reconciliation/bank/status', () => {
 
   it('rejects invalid date filter', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await statusGET(
       getRequest(

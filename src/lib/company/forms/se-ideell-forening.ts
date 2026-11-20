@@ -6,8 +6,10 @@ import type { LegalFormProfile } from './types'
  * AB 2099/2098 pair on the BAS 2060-2069 group (DECISIONS.md 2026-09-08).
  * Money settled with a member is a plain short-term liability on 2890.
  *
- * INK3 is the statutory return but is not modelled, so `incomeReturn` stays
- * null until it is; the same for årsbokslut and årsredovisning (#2072 step 2).
+ * The return is INK3, prepared as an underlag (lib/reports/ink3, #47): the
+ * figures to type into Skatteverket's e-tjänst, no SRU file. Årsredovisning
+ * is not modelled (#2072 step 2). The year-end document is the förenklat
+ * årsbokslut in the BFNAR 2010:1 bilaga 2 layout.
  */
 export const SE_IDEELL_FORENING: LegalFormProfile = {
   jurisdiction: 'SE',
@@ -21,20 +23,33 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     // BFNAR 2010:1 (K1 for ideella föreningar).
     simplifiedRegelverk: 'K1',
     templateColumn: 'base',
+    skattekontoAccounts: ['1630'],
   },
   equity: {
     closing: '2069',
     closingName: 'Årets resultat',
     priorYearCarry: '2068',
+    retained: '2067',
     hasOwners: false,
     settlement: { withdrawal: '2890', contribution: '2890' },
+    memberCapital: false,
+    developmentFund: false,
+    maintenanceFund: null,
+    shareRegister: false,
   },
   filings: {
-    incomeReturn: null,
+    incomeReturn: 'INK3',
     booksCurrentTax: false,
     corporateTaxDispositions: false,
     arsredovisning: false,
     frameworks: ['K1'],
+    ixbrl: false,
+    k3Document: false,
+    auditorAlwaysRequired: false,
+    forenklatArsbokslut: 'BFNAR 2010:1',
+    revisorspateckningLagrum: null,
+    cashFlowStatement: null,
+    housingKeyRatios: false,
   },
   glossary: { entity: 'föreningen', owner: 'Medlem', meeting: 'årsmöte' },
 }

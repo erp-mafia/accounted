@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   computeSuggestedPeriod,
   fiscalYearName,
+  fiscalYearShortName,
   isDerivedFiscalYearName,
+  missingFiscalYears,
+  nextFiscalYearRange,
+  scheduledFiscalYear,
   suggestSeedDate,
   resolveCurrentPeriodId,
 } from '../suggest-fiscal-period'
@@ -11,6 +15,45 @@ type Range = { period_start: string; period_end: string }
 
 const FY2024: Range = { period_start: '2024-01-01', period_end: '2024-12-31' }
 const FY2026: Range = { period_start: '2026-01-01', period_end: '2026-12-31' }
+
+describe('nextFiscalYearRange', () => {
+  it('runs twelve months from the day after', () => {
+    expect(nextFiscalYearRange('2026-12-31')).toEqual({ start: '2027-01-01', end: '2027-12-31' })
+    expect(nextFiscalYearRange('2026-06-30')).toEqual({ start: '2026-07-01', end: '2027-06-30' })
+  })
+
+  it('follows a short first year with a whole one, the February of a leap year included', () => {
+    expect(nextFiscalYearRange('2026-01-31')).toEqual({ start: '2026-02-01', end: '2027-01-31' })
+    expect(nextFiscalYearRange('2027-02-28')).toEqual({ start: '2027-03-01', end: '2028-02-29' })
+  })
+})
+
+describe('scheduledFiscalYear', () => {
+  it('is the twelve-month year holding the date', () => {
+    expect(scheduledFiscalYear('2026-03-05', 1)).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+    expect(scheduledFiscalYear('2026-03-05', 7)).toEqual({ start: '2025-07-01', end: '2026-06-30' })
+    expect(scheduledFiscalYear('2026-07-01', 7)).toEqual({ start: '2026-07-01', end: '2027-06-30' })
+  })
+})
+
+describe('missingFiscalYears', () => {
+  it('walks the chain up to the year holding the date', () => {
+    expect(missingFiscalYears('2028-03-10', [FY2026], 10)).toEqual([
+      { start: '2027-01-01', end: '2027-12-31' },
+      { start: '2028-01-01', end: '2028-12-31' },
+    ])
+  })
+
+  it('stops at the next recorded year', () => {
+    expect(
+      missingFiscalYears('2025-02-01', [FY2024, { period_start: '2025-07-01', period_end: '2026-06-30' }], 10),
+    ).toEqual([{ start: '2025-01-01', end: '2025-06-30' }])
+  })
+
+  it('answers nothing for a date further off than the limit', () => {
+    expect(missingFiscalYears('2099-03-10', [FY2026], 10)).toEqual([])
+  })
+})
 
 describe('fiscalYearName', () => {
   it('names a calendar year by its year', () => {
@@ -48,6 +91,31 @@ describe('isDerivedFiscalYearName', () => {
     expect(isDerivedFiscalYearName('2025')).toBe(false)
     expect(isDerivedFiscalYearName('Fiscal year 2025')).toBe(false)
     expect(isDerivedFiscalYearName('')).toBe(false)
+  })
+})
+
+describe('fiscalYearShortName', () => {
+  it('drops the noun from a generated name shown under a Räkenskapsår label (crm#1380)', () => {
+    // The "Räkenskapsår:" line of a new verifikat read "Räkenskapsår: Räkenskapsår 2026".
+    expect(fiscalYearShortName('Räkenskapsår 2026')).toBe('2026')
+    expect(fiscalYearShortName(fiscalYearName('2025-07-01', '2026-06-30'))).toBe('2025/2026')
+    expect(fiscalYearShortName('  Räkenskapsår 2026  ')).toBe('2026')
+  })
+
+  it('covers the onboarding first year and the year opened at year end', () => {
+    expect(fiscalYearShortName('Första räkenskapsåret 2026')).toBe('2026')
+    expect(fiscalYearShortName('Första räkenskapsåret 2025/2026')).toBe('2025/2026')
+    expect(fiscalYearShortName('FY 2027')).toBe('2027')
+    expect(fiscalYearShortName('FY 2026/2027')).toBe('2026/2027')
+  })
+
+  it('keeps a name the user wrote whole', () => {
+    expect(fiscalYearShortName('Räkenskapsår 2025 (förlängt)')).toBe('Räkenskapsår 2025 (förlängt)')
+    expect(fiscalYearShortName('Räkenskapsår 2024-2025')).toBe('Räkenskapsår 2024-2025')
+    expect(fiscalYearShortName('Första året')).toBe('Första året')
+    expect(fiscalYearShortName('Fiscal year 2025')).toBe('Fiscal year 2025')
+    expect(fiscalYearShortName('2025')).toBe('2025')
+    expect(fiscalYearShortName('')).toBe('')
   })
 })
 

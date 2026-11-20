@@ -1,0 +1,895 @@
+/**
+ * Company settings (company_settings): the one implementation of "save these
+ * settings" behind the dashboard's PUT /api/settings, the v1 operations
+ * settings.update / settings.update-tax-profile / settings.update-bookkeeping-lock
+ * and their MCP tools. Every door gets the same rules and the same side
+ * effects:
+ *
+ *   - owner/admin only. company_settings is written under the RLS predicate
+ *     user_is_company_admin; the dashboard checks it in withRouteContext
+ *     ({ requireAdmin }) and passes `adminVerified`, the API-key and MCP doors
+ *     run as the service role (auth.uid() is null there, so the predicate
+ *     cannot be asked) and this service reads the caller's company_members
+ *     role instead. The invoice-recipient and payment-instruction fields and
+ *     Swedbank's payment-file ids are re-checked the same way on every door;
+ *   - reminder thresholds strictly increasing;
+ *   - org_number is writable only while no valid one is stored, then fixed
+ *     (legal identifier; lib/company/org-number-rule.ts);
+ *   - enskild firma keeps a calendar fiscal year (BFL 3 kap.);
+ *   - aktiekapital and antal aktier are set together (ÅRL 5 kap 34 §);
+ *   - the vacation-year basis cannot move while open vacation balances exist;
+ *   - VAT coherence: turning VAT registration off retires the VAT-dependent
+ *     flags, a registered company needs a VAT number and a moms period, a
+ *     taxable base over SEK 40 million means monthly moms, periodisk
+ *     sammanställning needs registration and EU trade;
+ *   - kontantmetoden has no deferred invoice booking (#967, accrual only);
+ *   - the accounting method changes freely only while the current fiscal
+ *     year has no posted verifikat; later only as a stated correction, and
+ *     not while an open invoice lacks its own verifikat
+ *     (lib/company/accounting-method-change.ts), recorded in audit_log;
+ *   - payment instructions are written through to the default payee cash
+ *     account FIRST (migration 20260904010000), so a failure writes nothing;
+ *   - tax deadlines are regenerated when a tax-relevant field is saved, or
+ *     when the company has no system tax deadlines at all (self-heal). A
+ *     failed regeneration never fails the save;
+ *   - turning dimensions on (dimensions_enabled from off to on) registers the
+ *     dimension codes already on journal lines as archived values
+ *     (lib/dimensions/import-existing.ts), so the registry is complete for
+ *     the history on whichever door flipped the flag. A failed registration
+ *     never fails the save; it comes back as a warning;
+ *   - a save that changes the company's name, legal form, org number,
+ *     address or VAT registration writes them onto its Stripe customer, so
+ *     the next subscription invoice is made out to the company as it now
+ *     stands (crm#1378). A failed sync never fails the save;
+ *   - a lock date move (bookkeeping_locked_through) works out which filed
+ *     momsdeklaration periods it reopens. Every door refuses that unless the
+ *     caller acknowledged them: the settings page asks the person and saves
+ *     again (decision 2026-11-17). A failed read fails closed;
+ *   - a save that really moves the stored lock date emits
+ *     period.lock_date_changed (awaited), naming the door, not the person;
+ *   - the automatic lock (lib/company/auto-lock.ts, the nightly job) comes
+ *     through here as one more door, 'auto_lock', with expectedLockDate: its
+ *     save replaces the lock date it decided on or writes nothing.
+ *
+ * A dry run performs every read and every check and writes nothing: no payee
+ * write-through, no settings update, no deadline regeneration, no code
+ * registration, no event.
+ */
+import type { z } from 'zod'
+import type { UpdateSettingsSchema } from '@/lib/api/schemas'
+import {
+  hasTaxRelevantFields,
+  regenerateTaxDeadlinesForUser,
+  shouldRegenerateTaxDeadlines,
+  toDeadlineSettings,
+} from '@/lib/tax/deadline-generator'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
+import { importExistingDimensionCodes } from '@/lib/dimensions/import-existing'
+import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
+import { requireSettingsAdmin } from '@/lib/company/settings-writer'
+import { invoiceSeriesBehindMessages, readInvoiceSeries } from '@/lib/company/invoice-number-series'
+import { resolveOrgNumberChange } from '@/lib/company/org-number'
+import { billingIdentityChanged, syncCompanyStripeIdentity } from '@/lib/stripe/customer-identity'
+import {
+  checkAccountingMethodChange,
+  recordAccountingMethodCorrection,
+} from '@/lib/company/accounting-method-change'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ReopenedVatPeriod } from '@/lib/vat/filed-periods-reopened'
+import { eventBus } from '@/lib/events/bus'
+import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
+import type { LockDateChangeVia } from '@/lib/events/types'
+
+/** The dashboard's settings body after validation: column names, all optional. */
+export type CompanySettingsChanges = z.output<typeof UpdateSettingsSchema>
+
+type SettingsRow = Record<string, unknown>
+
+/**
+ * Which filed momsdeklaration periods a move of the lock date from `before`
+ * to `after` reopens: lib/vat/filed-periods-reopened.ts. The door passes it
+ * in, because the ledger kernel (this service) may not import the VAT block
+ * (lib/modules boundary ratchet).
+ */
+export type ReopenedFiledVatLookup = (
+  supabase: SupabaseClient,
+  companyId: string,
+  before: string | null,
+  after: string | null,
+) => Promise<ReopenedVatPeriod[]>
+
+export interface UpdateCompanySettingsOptions {
+  dryRun?: boolean
+  /**
+   * The door already asked the database whether the caller is owner/admin
+   * (withRouteContext requireAdmin). Doors without a cookie session (API
+   * key, MCP) leave this false and the service reads the membership role.
+   * The automatic lock sets it too: nobody calls, the job acts on the
+   * company's own setting behind the cron secret.
+   */
+  adminVerified?: boolean
+  /**
+   * Which door the save came through: the settings page ('app'), a direct v1
+   * call ('api'), the approval of a staged change ('approval'), or the
+   * automatic lock ('auto_lock'). period.lock_date_changed carries it in
+   * place of the person.
+   */
+  via: LockDateChangeVia
+  /**
+   * The lock date the caller read and decided on (null: none; left out: no
+   * condition). The settings row is written only while the stored date is
+   * still that one, and the UPDATE itself carries the condition: a date
+   * somebody saves in between is never replaced, and two runs of one job
+   * cannot both move it. Otherwise the row is left as it is and the save
+   * answers CONFLICT. The automatic lock sets it, so its move forward can
+   * never undo a later date.
+   */
+  expectedLockDate?: string | null
+  /** filedVatPeriodsReopenedBy, passed in by the door (see ReopenedFiledVatLookup). */
+  findReopenedFiledVatPeriods: ReopenedFiledVatLookup
+  /**
+   * Refuse a lock date move that reopens a filed momsdeklaration period
+   * (BOOKKEEPING_LOCK_REOPENS_FILED_VAT, naming the periods). Every door sets
+   * it unless the caller sent acknowledge_filed_vat_periods: the API and MCP
+   * doors, and since 2026-11-17 the settings page.
+   */
+  refuseReopeningFiledVat?: boolean
+}
+
+export interface UpdateCompanySettingsResult {
+  /** The stored row after the update (every column). */
+  settings: SettingsRow
+  /** Whether the tax deadlines were regenerated by this save. */
+  deadlines_regenerated: boolean
+  /**
+   * How many codes already on journal lines were registered because this
+   * save turned dimensions on; null when it did not (or the registration
+   * failed, which the warnings say).
+   */
+  dimension_codes_imported: number | null
+  /**
+   * Whether this save turned the company's email reminders off. The settings
+   * page's route then withdraws the pending reminder batch at once
+   * (lib/reminders/withdraw.ts, a block the kernel may not import); on other
+   * doors the reminder cron's sweep withdraws it.
+   */
+  reminders_turned_off: boolean
+}
+
+
+/** Every column the settings body can write, as an object literal. */
+function toUpdatePayload(c: CompanySettingsChanges) {
+  return {
+    entity_type: c.entity_type,
+    company_name: c.company_name,
+    org_number: c.org_number,
+    address_line1: c.address_line1,
+    address_line2: c.address_line2,
+    postal_code: c.postal_code,
+    city: c.city,
+    registered_office: c.registered_office,
+    country: c.country,
+    f_skatt: c.f_skatt,
+    vat_registered: c.vat_registered,
+    vat_number: c.vat_number,
+    moms_period: c.moms_period,
+    vat_taxable_base_over_40m: c.vat_taxable_base_over_40m,
+    vat_has_eu_trade: c.vat_has_eu_trade,
+    vat_filing_method: c.vat_filing_method,
+    periodisk_sammanstallning_enabled: c.periodisk_sammanstallning_enabled,
+    periodisk_sammanstallning_period: c.periodisk_sammanstallning_period,
+    periodisk_sammanstallning_filing_method: c.periodisk_sammanstallning_filing_method,
+    kontrolluppgifter_enabled: c.kontrolluppgifter_enabled,
+    rot_rut_enabled: c.rot_rut_enabled,
+    oss_enabled: c.oss_enabled,
+    ioss_enabled: c.ioss_enabled,
+    intrastat_enabled: c.intrastat_enabled,
+    punktskatt_enabled: c.punktskatt_enabled,
+    fyllnadsinbetalning_enabled: c.fyllnadsinbetalning_enabled,
+    tax_contact_name: c.tax_contact_name,
+    tax_contact_phone: c.tax_contact_phone,
+    tax_contact_email: c.tax_contact_email,
+    fiscal_year_start_month: c.fiscal_year_start_month,
+    preliminary_tax_monthly: c.preliminary_tax_monthly,
+    aktiekapital: c.aktiekapital,
+    antal_aktier: c.antal_aktier,
+    employer_registered: c.employer_registered,
+    employer_seasonal: c.employer_seasonal,
+    bank_name: c.bank_name,
+    clearing_number: c.clearing_number,
+    account_number: c.account_number,
+    bankgiro: c.bankgiro,
+    plusgiro: c.plusgiro,
+    swish: c.swish,
+    iban: c.iban,
+    bic: c.bic,
+    swedbank_signer_id: c.swedbank_signer_id,
+    swedbank_corporate_pay_id: c.swedbank_corporate_pay_id,
+    nordea_signer_id: c.nordea_signer_id,
+    nordea_agreement_id: c.nordea_agreement_id,
+    invoice_payment_accounts: c.invoice_payment_accounts,
+    accounting_method: c.accounting_method,
+    defer_invoice_booking: c.defer_invoice_booking,
+    invoice_prefix: c.invoice_prefix,
+    next_invoice_number: c.next_invoice_number,
+    next_arrival_number: c.next_arrival_number,
+    invoice_default_days: c.invoice_default_days,
+    invoice_default_notes: c.invoice_default_notes,
+    default_our_reference: c.default_our_reference,
+    phone: c.phone,
+    email: c.email,
+    website: c.website,
+    pays_salaries: c.pays_salaries,
+    sector_slug: c.sector_slug,
+    bookkeeping_locked_through: c.bookkeeping_locked_through,
+    auto_lock_period_days: c.auto_lock_period_days,
+    default_voucher_series: c.default_voucher_series,
+    default_voucher_series_per_source_type: c.default_voucher_series_per_source_type,
+    voucher_series_labels: c.voucher_series_labels,
+    ore_rounding: c.ore_rounding,
+    invoice_show_ocr: c.invoice_show_ocr,
+    invoice_show_bankgiro: c.invoice_show_bankgiro,
+    invoice_show_plusgiro: c.invoice_show_plusgiro,
+    invoice_show_swish: c.invoice_show_swish,
+    invoice_show_payment_qr: c.invoice_show_payment_qr,
+    invoice_qr_mode: c.invoice_qr_mode,
+    invoice_show_logo: c.invoice_show_logo,
+    invoice_show_article_number: c.invoice_show_article_number,
+    invoice_show_company_name: c.invoice_show_company_name,
+    invoice_company_name_position: c.invoice_company_name_position,
+    invoice_late_fee_text: c.invoice_late_fee_text,
+    invoice_credit_terms_text: c.invoice_credit_terms_text,
+    invoice_late_fee_text_en: c.invoice_late_fee_text_en,
+    invoice_credit_terms_text_en: c.invoice_credit_terms_text_en,
+    invoice_payment_links_enabled: c.invoice_payment_links_enabled,
+    invoice_email_texts: c.invoice_email_texts,
+    invoice_email_cc_addresses: c.invoice_email_cc_addresses,
+    invoice_email_bcc_addresses: c.invoice_email_bcc_addresses,
+    invoice_email_reply_to: c.invoice_email_reply_to,
+    invoice_primary_color: c.invoice_primary_color,
+    invoice_accent_color: c.invoice_accent_color,
+    invoice_font_family: c.invoice_font_family,
+    invoice_header_text: c.invoice_header_text,
+    invoice_footer_text: c.invoice_footer_text,
+    send_invoice_reminders: c.send_invoice_reminders,
+    reminder_days_level_1: c.reminder_days_level_1,
+    reminder_days_level_2: c.reminder_days_level_2,
+    reminder_days_level_3: c.reminder_days_level_3,
+    reminder_text_overrides: c.reminder_text_overrides,
+    reminder_fee_enabled: c.reminder_fee_enabled,
+    reminder_fee_amount: c.reminder_fee_amount,
+    reminder_interest_rate_override: c.reminder_interest_rate_override,
+    ai_flow_enabled: c.ai_flow_enabled,
+    dimensions_enabled: c.dimensions_enabled,
+    direct_booking_enabled: c.direct_booking_enabled,
+    mileage_enabled: c.mileage_enabled,
+    sales_orders_enabled: c.sales_orders_enabled,
+    quotes_enabled: c.quotes_enabled,
+    proforma_enabled: c.proforma_enabled,
+    recurring_invoices_enabled: c.recurring_invoices_enabled,
+    self_billing_enabled: c.self_billing_enabled,
+    self_billing_prefix: c.self_billing_prefix,
+    next_self_billing_number: c.next_self_billing_number,
+    self_billing_acceptance_text: c.self_billing_acceptance_text,
+    preferred_payment_format: c.preferred_payment_format,
+    salary_pay_day: c.salary_pay_day,
+    salary_default_bank: c.salary_default_bank,
+    salary_net_rounding: c.salary_net_rounding,
+    salary_payslip_show_employer_cost: c.salary_payslip_show_employer_cost,
+    salary_payslip_show_breakdown: c.salary_payslip_show_breakdown,
+    salary_regional_support: c.salary_regional_support,
+    salary_calculation_policy: c.salary_calculation_policy,
+    salary_deviation_period: c.salary_deviation_period,
+    salary_vacation_year_basis: c.salary_vacation_year_basis,
+  }
+}
+
+/** The supplied keys only: what the save actually changes. */
+function suppliedChanges(payload: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined))
+}
+
+function refuse(code: string, messageSv?: string, details?: Record<string, unknown>) {
+  return {
+    ok: false as const,
+    code,
+    ...(messageSv ? { messageSv } : {}),
+    ...(details ? { details } : {}),
+  }
+}
+
+/**
+ * The invoice series (ML 17 kap 24 § p. 2): a next number that is already
+ * used, or lies under a number the series already has, would fill a hole in
+ * the series or restart it, so the save is refused with the number to use.
+ * Judged only when the save changes the prefix or the next number: another
+ * save is never refused for a series an import left behind (the first issue
+ * after it asks instead). A failed read fails closed.
+ */
+async function checkInvoiceSeriesChange(
+  ctx: Pick<OperationContext, 'supabase' | 'companyId' | 'log'>,
+  body: CompanySettingsChanges,
+  oldSettings: SettingsRow | null,
+): Promise<ReturnType<typeof refuse> | { ok: false; code: 'UNKNOWN_ERROR'; error: unknown } | null> {
+  const storedPrefix = (oldSettings?.invoice_prefix as string | null | undefined) ?? ''
+  const storedNext = (oldSettings?.next_invoice_number as number | null | undefined) ?? 1
+  const prefix = body.invoice_prefix !== undefined ? (body.invoice_prefix ?? '') : storedPrefix
+  const nextNumber = body.next_invoice_number ?? storedNext
+  if (prefix === storedPrefix && nextNumber === storedNext) return null
+
+  let series: Awaited<ReturnType<typeof readInvoiceSeries>>
+  try {
+    series = await readInvoiceSeries(ctx.supabase, ctx.companyId, { prefix, nextNumber })
+  } catch (error) {
+    ctx.log.error('invoice series read failed before a settings save', error as Error)
+    return { ok: false, code: 'UNKNOWN_ERROR', error }
+  }
+  if (!series || series.highest_number === null || nextNumber > series.highest_number) return null
+
+  const behind = { prefix, highest_number: series.highest_number, first_allowed: series.first_allowed }
+  return refuse('SETTINGS_INVOICE_NUMBER_IN_SERIES', invoiceSeriesBehindMessages(behind).sv, behind)
+}
+
+/** Why the semesterår basis cannot change right now; the one place that rule lives. */
+export type VacationBasisChangeCheck =
+  | { changeable: true }
+  | { changeable: false; code: 'SETTINGS_VACATION_BASIS_OPEN_BALANCES' }
+  | { changeable: false; code: 'UNKNOWN_ERROR'; error: unknown }
+
+/**
+ * Whether the vacation-year basis (salary_vacation_year_basis) may move.
+ * Changing the boundary while OPEN vacation-ledger rows exist would orphan
+ * them (rows are keyed by vacation_year_start), so it is refused until the
+ * current year is closed. A failed check fails closed. The save below asks
+ * this; the salary settings page asks it too, to lock the choice up front
+ * with the same reason instead of letting a save fail.
+ */
+export async function checkVacationBasisChange(
+  ctx: Pick<OperationContext, 'supabase' | 'companyId'>,
+): Promise<VacationBasisChangeCheck> {
+  const { count: openRows, error } = await ctx.supabase
+    .from('employee_vacation_balances')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', ctx.companyId)
+    .eq('status', 'open')
+  if (error) return { changeable: false, code: 'UNKNOWN_ERROR', error }
+  if ((openRows ?? 0) > 0) return { changeable: false, code: 'SETTINGS_VACATION_BASIS_OPEN_BALANCES' }
+  return { changeable: true }
+}
+
+export async function updateCompanySettings(
+  ctx: OperationContext,
+  input: CompanySettingsChanges,
+  options: UpdateCompanySettingsOptions,
+): Promise<OperationOutcome<UpdateCompanySettingsResult>> {
+  const { supabase, companyId, log } = ctx
+  const body: CompanySettingsChanges = { ...input }
+
+  // The stored row: the fallback for every cross-field rule below, and the
+  // "before" side of a dry-run preview.
+  const { data: oldRow, error: oldError } = await supabase
+    .from('company_settings')
+    .select('*')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (oldError) {
+    log.error('failed to read company settings before update', oldError)
+    return { ok: false, code: 'UNKNOWN_ERROR', error: oldError }
+  }
+  const oldSettings = (oldRow ?? null) as SettingsRow | null
+
+  const changesInvoiceEmailRecipients =
+    body.invoice_email_cc_addresses !== undefined
+    || body.invoice_email_bcc_addresses !== undefined
+    || body.invoice_email_reply_to !== undefined
+  const changesInvoicePaymentInstructions =
+    body.invoice_payment_accounts !== undefined
+    || body.bank_name !== undefined
+    || body.clearing_number !== undefined
+    || body.account_number !== undefined
+    || body.bankgiro !== undefined
+    || body.plusgiro !== undefined
+    || body.swish !== undefined
+    || body.iban !== undefined
+    || body.bic !== undefined
+  // Who the bank sees as sender and under which agreement it pays out.
+  const changesPaymentFileIds =
+    body.swedbank_signer_id !== undefined
+    || body.swedbank_corporate_pay_id !== undefined
+    || body.nordea_signer_id !== undefined
+    || body.nordea_agreement_id !== undefined
+  if (
+    !options.adminVerified
+    || changesInvoiceEmailRecipients
+    || changesInvoicePaymentInstructions
+    || changesPaymentFileIds
+  ) {
+    const denied = await requireSettingsAdmin(ctx)
+    if (denied) return denied
+  }
+
+  const reminderDays = [
+    body.reminder_days_level_1 ?? (oldSettings?.reminder_days_level_1 as number | undefined) ?? 15,
+    body.reminder_days_level_2 ?? (oldSettings?.reminder_days_level_2 as number | undefined) ?? 30,
+    body.reminder_days_level_3 ?? (oldSettings?.reminder_days_level_3 as number | undefined) ?? 45,
+  ]
+  if (!(reminderDays[0] < reminderDays[1] && reminderDays[1] < reminderDays[2])) {
+    return refuse('SETTINGS_REMINDER_DAYS_ORDER')
+  }
+
+  // The org number is the legal identifier (changing it would orphan vouchers,
+  // SIE history and tax filings): writable only while the company has no valid
+  // one, never replaced once it has (lib/company/org-number-rule.ts). A
+  // company without one can fill it in itself; a valid one is kept on both
+  // copies. company_name stays editable (särskilt företagsnamn); the database
+  // mirrors it onto companies.name (company_settings_sync_company_name).
+  let orgNumberFill: string | null = null
+  if (body.org_number !== undefined) {
+    const change = await resolveOrgNumberChange(supabase, companyId, body.org_number, {
+      org_number: oldSettings?.org_number,
+      entity_type: body.entity_type ?? oldSettings?.entity_type,
+    })
+    if (change.kind === 'error') {
+      log.error('failed to read the stored org number before a settings save', change.error as Error)
+      return { ok: false, code: 'UNKNOWN_ERROR', error: change.error }
+    }
+    if (change.kind === 'refused') return refuse(change.code)
+    if (change.kind === 'unchanged') {
+      delete body.org_number
+    } else {
+      body.org_number = change.value
+      orgNumberFill = change.value
+    }
+  }
+
+  // Enskild firma must use calendar year (BFL 3 kap.)
+  const effectiveEntityType = body.entity_type || oldSettings?.entity_type
+  const effectiveFYStartMonth = body.fiscal_year_start_month ?? oldSettings?.fiscal_year_start_month
+  if (effectiveEntityType === 'enskild_firma' && effectiveFYStartMonth && effectiveFYStartMonth !== 1) {
+    return refuse('SETTINGS_EF_CALENDAR_YEAR')
+  }
+
+  // Share capital is all-or-nothing: the antal aktier/kvotvärde note (ÅRL 5 kap 34 §)
+  // needs both the registered amount and the share count, and the DB pair
+  // constraint enforces it. Validate against the effective (body-or-stored)
+  // values so the caller gets a clear message instead of a raw constraint 500.
+  if (body.aktiekapital !== undefined || body.antal_aktier !== undefined) {
+    const effectiveAktiekapital =
+      body.aktiekapital !== undefined ? body.aktiekapital : (oldSettings?.aktiekapital ?? null)
+    const effectiveAntalAktier =
+      body.antal_aktier !== undefined ? body.antal_aktier : (oldSettings?.antal_aktier ?? null)
+    if ((effectiveAktiekapital === null) !== (effectiveAntalAktier === null)) {
+      return refuse('SETTINGS_SHARE_CAPITAL_PAIR')
+    }
+  }
+
+  // Vacation year basis (payroll gap-closure 3.1): not while open
+  // vacation-ledger rows exist (checkVacationBasisChange).
+  if (
+    body.salary_vacation_year_basis !== undefined &&
+    body.salary_vacation_year_basis !== oldSettings?.salary_vacation_year_basis
+  ) {
+    const basisCheck = await checkVacationBasisChange({ supabase, companyId })
+    if (!basisCheck.changeable) {
+      // Fail closed: a failed check must not let the basis change through
+      // and orphan open vacation-ledger rows.
+      if (basisCheck.code === 'UNKNOWN_ERROR') return { ok: false, code: 'UNKNOWN_ERROR', error: basisCheck.error }
+      return refuse(basisCheck.code)
+    }
+  }
+
+  const seriesRefusal = await checkInvoiceSeriesChange(ctx, body, oldSettings)
+  if (seriesRefusal) return seriesRefusal
+
+  // Turning VAT registration off retires the VAT-dependent flags, and
+  // dropping EU trade retires the EU sales list: stale true values would
+  // otherwise block the save below or silently resurrect wrong deadlines
+  // when registration is re-enabled later. Same coherence rule as the
+  // 20260717070000 migration and the tax settings form.
+  if (body.vat_registered === false) {
+    body.vat_taxable_base_over_40m = false
+    body.vat_has_eu_trade = false
+    body.periodisk_sammanstallning_enabled = false
+  }
+  if (body.vat_has_eu_trade === false) {
+    body.periodisk_sammanstallning_enabled = false
+  }
+  // Seasonal registration is a mode of being a registered employer; an
+  // unregistered company cannot be sasongsregistrerad.
+  if (body.employer_registered === false) {
+    body.employer_seasonal = false
+  }
+  // The accounting method: never while an open invoice lacks a verifikat of
+  // its own, else free while the current fiscal year has no posted verifikat,
+  // afterwards only as a stated correction (the same rule on every door,
+  // recorded below once the row is saved).
+  const methodChange = await checkAccountingMethodChange(ctx, {
+    stored: oldSettings?.accounting_method as string | null | undefined,
+    requested: body.accounting_method,
+    reason: body.accounting_method_correction_reason,
+  })
+  if (methodChange.kind === 'refused') {
+    if (methodChange.outcome.error) log.error('accounting method check failed before a settings save', methodChange.outcome.error as Error)
+    return methodChange.outcome
+  }
+  const methodWarnings = methodChange.kind === 'correction' ? methodChange.warnings : []
+
+  // Deferred booking is an accrual-only concept (#967): kontantmetoden books
+  // on payment, so a stale true flag must not survive a switch to it (the
+  // bookkeeping settings form sends false in that case too).
+  if (body.accounting_method === 'cash') {
+    body.defer_invoice_booking = false
+  }
+
+  // VAT-registered must have VAT number (ML 17 kap. 24 §, the invoice needs
+  // it) and moms period (SFL 26 kap.). Each cross-field check runs only when
+  // the request touches a field in its group: a partial save of unrelated
+  // settings (e.g. the invoice bank-details dialog) must not be rejected for a
+  // pre-existing inconsistency it cannot fix from that surface. Explicit null
+  // counts as touched, it clears a value, so it must not fall back to the
+  // stored one during validation. PS/EU-trade edits are in the completeness
+  // group: enabling the EU sales list on an incomplete VAT registration must
+  // keep failing like it did when the check ran on every save.
+  const effectiveVatRegistered = body.vat_registered ?? oldSettings?.vat_registered
+  const effectiveMomsPeriod = body.moms_period !== undefined ? body.moms_period : oldSettings?.moms_period
+  const touchesVatCompleteness =
+    body.vat_registered !== undefined ||
+    body.vat_number !== undefined ||
+    body.moms_period !== undefined ||
+    body.vat_has_eu_trade !== undefined ||
+    body.periodisk_sammanstallning_enabled !== undefined
+  if (touchesVatCompleteness && effectiveVatRegistered === true) {
+    const effectiveVatNumber = body.vat_number !== undefined ? body.vat_number : oldSettings?.vat_number
+    if (!effectiveVatNumber) return refuse('SETTINGS_VAT_NUMBER_REQUIRED')
+    if (!effectiveMomsPeriod) return refuse('SETTINGS_MOMS_PERIOD_REQUIRED')
+  }
+
+  const touchesVat40m =
+    body.vat_registered !== undefined ||
+    body.vat_taxable_base_over_40m !== undefined ||
+    body.moms_period !== undefined
+  const effectiveVatTaxableBaseOver40m =
+    body.vat_taxable_base_over_40m ?? oldSettings?.vat_taxable_base_over_40m ?? false
+  if (touchesVat40m && effectiveVatRegistered && effectiveVatTaxableBaseOver40m && effectiveMomsPeriod !== 'monthly') {
+    return refuse('SETTINGS_VAT_40M_REQUIRES_MONTHLY')
+  }
+
+  const touchesPs =
+    body.periodisk_sammanstallning_enabled !== undefined ||
+    body.vat_registered !== undefined ||
+    body.vat_has_eu_trade !== undefined
+  const effectivePsEnabled =
+    body.periodisk_sammanstallning_enabled ?? oldSettings?.periodisk_sammanstallning_enabled ?? false
+  const effectiveEuTrade = body.vat_has_eu_trade ?? oldSettings?.vat_has_eu_trade ?? false
+  if (touchesPs && effectivePsEnabled && (!effectiveVatRegistered || !effectiveEuTrade)) {
+    return refuse('SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE')
+  }
+
+  const previousLockDate = (oldSettings?.bookkeeping_locked_through as string | null | undefined) ?? null
+  // A caller that decided on the lock date it read replaces only that date
+  // (options.expectedLockDate); the UPDATE below carries the same condition
+  // for a change between this read and the write.
+  const expectsLockDate = options.expectedLockDate !== undefined
+  if (expectsLockDate && previousLockDate !== options.expectedLockDate) return refuse('CONFLICT')
+
+  // The filed momsdeklaration periods a lock date move reopens, worked out
+  // once for every door: each door refuses them unacknowledged,
+  // and period.lock_date_changed names them whichever door moved the date.
+  // A failed read fails closed.
+  let reopenedFiledVatPeriods: ReopenedVatPeriod[] = []
+  if (body.bookkeeping_locked_through !== undefined) {
+    try {
+      reopenedFiledVatPeriods = await options.findReopenedFiledVatPeriods(
+        supabase,
+        companyId,
+        previousLockDate,
+        body.bookkeeping_locked_through,
+      )
+    } catch (error) {
+      log.error('filed VAT periods read failed before a lock date move', error as Error)
+      return { ok: false, code: 'UNKNOWN_ERROR', error }
+    }
+  }
+  if (reopenedFiledVatPeriods.length > 0 && options.refuseReopeningFiledVat) {
+    const names = reopenedFiledVatPeriods.map((p) => p.tax_period).join(', ')
+    return refuse(
+      'BOOKKEEPING_LOCK_REOPENS_FILED_VAT',
+      `Låsdatumet skulle öppna momsperioder som redan är deklarerade (${names}). Bekräfta med acknowledge_filed_vat_periods om en rättelse ska bokföras där.`,
+      { filed_periods: reopenedFiledVatPeriods, acknowledge_with: 'acknowledge_filed_vat_periods' },
+    )
+  }
+  const lockMoveWarnings = [
+    ...lockWarnings(oldSettings, body),
+    ...reopenedFiledVatWarnings(reopenedFiledVatPeriods),
+  ]
+
+  const payload = toUpdatePayload(body)
+
+  // Regenerate when the save touches tax-relevant fields: the statutory
+  // dates are derived from them, and re-running also repairs rows created
+  // by older schedule logic or lost to an earlier generation failure. The
+  // generator preserves completed rows, so filing progress survives.
+  // Additionally self-heal when the company has no system deadlines at all:
+  // tax settings are filled at onboarding, so an unrelated later save may be
+  // the first chance to backfill an empty set. Counted before the write in a
+  // dry run (the preview says whether the save will regenerate) and after it
+  // otherwise, exactly where the dashboard always counted.
+  const taxFieldsInBody = hasTaxRelevantFields(body as Record<string, unknown>)
+  const countSystemDeadlines = async (): Promise<number> => {
+    if (taxFieldsInBody) return 0
+    const { count, error: countError } = await supabase
+      .from('deadlines')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('source', 'system')
+      .eq('deadline_type', 'tax')
+    // Fail safe: on a count error, assume deadlines already exist so we do
+    // NOT delete+regenerate on a transient failure (regeneration would reset
+    // the status of pending rows). A non-zero placeholder keeps the
+    // self-heal off.
+    return countError ? 1 : (count ?? 0)
+  }
+
+  // Turning dimensions on means the registry must hold the codes the history
+  // already carries. It used to happen only when the settings page's toggle
+  // called the scan itself, so a v1 or MCP save turned dimensions on without it.
+  const turnsDimensionsOn = body.dimensions_enabled === true && oldSettings?.dimensions_enabled !== true
+
+  if (options.dryRun) {
+    if (!oldSettings) {
+      return refuse('NOT_FOUND', 'Inställningarna hittades inte.', { resource: 'company_settings' })
+    }
+    const changes = suppliedChanges(payload)
+    const previous = Object.fromEntries(Object.keys(changes).map((key) => [key, oldSettings[key] ?? null]))
+    const willRegenerate = shouldRegenerateTaxDeadlines(taxFieldsInBody, await countSystemDeadlines())
+    return {
+      ok: true,
+      dryRun: true,
+      preview: {
+        changes,
+        previous,
+        proposed: { ...oldSettings, ...changes },
+        deadlines_will_regenerate: willRegenerate,
+        dimension_codes_will_import: turnsDimensionsOn,
+        warnings: [...lockMoveWarnings, ...methodWarnings],
+      },
+    }
+  }
+
+  // Payment instructions live on cash_accounts since migration
+  // 20260904010000; the bank columns are a mirror of the default payee
+  // account per currency. Write the change through to the account FIRST: if
+  // that fails nothing has been written and the caller gets an error, instead
+  // of a settings row that the next mirror would undo.
+  if (changesInvoicePaymentInstructions) {
+    try {
+      await propagateLegacyPayeeWrite(supabase, companyId, body)
+    } catch (err) {
+      log.error('failed to write payment instructions through to cash accounts', err as Error)
+      return { ok: false, code: 'UNKNOWN_ERROR', error: err }
+    }
+  }
+
+  let update = supabase.from('company_settings').update(payload).eq('company_id', companyId)
+  if (expectsLockDate) {
+    update = previousLockDate === null
+      ? update.is('bookkeeping_locked_through', null)
+      : update.eq('bookkeeping_locked_through', previousLockDate)
+  }
+  const { data, error } = await update.select('*').single()
+
+  if (error) {
+    if (error.code === 'PGRST116') {
+      // The row was read above: with the condition, no match means the lock
+      // date changed in between.
+      if (expectsLockDate && oldSettings) return refuse('CONFLICT')
+      return refuse('NOT_FOUND', 'Inställningarna hittades inte.', { resource: 'company_settings' })
+    }
+    return { ok: false, code: 'UNKNOWN_ERROR', error }
+  }
+
+  // The monthly close an integration waits for: only when the save touched
+  // the lock date and the stored date really moved (the settings page resends
+  // the unchanged date on every save). Removing the lock is a move backward.
+  const lockDate = ((data as SettingsRow).bookkeeping_locked_through as string | null | undefined) ?? null
+  if (body.bookkeeping_locked_through !== undefined && lockDate !== previousLockDate) {
+    await eventBus.emit({
+      type: 'period.lock_date_changed',
+      payload: {
+        previousLockDate,
+        lockDate,
+        direction: lockDate !== null && (previousLockDate === null || lockDate > previousLockDate) ? 'forward' : 'backward',
+        via: options.via,
+        reopenedFiledVatPeriods,
+        userId: ctx.userId,
+        companyId,
+      },
+    })
+  }
+
+  // A filled-in org number goes to the company row too, which the duplicate
+  // check and the company lists read. The settings copy just written leads
+  // for every bank and payment call (lib/company/org-number.ts), so a failed
+  // mirror is logged, not a failed save. The audit trigger on
+  // company_settings has recorded the change: old and new value, who, when.
+  if (orgNumberFill) {
+    log.info('company org number filled in', { previous: oldSettings?.org_number ? 'invalid' : 'empty' })
+    const { error: mirrorError } = await supabase
+      .from('companies')
+      .update({ org_number: orgNumberFill })
+      .eq('id', companyId)
+    if (mirrorError) log.error('failed to mirror the filled-in org number to the company row', mirrorError)
+  }
+
+  const remindersTurnedOff =
+    oldSettings?.send_invoice_reminders === true && (data as SettingsRow).send_invoice_reminders !== true
+
+  let deadlinesRegenerated = false
+  if (shouldRegenerateTaxDeadlines(taxFieldsInBody, await countSystemDeadlines())) {
+    try {
+      await regenerateTaxDeadlinesForUser(supabase, companyId, toDeadlineSettings(data))
+      deadlinesRegenerated = true
+      log.info('tax deadlines regenerated after settings change')
+    } catch (err) {
+      log.error('failed to regenerate tax deadlines', err as Error)
+      // Don't fail the settings update if deadline generation fails
+    }
+  }
+
+  const warnings = [...lockMoveWarnings, ...methodWarnings]
+  if (methodChange.kind === 'correction') {
+    const notRecorded = await recordAccountingMethodCorrection(
+      ctx,
+      methodChange.correction,
+      ((data as SettingsRow).id as string | undefined) ?? null,
+    )
+    if (notRecorded) warnings.push(notRecorded)
+  }
+
+  let dimensionCodesImported: number | null = null
+  if (turnsDimensionsOn) {
+    const imported = await importExistingDimensionCodes(ctx)
+    if (imported.ok && !imported.dryRun) {
+      dimensionCodesImported = imported.data.created
+      if (imported.data.created > 0) warnings.push(dimensionCodesImportedWarning(imported.data.created))
+    } else {
+      // Dimensions are on either way: the settings page's toggle, or turning
+      // the flag off and on again, runs the registration once more.
+      log.error('registering the dimension codes already on journal lines failed', undefined, {
+        code: imported.ok ? 'UNEXPECTED_DRY_RUN' : imported.code,
+      })
+      warnings.push(DIMENSION_CODES_IMPORT_FAILED)
+    }
+  }
+
+  // The Stripe customer is a copy of the company's identity, written at
+  // checkout; a later change has to reach it too, or every renewal keeps
+  // invoicing the details as they stood that day (crm#1378). Only when an
+  // identity column moved, and best effort: the next subscription event
+  // writes it again.
+  if (billingIdentityChanged(oldSettings, data as SettingsRow)) {
+    try {
+      await syncCompanyStripeIdentity(supabase, companyId)
+    } catch (err) {
+      log.error('failed to write the company identity onto its Stripe customer', err as Error)
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      settings: data as SettingsRow,
+      deadlines_regenerated: deadlinesRegenerated,
+      dimension_codes_imported: dimensionCodesImported,
+      reminders_turned_off: remindersTurnedOff,
+    },
+    ...(warnings.length > 0 ? { warnings } : {}),
+  }
+}
+
+function dimensionCodesImportedWarning(count: number): OperationWarning {
+  return {
+    code: 'DIMENSION_CODES_IMPORTED',
+    message_sv: `${count} dimensionskoder som redan fanns på verifikationsrader lades in i registret som arkiverade värden.`,
+    message_en: `${count} dimension codes already on journal lines were added to the registry as archived values.`,
+  }
+}
+
+const DIMENSION_CODES_IMPORT_FAILED: OperationWarning = {
+  code: 'DIMENSION_CODES_IMPORT_FAILED',
+  message_sv:
+    'Dimensionerna slogs på, men koderna som redan finns på verifikationsrader kunde inte läggas in i registret. Slå av och på dimensionerna igen för att försöka på nytt.',
+  message_en:
+    'Dimensions were turned on, but the codes already on journal lines could not be added to the registry. Turn dimensions off and on again to retry.',
+}
+
+/**
+ * Moving bookkeeping_locked_through earlier (or clearing it) reopens dates
+ * that were closed for writes. The dashboard allows it, so every door does;
+ * the save goes through and says so, because it re-exposes booked periods to
+ * change (BFL 5 kap: the audit trigger records the old and new date).
+ */
+function lockWarnings(oldSettings: SettingsRow | null, body: CompanySettingsChanges): OperationWarning[] {
+  if (body.bookkeeping_locked_through === undefined) return []
+  const before = (oldSettings?.bookkeeping_locked_through as string | null | undefined) ?? null
+  const after = body.bookkeeping_locked_through
+  if (before === null || (after !== null && after >= before)) return []
+  return [
+    {
+      code: 'BOOKKEEPING_LOCK_MOVED_BACKWARDS',
+      message_sv: after === null
+        ? `Bokföringslåset (låst till och med ${before}) togs bort: tidigare låsta datum kan ändras igen.`
+        : `Bokföringslåset flyttades bakåt från ${before} till ${after}: datumen däremellan kan ändras igen.`,
+      message_en: after === null
+        ? `The bookkeeping lock (locked through ${before}) was removed: previously locked dates are writable again.`
+        : `The bookkeeping lock moved back from ${before} to ${after}: the dates in between are writable again.`,
+    },
+  ]
+}
+
+/** A lock date move reopened filed momsdeklaration periods: book the correction and file again. */
+function reopenedFiledVatWarnings(periods: ReopenedVatPeriod[]): OperationWarning[] {
+  if (periods.length === 0) return []
+  const names = periods.map((p) => p.tax_period).join(', ')
+  return [
+    {
+      code: 'BOOKKEEPING_LOCK_REOPENED_FILED_VAT',
+      message_sv: `Deklarerade momsperioder öppnades igen (${names}). Bokför rättelsen och lämna en rättad momsdeklaration för perioden.`,
+      message_en: `Filed VAT periods were reopened (${names}). Book the correction and file a corrected VAT return for the period.`,
+    },
+  ]
+}
+
+/**
+ * GET-side rule shared by the dashboard and the settings.get operation:
+ * legacy rows may carry a null company_settings.entity_type; the company row
+ * is the source of truth then.
+ */
+export async function withEntityTypeFallback<T extends SettingsRow>(
+  ctx: Pick<OperationContext, 'supabase' | 'companyId'>,
+  row: T,
+): Promise<T> {
+  if (row.entity_type) return row
+  const { data: company } = await ctx.supabase
+    .from('companies')
+    .select('entity_type')
+    .eq('id', ctx.companyId)
+    .single()
+  const entityType = (company as { entity_type?: string } | null)?.entity_type
+  return entityType ? { ...row, entity_type: entityType } : row
+}
+
+/**
+ * The columns of the settings.get read, but the recent ones getCompanySettings
+ * reads beside them while their migrations may still be on their way:
+ * nordea_agreement_id (20261102093417) and the English invoice fine print
+ * (20261109183000, crm#1735).
+ */
+const SETTINGS_READ_COLUMNS =
+  'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, registered_office, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, swedbank_signer_id, swedbank_corporate_pay_id, nordea_signer_id, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_payment_qr, invoice_qr_mode, invoice_show_logo, invoice_show_article_number, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, self_billing_prefix, next_self_billing_number, self_billing_acceptance_text, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete'
+
+/**
+ * The settings row for the API read (settings.get): every column a settings
+ * operation can write plus the fixed identity. Literal select so the schema
+ * guard can check each column; never '*', which would also hand an API
+ * caller internal bookkeeping columns.
+ */
+export async function getCompanySettings(ctx: OperationContext): Promise<OperationOutcome<SettingsRow>> {
+  let read = await ctx.supabase
+    .from('company_settings')
+    .select(`${SETTINGS_READ_COLUMNS}, nordea_agreement_id, invoice_late_fee_text_en, invoice_credit_terms_text_en`)
+    .eq('company_id', ctx.companyId)
+    .maybeSingle()
+  if (isMissingColumnError(read.error)) {
+    // Vercel serves this code up to a few hours before CI applies a
+    // migration; the resource reads the absent columns as null.
+    read = await ctx.supabase.from('company_settings').select(SETTINGS_READ_COLUMNS).eq('company_id', ctx.companyId).maybeSingle()
+  }
+  const { data, error } = read
+  if (error) {
+    ctx.log.error('company settings read failed', error)
+    return { ok: false, code: 'UNKNOWN_ERROR', error }
+  }
+  if (!data) return refuse('NOT_FOUND', 'Inställningarna hittades inte.', { resource: 'company_settings' })
+  return { ok: true, data: await withEntityTypeFallback(ctx, data as SettingsRow) }
+}

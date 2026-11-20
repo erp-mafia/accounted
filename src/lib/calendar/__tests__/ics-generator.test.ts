@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { generateCalendarFeed } from '../ics-generator'
-import type { Deadline } from '@/types'
+import type { Deadline, Invoice } from '@/types'
 
 function makeDeadline(overrides: Partial<Deadline>): Deadline {
   return {
@@ -66,5 +66,71 @@ describe('generateCalendarFeed deadline filtering', () => {
     )
     expect(ics).not.toContain('Momsdeklaration Q1 2027')
     expect(ics).toContain('Skicka avtal till kunden')
+  })
+})
+
+describe('generateCalendarFeed alarm and duration syntax (RFC 5545 3.3.6)', () => {
+  // crm#1284: the ics package kept a dangling "T" on whole-day durations
+  // (TRIGGER:-P14DT, TRIGGER:-PT), which is not a valid duration.
+  const DANGLING_T = /^(TRIGGER|DURATION):[+-]?P(\d+W)?(\d+D)?T\r?$/m
+
+  it('writes whole-day reminder offsets as valid triggers', async () => {
+    const ics = await generateCalendarFeed(
+      { deadlines: [makeDeadline({ ...SYSTEM_DEADLINE, reminder_offsets: [14, 7, 1, 0] })], invoices: [] },
+      { includeTaxDeadlines: true, includeInvoices: false },
+    )
+    expect(ics).toContain('TRIGGER:-P14D\r\n')
+    expect(ics).toContain('TRIGGER:-P7D\r\n')
+    expect(ics).toContain('TRIGGER:-P1D\r\n')
+    expect(ics).toContain('TRIGGER:PT0S\r\n')
+    expect(ics).not.toMatch(DANGLING_T)
+  })
+
+  it('keeps the default reminders and the one-hour event duration valid', async () => {
+    const ics = await generateCalendarFeed(
+      { deadlines: [USER_DEADLINE], invoices: [] },
+      { includeTaxDeadlines: true, includeInvoices: false },
+    )
+    expect(ics).toContain('TRIGGER:-P7D\r\n')
+    expect(ics).toContain('TRIGGER:-P1D\r\n')
+    expect(ics).toContain('DURATION:PT1H\r\n')
+    expect(ics).not.toMatch(DANGLING_T)
+  })
+
+  it('writes the all-day invoice event as a one-day duration', async () => {
+    const invoice = {
+      id: 'inv-1',
+      invoice_number: '1001',
+      due_date: '2027-03-12',
+      total: 1250,
+      currency: 'SEK',
+      status: 'sent',
+      customer: { name: 'Kund AB' },
+    } as unknown as Invoice
+    const ics = await generateCalendarFeed(
+      { deadlines: [], invoices: [invoice] },
+      { includeTaxDeadlines: true, includeInvoices: true },
+    )
+    expect(ics).toContain('DTSTART;VALUE=DATE:20270312')
+    expect(ics).toContain('DURATION:P1D\r\n')
+    expect(ics).toContain('TRIGGER:-P3D\r\n')
+    expect(ics).not.toMatch(DANGLING_T)
+  })
+
+  it('writes deadline times as Swedish wall-clock times in UTC', async () => {
+    const ics = await generateCalendarFeed(
+      {
+        deadlines: [
+          makeDeadline({ id: 'w', due_date: '2027-02-12', due_time: null }),
+          makeDeadline({ id: 's', due_date: '2027-06-30', due_time: null }),
+          makeDeadline({ id: 't', due_date: '2027-02-15', due_time: '14:30:00' }),
+        ],
+        invoices: [],
+      },
+      { includeTaxDeadlines: true, includeInvoices: false },
+    )
+    expect(ics).toContain('DTSTART:20270212T080000Z')
+    expect(ics).toContain('DTSTART:20270630T070000Z')
+    expect(ics).toContain('DTSTART:20270215T133000Z')
   })
 })

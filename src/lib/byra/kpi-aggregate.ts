@@ -14,7 +14,9 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { hasEnded } from '@/lib/dates/iso'
 import type { MonthlyDataPoint } from '@/components/reports/IncomeExpenseChart'
+import { stockholmYearMonth, todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Swedish month labels, mirrors MONTH_LABELS in lib/reports/monthly-breakdown.ts
  *  (not imported: that module pulls server-side report code, and this helper is
@@ -77,9 +79,9 @@ export function resolvePeriodPreset(
     ? (raw as KpiPeriodPreset)
     : 'ytd'
 
-  const y = today.getFullYear()
-  const m = today.getMonth()
-  const toDate = isoDate(y, m, today.getDate())
+  const { year: y, month } = stockholmYearMonth(today)
+  const m = month - 1
+  const toDate = todayIsoStockholm(today)
 
   let fromDate: string
   switch (preset) {
@@ -120,7 +122,7 @@ export function pickCurrentPeriod(
   if (containing.length > 0) return containing[0]
 
   const past = periods
-    .filter((p) => p.period_end < todayIso)
+    .filter((p) => hasEnded(p.period_end, todayIso))
     .sort((a, b) => b.period_end.localeCompare(a.period_end))
   if (past.length > 0) return past[0]
 

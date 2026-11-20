@@ -1,3 +1,7 @@
+---
+audience: developer
+---
+
 # SIE4 File Format Reference
 
 SIE (Standard Import Export) is the Swedish standard for exchanging accounting data between systems. SIE4 is the current version used in practice.
@@ -20,8 +24,10 @@ SIE (Standard Import Export) is the Swedish standard for exchanging accounting d
 | SIE1 | Yearly balances | Simple balance transfer |
 | SIE2 | Periodic balances | Periodic balance transfer |
 | SIE3 | Object balances | Dimensional balances |
-| SIE4 | Full transaction data | Complete bokföring export/import |
-| SIE4E | SIE4 + dimensions | Extended with kostnadsställe etc. |
+| SIE4E | Full transaction data, exported from a bokföringsprogram | Complete bokföring export (file extension .SE) |
+| SIE4I | Verifikationer for import into a bokföringsprogram | Transaction files from försystem, e.g. lön or fakturering (file extension .SI) |
+
+4E and 4I are the export and import variants of SIE typ 4, not a dimensions extension. Dimensions (#DIM/#OBJEKT) exist in SIE 3 and 4. The current specification is SIE filformat utgåva 4C (2025-08-06).
 
 SIE4 is the workhorse. It contains the complete bokföring: kontoplan, verifikationer, and all transactions. Use SIE4 for import/export of full bokföring data.
 
@@ -66,12 +72,12 @@ A SIE4 file is a plain text file with records, one per line. Each record starts 
 | #PROGRAM | Software name and version | Yes |
 | #GEN | Generation date and user signature | Yes |
 | #FNR | Company number (internal) | No |
-| #ORGNR | Organisationsnummer | Yes |
+| #ORGNR | Organisationsnummer | No |
 | #FNAMN | Company name | Yes |
 | #ADRESS | Company address | No |
-| #RAR | Räkenskapsår period (0 = current, -1 = previous) | Yes |
+| #RAR | Räkenskapsår period (0 = current, -1 = previous) | Yes (4E); optional in 4I |
 | #TAXAR | Taxeringsår | No |
-| #KPTYP | Kontoplan type (e.g., BAS2024) | Yes |
+| #KPTYP | Kontoplan type (e.g., BAS2024) | No |
 | #VALUTA | Currency (SEK default) | No |
 
 ### Account records
@@ -96,10 +102,10 @@ A SIE4 file is a plain text file with records, one per line. Each record starts 
 |---|---|
 | #VER | Verifikation header |
 | #TRANS | Transaction line within a verifikation |
-| #RTRANS | Reversed transaction (rättelse) |
-| #BTRANS | Added transaction (tillägg) |
+| #RTRANS | Tillagd transaktionspost (row added to a verifikation after registration; always followed by an identical #TRANS) |
+| #BTRANS | Borttagen transaktionspost (row removed from a verifikation) |
 
-### Dimension records (SIE4E)
+### Dimension records (SIE 3 and 4)
 | Tag | Description |
 |---|---|
 | #DIM | Dimension definition |
@@ -108,31 +114,31 @@ A SIE4 file is a plain text file with records, one per line. Each record starts 
 
 ## 4. Mandatory vs optional
 
-### Minimum valid SIE4 file must have:
+### Minimum valid SIE4E (export) file must have:
 1. #FLAGGA
 2. #FORMAT
 3. #SIETYP
 4. #PROGRAM
 5. #GEN
-6. #ORGNR
-7. #FNAMN
-8. #RAR (at least current year)
-9. #KPTYP
-10. #KONTO (all used accounts)
-11. #VER + #TRANS (all verifikationer and transactions)
+6. #FNAMN
+7. #RAR (at least current year)
+8. #KONTO (all used accounts)
+9. #IB, #UB and #RES (for current and previous year; zero balances may be omitted)
+10. #VER + #TRANS (formally optional in the spec, but a full bokföring export includes all verifikationer and transactions)
+
+#ORGNR and #KPTYP are optional (recommended). In a 4I (import) file #RAR and #KONTO are also optional, and #IB/#UB/#RES are not allowed.
 
 ### Balance records
-- #IB and #UB are expected but some systems omit them
+- #IB and #UB are required in 4E but some systems omit them
 - #RES records summarize resultaträkning accounts
 - Best practice: always include IB/UB for balansräkning accounts and RES for resultaträkning accounts
 
 ## 5. Character encoding and formatting
 
 ### Encoding
-- Traditional: PC8 (Code Page 437) declared with #FORMAT PC8
-- Modern alternative: UTF-8, no #FORMAT tag or custom declaration
-- Most Swedish systems still expect PC8. If you produce UTF-8, document it clearly.
-- When importing: detect encoding, handle both
+- The standard only allows PC8 (IBM extended 8-bit ASCII, Code Page 437), declared with #FORMAT PC8
+- UTF-8 or other encodings are not allowed in a compliant SIE4 file. Always export PC8.
+- When importing: files from non-compliant exporters may still arrive as CP1252/ISO-8859-1 or UTF-8, so detect the encoding defensively
 
 ### Number format
 - Decimal separator: period (.)
@@ -175,7 +181,7 @@ A SIE4 file is a plain text file with records, one per line. Each record starts 
 - Forgetting to handle PC8 encoding (Swedish characters å, ä, ö)
 - Not validating that verifikationer balance (sum of TRANS = 0)
 - Assuming date fields are always populated (some are optional)
-- Not handling #RTRANS and #BTRANS (corrections and additions to existing verifikationer)
+- Not handling #RTRANS and #BTRANS (rows added to and removed from existing verifikationer). A reader that handles #RTRANS must skip the duplicate #TRANS that follows it; a reader that doesn't must ignore both tags
 - Missing #SRU codes (needed for tax declaration mapping)
 
 ## 7. Validation rules

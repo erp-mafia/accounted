@@ -11,7 +11,7 @@ import type { BokioClient } from './client';
  * application/octet-stream, so the real file type comes from the list item's
  * `contentType`, and a filename has to be synthesised by the caller.
  *
- * The link between an upload and a gnubok verifikat is recovered from the
+ * The link between an upload and an Accounted verifikat is recovered from the
  * Bokio journal entry's human voucher number (e.g. "V342"): the SIE import
  * preserves it on journal_entries.source_voucher_series / source_voucher_number.
  * Bokio restarts numbering at V1 every fiscal year, so the number alone is not
@@ -118,7 +118,7 @@ export function fetchBokioUploads(
 /**
  * Build a GUID → voucher-reference index from Bokio's journal entries.
  * An upload only carries the entry's GUID; this resolves it to the human
- * voucher number (and date) that gnubok preserved from the SIE import.
+ * voucher number (and date) that Accounted preserved from the SIE import.
  * Entries with an unparseable number are skipped.
  */
 export async function fetchBokioVoucherIndex(

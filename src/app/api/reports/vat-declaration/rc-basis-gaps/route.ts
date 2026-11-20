@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
+import {
+  rcBasisSupplierDefaults,
+  type RcBasisGapWithDefault,
+  type RcBasisSupplierDefault,
+} from '@/lib/vat/rc-basis-supplier-default'
 import type { VatPeriodType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -38,9 +43,23 @@ export const GET = withRouteContext(
     }
 
     try {
-      const gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period, {
+      const scanned = await findRcBasisGaps(supabase, companyId, periodType, year, period, {
         fiscalPeriodId,
       })
+      // Where each row's Korrigera picker starts (crm#1431). A failed read
+      // starts every picker empty, which only asks the person to choose.
+      let defaults = new Map<string, RcBasisSupplierDefault>()
+      try {
+        defaults = await rcBasisSupplierDefaults(supabase, companyId, scanned.map((g) => g.entryId))
+      } catch (err) {
+        log.warn('rc-basis-gaps supplier defaults unavailable, pickers start empty', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      const gaps: RcBasisGapWithDefault[] = scanned.map((g) => ({
+        ...g,
+        supplierDefault: defaults.get(g.entryId) ?? null,
+      }))
       return NextResponse.json({ data: { gaps } })
     } catch (err) {
       log.error('rc-basis-gaps detection failed', err as Error, { periodType, year, period })

@@ -12,14 +12,14 @@ function buildXlsx(rows: (string | number)[][]): ArrayBuffer {
 }
 
 describe('parseCustomersFile', () => {
-  it('parses a basic Swedish customer register', () => {
+  it('parses a basic Swedish customer register', async () => {
     const buffer = buildXlsx([
       ['Namn', 'Orgnr', 'E-post', 'Telefon', 'Adress', 'Postnr', 'Ort'],
       ['Acme AB', '5560217780', 'kontakt@acme.se', '0701234567', 'Storgatan 1', '11122', 'Stockholm'],
       ['Beta AB', '5562345678', 'info@beta.se', '0709876543', 'Vasagatan 2', '11329', 'Stockholm'],
     ])
 
-    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
 
     expect(result.total_rows).toBe(2)
     expect(result.rows[0].name).toBe('Acme AB')
@@ -30,30 +30,30 @@ describe('parseCustomersFile', () => {
     expect(result.rows[0].is_valid).toBe(true)
   })
 
-  it('auto-classifies customer_type by org_number length', () => {
+  it('auto-classifies customer_type by org_number length', async () => {
     const buffer = buildXlsx([
       ['Namn', 'Orgnr'],
       ['Acme AB', '5560217780'],          // 10-digit company
       ['Sven Svensson', '198001011234'],  // 12-digit personnummer
     ])
 
-    const result = parseCustomersFile(buffer, 'mixed.xlsx')
+    const result = await parseCustomersFile(buffer, 'mixed.xlsx')
     expect(result.rows[0].customer_type).toBe('swedish_business')
     expect(result.rows[1].customer_type).toBe('individual')
   })
 
-  it('classifies eu_business from VAT number prefix', () => {
+  it('classifies eu_business from VAT number prefix', async () => {
     const buffer = buildXlsx([
       ['Namn', 'VAT'],
       ['Müller GmbH', 'DE123456789'],
     ])
 
-    const result = parseCustomersFile(buffer, 'eu.xlsx')
+    const result = await parseCustomersFile(buffer, 'eu.xlsx')
     expect(result.rows[0].customer_type).toBe('eu_business')
     expect(result.rows[0].vat_number).toBe('DE123456789')
   })
 
-  it('skips rows with empty name', () => {
+  it('skips rows with empty name', async () => {
     const buffer = buildXlsx([
       ['Namn', 'E-post'],
       ['Acme AB', 'a@a.se'],
@@ -61,78 +61,92 @@ describe('parseCustomersFile', () => {
       ['Beta AB', 'c@c.se'],
     ])
 
-    const result = parseCustomersFile(buffer, 'sparse.xlsx')
+    const result = await parseCustomersFile(buffer, 'sparse.xlsx')
     expect(result.total_rows).toBe(2)
     expect(result.rows.map((r) => r.name)).toEqual(['Acme AB', 'Beta AB'])
   })
 
-  it('flags invalid email format', () => {
+  it('flags invalid email format', async () => {
     const buffer = buildXlsx([
       ['Namn', 'E-post'],
       ['Acme AB', 'not-an-email'],
     ])
 
-    const result = parseCustomersFile(buffer, 'bad-email.xlsx')
+    const result = await parseCustomersFile(buffer, 'bad-email.xlsx')
     expect(result.rows[0].is_valid).toBe(false)
-    expect(result.rows[0].validation_errors).toContain('Ogiltig e-postadress')
+    expect(result.rows[0].validation_errors).toContain('Ogiltig e-postadress "not-an-email" i kolumnen "E-post"')
   })
 
-  it('parses payment terms with day suffix', () => {
+  it('parses payment terms with day suffix', async () => {
     const buffer = buildXlsx([
       ['Namn', 'Betalningsvillkor'],
       ['Acme AB', '45 dagar'],
       ['Beta AB', ''],
     ])
 
-    const result = parseCustomersFile(buffer, 'terms.xlsx')
+    const result = await parseCustomersFile(buffer, 'terms.xlsx')
     expect(result.rows[0].default_payment_terms).toBe(45)
-    expect(result.rows[1].default_payment_terms).toBe(30) // default fallback
+    expect(result.rows[1].default_payment_terms).toBeNull() // not in the file: the card or the company decides
   })
 
-  it('returns warning when zero rows match', () => {
+  it('returns warning when zero rows match', async () => {
     const buffer = buildXlsx([
       ['Namn', 'Orgnr'],
     ])
 
-    const result = parseCustomersFile(buffer, 'empty.xlsx')
+    const result = await parseCustomersFile(buffer, 'empty.xlsx')
     expect(result.total_rows).toBe(0)
     expect(result.warnings.length).toBeGreaterThan(0)
   })
 
-  it('honors explicit customer_type column', () => {
+  it('honors explicit customer_type column', async () => {
     const buffer = buildXlsx([
       ['Namn', 'Kundtyp'],
       ['Acme AB', 'aktiebolag'],
       ['Sven', 'privatperson'],
     ])
 
-    const result = parseCustomersFile(buffer, 'types.xlsx')
+    const result = await parseCustomersFile(buffer, 'types.xlsx')
     expect(result.rows[0].customer_type).toBe('swedish_business')
     expect(result.rows[1].customer_type).toBe('individual')
   })
 
-  it('preserves row_index pointing to spreadsheet row', () => {
+  it('flags a privatperson whose number is an org number, not a personnummer', async () => {
+    // Synthetic numbers only.
+    const buffer = buildXlsx([
+      ['Namn', 'Orgnr', 'Kundtyp'],
+      ['Sven', '5560217780', 'privatperson'],
+      ['Stina', '198001011234', 'privatperson'],
+    ])
+
+    const result = await parseCustomersFile(buffer, 'individuals.xlsx')
+    expect(result.rows[0].is_valid).toBe(false)
+    expect(result.rows[0].validation_errors.join(' ')).toMatch(/privatperson har inget organisationsnummer/)
+    expect(result.rows[1].is_valid).toBe(true)
+  })
+
+  it('preserves row_index pointing to spreadsheet row', async () => {
     const buffer = buildXlsx([
       ['Namn'],
       ['Acme AB'],
       ['Beta AB'],
     ])
 
-    const result = parseCustomersFile(buffer, 'rows.xlsx')
+    const result = await parseCustomersFile(buffer, 'rows.xlsx')
     expect(result.rows[0].row_index).toBe(2) // header is row 1
     expect(result.rows[1].row_index).toBe(3)
   })
 
-  it('preserves Swedish characters when reading a UTF-8 CSV', () => {
+  it('preserves Swedish characters when reading a UTF-8 CSV', async () => {
     const csv = new TextEncoder().encode(
       'Namn,Ort\nAcme AB,GÖTEBORG\nBeta AB,HISINGS KÄRRA\n',
     ).buffer
-    const result = parseCustomersFile(csv, 'kunder.csv')
+    const result = await parseCustomersFile(csv, 'kunder.csv')
     expect(result.rows[0].city).toBe('GÖTEBORG')
     expect(result.rows[1].city).toBe('HISINGS KÄRRA')
   })
 
-  it('stores the country as an ISO code and flags a name it cannot map', () => {
+  it('stores the country as an ISO code and flags a name it cannot map', async () => {
     const buffer = buildXlsx([
       ['Namn', 'Orgnr', 'Land'],
       ['Acme AB', '5560217780', 'Sverige'],
@@ -141,7 +155,7 @@ describe('parseCustomersFile', () => {
       ['Blank AB', '5562345678', ''],
     ])
 
-    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
 
     expect(result.rows[0].country).toBe('SE')
     expect(result.rows[1].country).toBe('DE')
@@ -151,7 +165,7 @@ describe('parseCustomersFile', () => {
     expect(result.rows[3].country).toBe('SE')
   })
 
-  it('derives a missing country from the type and flags a contradictory row', () => {
+  it('derives a missing country from the type and flags a contradictory row', async () => {
     const buffer = buildXlsx([
       ['Namn', 'Kundtyp', 'Land', 'VAT-nummer'],
       ['Muster GmbH', 'eu_business', '', 'DE811234567'],
@@ -160,7 +174,7 @@ describe('parseCustomersFile', () => {
       ['Acme AB', 'swedish_business', '', ''],
     ])
 
-    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
 
     expect(result.rows[0].country).toBe('DE')
     expect(result.rows[0].is_valid).toBe(true)
@@ -175,17 +189,73 @@ describe('parseCustomersFile', () => {
   // Detection now reports -1 rather than claiming column 0 as the name (#2548),
   // so the preview must still parse: confidence is 0, so the UI shows the
   // mapping step with these rows and the user picks the real name column.
-  it('still previews rows when no name column was detected', () => {
+  it('still previews rows when no name column was detected', async () => {
     const buffer = buildXlsx([
       ['Kundnummer', 'Postnr'],
       ['K-001', '11122'],
     ])
 
-    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
 
     expect(result.detected_columns.name_col).toBe(-1)
     expect(result.detected_columns.confidence).toBe(0)
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].name).toBe('K-001')
+  })
+
+  it('reads the customer number column', async () => {
+    const buffer = buildXlsx([
+      ['Kundnummer', 'Kundnamn', 'Orgnr'],
+      [1001, 'Acme AB', '5560217780'],
+      ['K-2', 'Beta AB', '5562345678'],
+      ['', 'Gamma AB', '5561234567'],
+    ])
+
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.detected_columns.customer_number_col).toBe(0)
+    expect(result.rows.map((r) => r.customer_number)).toEqual(['1001', 'K-2', null])
+    expect(result.rows.every((r) => r.is_valid)).toBe(true)
+  })
+
+  it('flags a customer number longer than 32 characters', async () => {
+    const buffer = buildXlsx([
+      ['Kundnummer', 'Kundnamn'],
+      ['K'.repeat(33), 'Acme AB'],
+    ])
+
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows[0].is_valid).toBe(false)
+    expect(result.rows[0].validation_errors).toContain('Kundnumret i kolumnen "Kundnummer" får vara högst 32 tecken')
+  })
+
+  it('reads a 16-prefixed company as a company, not a private person', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Orgnr'],
+      ['Acme AB', '165566778899'],
+      ['Acme Två AB', '16556677-8899'],
+    ])
+
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows.map((r) => r.customer_type)).toEqual(['swedish_business', 'swedish_business'])
+    expect(result.rows.every((r) => r.is_valid)).toBe(true)
+  })
+
+  it('refuses a number that reads as neither a company nor a person, and names it', async () => {
+    const buffer = buildXlsx([
+      ['Namn', 'Orgnr'],
+      ['Momsnummer AB', '556677889901'],
+      ['Dag 32', '8001321234'],
+      ['Foreign digits', '12345678'],
+    ])
+
+    const result = await parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.rows[0]).toMatchObject({ customer_type: 'swedish_business', is_valid: false })
+    expect(result.rows[0].validation_errors).toContain('Ogiltigt org-/personnummer "556677889901" i kolumnen "Orgnr"')
+    expect(result.rows[1]).toMatchObject({ customer_type: 'swedish_business', is_valid: false })
+    expect(result.rows[2].is_valid).toBe(true)
   })
 })

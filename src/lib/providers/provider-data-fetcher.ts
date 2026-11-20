@@ -7,11 +7,12 @@ import type {
   SalesInvoiceDto,
   SupplierInvoiceDto,
 } from './dto';
-import type { BjornLundenResourceConfig, ProviderName } from './types';
+import type { ProviderName } from './types';
 
 import { FortnoxClient } from './fortnox/client';
 import { ISO_DATE_RE } from '@/lib/invariants';
 import { FORTNOX_RESOURCE_CONFIGS } from './fortnox/config';
+import { fortnoxSupplierInvoiceNotOpen } from './fortnox/mapper';
 import { VismaClient } from './visma/client';
 import { VISMA_RESOURCE_CONFIGS } from './visma/config';
 import { BrioxClient } from './briox/client';
@@ -27,6 +28,10 @@ import { WintClient } from './wint/client';
 import { WINT_RESOURCE_CONFIGS } from './wint/config';
 import { ResourceType } from './dto';
 import type { MigrationResource } from './migration-contract';
+import { createLogger } from '@/lib/logger';
+import { isProviderRefusal } from './with-provider-call';
+
+const log = createLogger('providers/provider-data-fetcher');
 
 // Singleton clients (they hold rate limiters)
 const fortnoxClient = new FortnoxClient();
@@ -104,11 +109,42 @@ export async function fetchInvoiceCompletionDetail(
   return raw ? mapper(raw) as SalesInvoiceDto : null;
 }
 
-/** One provider page, never a whole-register loop. The worker persists its cursor. */
+/**
+ * A 1000-row register page is a report, not a record: the client's 15 s
+ * single-record timeout cut every supplier invoice page of a 4805-invoice
+ * register short. The limit applies per attempt; the migration worker's
+ * execution budget, shared by everything one invocation does, cancels the
+ * request, the rate-limit wait and any further attempt at its deadline.
+ */
+export const MIGRATION_LIST_TIMEOUT_MS = 60_000
+
+/** Fortnox supplier invoices a listed page left out of the default import, by reason. */
+export type FortnoxNotOpenCounts = Partial<Record<NonNullable<ReturnType<typeof fortnoxSupplierInvoiceNotOpen>>, number>>;
+
+/** The open payables of a Fortnox supplier-invoice list, and what was left out and why. */
+function keepOpenFortnoxSupplierInvoices(items: Record<string, unknown>[]): {
+  open: Record<string, unknown>[]; declined: FortnoxNotOpenCounts;
+} {
+  const declined: FortnoxNotOpenCounts = {};
+  const open = items.filter((item) => {
+    const reason = fortnoxSupplierInvoiceNotOpen(item);
+    if (reason) declined[reason] = (declined[reason] ?? 0) + 1;
+    return !reason;
+  });
+  return { open, declined };
+}
+
+/**
+ * One provider page, never a whole-register loop. The worker persists its cursor.
+ * `allSupplierInvoices` is the job's request for Fortnox's paid supplier
+ * invoices too; without it a Fortnox page keeps only the open ones and says
+ * how many it left out (`declined`). Every other provider lists the whole
+ * register regardless.
+ */
 export async function fetchMigrationPage(
   provider: ProviderName, accessToken: string, providerCompanyId: string | undefined,
-  resource: MigrationResource, page: number,
-): Promise<{ items: MigrationDto[]; nextPage: number | null; total: number }> {
+  resource: MigrationResource, page: number, options: { allSupplierInvoices?: boolean } = {},
+): Promise<{ items: MigrationDto[]; nextPage: number | null; total: number; declined?: FortnoxNotOpenCounts }> {
   const kind = { customers: ResourceType.Customers, suppliers: ResourceType.Suppliers,
     salesInvoices: ResourceType.SalesInvoices, supplierInvoices: ResourceType.SupplierInvoices }[resource];
   const configs = { fortnox: FORTNOX_RESOURCE_CONFIGS, visma: VISMA_RESOURCE_CONFIGS,
@@ -121,7 +157,7 @@ export async function fetchMigrationPage(
   }
   let result: { items: Record<string, unknown>[]; page: number; totalPages: number; totalCount: number };
   if (provider === 'visma') {
-    result = await vismaClient.getPage(accessToken, config.listEndpoint, { page, pageSize: 1000 });
+    result = await vismaClient.getPage(accessToken, config.listEndpoint, { page, pageSize: 1000, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else if (provider === 'fortnox') {
     result = await fortnoxClient.getPage(accessToken, config.listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
   } else if (provider === 'briox') {
@@ -149,6 +185,11 @@ export async function fetchMigrationPage(
   const nextPage = result.items.length > 0 && page < result.totalPages ? page + 1 : null;
   let items = result.items;
   let total = result.totalCount;
+  let declined: FortnoxNotOpenCounts | undefined;
+  if (provider === 'fortnox' && resource === 'supplierInvoices' && !options.allSupplierInvoices) {
+    // After the page checks above: a page of only paid invoices is no end of the register.
+    ({ open: items, declined } = keepOpenFortnoxSupplierInvoices(items));
+  }
   if (provider === 'bokio' && resource === 'salesInvoices' && page === 1) {
     // Bokio keeps kreditfakturor on /credit-notes, not in /invoices. The job
     // worker persists ONE cursor per resource and its page RPC
@@ -166,6 +207,7 @@ export async function fetchMigrationPage(
     items: items.map(item => config.mapper(item) as MigrationDto),
     nextPage,
     total,
+    ...(declined ? { declined } : {}),
   };
 }
 
@@ -188,7 +230,7 @@ async function bokioPaginate<T>(
     page++;
   } while (page <= totalPages);
 
-  console.log(`[bokio-paginate] ${path}: fetched ${allItems.length} total items across ${totalPages} page(s)`);
+  log.info(`${path}: fetched ${allItems.length} total items across ${totalPages} page(s)`);
   return allItems;
 }
 
@@ -219,7 +261,7 @@ async function fetchBokioCreditNotes(
     );
   } catch (err) {
     if (err instanceof BokioApiError && err.statusCode === 404) {
-      console.log('[provider-data-fetcher] Bokio credit-notes endpoint not available (404), skipping');
+      log.info('Bokio credit-notes endpoint not available (404), skipping');
       return [];
     }
     throw err;
@@ -266,24 +308,6 @@ async function blPaginate<T>(
   } while (page <= totalPages);
 
   return allItems;
-}
-
-/**
- * List a Björn Lundén resource the way its endpoint is shaped. The batch
- * endpoints page; the registers (/customer, /supplier) ignore paging and
- * answer the whole register as one bare array, so they take the single-call
- * path. The config's `paginated` flag has said which is which since the
- * provider was added; the fetchers never read it, and paged the registers.
- */
-async function blList<T>(
-  accessToken: string,
-  userKey: string,
-  config: BjornLundenResourceConfig,
-): Promise<T[]> {
-  if (config.paginated === false) {
-    return bjornLundenClient.getAll<T>(accessToken, userKey, config.listEndpoint);
-  }
-  return blPaginate<T>(accessToken, userKey, config.listEndpoint);
 }
 
 // ── Public fetch functions ──────────────────────────────────────────
@@ -355,9 +379,8 @@ export async function fetchCompanyInfoDirect(
  * this consent may not carry, WINT has no supplier register, and Bokio's
  * supplier 404 is swallowed on purpose. So an empty array means "nothing to
  * import", never "the provider answered nothing", and callers must not read a
- * resolved promise as proof that the access token works (see the migration
- * orchestrator's ProviderRunState.grantProven, which counts rows instead).
- * A failed request still throws; only genuinely absent resources return [].
+ * resolved promise as proof that the access token works. A failed request
+ * still throws; only genuinely absent resources return [].
  */
 /**
  * The provider's chart of accounts, with the per-account momskod the SIE
@@ -382,114 +405,6 @@ export async function fetchAccountingAccountsDirect(
     );
     return items.map((item) => config.mapper(item) as AccountingAccountDto);
   }
-
-  return [];
-}
-
-export async function fetchCustomersDirect(
-  provider: ProviderName,
-  accessToken: string,
-  providerCompanyId?: string,
-): Promise<CustomerDto[]> {
-  if (provider === 'fortnox') {
-    const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
-      accessToken, config.listEndpoint, config.listKey,
-    );
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'visma') {
-    const config = VISMA_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await vismaClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'briox') {
-    const config = BRIOX_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await brioxClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint, config.listKey);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'bokio') {
-    const config = BOKIO_RESOURCE_CONFIGS[ResourceType.Customers];
-    if (!config || !providerCompanyId) {
-      console.warn(`[provider-data-fetcher] Bokio customers: skipped, config=${!!config}, providerCompanyId=${providerCompanyId ?? 'undefined'}`);
-      return [];
-    }
-    const items = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
-    if (items.length > 0) {
-      console.log(`[provider-data-fetcher] Bokio customers: first item keys: ${Object.keys(items[0]).join(', ')}`);
-    }
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'bjornlunden') {
-    const config = BL_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  if (provider === 'wint') {
-    const config = WINT_RESOURCE_CONFIGS[ResourceType.Customers]!;
-    const items = await wintClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
-    return items.map((item) => config.mapper(item) as CustomerDto);
-  }
-
-  return [];
-}
-
-export async function fetchSuppliersDirect(
-  provider: ProviderName,
-  accessToken: string,
-  providerCompanyId?: string,
-): Promise<SupplierDto[]> {
-  if (provider === 'fortnox') {
-    const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
-      accessToken, config.listEndpoint, config.listKey,
-    );
-    return items.map((item) => config.mapper(item) as SupplierDto);
-  }
-
-  if (provider === 'visma') {
-    const config = VISMA_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    const items = await vismaClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
-    return items.map((item) => config.mapper(item) as SupplierDto);
-  }
-
-  if (provider === 'briox') {
-    const config = BRIOX_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    const items = await brioxClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint, config.listKey);
-    return items.map((item) => config.mapper(item) as SupplierDto);
-  }
-
-  if (provider === 'bokio') {
-    const config = BOKIO_RESOURCE_CONFIGS[ResourceType.Suppliers];
-    if (!config || !providerCompanyId) return [];
-    try {
-      const items = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
-      return items.map((item) => config.mapper(item) as SupplierDto);
-    } catch (err) {
-      if (err instanceof BokioApiError && err.statusCode === 404) {
-        console.log('[provider-data-fetcher] Bokio suppliers endpoint not available (404), skipping');
-        return [];
-      }
-      throw err;
-    }
-  }
-
-  if (provider === 'bjornlunden') {
-    const config = BL_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
-    if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
-    return items.map((item) => config.mapper(item) as SupplierDto);
-  }
-
-  // WINT (Tier A): the supplier register lives on the IncomingInvoice surface,
-  // which exists only in WINT's internal Full spec. Deliberately not fetched:
-  // see lib/providers/wint/config.ts.
 
   return [];
 }
@@ -529,8 +444,8 @@ export async function fetchSalesInvoicesDirect(
     const creditNotes = await fetchBokioCreditNotes(accessToken, providerCompanyId);
     const items = mergeBokioSalesDocuments(creditNotes, invoices);
     if (items.length > 0) {
-      console.log(
-        `[provider-data-fetcher] Bokio invoices: ${invoices.length} invoices, ${creditNotes.length} credit notes; `
+      log.info(
+        `Bokio invoices: ${invoices.length} invoices, ${creditNotes.length} credit notes; `
         + `first item keys: ${Object.keys(items[0]).join(', ')}`,
       );
     }
@@ -542,7 +457,7 @@ export async function fetchSalesInvoicesDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.SalesInvoices]!;
     if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
+    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
     return items.map((item) => config.mapper(item) as SalesInvoiceDto);
   }
 
@@ -562,10 +477,11 @@ export async function fetchSupplierInvoicesDirect(
 ): Promise<SupplierInvoiceDto[]> {
   if (provider === 'fortnox') {
     const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.SupplierInvoices]!;
+    // The open register, read the way the migration job reads it.
     const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
-      accessToken, config.listEndpoint, config.listKey,
+      accessToken, config.listEndpoint, config.listKey, { pageSize: 500 },
     );
-    return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
+    return keepOpenFortnoxSupplierInvoices(items).open.map((item) => config.mapper(item) as SupplierInvoiceDto);
   }
 
   if (provider === 'visma') {
@@ -588,7 +504,7 @@ export async function fetchSupplierInvoicesDirect(
       return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
     } catch (err) {
       if (err instanceof BokioApiError && err.statusCode === 404) {
-        console.log('[provider-data-fetcher] Bokio supplier-invoices endpoint not available (404), skipping');
+        log.info('Bokio supplier-invoices endpoint not available (404), skipping');
         return [];
       }
       throw err;
@@ -598,7 +514,7 @@ export async function fetchSupplierInvoicesDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.SupplierInvoices]!;
     if (!providerCompanyId) return [];
-    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
+    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
     return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
   }
 
@@ -632,10 +548,16 @@ export async function fetchSupplierInvoicesDirect(
 //   2. Whatever the budget does not cover is REPORTED, never silently
 //      dropped. A migration that hydrated 300 of 1 900 invoices says so.
 
-/** The two resources hydration applies to. */
-type InvoiceResource =
+/**
+ * The resources hydration applies to: both invoice registers, and Fortnox's
+ * customer and supplier registers, whose list forms are short
+ * (partyNeedsDetail).
+ */
+type DetailResource =
   | typeof ResourceType.SalesInvoices
-  | typeof ResourceType.SupplierInvoices;
+  | typeof ResourceType.SupplierInvoices
+  | typeof ResourceType.Customers
+  | typeof ResourceType.Suppliers;
 
 /** What a hydration pass managed to do, for the migration summary. */
 export interface HydrationReport {
@@ -670,6 +592,13 @@ export interface HydratedInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto
    * absent: the migration must not report them as "the provider had none".
    */
   unhydratedIds: Set<string>;
+  /**
+   * The provider's own error when the pass stopped on it (`abortedBy: 'auth'`),
+   * so a caller can still tell a dead token (401) from one resource the token
+   * may not read (403). Kept off the report, which is serialized into the
+   * migration summary.
+   */
+  authError?: unknown;
   /**
    * Listed invoices the caller's `select` predicate declined BEFORE the
    * detail pass, so no budget was spent on them. Absent when no predicate
@@ -755,7 +684,7 @@ function detailId(dto: { id: string; _raw?: Record<string, unknown> }, idField: 
 
 function detailFetcher(
   provider: ProviderName,
-  resource: InvoiceResource,
+  resource: DetailResource,
   accessToken: string,
   providerCompanyId?: string,
 ): DetailFetch | null {
@@ -835,9 +764,9 @@ function detailFetcher(
 /** Resolve the mapper for a provider/resource pair, or null if unsupported. */
 function resourceMapper(
   provider: ProviderName,
-  resource: InvoiceResource,
+  resource: DetailResource,
 ): ((raw: Record<string, unknown>) => unknown) | null {
-  const configs: Partial<Record<InvoiceResource, { mapper: (raw: Record<string, unknown>) => unknown }>> = {
+  const configs: Partial<Record<DetailResource, { mapper: (raw: Record<string, unknown>) => unknown }>> = {
     fortnox: FORTNOX_RESOURCE_CONFIGS,
     visma: VISMA_RESOURCE_CONFIGS,
     briox: BRIOX_RESOURCE_CONFIGS,
@@ -906,11 +835,23 @@ function bokioVoucherEnrichment<T extends SalesInvoiceDto | SupplierInvoiceDto>(
 }
 
 /**
- * Replace list-form invoices with their detail form, open ones first.
+ * Drafts first, then the other unpaid invoices, then the paid ones. A draft
+ * is the next document the user sends, and without its detail form it has
+ * no rows and no VAT to send with (crm#1245: 29 of 63 drafts lost the
+ * budget to sent invoices). Unpaid invoices are the ones a later payment
+ * match or credit note will book.
+ */
+function invoiceHydrationRank(dto: SalesInvoiceDto | SupplierInvoiceDto): number {
+  return dto.status === 'draft' ? 0 : dto.paymentStatus.paid ? 2 : 1;
+}
+
+/**
+ * Replace list-form records with their detail form, in `rank` order (invoices:
+ * open ones first, see invoiceHydrationRank).
  *
  * Returns a NEW array in the original order; entries that were not hydrated
  * (already complete, out of budget, or the fetch failed) retain the latest
- * successfully mapped payload. The caller never loses an invoice.
+ * successfully mapped payload. The caller never loses a record.
  *
  * `unhydratedIds` names the invoices that NEEDED a detail form and did not
  * get one (budget, abort, or a failed fetch). A consumer that reads a field
@@ -918,7 +859,7 @@ function bokioVoucherEnrichment<T extends SalesInvoiceDto | SupplierInvoiceDto>(
  * tell "the provider reported none" from "we never asked" only through this
  * set; the counts in the report do not say which invoices they were.
  */
-async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
+async function hydrateRegister<T extends { id: string }>(
   items: T[],
   needsDetail: (dto: T) => boolean,
   fetchDetail: DetailFetch | null,
@@ -926,7 +867,8 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   label: string,
   budgetMs: number,
   enrichment?: InvoiceEnrichment<T>,
-): Promise<{ items: T[]; report: HydrationReport; unhydratedIds: Set<string> }> {
+  rank: (dto: T) => number = () => 0,
+): Promise<{ items: T[]; report: HydrationReport; unhydratedIds: Set<string>; authError?: unknown }> {
   if (!fetchDetail || !mapper) {
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
   }
@@ -939,9 +881,8 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
   }
 
-  // Unpaid invoices are the ones a later payment match or credit note will
-  // book, so they get the budget first.
-  pending.sort((a, b) => Number(a.dto.paymentStatus.paid) - Number(b.dto.paymentStatus.paid));
+  // The sort is stable, so list order holds within each rank.
+  pending.sort((a, b) => rank(a.dto) - rank(b.dto));
 
   const hydrated = [...items];
   const report: HydrationReport = { ...EMPTY_HYDRATION_REPORT, needed: pending.length };
@@ -949,6 +890,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   const unhydratedIds = new Set<string>(pending.map(({ dto }) => dto.id));
   const deadline = Math.min(Date.now() + budgetMs, currentExecutionBudget()?.deadline ?? Infinity);
   let aborted: 'auth' | 'budget' | null = null;
+  let authError: unknown;
 
   await mapWithConcurrency(pending, HYDRATION_CONCURRENCY, async ({ dto, index }) => {
     if (aborted) {
@@ -991,8 +933,9 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
       // remaining invoice. Issuing hundreds more doomed calls would spend the
       // rate-limit budget (shared platform-wide, see acquire()) for nothing
       // and bury the real cause under a wall of identical warnings.
-      if (isAuthFailure(err)) {
+      if (isProviderRefusal(err)) {
         aborted = 'auth';
+        authError = err;
         console.warn(
           `[provider-data-fetcher] ${label} hydration stopped: provider rejected the token or scope`,
           err instanceof Error ? err.message : String(err),
@@ -1011,26 +954,13 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
 
   if (aborted) report.abortedBy = aborted;
 
-  console.log(
-    `[provider-data-fetcher] ${label} hydration: ${report.hydrated}/${report.needed} hydrated, `
+  log.info(
+    `${label} hydration: ${report.hydrated}/${report.needed} hydrated, `
     + `${report.failed} failed, ${report.skippedForBudget} not attempted`
     + (aborted ? ` (stopped early: ${aborted})` : ''),
   );
 
-  return { items: hydrated, report, unhydratedIds };
-}
-
-/**
- * Does this error mean the credential itself is refused?
- *
- * Every provider client throws its own error class carrying `statusCode`, so
- * the shape is read structurally rather than by instanceof across six classes.
- * 401 and 403 are the credential answers; a 404 is about one invoice and must
- * not stop the pass.
- */
-function isAuthFailure(err: unknown): boolean {
-  const status = (err as { statusCode?: unknown } | null)?.statusCode;
-  return status === 401 || status === 403;
+  return { items: hydrated, report, unhydratedIds, authError };
 }
 
 /**
@@ -1064,7 +994,7 @@ export async function fetchSalesInvoicesHydrated(
  * progress on exactly those. Invoices that need nothing (a list payload that
  * carried its rows) pass through unrequested, as in the full pass.
  *
- * Returns the invoices in the order given; see `hydrateInvoices` for the
+ * Returns the invoices in the order given; see `hydrateRegister` for the
  * report and `unhydratedIds` semantics.
  */
 export async function hydrateSalesInvoices(
@@ -1074,7 +1004,7 @@ export async function hydrateSalesInvoices(
   invoices: SalesInvoiceDto[],
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SalesInvoiceDto>> {
-  const { items, report, unhydratedIds } = await hydrateInvoices<SalesInvoiceDto>(
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<SalesInvoiceDto>(
     invoices,
     salesInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SalesInvoices, accessToken, providerCompanyId),
@@ -1082,9 +1012,10 @@ export async function hydrateSalesInvoices(
     `${provider} sales-invoice`,
     budgetMs,
     bokioVoucherEnrichment(provider, accessToken, providerCompanyId),
+    invoiceHydrationRank,
   );
 
-  return { invoices: items, hydration: report, unhydratedIds };
+  return { invoices: items, hydration: report, unhydratedIds, authError };
 }
 
 /** Supplier invoices with their detail payloads merged in where needed. */
@@ -1113,7 +1044,7 @@ export async function hydrateSupplierInvoices(
   invoices: SupplierInvoiceDto[],
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SupplierInvoiceDto>> {
-  const { items, report, unhydratedIds } = await hydrateInvoices<SupplierInvoiceDto>(
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<SupplierInvoiceDto>(
     invoices,
     provider === 'bokio' ? () => false : supplierInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SupplierInvoices, accessToken, providerCompanyId),
@@ -1121,7 +1052,88 @@ export async function hydrateSupplierInvoices(
     `${provider} supplier-invoice`,
     budgetMs,
     bokioVoucherEnrichment(provider, accessToken, providerCompanyId, true),
+    invoiceHydrationRank,
   );
 
-  return { invoices: provider === 'bokio' ? items.map(dto => dto.supplierEvidence ? dto : enrichBokioSupplierInvoice(dto)) : items, hydration: report, unhydratedIds };
+  return { invoices: provider === 'bokio' ? items.map(dto => dto.supplierEvidence ? dto : enrichBokioSupplierInvoice(dto)) : items, hydration: report, unhydratedIds, authError };
+}
+
+/**
+ * Does a listed customer or supplier need its detail form?
+ *
+ * Fortnox lists both registers in a short form, and what the short form
+ * leaves out is lost without a word: a customer's TermsOfPayment, VATNumber,
+ * EmailInvoice and its copies, YourReference and Type (crm#1245), a
+ * supplier's Country and VATNumber, and the phone, which the list names
+ * Phone where the record names it Phone1 (crm#1436). So a Fortnox customer or
+ * supplier is always read from its own record, one request each. The other
+ * providers are left as they were.
+ */
+function partyNeedsDetail(provider: ProviderName): () => boolean {
+  return provider === 'fortnox' ? () => true : () => false;
+}
+
+/** A customer register with its detail payloads merged in, plus what the pass missed. */
+export interface HydratedCustomers {
+  customers: CustomerDto[];
+  hydration: HydrationReport;
+  /** Ids of customers that needed their detail form and did not get it. */
+  unhydratedIds: Set<string>;
+  /** The provider's own error when the pass stopped on it (`abortedBy: 'auth'`). */
+  authError?: unknown;
+}
+
+/**
+ * Listed customers in their detail form where the provider lists a short one
+ * (partyNeedsDetail), in the order given. Bounded like the invoice passes: a
+ * customer the budget does not reach, or whose detail cannot be read, keeps
+ * its list form and is named in `unhydratedIds`.
+ */
+export async function hydrateCustomers(
+  provider: ProviderName,
+  accessToken: string,
+  providerCompanyId: string | undefined,
+  customers: CustomerDto[],
+  budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+): Promise<HydratedCustomers> {
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<CustomerDto>(
+    customers,
+    partyNeedsDetail(provider),
+    detailFetcher(provider, ResourceType.Customers, accessToken, providerCompanyId),
+    resourceMapper(provider, ResourceType.Customers),
+    `${provider} customer`,
+    budgetMs,
+  );
+
+  return { customers: items, hydration: report, unhydratedIds, authError };
+}
+
+/** A supplier register with its detail payloads merged in, plus what the pass missed. */
+export interface HydratedSuppliers {
+  suppliers: SupplierDto[];
+  hydration: HydrationReport;
+  /** Ids of suppliers that needed their detail form and did not get it. */
+  unhydratedIds: Set<string>;
+  /** The provider's own error when the pass stopped on it (`abortedBy: 'auth'`). */
+  authError?: unknown;
+}
+
+/** The supplier twin of hydrateCustomers, under the same rule and bounds. */
+export async function hydrateSuppliers(
+  provider: ProviderName,
+  accessToken: string,
+  providerCompanyId: string | undefined,
+  suppliers: SupplierDto[],
+  budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+): Promise<HydratedSuppliers> {
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<SupplierDto>(
+    suppliers,
+    partyNeedsDetail(provider),
+    detailFetcher(provider, ResourceType.Suppliers, accessToken, providerCompanyId),
+    resourceMapper(provider, ResourceType.Suppliers),
+    `${provider} supplier`,
+    budgetMs,
+  );
+
+  return { suppliers: items, hydration: report, unhydratedIds, authError };
 }

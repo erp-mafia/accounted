@@ -2,12 +2,14 @@
 
 import { useState, useRef, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { useTranslations } from 'next-intl'
+import { enrollTotp, fetchSessionUser, verifyTotp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { TotpCodeField } from '@/components/auth/TotpCodeField'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, Copy, Check, ArrowLeft } from 'lucide-react'
+import { CheckIcon, Square2StackIcon } from '@/components/icons'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
 import { getBranding } from '@/lib/branding/service'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
@@ -29,11 +31,14 @@ function MfaEnrollContent() {
   const [isEnrolling, setIsEnrolling] = useState(false)
   const [isVerifying, setIsVerifying] = useState(false)
   const [copied, setCopied] = useState(false)
+  // Failures sit in the page: a wrong code under its field, the rest over the form.
+  const [codeError, setCodeError] = useState<string | null>(null)
+  const [panelError, setPanelError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
+  const t = useTranslations('mfa')
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
 
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
 
@@ -61,9 +66,7 @@ function MfaEnrollContent() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (cancelled || !user) return
       if (!userHasPassword(user)) {
         router.replace(
@@ -81,45 +84,27 @@ function MfaEnrollContent() {
 
   const handleEnroll = async () => {
     setIsEnrolling(true)
+    setPanelError(null)
 
     try {
-      // Clean up any stale unverified factors from previous abandoned attempts
-      const { data: existingFactors } = await supabase.auth.mfa.listFactors()
-      if (existingFactors?.totp) {
-        for (const factor of existingFactors.totp) {
-          if (factor.status !== 'verified') {
-            await supabase.auth.mfa.unenroll({ factorId: factor.id })
-          }
-        }
-      }
+      // The server removes stale unverified factors from abandoned attempts
+      // first, then enrols a new TOTP factor.
+      const { data, error } = await enrollTotp(getBranding().appName.toLowerCase())
 
-      const { data, error } = await supabase.auth.mfa.enroll({
-        factorType: 'totp',
-        friendlyName: getBranding().appName.toLowerCase(),
-      })
-
-      if (error) {
-        toast({
-          title: 'Kunde inte aktivera 2FA',
-          description: getUserErrorMessage(error),
-          variant: 'destructive',
-        })
+      if (error || !data) {
+        setPanelError(getUserErrorMessage(error))
         setIsEnrolling(false)
         return
       }
 
-      setQrCode(data.totp.qr_code)
-      setSecret(data.totp.secret)
+      setQrCode(data.qrCode)
+      setSecret(data.secret)
       setFactorId(data.id)
 
       // Focus the code input after render
       setTimeout(() => inputRef.current?.focus(), 100)
     } catch {
-      toast({
-        title: 'Kunde inte aktivera 2FA',
-        description: 'Ett oväntat fel uppstod.',
-        variant: 'destructive',
-      })
+      setPanelError('Kunde inte aktivera 2FA. Ett oväntat fel uppstod.')
     } finally {
       setIsEnrolling(false)
     }
@@ -130,36 +115,26 @@ function MfaEnrollContent() {
     if (!factorId || code.length !== 6) return
 
     setIsVerifying(true)
+    setCodeError(null)
+    setPanelError(null)
 
     try {
-      const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
-        factorId,
-      })
+      // Challenge + verify on the server; success raises the session to
+      // AAL2 in the HttpOnly cookie.
+      const { error: verifyError } = await verifyTotp(factorId, code)
 
-      if (challengeError) {
-        toast({
-          title: 'Verifiering misslyckades',
-          description: 'Kunde inte starta verifiering. Försök igen.',
-          variant: 'destructive',
-        })
+      if (verifyError && verifyError.code?.startsWith('mfa_challenge')) {
+        setPanelError('Kunde inte starta verifiering. Försök igen.')
         setIsVerifying(false)
         return
       }
 
-      const { error: verifyError } = await supabase.auth.mfa.verify({
-        factorId,
-        challengeId: challenge.id,
-        code,
-      })
-
       if (verifyError) {
-        toast({
-          title: 'Fel kod',
-          description: 'Kontrollera att koden stämmer och försök igen.',
-          variant: 'destructive',
-        })
-        setCode('')
+        // The code stays so it can be compared with the app; it is selected,
+        // so typing the next one replaces it.
+        setCodeError('Fel kod. Kontrollera att koden stämmer och försök igen.')
         inputRef.current?.focus()
+        inputRef.current?.select()
         setIsVerifying(false)
         return
       }
@@ -171,11 +146,7 @@ function MfaEnrollContent() {
 
       leave()
     } catch {
-      toast({
-        title: 'Verifiering misslyckades',
-        description: 'Ett oväntat fel uppstod. Försök igen.',
-        variant: 'destructive',
-      })
+      setPanelError('Verifiering misslyckades. Ett oväntat fel uppstod. Försök igen.')
     } finally {
       setIsVerifying(false)
     }
@@ -191,153 +162,76 @@ function MfaEnrollContent() {
   // Step 1: Show enroll button
   if (!qrCode) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-        <div className="w-full max-w-sm animate-slide-up">
-          <div className="text-center mb-10">
-            <div className="flex justify-center mb-4">
-              <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-                <ShieldCheck className="h-7 w-7 text-primary" />
-              </div>
-            </div>
-            <h1 className="text-2xl tracking-tight">Aktivera tvåfaktorsautentisering</h1>
-            <p className="text-muted-foreground text-sm mt-2">
-              Skydda ditt konto med en autentiseringsapp som Google Authenticator eller Authy
-            </p>
-          </div>
-
-          <div className="rounded-lg border bg-card p-6">
-            <div className="space-y-4">
-              <div className="rounded-lg border bg-muted/50 p-4">
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  Du behöver en autentiseringsapp på din telefon. Appen genererar en
-                  tidsbegränsad kod som du anger vid varje inloggning.
-                </p>
-              </div>
-              <Button
-                className="w-full h-11"
-                onClick={handleEnroll}
-                disabled={isEnrolling}
-              >
-                {isEnrolling ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Förbereder...
-                  </>
-                ) : (
-                  'Fortsätt'
-                )}
-              </Button>
-            </div>
-          </div>
-
-          <Button
-            variant="ghost"
-            className="w-full mt-4 text-muted-foreground"
-            onClick={abort}
-          >
-            <ArrowLeft className="mr-2 h-4 w-4" />
+      <StandalonePage>
+        <StandaloneHeading
+          title="Aktivera tvåfaktorsautentisering"
+          sub="Skydda ditt konto med en autentiseringsapp som Google Authenticator eller Authy"
+        />
+        <StandaloneStack>
+          {panelError && <AuthFormError message={panelError} />}
+          <p className="text-sm text-foreground">
+            Du behöver en autentiseringsapp på din telefon. Appen genererar en
+            tidsbegränsad kod som du anger vid varje inloggning.
+          </p>
+          <Button size="lg" className="w-full" onClick={handleEnroll} loading={isEnrolling}>
+            {isEnrolling ? 'Förbereder...' : 'Fortsätt'}
+          </Button>
+          <Button variant="ghost" size="lg" className="w-full" onClick={abort}>
             Tillbaka
           </Button>
-        </div>
-      </div>
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
   // Step 2: Show QR code and verification
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
-      <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-8">
-          <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <ShieldCheck className="h-7 w-7 text-primary" />
-            </div>
-          </div>
-          <h1 className="text-2xl tracking-tight">Skanna QR-koden</h1>
-          <p className="text-muted-foreground text-sm mt-2">
-            Öppna din autentiseringsapp och skanna koden nedan
-          </p>
+    <StandalonePage>
+      <StandaloneHeading title="Skanna QR-koden" sub="Öppna din autentiseringsapp och skanna koden nedan" />
+      <StandaloneStack>
+        {panelError && <AuthFormError message={panelError} />}
+        {/* QR code: always dark on white, so every scanner reads it in both themes. */}
+        <div className="flex justify-center">
+          {/* The auth client hands the QR as an SVG data URL; only the markup after the prefix is drawn, or the prefix shows as text above the code. */}
+          <div
+            className="rounded-lg bg-white p-3 shadow-raised"
+            dangerouslySetInnerHTML={{ __html: qrCode.replace(/^data:image\/svg\+xml;utf-8,/, '') }}
+          />
         </div>
 
-        <div className="rounded-lg border bg-card p-6 space-y-6">
-          {/* QR Code */}
-          <div className="flex justify-center">
-            <div
-              className="rounded-lg border bg-white p-3"
-              dangerouslySetInnerHTML={{ __html: qrCode }}
-            />
-          </div>
-
-          {/* Manual secret */}
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground text-center">
-              Kan du inte skanna? Ange denna nyckel manuellt:
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 rounded-sm border bg-muted/50 px-3 py-2 text-xs font-mono text-center break-all select-all">
-                {secret}
-              </code>
-              <Button
-                variant="outline"
-                size="icon"
-                className="shrink-0"
-                onClick={copySecret}
-              >
-                {copied ? (
-                  <Check className="h-4 w-4 text-green-600" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-          </div>
-
-          {/* Verification code */}
-          <form onSubmit={handleVerify} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="code">Ange koden från appen</Label>
-              <Input
-                ref={inputRef}
-                id="code"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                autoComplete="one-time-code"
-                placeholder="000000"
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                required
-                disabled={isVerifying}
-                className="h-11 text-center text-lg tracking-[0.5em] font-mono"
-              />
-            </div>
-            <Button
-              type="submit"
-              className="w-full h-11"
-              disabled={isVerifying || code.length !== 6}
-            >
-              {isVerifying ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Verifierar...
-                </>
-              ) : (
-                'Aktivera 2FA'
-              )}
+        {/* Manual secret */}
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">Kan du inte skanna? Ange denna nyckel manuellt:</p>
+          <div className="mt-1 flex items-center gap-2">
+            <code className="min-w-0 flex-1 select-all break-all font-mono text-[13px] text-strong">{secret}</code>
+            <Button variant="ghost" className="shrink-0" onClick={copySecret}>
+              {copied ? <CheckIcon className="h-4 w-4" /> : <Square2StackIcon className="h-4 w-4" />}
+              {t('copy_secret')}
             </Button>
-          </form>
+          </div>
         </div>
 
-        <Button
-          variant="ghost"
-          className="w-full mt-4 text-muted-foreground"
-          onClick={abort}
-        >
-          <ArrowLeft className="mr-2 h-4 w-4" />
+        {/* Verification code */}
+        <form onSubmit={handleVerify} className="flex flex-col gap-3">
+            <TotpCodeField
+              ref={inputRef}
+              label="Ange koden från appen"
+              value={code}
+              onChange={(next) => {
+                setCode(next)
+                if (codeError) setCodeError(null)
+              }}
+              error={codeError}
+              disabled={isVerifying}
+            />
+          <Button type="submit" size="lg" className="w-full" loading={isVerifying} disabled={code.length !== 6}>
+            {isVerifying ? 'Verifierar...' : 'Aktivera 2FA'}
+          </Button>
+        </form>
+        <Button variant="ghost" size="lg" className="w-full" onClick={abort}>
           Tillbaka
         </Button>
-      </div>
-    </div>
+      </StandaloneStack>
+    </StandalonePage>
   )
 }

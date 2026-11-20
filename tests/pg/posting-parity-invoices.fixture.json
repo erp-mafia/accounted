@@ -1,0 +1,1475 @@
+{
+  "dumps": [
+    {
+      "flow": "issue: a domestic invoice at 25 % issued by Markera som skickad",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 1,
+          "entry_date": "2026-02-02",
+          "description": "Kundfaktura 001, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 001",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 001",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 001",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "issue: the send dialog's user-edited lines are booked as reviewed",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 2,
+          "entry_date": "2026-02-09",
+          "description": "Kundfaktura 002, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kundfordran",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25 %",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Resetid februari",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Konsulttjänster februari",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "issue: an EU business customer's EUR invoice under reverse charge",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 3,
+          "entry_date": "2026-03-10",
+          "description": "Kundfaktura 003, Kunde GmbH",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "EUR",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2300",
+              "credit_amount": "0",
+              "exchange_rate": "11.5",
+              "account_number": "1510",
+              "line_description": "Faktura 003",
+              "amount_in_currency": "200"
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2300",
+              "exchange_rate": null,
+              "account_number": "3308",
+              "line_description": "Försäljning faktura 003",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "issue: a staged mark_invoice_sent approved",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 4,
+          "entry_date": "2026-03-16",
+          "description": "Kundfaktura 004, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 004",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 004",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 004",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "issue: a RUT invoice to a private customer splits the receivable over 1510 and 1513",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 5,
+          "entry_date": "2026-04-07",
+          "description": "Kundfaktura 005, Privatkund",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 005",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "RUT-avdrag faktura 005",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 005",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "4800",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 005",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "booking: an invoice issued under deferred booking is booked by the Bokför step",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 6,
+          "entry_date": "2026-04-20",
+          "description": "Kundfaktura 006, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 006",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 006",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 006",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "self-billing: a received självfaktura is booked on registration",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 7,
+          "entry_date": "2026-05-05",
+          "description": "Självfaktura SF-2026-31, Uppdragsgivaren AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura SF-2026-31",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "500",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura SF-2026-31",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura SF-2026-31",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "credit: an issued invoice credited with a kreditfaktura (Kreditera)",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 8,
+          "entry_date": "2026-05-11",
+          "description": "Kundfaktura 007, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 007",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 007",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 007",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "B",
+          "voucher_number": 9,
+          "entry_date": "2026-09-30",
+          "description": "Kreditfaktura KR-007, Kund AB (avser verifikation B-8)",
+          "source_type": "credit_note",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kreditfaktura KR-007",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Kreditfaktura KR-007 (avser B-8)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Kreditfaktura KR-007 (avser B-8)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "credit: a staged credit_invoice approved",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 10,
+          "entry_date": "2026-05-18",
+          "description": "Kundfaktura 008, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 008",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 008",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 008",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "B",
+          "voucher_number": 11,
+          "entry_date": "2026-09-30",
+          "description": "Kreditfaktura KR-008, Kund AB (avser verifikation B-10)",
+          "source_type": "credit_note",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kreditfaktura KR-008",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Kreditfaktura KR-008 (avser B-10)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Kreditfaktura KR-008 (avser B-10)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "credit: a deferred original never booked is booked first, then credited",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 12,
+          "entry_date": "2026-06-01",
+          "description": "Kundfaktura 009, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 009",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "B",
+          "voucher_number": 13,
+          "entry_date": "2026-09-30",
+          "description": "Kreditfaktura KR-009, Kund AB (avser verifikation B-12)",
+          "source_type": "credit_note",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kreditfaktura KR-009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Kreditfaktura KR-009 (avser B-12)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Kreditfaktura KR-009 (avser B-12)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "kontantmetoden: an invoice issued without a verifikat, paid, then credited",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 14,
+          "entry_date": "2026-09-30",
+          "description": "Kreditfaktura KR-010, Kund AB",
+          "source_type": "credit_note",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Kreditfaktura KR-010",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Kreditfaktura KR-010",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Kreditfaktura KR-010",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "C",
+          "voucher_number": 1,
+          "entry_date": "2026-06-25",
+          "description": "Kontantbetalning kundfaktura 010, Kund AB",
+          "source_type": "invoice_cash_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Kontantbetalning kundfaktura 010, Kund AB",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 010",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 010",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "reversal hook: a payment on an issued invoice reversed puts the invoice back to unpaid",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 15,
+          "entry_date": "2026-07-01",
+          "description": "Kundfaktura 011, Kund AB",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 011",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 011",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 011",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "C",
+          "voucher_number": 2,
+          "entry_date": "2026-07-10",
+          "description": "Inbetalning kundfaktura 011, Kund AB",
+          "source_type": "invoice_paid",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Inbetalning kundfaktura 011, Kund AB",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Inbetalning kundfaktura 011, Kund AB",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "C",
+          "voucher_number": 3,
+          "entry_date": "2026-07-10",
+          "description": "Makulering: Inbetalning kundfaktura 011, Kund AB",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Reversal: Inbetalning kundfaktura 011, Kund AB",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: Inbetalning kundfaktura 011, Kund AB",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "reversal hook: a refused RUT share reclaimed onto the customer, and the reclaim reversed",
+      "entries": [
+        {
+          "voucher_series": "B",
+          "voucher_number": 16,
+          "entry_date": "2026-07-14",
+          "description": "Kundfaktura 012, Privatkund",
+          "source_type": "invoice_created",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Faktura 012",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "RUT-avdrag faktura 012",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1200",
+              "exchange_rate": null,
+              "account_number": "2611",
+              "line_description": "Utgående moms 25% faktura 012",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "4800",
+              "exchange_rate": null,
+              "account_number": "3001",
+              "line_description": "Försäljning faktura 012",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "C",
+          "voucher_number": 4,
+          "entry_date": "2026-08-05",
+          "description": "Nekat RUT-avdrag från Skatteverket (RUT 2026-07)",
+          "source_type": "rot_rut_reclaim",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Nekat RUT-avdrag faktura 012",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2500",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Nekat RUT-avdrag faktura 012",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "C",
+          "voucher_number": 5,
+          "entry_date": "2026-08-05",
+          "description": "Makulering: Nekat RUT-avdrag från Skatteverket (RUT 2026-07)",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2500",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Reversal: Nekat RUT-avdrag faktura 012",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Reversal: Nekat RUT-avdrag faktura 012",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "invoices": [
+      {
+        "invoice_number": "001",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-02-02",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 1,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "002",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-02-09",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 2,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "003",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-03-10",
+        "currency": "EUR",
+        "exchange_rate": "11.5",
+        "vat_treatment": "reverse_charge",
+        "subtotal": "200",
+        "vat_amount": "0",
+        "total": "200",
+        "total_sek": "2300",
+        "vat_amount_sek": "0",
+        "remaining_amount": "200",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 3,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "004",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-03-16",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 4,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "005",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-04-07",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "4800",
+        "vat_amount": "1200",
+        "total": "6000",
+        "total_sek": "6000",
+        "vat_amount_sek": "1200",
+        "remaining_amount": "3500",
+        "paid_amount": "0",
+        "deduction_total": "2500.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 5,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "006",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-04-20",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 6,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": null,
+        "external_invoice_number": "SF-2026-31",
+        "is_self_billed": true,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-05-05",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "2000",
+        "vat_amount": "500",
+        "total": "2500",
+        "total_sek": null,
+        "vat_amount_sek": null,
+        "remaining_amount": "2500",
+        "paid_amount": null,
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 7,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "007",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "credited",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-05-11",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 8,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "KR-007",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": "007",
+        "invoice_date": "2026-09-30",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "-1200",
+        "vat_amount": "-300",
+        "total": "-1500",
+        "total_sek": "-1500",
+        "vat_amount_sek": "-300",
+        "remaining_amount": "0",
+        "paid_amount": null,
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 9,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "008",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "credited",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-05-18",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 10,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "KR-008",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": "008",
+        "invoice_date": "2026-09-30",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "-1200",
+        "vat_amount": "-300",
+        "total": "-1500",
+        "total_sek": "-1500",
+        "vat_amount_sek": "-300",
+        "remaining_amount": "0",
+        "paid_amount": null,
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 11,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "009",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "credited",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-06-01",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 12,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "KR-009",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": "009",
+        "invoice_date": "2026-09-30",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "-1200",
+        "vat_amount": "-300",
+        "total": "-1500",
+        "total_sek": "-1500",
+        "vat_amount_sek": "-300",
+        "remaining_amount": "0",
+        "paid_amount": null,
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 13,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "010",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "credited",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-06-15",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "paid_amount": "1500",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": null,
+        "voucher_number": null,
+        "voucher_status": null
+      },
+      {
+        "invoice_number": "KR-010",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": "010",
+        "invoice_date": "2026-09-30",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "-1200",
+        "vat_amount": "-300",
+        "total": "-1500",
+        "total_sek": "-1500",
+        "vat_amount_sek": "-300",
+        "remaining_amount": "0",
+        "paid_amount": null,
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 14,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "011",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-07-01",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "paid_amount": "0",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 15,
+        "voucher_status": "posted"
+      },
+      {
+        "invoice_number": "012",
+        "external_invoice_number": null,
+        "is_self_billed": false,
+        "status": "sent",
+        "document_type": "invoice",
+        "credits": null,
+        "invoice_date": "2026-07-14",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "subtotal": "4800",
+        "vat_amount": "1200",
+        "total": "6000",
+        "total_sek": "6000",
+        "vat_amount_sek": "1200",
+        "remaining_amount": "3500.00",
+        "paid_amount": "0",
+        "deduction_total": "2500.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher_series": "B",
+        "voucher_number": 16,
+        "voucher_status": "posted"
+      }
+    ],
+    "payments": [
+      {
+        "invoice_number": "010",
+        "payment_date": "2026-06-25",
+        "amount": "1500",
+        "currency": "SEK",
+        "source": "manual",
+        "voucher_series": "C",
+        "voucher_number": 1,
+        "voucher_status": "posted"
+      }
+    ],
+    "payoutRequests": [
+      {
+        "name": "RUT 2026-07",
+        "status": "rejected",
+        "requested_total": "2500.00",
+        "decided_total": "0.00",
+        "reclaim_series": null,
+        "reclaim_voucher": null,
+        "reclaim_status": null,
+        "items": [
+          {
+            "decided": "0.00",
+            "reclaimed": null,
+            "requested": "2500.00",
+            "invoice_number": "012"
+          }
+        ]
+      }
+    ]
+  }
+}

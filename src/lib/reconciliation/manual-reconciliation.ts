@@ -1,9 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
-import { generateReconciliation as generateSupplierReconciliation } from '@/lib/reports/supplier-reconciliation'
+import { generateARLedger } from '@/lib/reports/ar-ledger'
+import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { generateVacationLiability } from '@/lib/reports/vacation-liability'
 import {
   manualAccountKey,
@@ -13,6 +14,7 @@ import {
   type ReconciliationSignoff,
   type ReconciliationStatus,
 } from './schemas'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('reconciliation/manual')
 
@@ -31,9 +33,8 @@ const log = createLogger('reconciliation/manual')
  * The outside side comes from a specification the system already keeps
  * (kundreskontra for 1510, leverantörsreskontra for 2440, semesterlöneskuld
  * for 2920/2940) or, for every other account, from the balance the signer
- * states from their underlag when they sign off. The reskontra totals are the
- * open items as they stand today, not as of the balansdag; a per-date
- * reskontra is a follow-up and the bridge label says "idag" until then.
+ * states from their underlag when they sign off. Each specification is read
+ * as of the balansdag: the ledger's reskontra reconstructs any date.
  */
 
 export const BALANCE_TOLERANCE = 0.005
@@ -107,9 +108,13 @@ export interface SpecificationProvider {
   label_en: string
 }
 
+/** The control accounts the two reskontra tie-outs specify (BAS 1510 and 2440 in the SE pack). */
+const RECEIVABLES_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable')
+const PAYABLES_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable')
+
 export const SPECIFICATION_PROVIDERS: Record<string, SpecificationProvider> = {
-  '1510': { key: 'ar', label_sv: 'Kundreskontra, öppna fakturor', label_en: 'Customer ledger, open invoices' },
-  '2440': { key: 'ap', label_sv: 'Leverantörsreskontra, öppna fakturor', label_en: 'Supplier ledger, open invoices' },
+  [RECEIVABLES_ACCOUNT]: { key: 'ar', label_sv: 'Kundreskontra, öppna fakturor', label_en: 'Customer ledger, open invoices' },
+  [PAYABLES_ACCOUNT]: { key: 'ap', label_sv: 'Leverantörsreskontra, öppna fakturor', label_en: 'Supplier ledger, open invoices' },
   '2920': { key: 'vacation', label_sv: 'Semesterlöneskuld enligt lönekörningar', label_en: 'Vacation liability per payroll runs' },
   '2940': {
     key: 'vacation',
@@ -126,7 +131,35 @@ export type SpecificationAmounts = Map<string, { amount: number; unconverted_fx_
  * source is logged and left out: the account then reconciles like any manual
  * account (outside unknown) rather than against a wrong number.
  */
-export async function loadSpecificationAmounts(
+export function loadSpecificationAmounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  snapshot: BalanceSheetSnapshot,
+  onlyAccounts?: ReadonlySet<string>,
+): Promise<SpecificationAmounts> {
+  // One read per snapshot and account set: a reader that hands the same
+  // snapshot to the account list (the bokslutsbilagor) asks for the same
+  // specifications the list already read. Keyed on the snapshot object, so
+  // nothing outlives the request that built it.
+  const key = onlyAccounts ? [...onlyAccounts].sort().join(',') : '*'
+  let bySet = specificationReads.get(snapshot)
+  if (!bySet) {
+    bySet = new Map()
+    specificationReads.set(snapshot, bySet)
+  }
+  const cached = bySet.get(key)
+  if (cached && cached.companyId === companyId && cached.supabase === supabase) return cached.read
+  const read = readSpecificationAmounts(supabase, companyId, snapshot, onlyAccounts)
+  bySet.set(key, { companyId, supabase, read })
+  return read
+}
+
+const specificationReads = new WeakMap<
+  BalanceSheetSnapshot,
+  Map<string, { companyId: string; supabase: SupabaseClient; read: Promise<SpecificationAmounts> }>
+>()
+
+async function readSpecificationAmounts(
   supabase: SupabaseClient,
   companyId: string,
   snapshot: BalanceSheetSnapshot,
@@ -136,29 +169,28 @@ export async function loadSpecificationAmounts(
   const wants = (n: string) => !onlyAccounts || onlyAccounts.has(n)
   const tasks: Array<Promise<void>> = []
 
-  if (wants('1510')) {
+  if (wants(RECEIVABLES_ACCOUNT)) {
     tasks.push(
-      generateARReconciliation(supabase, companyId, snapshot.period.id)
+      generateARLedger(supabase, companyId, snapshot.as_of, { strict: true })
         .then((r) => {
-          out.set('1510', { amount: roundOre(r.ar_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
+          out.set(RECEIVABLES_ACCOUNT, { amount: roundOre(r.total_outstanding), unconverted_fx_count: r.unconverted_fx_count })
         })
         .catch((err) => log.warn('AR specification failed', { companyId, error: String(err) })),
     )
   }
-  if (wants('2440')) {
+  if (wants(PAYABLES_ACCOUNT)) {
     tasks.push(
-      generateSupplierReconciliation(supabase, companyId, snapshot.period.id)
+      generateSupplierLedger(supabase, companyId, snapshot.as_of, { strict: true })
         .then((r) => {
           // Liabilities carry credit balances: negative in ledger sign.
-          out.set('2440', { amount: roundOre(-r.supplier_ledger_total), unconverted_fx_count: r.unconverted_fx_count })
+          out.set(PAYABLES_ACCOUNT, { amount: roundOre(-r.total_outstanding), unconverted_fx_count: r.unconverted_fx_count })
         })
         .catch((err) => log.warn('AP specification failed', { companyId, error: String(err) })),
     )
   }
   if (wants('2920') || wants('2940')) {
-    const year = Number(snapshot.as_of.slice(0, 4))
     tasks.push(
-      generateVacationLiability(supabase, companyId, year)
+      generateVacationLiability(supabase, companyId, snapshot.as_of)
         .then((r) => {
           if (wants('2920')) out.set('2920', { amount: roundOre(-r.totals.accruedAmount), unconverted_fx_count: 0 })
           if (wants('2940')) out.set('2940', { amount: roundOre(-r.totals.accruedAvgifter), unconverted_fx_count: 0 })
@@ -179,8 +211,8 @@ function bridgeFor(
   if (specification) {
     lines.push({
       key: 'specification',
-      label_sv: `${specification.label_sv} (idag)`,
-      label_en: `${specification.label_en} (today)`,
+      label_sv: `${specification.label_sv} per ${snapshot.as_of}`,
+      label_en: `${specification.label_en} as of ${snapshot.as_of}`,
       amount: specification.amount,
       count: null,
       items_bucket: null,
@@ -310,7 +342,7 @@ export async function getManualReconciliationStatus(
   accountNumber: string,
   options: ManualStatusOptions = {},
 ): Promise<ReconciliationStatus | null> {
-  const today = options.today ?? new Date().toISOString().slice(0, 10)
+  const today = options.today ?? todayIsoStockholm()
   const asOf = options.asOf ?? today
   const snapshot = await loadBalanceSheetSnapshot(supabase, companyId, asOf)
   if (!snapshot) return null
@@ -325,6 +357,8 @@ export async function getManualReconciliationStatus(
 export interface ListManualAccountsOptions {
   /** The balansdag the list is computed through. */
   asOf: string
+  /** The balances through asOf when the caller reads them anyway (loadBalanceSheetSnapshot(asOf)). */
+  balanceSheet?: Promise<BalanceSheetSnapshot | null>
   /** Account numbers other adapters already own (cash accounts' ledger accounts, 1630 when the skattekonto is present). */
   exclude: ReadonlySet<string>
   /** Latest active sign-off per account key, as the service already loaded them. */
@@ -361,7 +395,7 @@ export async function listManualAccounts(
   companyId: string,
   options: ListManualAccountsOptions,
 ): Promise<ReconciliationAccount[]> {
-  const snapshot = await loadBalanceSheetSnapshot(supabase, companyId, options.asOf)
+  const snapshot = await (options.balanceSheet ?? loadBalanceSheetSnapshot(supabase, companyId, options.asOf))
   if (!snapshot) return []
   const withStatus = options.withStatus ?? true
 

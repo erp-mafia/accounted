@@ -24,6 +24,10 @@ export type { CashFlowOmissionRule, CashFlowOmissionState }
  *     balansomslutning, >80 MSEK nettoomsättning in EACH of the two most
  *     recent fiscal years.
  *
+ *   - ÅRL 2 kap. 1 § andra stycket also requires one of every
+ *     bostadsrättsförening whatever its size (K3 kapitel 38): the form's
+ *     profile says so (`filings.cashFlowStatement` 'always').
+ *
  * The product determines the size classification itself (eligibility.ts),
  * but only from figures it holds. When either year's figures are missing or
  * the listed-securities question is unanswered, the omission needs the
@@ -35,9 +39,12 @@ export function cashFlowOmissionRule(input: {
   sizeClassification: AnnualReportEligibilityResult['size_classification']
   metrics: AnnualReportSizeMetrics
   securitiesTradedOnRegulatedMarket: boolean | null
+  /** The form's requirement (cashFlowStatementRequirement): 'always' allows no omission. */
+  formRequirement?: 'always' | 'larger' | null
 }): CashFlowOmissionRule {
   // K2 never carries a kassaflödesanalys in this product; nothing to omit.
   if (input.framework !== 'k3') return 'forbidden'
+  if (input.formRequirement === 'always') return 'forbidden'
   if (input.securitiesTradedOnRegulatedMarket === true) return 'forbidden'
   if (input.sizeClassification === 'larger') return 'forbidden'
   // eligibility.ts classifies a missing jämförelseår as 'smaller'. That is
@@ -58,6 +65,8 @@ export function resolveCashFlowOmission(input: {
   rule: CashFlowOmissionRule
   requested: boolean
   confirmed: boolean
+  /** The form always carries the statement (a bostadsrättsförening). */
+  requiredByForm?: boolean
 }): CashFlowOmissionState {
   const omitted =
     input.requested &&
@@ -68,6 +77,7 @@ export function resolveCashFlowOmission(input: {
     requested: input.requested,
     confirmed: input.confirmed,
     omitted,
+    ...(input.requiredByForm ? { required_by_form: true } : {}),
   }
 }
 
@@ -80,6 +90,18 @@ export function cashFlowOmissionIssues(
   state: CashFlowOmissionState | undefined,
 ): AnnualReportComplianceIssue[] {
   if (!state || !state.requested || state.omitted) return []
+  if (state.rule === 'forbidden' && state.required_by_form) {
+    return [
+      {
+        code: 'AR-K3-CASHFLOW-REQUIRED',
+        severity: 'warning',
+        section: 'statements',
+        message:
+          'En bostadsrättsförening ska alltid ha en kassaflödesanalys i årsredovisningen (ÅRL 2 kap. 1 §). Valet att utelämna den tillämpas inte.',
+        remediation: 'Avmarkera "Utelämna kassaflödesanalys" och spara texten.',
+      },
+    ]
+  }
   if (state.rule === 'forbidden') {
     return [
       {

@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { formatRedovisare } from '@/lib/skatteverket/format'
+import { companyRedovisare } from '@/lib/company/org-number'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { ISO_DATE_RE } from '@/lib/invariants'
-
-ensureInitialized()
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { updateDraftSalaryRun, type SalaryRunHeaderPatch } from '@/lib/salary/update-run'
+import { deleteDraftSalaryRun } from '@/lib/salary/delete-run'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.runs.get',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (_request, { supabase, companyId, log }, { params }) => {
     const { id } = await params
 
     const { data: run, error } = await supabase
@@ -25,7 +24,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     // These five reads only depend on `run` (already fetched) + companyId, so
-    // fire them concurrently — the detail GET is on the hot path for every
+    // fire them concurrently - the detail GET is on the hot path for every
     // status transition, and serial round-trips dominated its latency.
     type PreviousRun = {
       id: string
@@ -34,24 +33,24 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       by_employee: Record<string, { gross: number; tax: number; net: number }>
     }
 
-    const [employeesResult, settingsResult, previousRun, correctedByRunId, deliveriesResult] =
+    const [employeesResult, arbetsgivare, previousRun, correctedByRunId, deliveriesResult] =
       await Promise.all([
         // Employees with line items. A failed embed here (e.g. a schema/column
-        // mismatch on the joined tables) must surface — silently returning an
+        // mismatch on the joined tables) must surface - silently returning an
         // empty list makes the run look employee-less, which then lets the
         // client offer an already-added employee and get a confusing 409.
         supabase
           .from('salary_run_employees')
-          .select('*, employee:employees(id, first_name, last_name, personnummer, employment_type, default_dimensions), line_items:salary_line_items(*)')
+          .select('*, employee:employees(id, first_name, last_name, personnummer, employment_type, default_dimensions, f_skatt_status, salary_type, monthly_salary, hourly_rate, employment_degree, fora_fok_id), line_items:salary_line_items(*)')
           .eq('salary_run_id', id)
           .order('created_at'),
-        // Skatteverket arbetsgivare ID for AGI submission.
-        supabase
-          .from('company_settings')
-          .select('org_number, entity_type')
-          .eq('company_id', companyId)
-          .maybeSingle(),
-        // Latest booked run before this period — powers the Δ-vs-last-month
+        // Skatteverket arbetsgivare ID for AGI submission. A number that does
+        // not convert leaves the page without one, logged: AGI answers that itself.
+        companyRedovisare(supabase, companyId).catch((err: unknown) => {
+          log.warn('arbetsgivare id unavailable', { error: err instanceof Error ? err.message : String(err) })
+          return null
+        }),
+        // Latest booked run before this period - powers the Δ-vs-last-month
         // column. Effective values (overrides coalesced) so the diff matches
         // what was actually booked and AGI-reported.
         (async (): Promise<PreviousRun | null> => {
@@ -121,16 +120,6 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    const settings = settingsResult.data
-    let arbetsgivare: string | null = null
-    if (settings?.org_number && settings?.entity_type) {
-      try {
-        arbetsgivare = formatRedovisare(settings.org_number, settings.entity_type)
-      } catch {
-        arbetsgivare = null
-      }
-    }
-
     const deliveries = deliveriesResult.data
     const latestByEmployee = new Map<string, string>()
     for (const d of deliveries || []) {
@@ -170,107 +159,42 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.runs.update',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
     const { id } = await params
 
-    // Only allow updates on draft runs
-    const { data: run, error: fetchError } = await supabase
-      .from('salary_runs')
-      .select('id, status, payment_date, period_year, period_month')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
-
-    if (fetchError || !run) {
-      return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
-    }
-
-    if (run.status !== 'draft') {
-      return NextResponse.json({ error: 'Kan bara redigera utkast' }, { status: 400 })
-    }
-
-    const body = await request.json()
+    const body = await request.json().catch(() => null)
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
       return NextResponse.json({ error: 'Ogiltig förfrågan' }, { status: 400 })
     }
-    // Whitelist keys AND values: only these three fields, with the same value
-    // rules as the v1 UpdateSalaryRunSchema, ever reach the DB.
-    const allowedFields = ['payment_date', 'voucher_series', 'notes']
-    const updates: Record<string, unknown> = {}
-    for (const field of allowedFields) {
-      if (body[field] !== undefined) {
-        updates[field] = body[field]
+    // Only these three fields ever reach the service; the value rules, the
+    // draft-only guard, the optimistic lock and the calculation clear on a
+    // supplied payment_date are lib/salary/update-run.ts, shared with the v1
+    // PATCH and the MCP update tool.
+    const patch: SalaryRunHeaderPatch = {}
+    if (body.payment_date !== undefined) patch.payment_date = body.payment_date
+    if (body.voucher_series !== undefined) patch.voucher_series = body.voucher_series
+    if (body.notes !== undefined) patch.notes = body.notes
+
+    const result = await updateDraftSalaryRun(supabase, {
+      companyId: companyId!,
+      salaryRunId: id,
+      patch,
+      columns: '*',
+    })
+    if (!result.ok) {
+      if (result.code === 'INTERNAL_ERROR') {
+        log.error('salary run update failed', new Error(String(result.details?.message)), { salaryRunId: id })
+        return NextResponse.json({ error: 'Lönekörningen kunde inte uppdateras' }, { status: 500 })
       }
-    }
-    if (
-      updates.payment_date !== undefined &&
-      (typeof updates.payment_date !== 'string' || !ISO_DATE_RE.test(updates.payment_date))
-    ) {
-      return NextResponse.json({ error: 'Ogiltigt datum (ÅÅÅÅ-MM-DD)' }, { status: 400 })
-    }
-    if (
-      updates.voucher_series !== undefined &&
-      (typeof updates.voucher_series !== 'string' || !/^[A-Z]$/.test(updates.voucher_series))
-    ) {
-      return NextResponse.json(
-        { error: 'Verifikationsserie måste vara en bokstav A-Z' },
-        { status: 400 },
-      )
-    }
-    if (
-      updates.notes !== undefined &&
-      updates.notes !== null &&
-      (typeof updates.notes !== 'string' || updates.notes.length > 2000)
-    ) {
-      return NextResponse.json({ error: 'Anteckningen får vara högst 2000 tecken' }, { status: 400 })
+      const messageSv = result.details?.message_sv as string | undefined
+      return errorResponseFromCode(result.code, log, {
+        requestId,
+        details: result.details,
+        ...(messageSv ? { messageSv, messageEn: result.details?.message as string } : {}),
+      })
     }
 
-    // The payment date may leave the run's period month: the AGI
-    // redovisningsperiod follows payment_date (kontantprincipen, #2191), so a
-    // run for August paid 25 September is declared in September, and the
-    // verifikat books on the same date. Same rule as lib/salary/update-run.ts
-    // and the v1 PATCH.
-
-    // Optimistic lock on status='draft': a concurrent step advancing the run
-    // (Beräkna → Till granskning in another tab) between the fetch above and
-    // this write must fail the write, not slip a frozen-field edit through
-    // (same guard as the v1 PATCH and lib/salary/update-run.ts).
-    const { data: updated, error } = await supabase
-      .from('salary_runs')
-      .update(updates)
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .eq('status', 'draft')
-      .select()
-      .maybeSingle()
-
-    if (error) {
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-    }
-    if (!updated) {
-      // Race: the run advanced past draft between fetch and update.
-      return NextResponse.json({ error: 'Kan bara redigera utkast' }, { status: 400 })
-    }
-
-    // A supplied payment_date invalidates any existing calculation:
-    // skatteavdrag follows the payment date, so clearing calculation_breakdown
-    // makes both book preflights refuse the roster until a recalculation has
-    // run against the new date (same invariant as setRunEmployeeSalary in
-    // lib/salary/run-employees.ts and lib/salary/update-run.ts). Gated on
-    // SUPPLIED, not on changed, so a retry after a partial failure re-clears
-    // instead of comparing against the already-updated date and skipping.
-    if (updates.payment_date !== undefined) {
-      const { error: clearError } = await supabase
-        .from('salary_run_employees')
-        .update({ calculation_breakdown: null })
-        .eq('salary_run_id', id)
-        .eq('company_id', companyId)
-      if (clearError) {
-        return NextResponse.json({ error: getUserErrorMessage(clearError) }, { status: 500 })
-      }
-    }
-
-    return NextResponse.json({ data: updated })
+    return NextResponse.json({ data: result.data.row })
   },
   { requireWrite: true },
 )
@@ -280,42 +204,25 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   async (_request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
-    // Only draft runs can be deleted. Once a run reaches review/approved/paid/
-    // booked it carries compliance weight: a booked run created immutable
-    // verifikat (storno to undo, never delete). A draft has produced no journal
-    // entries and no AGI (the arbetsgivardeklaration is filed monthly from the
-    // booked/paid run, never from a draft), so removing it touches no posted
-    // accounting data.
-    const { data: run, error: fetchError } = await supabase
-      .from('salary_runs')
-      .select('id, status')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
+    // Only draft runs can be deleted: past draft the run carries compliance
+    // weight and storno is the only way back. The guarded write (status lock
+    // plus null journal-entry FKs) lives in lib/salary/delete-run.ts, shared
+    // with the v1 DELETE.
+    const result = await deleteDraftSalaryRun(supabase, { companyId, salaryRunId: id })
 
-    if (fetchError || !run) {
-      return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
-    }
-
-    if (run.status !== 'draft') {
-      return NextResponse.json(
-        { error: 'Bara utkast kan raderas. En bokförd lönekörning måste vändas (storno).' },
-        { status: 400 }
-      )
-    }
-
-    // salary_run_employees and their salary_line_items are removed via
-    // ON DELETE CASCADE. An agi_declarations row (never present on a draft)
-    // would block the delete via its RESTRICT FK, the safety net for the
-    // impossible case.
-    const { error } = await supabase
-      .from('salary_runs')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', companyId)
-
-    if (error) {
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    if (!result.ok) {
+      switch (result.code) {
+        case 'SALARY_RUN_NOT_FOUND':
+          return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
+        case 'DB_ERROR':
+          return NextResponse.json({ error: getUserErrorMessage(result.error) }, { status: 500 })
+        default:
+          // Not a draft, or it left draft (or got a verifikat) after the check.
+          return NextResponse.json(
+            { error: 'Bara utkast kan raderas. En bokförd lönekörning måste vändas (storno).' },
+            { status: 400 }
+          )
+      }
     }
 
     return NextResponse.json({ data: { id, deleted: true } })

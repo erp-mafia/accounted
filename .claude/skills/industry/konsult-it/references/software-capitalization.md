@@ -1,3 +1,7 @@
+---
+areas: [bokslut]
+---
+
 # Software capitalization: K3, K2, IFRS
 
 ## K3 (BFNAR 2012:1) kap 18: internt upparbetade immateriella tillgångar

@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
+import { OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import { getPool } from './setup'
 import { seedCompany } from './fixtures'
 
@@ -13,22 +13,23 @@ import { seedCompany } from './fixtures'
  * risk tier but without the constraint-expansion migration: the staging
  * INSERT then fails with check_violation on every real call while dry_run
  * (which skips the INSERT) previews clean. That exact gap shipped with
- * gnubok_link_document_to_voucher and went unnoticed until agent feedback
- * (dev_docs/mcp_optimization_plan.md P0-1). It also catches the inverse
+ * gnubok_link_document_to_voucher and went unnoticed until agent feedback. It also catches the inverse
  * hazard: expand-types migrations hand-copy the full list, so one authored on
  * a stale branch can silently drop a type added in between.
  *
  * Op types are collected from BOTH code-side sources of truth:
- *  1. literal types passed to stagePendingOperation() in the MCP server
+ *  1. literal types passed to stage({ type }) in the MCP server
  *  2. keys of OPERATION_RISK_TIERS (imported, not parsed)
+ * and PENDING_OPERATION_TYPES (the PendingOperationType union, derived from
+ * the risk tiers) is checked against the constraint's definition itself.
  */
 
 const SERVER_TS = resolve(__dirname, '../../src/extensions/general/mcp-server/server.ts')
 
-// Matches `stagePendingOperation(<client>, <companyId>, <userId>, '<op_type>'`
-// across line breaks. If the staging signature changes, the call-site count
-// assertion below fails loudly: update this regex together with the signature.
-const STAGE_CALL_RE = /stagePendingOperation\(\s*[\w.]+,\s*[\w.]+,\s*[\w.]+,\s*'([a-z_]+)'/g
+// Matches `stage({ supabase, companyId, userId, type: '<op_type>'` across line
+// breaks. If the staging call shape changes, the call-site count assertion
+// below fails loudly: update this regex together with the shape.
+const STAGE_CALL_RE = /\bstage\(\{\s*(?:[\w.]+(?::\s*[\w.]+)?,\s*){3}type:\s*'([a-z_]+)'/g
 
 function extractStagedOpTypes(): { types: Set<string>; callSites: number } {
   const src = readFileSync(SERVER_TS, 'utf8')
@@ -89,6 +90,30 @@ describe('pending_operations operation_type CHECK audit', () => {
       rejected,
       `op types staged in code but rejected by pending_operations constraints: ` +
         `add them to pending_operations_operation_type_check in a new migration:\n${rejected.join('\n')}`,
+    ).toEqual([])
+  })
+
+  it('the final CHECK holds every PendingOperationType in src/types (a rebuilt list never drops one)', async () => {
+    const types: string[] = PENDING_OPERATION_TYPES
+    // A floor, as above: a big drop means the risk tiers lost their list.
+    expect(types.length).toBeGreaterThanOrEqual(150)
+    const { rows } = await getPool().query<{ def: string }>(
+      `SELECT pg_get_constraintdef(oid) AS def
+         FROM pg_constraint
+        WHERE conrelid = 'public.pending_operations'::regclass
+          AND conname = 'pending_operations_operation_type_check'`,
+    )
+    expect(rows).toHaveLength(1)
+    const allowed = new Set([...rows[0].def.matchAll(/'([a-z0-9_]+)'::text/g)].map((m) => m[1]))
+    // Values main and this stack added in parallel: a rebuild from a stale list drops them first.
+    for (const type of ['cancel_draft_entry', 'mark_agi_period_filed', 'open_collection_case', 'collection_case_action']) {
+      expect(types).toContain(type)
+    }
+    const missing = types.filter((type) => !allowed.has(type))
+    expect(
+      missing,
+      `PendingOperationType values the final pending_operations_operation_type_check rejects: ` +
+        `a later migration rebuilt the list from a stale copy. Re-state the latest list:\n${missing.join('\n')}`,
     ).toEqual([])
   })
 

@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils'
 import type { TrialBalanceRow } from '@/types'
+import { CHART_TOOLTIP_PROPS } from '@/components/reports/chart-tooltip'
 
 interface TrialBalanceChartProps {
   rows: TrialBalanceRow[]
@@ -26,7 +27,7 @@ export function TrialBalanceChart({ rows }: TrialBalanceChartProps) {
 
   return (
     <Card className="mb-4">
-      <CardHeader className="pb-2">
+      <CardHeader>
         <CardTitle className="text-base">Topp 10 konton (nettosaldo)</CardTitle>
       </CardHeader>
       <CardContent>
@@ -48,6 +49,7 @@ export function TrialBalanceChart({ rows }: TrialBalanceChartProps) {
               tick={{ fontSize: 12 }}
             />
             <Tooltip
+              {...CHART_TOOLTIP_PROPS}
               formatter={(value) => [
                 formatCurrency(Number(value)),
                 'Netto',

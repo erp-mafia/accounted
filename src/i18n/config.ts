@@ -16,3 +16,19 @@ export const APP_TIME_ZONE = 'Europe/Stockholm'
 export function isLocale(value: unknown): value is Locale {
   return typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value)
 }
+
+/**
+ * The locale a request's page was rendered in, for route handlers that hold a
+ * plain Request. Reads the cookie next-intl's request config reads (the
+ * middleware keeps it in step with user_preferences.locale), with the same
+ * fallback to the default.
+ */
+export function localeFromCookieHeader(header: string | null): Locale {
+  for (const part of (header ?? '').split(';')) {
+    const eq = part.indexOf('=')
+    if (eq === -1 || part.slice(0, eq).trim() !== LOCALE_COOKIE) continue
+    const value = part.slice(eq + 1).trim()
+    return isLocale(value) ? value : DEFAULT_LOCALE
+  }
+  return DEFAULT_LOCALE
+}

@@ -16,15 +16,30 @@ import { revertFact } from '@/lib/arkiv/facts/store'
 const FACT = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 const call = (body: unknown) => POST(new Request(`http://localhost/api/arkiv/facts/${FACT}/revert`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), { params: Promise.resolve({ id: FACT }) } as never)
 
+// The resolver reports the caller's role on the facts object it is handed;
+// withRouteContext's write guard reads it from there.
+function asRole(role: string) {
+  ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockImplementation(async (_s: unknown, _u: unknown, resolved?: { role?: string }) => {
+    if (resolved) resolved.role = role
+    return 'company-1'
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
-  ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
+  asRole('member')
 })
 
 describe('POST /api/arkiv/facts/[id]/revert', () => {
+  it('is 403 for a viewer and reverts nothing', async () => {
+    asRole('viewer')
+    expect((await parseJsonResponse(await call({ reason: 'fel' }))).status).toBe(403)
+    expect(revertFact).not.toHaveBeenCalled()
+  })
+
   it('needs a reason, an own fact, and a fact not already deprecated', async () => {
     expect((await parseJsonResponse(await call({ reason: '' }))).status).toBe(400)
     enqueue({ data: null })

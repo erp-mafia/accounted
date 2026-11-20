@@ -1,25 +1,41 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import Image from 'next/image'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
-import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
+import { isSkvPopupOrigin, type SkvPopupMessage } from '@/lib/skatteverket/popup-origin'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
+  SettingsReveal,
   SettingsRow,
   SettingsRowEnd,
   SettingsRowNote,
+  SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
-import { CheckCircle2, ExternalLink, Loader2, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  BeakerIcon,
+  BuildingLibraryIcon,
+  CheckCircleIcon,
+  ChevronDownIcon,
+  EllipsisHorizontalIcon,
+  ShieldExclamationIcon,
+} from '@/components/icons'
+import { cn } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
+import type { OmbudAppointment, OmbudRole, OmbudRoleState } from '@/lib/skatteverket/ombud-appointment'
 
 type Environment = 'test' | 'prod'
 
@@ -31,31 +47,268 @@ type Status =
       canRefresh: boolean
       needsReconsent?: boolean
       lastErrorCode?: string | null
+      /** Skatteverket's last "no skattekonto yet / not authorized" answer, if any. */
+      skattekontoUnavailable?: { reason: 'no_account' | 'not_authorized'; since: string; checkedAt: string } | null
       scope: string
       expiresAt: string
       environment?: Environment
       disabled?: boolean
     }
 
+interface SystemConnectionState {
+  available: boolean
+  mode?: string
+  environment?: string
+  ombud_org_number?: string | null
+  grant_url?: string
+  cert?: { notAfter: string; daysUntilExpiry: number; expiresSoon: boolean } | null
+  /** Where the appointment stands (lib/skatteverket/ombud-appointment.ts). */
+  appointment?: OmbudAppointment
+}
+
 /** Live warning inside a settings group: one warning-tone line, no banner. */
 function WarningLine({ children }: { children: React.ReactNode }) {
   return (
-    <p className="border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-attn">
+    <p className="border-b-hairline px-1 py-3 text-xs leading-relaxed text-attn">
       {children}
     </p>
   )
 }
 
-export function SkatteverketConnectPanel() {
+/** One quiet line inside a settings group, for a state that needs no action. */
+function NoteLine({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="border-b-hairline px-1 py-3 text-xs leading-relaxed text-muted-foreground">
+      {children}
+    </p>
+  )
+}
+
+/**
+ * Kopplingar → Skatteverket. Two connections that do different jobs, in the
+ * order a company needs them:
+ *
+ *   1. Ombud (when system auth is on): the company appoints the app as its
+ *      ombud once, and the skattekonto and the declarations' status are read
+ *      in the background with no login. The main step, at the top.
+ *   2. BankID: a personal login, needed when someone submits a declaration
+ *      (moms, AGI). Below, as the secondary step, its technical rows folded
+ *      away under Detaljer.
+ *
+ * With system auth off (or self-hosted without a certificate) the ombud step
+ * is not there at all and the BankID connection is the page, as before.
+ */
+export function SkatteverketConnectPanel({ title }: { title: string }) {
+  const t = useTranslations('settings_skatteverket_connect')
+  const { appName } = useBranding()
+  const [system, setSystem] = useState<SystemConnectionState | null>(null)
+
+  const loadSystem = useCallback(async () => {
+    try {
+      const res = await fetch('/api/extensions/ext/skatteverket/system-connection')
+      if (!res.ok) {
+        setSystem({ available: false })
+        return
+      }
+      setSystem((await res.json()) as SystemConnectionState)
+    } catch {
+      setSystem({ available: false })
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadSystem()
+  }, [loadSystem])
+
+  const ombudAvailable = system?.available === true
+  // The difference between the two, behind the "?" beside the title (a
+  // popover, so it opens on a tap as well as a click).
+  const intro = system === null
+    ? undefined
+    : ombudAvailable
+      ? (
+          <div className="space-y-2">
+            <p>{t.rich('intro_ombud', { appName, b: (chunks) => <b className="font-medium">{chunks}</b> })}</p>
+            <p>{t.rich('intro_bankid', { b: (chunks) => <b className="font-medium">{chunks}</b> })}</p>
+          </div>
+        )
+      : t('connect_intro')
+
   return (
     <>
-      <SkatteverketPersonalConnectionCard />
-      <SkatteverketSystemConnectionCard />
+      <SettingsSectionHeader title={title} intro={intro} />
+      {system === null ? (
+        <SettingsGroup>
+          <SettingsRow label={t('title')} borderless>
+            <SettingsRowNote>{t('loading_status')}</SettingsRowNote>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : (
+        <>
+          {ombudAvailable && <OmbudStep state={system} reload={loadSystem} />}
+          <SkatteverketPersonalConnectionCard
+            secondary={ombudAvailable}
+            readsCovered={ombudAvailable && readsRunOnOmbud(system.appointment)}
+          />
+        </>
+      )}
     </>
   )
 }
 
-function SkatteverketPersonalConnectionCard() {
+const NOT_APPOINTED: OmbudAppointment = { state: 'none', predatesOptIn: false }
+
+/** The background reads run on läsombud: with it granted, the BankID login is only for submitting. */
+function readsRunOnOmbud(appointment: OmbudAppointment | undefined): boolean {
+  return appointment !== undefined && 'roles' in appointment && appointment.roles.lasombud === 'granted'
+}
+
+/**
+ * The ombud step: one status and one button. The button asks Skatteverket's
+ * register first (server-side, in the deep link route): already appointed
+ * with both roles reads Klart with no trip to Skatteverket; otherwise
+ * Skatteverket's e-service opens with the roles pre-selected and the company
+ * signs there. Nothing calls back after signing, so the grant is checked once
+ * when the user returns, and the hourly ombud sync finds one Skatteverket
+ * registers later (minutes to an hour): until then the status says it is
+ * waiting on Skatteverket. Red is kept for a grant that counted and no longer
+ * does.
+ */
+function OmbudStep({ state, reload }: { state: SystemConnectionState; reload: () => Promise<void> }) {
+  // Appointing the ombud is a company write; the personal session below is the user's own.
+  const { canWrite, lockedTitle } = useViewerLock()
+  const t = useTranslations('settings_skatteverket_connect')
+  const tOmbud = useTranslations('skatteverket_ombud')
+  const { appName } = useBranding()
+  const { appoint, linking, checking } = useOmbudAppointWithToasts(() => {
+    void reload()
+  })
+
+  const appointment = state.appointment ?? NOT_APPOINTED
+  const roles = 'roles' in appointment ? appointment.roles : null
+  const done = roles !== null && roles.lasombud === 'granted' && roles.moms_ombud === 'granted'
+  // Appointed with one role only: say which role is missing, and offer the
+  // link again (it pre-selects both).
+  const missingRoles: OmbudRole[] =
+    appointment.state === 'appointed' && !done && roles
+      ? (['lasombud', 'moms_ombud'] as const).filter((role) => roles[role] !== 'granted')
+      : []
+
+  const roleLabel = (role: OmbudRole) =>
+    role === 'lasombud' ? t('system_behorighet_lasombud') : t('system_behorighet_moms')
+  const roleStateLabel = (role: OmbudRoleState) =>
+    role === 'withdrawn'
+      ? t('system_status_withdrawn')
+      : role === 'error'
+        ? t('system_status_error')
+        : t('system_status_not_included')
+
+  const status = done ? (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <CheckCircleIcon className="h-3.5 w-3.5" />
+      {tOmbud('done')}
+    </span>
+  ) : appointment.state === 'waiting' ? (
+    <Badge variant="secondary">{tOmbud('waiting')}</Badge>
+  ) : appointment.state === 'withdrawn' ? (
+    <Badge variant="destructive">{t('system_status_withdrawn')}</Badge>
+  ) : appointment.state === 'appointed' ? (
+    <Badge variant="warning">{t('ombud_partial')}</Badge>
+  ) : (
+    <SettingsRowNote>{tOmbud('none')}</SettingsRowNote>
+  )
+
+  const help = (
+    <div className="space-y-2">
+      <p>{t('system_intro', { appName })}</p>
+      <p>{t('ombud_checks_first', { appName })}</p>
+      {state.ombud_org_number && (
+        <p>
+          {t('system_org_label')}: <span className="font-mono tabular-nums">{state.ombud_org_number}</span>
+        </p>
+      )}
+      {/* The way round a deep link Skatteverket turns down ("Felaktig länk"):
+          the same appointment made by hand in the e-service (crm#1814). */}
+      {state.ombud_org_number && (
+        <p>
+          {t('system_manual', {
+            appName,
+            lasombud: t('system_behorighet_lasombud'),
+            moms: t('system_behorighet_moms'),
+          })}
+        </p>
+      )}
+      {state.grant_url && (
+        <p>
+          <a
+            href={state.grant_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+          >
+            {t('system_open_ombud')}
+          </a>
+        </p>
+      )}
+    </div>
+  )
+
+  const busy = linking || checking
+
+  return (
+    <SettingsGroup label={t('system_title')}>
+      <SettingsRow label={t('system_status_label')} help={help}>
+        {status}
+        {!done && (
+          <SettingsRowEnd>
+            {/* Waiting: the signature may be unfinished, so the same button
+                opens the link again, quieter, as on Hem and Kom igång. */}
+            <Button
+              variant={appointment.state === 'waiting' ? 'outline' : 'default'}
+              onClick={() => void appoint()}
+              loading={busy}
+              disabled={!canWrite}
+              title={lockedTitle ?? t('system_deeplink_hint', { appName })}
+            >
+              {!busy && <ArrowTopRightOnSquareIcon className="h-4 w-4" />}
+              {appointment.state === 'waiting' ? tOmbud('reopen') : t('system_deeplink', { appName })}
+            </Button>
+          </SettingsRowEnd>
+        )}
+      </SettingsRow>
+
+      {appointment.state === 'waiting' && <NoteLine>{tOmbud('waiting_hint', { appName })}</NoteLine>}
+      {appointment.state === 'withdrawn' && <WarningLine>{tOmbud('withdrawn_hint', { appName })}</WarningLine>}
+      {roles &&
+        missingRoles.map((role) => (
+          <NoteLine key={role}>
+            {roleLabel(role)}: {roleStateLabel(roles[role])}
+          </NoteLine>
+        ))}
+      {appointment.predatesOptIn && <WarningLine>{t('system_predates_opt_in', { appName })}</WarningLine>}
+      {state.cert?.expiresSoon && (
+        <WarningLine>
+          {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry, appName })}
+        </WarningLine>
+      )}
+    </SettingsGroup>
+  )
+}
+
+/**
+ * The personal BankID connection. `secondary`: the ombud step sits above, so
+ * this is the login for submitting declarations: its own eyebrow and an
+ * outline button. `readsCovered`: the ombud already does the background
+ * reads, so an expired session is the normal resting state, not a warning;
+ * until then an expired session still stops the skattekonto sync and says so.
+ */
+function SkatteverketPersonalConnectionCard({
+  secondary,
+  readsCovered,
+}: {
+  secondary: boolean
+  readsCovered: boolean
+}) {
   const t = useTranslations('settings_skatteverket_connect')
   // Toast strings shared with TaxSettingsContent's query-param fallback path.
   const tOauth = useTranslations('settings_skatteverket')
@@ -64,14 +317,13 @@ function SkatteverketPersonalConnectionCard() {
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const detailsId = useId()
   // True while an OAuth tab opened from this panel is still alive. Disables
   // the connect button so a second click cannot start a parallel flow: each
   // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
   // parallel flow guarantees a CSRF failure for whichever tab finishes last.
   const [connecting, setConnecting] = useState(false)
-  // Handle of the OAuth tab opened by startConnect: used to verify the
-  // sender identity of incoming postMessages and to detect abandonment.
-  const popupRef = useRef<Window | null>(null)
   const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const delayedRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -145,54 +397,46 @@ function SkatteverketPersonalConnectionCard() {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [loadStatus])
 
-  // Listen for OAuth completion from the BankID popup (same pattern as
-  // AGIPanel): the callback page posts success/error and closes itself, so
-  // the settings page never navigates and we just re-fetch the status.
-  useEffect(() => {
-    function handleMessage(event: MessageEvent) {
-      // The popup runs on the pinned SKV OAuth host, which differs from the
-      // app origin after the app.accounted.se cutover.
-      if (!isAllowedSkvPopupOrigin(event.origin, window.location.origin)) return
-      // Source-identity check: only the popup this component opened can
-      // trigger the handler; a window reference cannot be forged by other
-      // same-origin scripts.
-      if (!popupRef.current || event.source !== popupRef.current) return
-      if (event.data?.type === 'skatteverket-oauth-success') {
-        stopWatchingOauthTab()
-        toast({
-          title: tOauth('connected_title'),
-          description: tOauth('connected_description'),
-        })
+  // Handle of the OAuth tab opened by startConnect (same pattern as
+  // AGIPanel). Only messages from that tab, on the app origin or the pinned
+  // SKV OAuth host, reach the handler; the watch in startConnect uses it to
+  // detect abandonment. The callback page posts success/error and closes
+  // itself, so the settings page never navigates and we just re-fetch the
+  // status.
+  const popupRef = useOAuthPopup<SkvPopupMessage>((data) => {
+    if (data?.type === 'skatteverket-oauth-success') {
+      stopWatchingOauthTab()
+      toast({
+        title: tOauth('connected_title'),
+        description: tOauth('connected_description'),
+      })
+      loadStatus()
+      // Verified success: rebroadcast as an internal DOM event so passive
+      // consumers (e.g. the salary page) can react without trusting raw
+      // postMessage.
+      window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+      // The post-connect refresh (skattekonto sync, AGI settle, token
+      // health) now runs server-side AFTER the callback responds, so the
+      // status fetched above predates it. Refetch once more when it has
+      // plausibly settled so synced data and health flags (e.g.
+      // MISSING_SCOPE) show up without a manual reload.
+      if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
+      delayedRefetchRef.current = setTimeout(() => {
         loadStatus()
-        // Verified success: rebroadcast as an internal DOM event so passive
-        // consumers (e.g. the salary page) can react without trusting raw
-        // postMessage.
         window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
-        // The post-connect refresh (skattekonto sync, AGI settle, token
-        // health) now runs server-side AFTER the callback responds, so the
-        // status fetched above predates it. Refetch once more when it has
-        // plausibly settled so synced data and health flags (e.g.
-        // MISSING_SCOPE) show up without a manual reload.
-        if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
-        delayedRefetchRef.current = setTimeout(() => {
-          loadStatus()
-          window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
-        }, 15_000)
-      } else if (event.data?.type === 'skatteverket-oauth-error') {
-        stopWatchingOauthTab()
-        toast({
-          title: tOauth('connect_failed_title'),
-          description:
-            typeof event.data.reason === 'string' && event.data.reason
-              ? event.data.reason
-              : undefined,
-          variant: 'destructive',
-        })
-      }
+      }, 15_000)
+    } else if (data?.type === 'skatteverket-oauth-error') {
+      stopWatchingOauthTab()
+      toast({
+        title: tOauth('connect_failed_title'),
+        description:
+          typeof data.reason === 'string' && data.reason
+            ? data.reason
+            : undefined,
+        variant: 'destructive',
+      })
     }
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [loadStatus, stopWatchingOauthTab, toast, tOauth])
+  }, isSkvPopupOrigin)
 
   function startConnect() {
     // Open the BankID OAuth flow in a NEW TAB, not a popup. The old 600x750
@@ -203,14 +447,14 @@ function SkatteverketPersonalConnectionCard() {
     // settings page never navigates, so browser history stays clean and
     // closing the settings afterwards cannot walk Back into the consumed
     // OAuth chain (the "redirected to Skatteverket again" bug).
-    const returnTo = encodeURIComponent('/settings/tax')
+    const returnTo = encodeURIComponent('/settings/skatteverket')
     const url = `/api/extensions/ext/skatteverket/authorize?return_to=${returnTo}`
     const tab = window.open(url, '_blank')
     popupRef.current = tab
     if (!tab) {
       // Tab blocked: fall back to the full-page flow. The callback then
-      // lands on /settings/tax?skv_connected=true, handled by
-      // TaxSettingsContent's query-param effect.
+      // lands on /settings/skatteverket?skv_connected=true, handled by
+      // SkatteverketSettingsContent's query-param effect.
       window.location.href = url
       return
     }
@@ -254,36 +498,51 @@ function SkatteverketPersonalConnectionCard() {
     }
   }
 
-  // Static connect guidance lives behind the "?": what the connection is
-  // used for, plus the consent-page instructions ("godkänn alla
-  // behörigheter", the ska/skahmst explainer). The consent notes only matter
-  // when the user can actually reach the consent page: hidden while the
-  // feature is entitlement-gated.
-  const connectHelp = (
+  // The consent-page instructions ("godkänn alla behörigheter", the
+  // ska/skahmst explainer) live behind the row's "?"; what the connection is
+  // for sits behind the section title's. They only matter when the user can
+  // actually reach the consent page: hidden while the feature is
+  // entitlement-gated.
+  const connectHelp = hasSkatteverket ? (
     <div className="space-y-2">
-      <p>{t('connect_intro')}</p>
-      {hasSkatteverket && (
-        <>
-          <p>{t('connect_approve_all')}</p>
-          <p>
-            {t.rich('skahmst_note', {
-              code: (chunks) => <span className="font-mono">{chunks}</span>,
-            })}
-          </p>
-        </>
-      )}
+      <p>{t('connect_approve_all')}</p>
+      <p>
+        {t.rich('skahmst_note', {
+          code: (chunks) => <span className="font-mono">{chunks}</span>,
+        })}
+      </p>
     </div>
+  ) : undefined
+
+  const groupLabel = secondary ? t('bankid_title') : undefined
+  // Secondary: what BankID is for sits under its name, where the label
+  // column has room, so the "?" moves into the label beside the name.
+  const rowLabel = secondary ? (
+    <span className="flex flex-col gap-1">
+      <span className="inline-flex items-center gap-2">
+        <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
+        {t('bankid_label')}
+        {connectHelp ? <HelpPopover className="shrink-0">{connectHelp}</HelpPopover> : null}
+      </span>
+      <span className="text-xs text-muted-foreground">{t('bankid_line')}</span>
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-2">
+      <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
+      {t('title')}
+    </span>
   )
+  const rowHelp = secondary ? undefined : connectHelp
+  const connectTitle = !hasSkatteverket
+    ? isSelfHosted()
+      ? t('connect_requires_connector_key')
+      : t('connect_requires_subscription')
+    : undefined
 
   if (loading) {
     return (
-      <SettingsGroup>
-        <SettingsRow label={
-          <span className="inline-flex items-center gap-2">
-            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
-            {t('title')}
-          </span>
-        } help={connectHelp} borderless>
+      <SettingsGroup label={groupLabel}>
+        <SettingsRow label={rowLabel} help={rowHelp} borderless>
           <SettingsRowNote>{t('loading_status')}</SettingsRowNote>
         </SettingsRow>
       </SettingsGroup>
@@ -292,29 +551,18 @@ function SkatteverketPersonalConnectionCard() {
 
   if (!status?.connected) {
     return (
-      <SettingsGroup>
+      <SettingsGroup label={groupLabel}>
         {status?.disabled && <WarningLine>{t('disabled_message')}</WarningLine>}
-        <SettingsRow label={
-          <span className="inline-flex items-center gap-2">
-            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
-            {t('title')}
-          </span>
-        } help={connectHelp} borderless={!hasSkatteverket}>
-          <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} />
+        <SettingsRow label={rowLabel} help={rowHelp} borderless={!hasSkatteverket}>
+          <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} quietProd={secondary} />
           <SettingsRowEnd>
             <Button
-              size="sm"
+              variant={secondary ? 'outline' : 'default'}
               onClick={startConnect}
               disabled={status?.disabled || !hasSkatteverket || connecting}
-              title={
-                !hasSkatteverket
-                  ? isSelfHosted()
-                    ? t('connect_requires_connector_key')
-                    : t('connect_requires_subscription')
-                  : undefined
-              }
+              title={connectTitle}
             >
-              <ExternalLink className="mr-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_with_bankid')}
             </Button>
           </SettingsRowEnd>
@@ -329,14 +577,27 @@ function SkatteverketPersonalConnectionCard() {
   }
 
   const scopes = (status.scope || '').split(/\s+/).filter(Boolean)
+  const skattekontoReason = status.skattekontoUnavailable?.reason ?? null
+  // `ska` gates the interactive skattekonto API (saldo + transaktioner); a
+  // grant without it cannot sync, so the reconnect is offered even while the
+  // token is otherwise healthy.
+  const offerReconnect =
+    status.expired ||
+    status.needsReconsent ||
+    !status.canRefresh ||
+    !scopes.includes('ska') ||
+    !scopes.includes('agd') ||
+    skattekontoReason === 'not_authorized'
   const expiresAtDate = new Date(status.expiresAt)
   const expiresInMinutes = Math.round(
     (expiresAtDate.getTime() - Date.now()) / 60_000,
   )
 
   return (
-    <SettingsGroup>
-      {status.needsReconsent && (
+    <SettingsGroup label={groupLabel}>
+      {/* "Automatic syncing is paused" is untrue while the ombud does the
+          reads; a missing scope still blocks a submission. */}
+      {status.needsReconsent && (!readsCovered || status.lastErrorCode === 'MISSING_SCOPE') && (
         <WarningLine>
           {/* MISSING_SCOPE right after a connect means the user skipped a
               behörighet on SKV's consent page; tell them exactly that
@@ -347,277 +608,135 @@ function SkatteverketPersonalConnectionCard() {
         </WarningLine>
       )}
 
-      <SettingsRow label={
-          <span className="inline-flex items-center gap-2">
-            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
-            {t('title')}
-          </span>
-        } help={connectHelp}>
+      <SettingsRow label={rowLabel} help={rowHelp}>
         {status.expired ? (
-          <Badge variant="warning">{t('expired')}</Badge>
+          // With the ombud doing the background reads, an expired login is
+          // where the BankID session normally rests: the next submission
+          // asks for a new one.
+          readsCovered ? (
+            <SettingsRowNote>{t('expired')}</SettingsRowNote>
+          ) : (
+            <Badge variant="warning">{t('expired')}</Badge>
+          )
         ) : (
-          <Badge variant="success">
-            <CheckCircle2 className="mr-1 h-3 w-3" />
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <CheckCircleIcon className="h-3.5 w-3.5" />
             {t('connected')}
-          </Badge>
+          </span>
         )}
-        <EnvironmentBadge environment={status.environment} disabled={status.disabled} />
+        <EnvironmentBadge environment={status.environment} disabled={status.disabled} quietProd={secondary} />
         <SettingsRowEnd>
-          {/* `ska` gates the interactive skattekonto API (saldo +
-              transaktioner); a grant without it cannot sync, so offer the
-              reconnect even while the token is otherwise healthy. */}
-          {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('ska') || !scopes.includes('agd')) && (
+          {offerReconnect && (
             <Button
-              size="sm"
+              variant={secondary ? 'outline' : 'default'}
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket || connecting}
-              title={
-                !hasSkatteverket
-                  ? isSelfHosted()
-                    ? t('connect_requires_connector_key')
-                    : t('connect_requires_subscription')
-                  : undefined
-              }
+              title={connectTitle}
             >
-              <ExternalLink className="mr-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               {connecting ? t('connect_waiting') : t('reconnect')}
             </Button>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={disconnect}
-            disabled={disconnecting || connecting}
-          >
-            <ShieldOff className="mr-2 h-4 w-4" />
-            {disconnecting ? t('disconnecting') : t('disconnect')}
-          </Button>
-        </SettingsRowEnd>
-      </SettingsRow>
-
-      <SettingsRow label={t('token_expires_label')} help={t('session_lifetime_note')}>
-        <SettingsRowNote className="tabular-nums">
-          {expiresAtDate.toLocaleString('sv-SE')}
-          {!status.expired && expiresInMinutes > 0 && (
-            <> {t('expires_in_minutes', { minutes: expiresInMinutes })}</>
+          {/* One button per row: beside the reconnect, Koppla från waits behind "...". */}
+          {offerReconnect ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label={t('more_actions')} disabled={disconnecting || connecting}>
+                  <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => void disconnect()}>{t('disconnect')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button variant="outline" onClick={disconnect} loading={disconnecting} disabled={connecting}>
+              {!disconnecting && <ShieldExclamationIcon className="h-4 w-4" />}
+              {t('disconnect')}
+            </Button>
           )}
-        </SettingsRowNote>
-      </SettingsRow>
-
-      <SettingsRow label={t('refresh_label')}>
-        <SettingsRowNote>
-          {status.canRefresh ? t('refresh_auto') : t('refresh_exhausted')}
-        </SettingsRowNote>
-      </SettingsRow>
-
-      <SettingsRow label={t('permissions_label')}>
-        <div className="flex flex-wrap gap-2">
-          {scopes.map(s => (
-            <Badge key={s} variant="outline">
-              {SCOPE_LABELS[s] ?? s}
-            </Badge>
-          ))}
-        </div>
+        </SettingsRowEnd>
       </SettingsRow>
 
       {/* `ska` is the scope the interactive skattekonto API enforces;
           skahmst (bulk E-transport service) does not substitute for it.
-          Missing scopes are actionable state: keep them visible. */}
+          Missing scopes are actionable state: keep them visible, outside
+          Detaljer. */}
       {!scopes.includes('ska') && <WarningLine>{t('missing_skattekonto')}</WarningLine>}
+      {/* Skatteverket's own answer on the last skattekonto read: a person
+          without authorization is something the user can act on. */}
+      {skattekontoReason === 'not_authorized' && <WarningLine>{t('skattekonto_not_authorized')}</WarningLine>}
       {!scopes.includes('agd') && <WarningLine>{t('missing_agd')}</WarningLine>}
       {status.disabled && <WarningLine>{t('disabled_filings_message')}</WarningLine>}
-    </SettingsGroup>
-  )
-}
 
-type GrantStatus = 'unknown' | 'granted' | 'denied' | 'error'
+      {/* The token's own facts: useful when something is off, noise otherwise. */}
+      <button
+        type="button"
+        onClick={() => setDetailsOpen((open) => !open)}
+        aria-expanded={detailsOpen}
+        aria-controls={detailsId}
+        className="flex w-full items-center gap-2 px-1 py-3 text-left text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+      >
+        <ChevronDownIcon
+          className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-180')}
+          aria-hidden="true"
+        />
+        {t('details')}
+      </button>
+      <div id={detailsId}>
+        <SettingsReveal open={detailsOpen} indent={false}>
+          <SettingsRow label={t('token_expires_label')} help={t('session_lifetime_note')}>
+            <SettingsRowNote className="tabular-nums">
+              {expiresAtDate.toLocaleString('sv-SE')}
+              {!status.expired && expiresInMinutes > 0 && (
+                <> {t('expires_in_minutes', { minutes: expiresInMinutes })}</>
+              )}
+            </SettingsRowNote>
+          </SettingsRow>
 
-interface SystemConnectionState {
-  available: boolean
-  mode?: string
-  environment?: string
-  ombud_org_number?: string | null
-  grant_url?: string
-  cert?: { notAfter: string; daysUntilExpiry: number; expiresSoon: boolean } | null
-  connection?: {
-    status: string
-    lasombud_status: GrantStatus
-    moms_ombud_status: GrantStatus
-    verified_at: string | null
-    last_probe_at: string | null
-  } | null
-}
+          <SettingsRow label={t('refresh_label')}>
+            <SettingsRowNote>
+              {status.canRefresh ? t('refresh_auto') : t('refresh_exhausted')}
+            </SettingsRowNote>
+          </SettingsRow>
 
-/**
- * The system (ombud + organization certificate) connection: the one-time
- * grant that lets background syncs run without a personal BankID session.
- * Renders nothing until SKATTEVERKET_SYSTEM_AUTH_MODE is switched on
- * server-side, so the whole section is invisible during Phase 1.
- */
-function SkatteverketSystemConnectionCard() {
-  const t = useTranslations('settings_skatteverket_connect')
-  const { appName } = useBranding()
-  const { toast } = useToast()
-  const [state, setState] = useState<SystemConnectionState | null>(null)
-  const [verifying, setVerifying] = useState(false)
-  const [linking, setLinking] = useState(false)
+          <SettingsRow label={t('permissions_label')} borderless={skattekontoReason !== 'no_account'}>
+            <div className="flex flex-wrap gap-2">
+              {scopes.map(s => (
+                <Badge key={s} variant="outline">
+                  {SCOPE_LABELS[s] ?? s}
+                </Badge>
+              ))}
+            </div>
+          </SettingsRow>
 
-  /**
-   * Ombudshantering deep link: Skatteverket's e-service opens with the app
-   * pre-filled as ombud and both roles pre-selected, so the company only
-   * signs. The tab is opened synchronously on click (popup blockers) and
-   * pointed at the link once the server has minted it.
-   */
-  async function openDeepLink() {
-    setLinking(true)
-    // No 'noopener' feature here: with it window.open returns null and the
-    // pre-opened tab (the popup-blocker mitigation) would never exist. The
-    // opener link is cut by hand instead.
-    const tab = window.open('', '_blank')
-    if (tab) tab.opener = null
-    try {
-      const res = await fetch('/api/extensions/ext/skatteverket/system-connection/deeplink', {
-        method: 'POST',
-      })
-      const body = await res.json().catch(() => ({}))
-      const url = typeof body?.data?.djuplank === 'string' ? body.data.djuplank : null
-      if (!res.ok || !url) {
-        tab?.close()
-        toast({
-          title: t('system_deeplink_failed'),
-          description: typeof body?.error === 'string' ? body.error : undefined,
-          variant: 'destructive',
-        })
-        return
-      }
-      // A blocked pre-open means a second window.open after the await would
-      // be blocked too: navigate this tab instead so the link is never lost.
-      if (tab) tab.location.href = url
-      else window.location.assign(url)
-    } catch {
-      tab?.close()
-      toast({ title: t('system_deeplink_failed'), variant: 'destructive' })
-    } finally {
-      setLinking(false)
-    }
-  }
-
-  async function loadState() {
-    try {
-      const res = await fetch('/api/extensions/ext/skatteverket/system-connection')
-      if (!res.ok) {
-        setState({ available: false })
-        return
-      }
-      setState((await res.json()) as SystemConnectionState)
-    } catch {
-      setState({ available: false })
-    }
-  }
-
-  useEffect(() => {
-    loadState()
-  }, [])
-
-  async function verify() {
-    setVerifying(true)
-    try {
-      const res = await fetch('/api/extensions/ext/skatteverket/system-connection/verify', {
-        method: 'POST',
-      })
-      const body = await res.json().catch(() => ({}))
-      if (res.status === 429) {
-        toast({ title: t('system_verify_rate_limited') })
-        return
-      }
-      if (!res.ok) {
-        toast({
-          title: t('system_verify_failed'),
-          description: typeof body?.error === 'string' ? body.error : undefined,
-          variant: 'destructive',
-        })
-        return
-      }
-      await loadState()
-    } catch {
-      toast({ title: t('system_verify_failed'), variant: 'destructive' })
-    } finally {
-      setVerifying(false)
-    }
-  }
-
-  if (!state?.available) return null
-
-  const grantBadge = (status: GrantStatus | undefined) => {
-    switch (status) {
-      case 'granted':
-        return (
-          <Badge variant="success">
-            <CheckCircle2 className="mr-1 h-3 w-3" />
-            {t('system_status_granted')}
-          </Badge>
-        )
-      case 'denied':
-        return <Badge variant="destructive">{t('system_status_denied')}</Badge>
-      case 'error':
-        return <Badge variant="warning">{t('system_status_error')}</Badge>
-      default:
-        return <Badge variant="outline">{t('system_status_unknown')}</Badge>
-    }
-  }
-
-  return (
-    <SettingsGroup label={t('system_title')} help={t('system_intro', { appName })}>
-      {state.ombud_org_number && (
-        <SettingsRow label={t('system_org_label')}>
-          <span className="font-mono text-sm tabular-nums">{state.ombud_org_number}</span>
-        </SettingsRow>
-      )}
-
-      <SettingsRow label={t('system_behorighet_lasombud')}>
-        {grantBadge(state.connection?.lasombud_status)}
-      </SettingsRow>
-      <SettingsRow label={t('system_behorighet_moms')}>
-        {grantBadge(state.connection?.moms_ombud_status)}
-      </SettingsRow>
-
-      {state.cert?.expiresSoon && (
-        <WarningLine>
-          {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry, appName })}
-        </WarningLine>
-      )}
-
-      <div className="flex flex-wrap items-center gap-4 px-1 py-3">
-        <Button size="sm" variant="outline" onClick={openDeepLink} disabled={linking} title={t('system_deeplink_hint', { appName })}>
-          {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
-          {linking ? t('system_deeplink_loading') : t('system_deeplink', { appName })}
-        </Button>
-        {state.grant_url && (
-          <a
-            href={state.grant_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            {t('system_open_ombud')}
-          </a>
-        )}
-        <Button size="sm" onClick={verify} disabled={verifying}>
-          {verifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          {verifying ? t('system_verifying') : t('system_verify')}
-        </Button>
+          {/* No skattekonto yet is a state to explain, not a fault. */}
+          {skattekontoReason === 'no_account' && (
+            <SettingsRow label={t('scope_skattekonto')} borderless>
+              <SettingsRowNote>{t('skattekonto_no_account')}</SettingsRowNote>
+            </SettingsRow>
+          )}
+        </SettingsReveal>
       </div>
     </SettingsGroup>
   )
 }
 
-function EnvironmentBadge({ environment, disabled }: { environment?: Environment; disabled?: boolean }) {
+/** `quietProd`: production is the normal state, so only test or disabled says anything. */
+function EnvironmentBadge({
+  environment,
+  disabled,
+  quietProd = false,
+}: {
+  environment?: Environment
+  disabled?: boolean
+  quietProd?: boolean
+}) {
   const t = useTranslations('settings_skatteverket_connect')
   if (disabled) {
     return (
       <Badge variant="destructive">
-        <ShieldAlert className="mr-1 h-3 w-3" />
+        <ShieldExclamationIcon className="mr-1 h-3 w-3" />
         {t('env_disabled')}
       </Badge>
     )
@@ -625,16 +744,14 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
   if (environment === 'test') {
     return (
       <Badge variant="warning">
-        <FlaskConical className="mr-1 h-3 w-3" />
+        <BeakerIcon className="mr-1 h-3 w-3" />
         {t('env_test')}
       </Badge>
     )
   }
-  if (environment === 'prod') {
+  if (environment === 'prod' && !quietProd) {
     return (
-      <Badge variant="success">
-        {t('env_prod')}
-      </Badge>
+      <span className="text-xs text-muted-foreground">{t('env_prod')}</span>
     )
   }
   return null

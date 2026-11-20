@@ -43,3 +43,18 @@ export function deriveSwedishVatNumber(orgNumber: string | null | undefined): st
   const canonical = normalizeOrgNumber(orgNumber)
   return canonical ? `SE${canonical}01` : null
 }
+
+/**
+ * Whether a company would be VAT-registered without an organisationsnummer:
+ * its momsregistreringsnummer, printed on every invoice (ML 17 kap 24 §),
+ * derives from that number, so the combination is refused wherever a company
+ * is created. Without VAT registration the number is optional and can be
+ * added in Settings later. Whether a given number is valid is
+ * normalizeOrgNumber's rule, not this one.
+ */
+export function vatRegisteredWithoutOrgNumber(
+  vatRegistered: boolean | null | undefined,
+  orgNumber: string | null | undefined,
+): boolean {
+  return vatRegistered === true && !orgNumber?.trim()
+}

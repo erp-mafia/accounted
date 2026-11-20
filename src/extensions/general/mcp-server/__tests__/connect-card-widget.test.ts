@@ -83,6 +83,14 @@ describe('Connect card widget', () => {
       expect(widget.html).not.toContain('window.open')
     })
 
+    it('keeps the Skatteverket link when the company is connected but the user cannot file (crm#1263)', () => {
+      // Filing runs on the user's own BankID login: hiding the button behind
+      // "connected" left a member whose colleague connected with no way in.
+      const widget = findUiWidget('ui://connect-card/app.html')!
+      expect(widget.html).toContain('sc.can_file === false')
+      expect(widget.html).toContain('ditt eget BankID')
+    })
+
     it('performs the ui/initialize handshake (claude.ai keeps the iframe hidden without it)', () => {
       const widget = findUiWidget('ui://connect-card/app.html')!
       expect(widget.html).toContain("sendRequest('ui/initialize'")

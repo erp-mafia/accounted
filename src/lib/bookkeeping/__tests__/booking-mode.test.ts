@@ -1,9 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import {
   booksInvoicesOnIssue,
+  issueBooksDocument,
+  invoiceBookingMoment,
+  supplierInvoiceBookingMoment,
+  supplierInvoiceBooksOnRegistration,
+  supplierInvoiceRegistrationDate,
   cashPartialBlockReason,
+  cashProRataUnsupportedReason,
   creditNoteNeedsJournalEntry,
+  creditBooksOriginalFirst,
   supplierCreditNoteNeedsJournalEntry,
+  supplierCreditBooksOriginalFirst,
 } from '../booking-mode'
 
 describe('booksInvoicesOnIssue (#967)', () => {
@@ -25,6 +33,137 @@ describe('booksInvoicesOnIssue (#967)', () => {
     expect(booksInvoicesOnIssue(null)).toBe(true)
     expect(booksInvoicesOnIssue(undefined)).toBe(true)
     expect(booksInvoicesOnIssue({})).toBe(true)
+  })
+})
+
+describe('issueBooksDocument (crm#1202)', () => {
+  const accrual = { accounting_method: 'accrual', defer_invoice_booking: false }
+
+  it('books a faktura at issue exactly when the company books invoices on issue', () => {
+    expect(issueBooksDocument({ document_type: 'invoice' }, accrual)).toBe(true)
+    expect(issueBooksDocument({ document_type: null }, accrual)).toBe(true)
+    expect(issueBooksDocument({}, null)).toBe(true)
+    expect(issueBooksDocument({ document_type: 'invoice' }, { accounting_method: 'cash' })).toBe(false)
+    expect(issueBooksDocument({ document_type: 'invoice' }, { accounting_method: 'accrual', defer_invoice_booking: true })).toBe(false)
+  })
+
+  it.each(['quote', 'proforma', 'delivery_note'])('never books a %s, even under faktureringsmetoden', (documentType) => {
+    expect(issueBooksDocument({ document_type: documentType }, accrual)).toBe(false)
+    expect(issueBooksDocument({ document_type: documentType }, null)).toBe(false)
+  })
+})
+
+describe('invoiceBookingMoment', () => {
+  it('books at issue under faktureringsmetoden and while settings are missing', () => {
+    expect(invoiceBookingMoment({ accounting_method: 'accrual' })).toBe('issue')
+    expect(invoiceBookingMoment(null)).toBe('issue')
+    expect(invoiceBookingMoment({})).toBe('issue')
+  })
+
+  it('books at payment under kontantmetoden, whatever the defer flag says', () => {
+    expect(invoiceBookingMoment({ accounting_method: 'cash' })).toBe('payment')
+    expect(invoiceBookingMoment({ accounting_method: 'cash', defer_invoice_booking: true })).toBe('payment')
+  })
+
+  it('books at the explicit Bokför step when booking is deferred', () => {
+    expect(invoiceBookingMoment({ accounting_method: 'accrual', defer_invoice_booking: true })).toBe('manual')
+  })
+})
+
+// ML 2023:200 7 kap. 26 and 40 §§: the moms of an EU goods acquisition belongs
+// to the period the invoice is issued in, whatever the buyer's method; 7 kap.
+// 16 § lets reverse charge wait for the payment only for services from abroad
+// and domestic reverse charge (16 kap. 6, 8-16 §§), not 16 kap. 17 §.
+describe('supplierInvoiceBookingMoment (#73)', () => {
+  const euGoods = { reverse_charge: true, reverse_charge_kind: 'eu_goods' }
+  const euServices = { reverse_charge: true, reverse_charge_kind: 'eu_services' }
+
+  it('books an EU goods acquisition at registration under kontantmetoden', () => {
+    expect(supplierInvoiceBookingMoment('payment', euGoods, 'eu_business')).toBe('issue')
+    expect(supplierInvoiceBooksOnRegistration({ accounting_method: 'cash' }, euGoods, 'eu_business')).toBe(true)
+    // The defer flag never wins under kontantmetoden (invoiceBookingMoment), here neither.
+    expect(
+      supplierInvoiceBooksOnRegistration({ accounting_method: 'cash', defer_invoice_booking: true }, euGoods, 'eu_business'),
+    ).toBe(true)
+  })
+
+  it('keeps every other kontantmetoden supplier invoice at payment', () => {
+    const cash = { accounting_method: 'cash' }
+    // EU services (16 kap. 9 §) and services from outside the EU follow 7 kap. 16 §.
+    expect(supplierInvoiceBooksOnRegistration(cash, euServices, 'eu_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: true, reverse_charge_kind: null }, 'eu_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: true }, 'non_eu_business')).toBe(false)
+    // Domestic reverse charge (byggtjänster, 16 kap. 13 §) and plain domestic purchases.
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: true }, 'swedish_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, { reverse_charge: false }, 'swedish_business')).toBe(false)
+    // The goods word means nothing without reverse charge or from a supplier outside the EU.
+    expect(supplierInvoiceBooksOnRegistration(cash, { ...euGoods, reverse_charge: false }, 'eu_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, euGoods, 'swedish_business')).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(cash, euGoods, 'non_eu_business')).toBe(false)
+  })
+
+  it('leaves faktureringsmetoden and deferred booking as they were', () => {
+    expect(supplierInvoiceBookingMoment('issue', euServices, 'eu_business')).toBe('issue')
+    expect(supplierInvoiceBookingMoment('manual', euGoods, 'eu_business')).toBe('manual')
+    expect(supplierInvoiceBooksOnRegistration({ accounting_method: 'accrual' }, euGoods, 'eu_business')).toBe(true)
+    expect(supplierInvoiceBooksOnRegistration({ accounting_method: 'accrual' }, { reverse_charge: false }, 'swedish_business')).toBe(true)
+    expect(
+      supplierInvoiceBooksOnRegistration({ accounting_method: 'accrual', defer_invoice_booking: true }, euGoods, 'eu_business'),
+    ).toBe(false)
+    expect(supplierInvoiceBooksOnRegistration(null, euGoods, 'eu_business')).toBe(true)
+  })
+})
+
+// ML 2023:200 7 kap. 26 §: the output moms of an EU goods acquisition is
+// reported for the invoice's period, but at the latest for the period holding
+// the 15th of the month after the month of the acquisition (7 kap. 12 §);
+// 7 kap. 40 § deducts the input moms in the same period.
+describe('supplierInvoiceRegistrationDate (#93)', () => {
+  const euGoods = { reverse_charge: true, reverse_charge_kind: 'eu_goods' }
+
+  it('dates a late EU goods invoice on the 15th of the month after delivery', () => {
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05', delivery_date: '2026-01-10' }, 'eu_business'),
+    ).toBe('2026-02-15')
+    // December delivery: the cap is in January of the next year.
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2027-01-20', delivery_date: '2026-12-31' }, 'eu_business'),
+    ).toBe('2027-01-15')
+  })
+
+  it('keeps the invoice date when the invoice came on time or before the delivery', () => {
+    // Issued on the 15th itself, before it, and before the goods arrived.
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-02-15', delivery_date: '2026-01-10' }, 'eu_business'),
+    ).toBe('2026-02-15')
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-01-31', delivery_date: '2026-01-10' }, 'eu_business'),
+    ).toBe('2026-01-31')
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-01-05', delivery_date: '2026-02-20' }, 'eu_business'),
+    ).toBe('2026-01-05')
+  })
+
+  it('keeps the invoice date without a delivery date, or for anything but an EU goods acquisition', () => {
+    expect(supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05' }, 'eu_business')).toBe('2026-03-05')
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05', delivery_date: null }, 'eu_business'),
+    ).toBe('2026-03-05')
+    const late = { invoice_date: '2026-03-05', delivery_date: '2026-01-10' }
+    // EU services, services from outside the EU, domestic purchases.
+    expect(
+      supplierInvoiceRegistrationDate({ ...late, reverse_charge: true, reverse_charge_kind: 'eu_services' }, 'eu_business'),
+    ).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, reverse_charge: true }, 'eu_business')).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, ...euGoods }, 'non_eu_business')).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, reverse_charge: false }, 'swedish_business')).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, ...euGoods, reverse_charge: false }, 'eu_business')).toBe('2026-03-05')
+  })
+
+  it('ignores a delivery date it cannot read', () => {
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05', delivery_date: 'januari' }, 'eu_business'),
+    ).toBe('2026-03-05')
   })
 })
 
@@ -69,6 +208,32 @@ describe('cashPartialBlockReason', () => {
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: 0.004 })).toBeNull()
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: null })).toBeNull()
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: undefined })).toBeNull()
+  })
+})
+
+describe('cashProRataUnsupportedReason', () => {
+  it('accepts a SEK invoice without a tax deduction', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'SEK', deduction_total: 0, items: [{ deduction_type: null }] })).toBeNull()
+    expect(cashProRataUnsupportedReason({ currency: 'SEK' })).toBeNull()
+  })
+
+  it('treats a missing currency as SEK', () => {
+    expect(cashProRataUnsupportedReason({ currency: null })).toBeNull()
+  })
+
+  it('refuses a foreign-currency invoice', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'EUR' })).toBe('foreign_currency')
+  })
+
+  it('refuses a deduction on the header or on any item', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'SEK', deduction_total: 7500 })).toBe('tax_deduction')
+    expect(
+      cashProRataUnsupportedReason({ currency: 'SEK', items: [{ deduction_type: null }, { deduction_type: 'rut' }] }),
+    ).toBe('tax_deduction')
+  })
+
+  it('ignores float noise below half an öre on the header deduction', () => {
+    expect(cashProRataUnsupportedReason({ currency: 'SEK', deduction_total: 0.001 })).toBeNull()
   })
 })
 
@@ -135,6 +300,43 @@ describe('creditNoteNeedsJournalEntry (customer side, #2552)', () => {
   })
 })
 
+describe('creditBooksOriginalFirst (accounted#45)', () => {
+  const deferred = { accounting_method: 'accrual', defer_invoice_booking: true }
+  const unbooked = { status: 'sent', journal_entry_id: null, paid_at: null, paid_amount: 0 }
+
+  it('books a sent or overdue deferred original that has no verifikat first', () => {
+    expect(creditBooksOriginalFirst(deferred, unbooked)).toBe(true)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, status: 'overdue' })).toBe(true)
+  })
+
+  it('leaves an original that reached the ledger alone: linked, or booked by its payment', () => {
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, journal_entry_id: 'je-1' })).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, status: 'paid' })).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, paid_at: '2026-10-01T10:00:00Z' })).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, { ...unbooked, paid_amount: 100 })).toBe(false)
+  })
+
+  it('never books first where the company books at issue: an unlinked original there was migrated or imported booked', () => {
+    expect(creditBooksOriginalFirst({ accounting_method: 'accrual', defer_invoice_booking: false }, unbooked)).toBe(false)
+    expect(creditBooksOriginalFirst({ accounting_method: 'accrual' }, unbooked)).toBe(false)
+    expect(creditBooksOriginalFirst(null, unbooked)).toBe(false)
+  })
+
+  it('never books first under kontantmetoden, defer flag or not', () => {
+    expect(creditBooksOriginalFirst({ accounting_method: 'cash', defer_invoice_booking: true }, unbooked)).toBe(false)
+    expect(creditBooksOriginalFirst({ accounting_method: 'cash' }, unbooked)).toBe(false)
+  })
+
+  it('needs an original to read', () => {
+    expect(creditBooksOriginalFirst(deferred, null)).toBe(false)
+    expect(creditBooksOriginalFirst(deferred, undefined)).toBe(false)
+  })
+
+  it('still has the credit post its own verifikat after the original is booked', () => {
+    expect(creditNoteNeedsJournalEntry('accrual', unbooked)).toBe(true)
+  })
+})
+
 describe('supplierCreditNoteNeedsJournalEntry', () => {
   const unpaid = {
     registration_journal_entry_id: null,
@@ -198,5 +400,52 @@ describe('supplierCreditNoteNeedsJournalEntry', () => {
     expect(supplierCreditNoteNeedsJournalEntry('cash', { ...unpaid, paid_amount: null })).toBe(false)
     expect(supplierCreditNoteNeedsJournalEntry('cash', null)).toBe(false)
     expect(supplierCreditNoteNeedsJournalEntry('cash', undefined)).toBe(false)
+  })
+})
+
+describe('supplierCreditBooksOriginalFirst (accounted#58)', () => {
+  const deferred = { accounting_method: 'accrual', defer_invoice_booking: true }
+  const unbooked = {
+    registration_journal_entry_id: null,
+    payment_journal_entry_id: null,
+    status: 'approved',
+    paid_at: null,
+    paid_amount: 0,
+  }
+
+  it('books a registered, approved or overdue deferred original that has no verifikat first', () => {
+    expect(supplierCreditBooksOriginalFirst(deferred, unbooked)).toBe(true)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, status: 'registered' })).toBe(true)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, status: 'overdue' })).toBe(true)
+  })
+
+  it('leaves an original that reached the ledger alone: linked, or reached by a payment', () => {
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, registration_journal_entry_id: 'je-1' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, payment_journal_entry_id: 'je-2' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, status: 'paid' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, paid_at: '2026-10-01T10:00:00Z' })).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, { ...unbooked, paid_amount: 100 })).toBe(false)
+  })
+
+  it('never books first where the company books at registration: an unlinked original there was migrated or imported booked', () => {
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'accrual', defer_invoice_booking: false }, unbooked)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'accrual' }, unbooked)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(null, unbooked)).toBe(false)
+  })
+
+  it('never books first under kontantmetoden, defer flag or not', () => {
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'cash', defer_invoice_booking: true }, unbooked)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst({ accounting_method: 'cash' }, unbooked)).toBe(false)
+    // ...where an unpaid original's credit posts nothing at all.
+    expect(supplierCreditNoteNeedsJournalEntry('cash', unbooked)).toBe(false)
+  })
+
+  it('needs an original to read', () => {
+    expect(supplierCreditBooksOriginalFirst(deferred, null)).toBe(false)
+    expect(supplierCreditBooksOriginalFirst(deferred, undefined)).toBe(false)
+  })
+
+  it('still has the credit post its own verifikat after the original is booked', () => {
+    expect(supplierCreditNoteNeedsJournalEntry('accrual', unbooked)).toBe(true)
   })
 })

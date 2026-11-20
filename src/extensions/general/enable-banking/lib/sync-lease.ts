@@ -1,11 +1,15 @@
 /**
  * The one sync lease on bank_connections.sync_lease_until, shared by every
  * entry point that reaches the bank: the hourly cron, the agent-triggered
- * sync (trigger-sync.ts) and the "Synka nu" route (index.ts).
+ * sync (trigger-sync.ts), the initial backfill on account selection and the
+ * "Synka nu" route (both index.ts).
  *
  * - The cron and the agent CLAIM it (conditional UPDATE, exactly one winner),
  *   so an overlapping cron run, a retried invocation or an agent loop can
- *   never sync the same connection twice inside the window.
+ *   never sync the same connection twice inside the window. The initial
+ *   backfill claims it too and leaves the import to the cron when it loses:
+ *   it can outlive its response, and two writers of one first import race
+ *   on the same external_ids.
  * - "Synka nu" only HOLDS it: a person asking for a sync is never told to
  *   wait for the ordinary 15-minute window, but the automatic paths stay off
  *   the connection while and right after they sync it. The one lease a

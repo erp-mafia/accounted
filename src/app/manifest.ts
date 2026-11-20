@@ -1,11 +1,10 @@
 import type { MetadataRoute } from 'next'
 import { headers } from 'next/headers'
-import { ensureInitialized } from '@/lib/init'
 import { getBranding } from '@/lib/branding/service'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
-
-// Guarantee branding extensions have registered before the manifest is built.
-ensureInitialized()
+// Guarantee branding extensions have registered before the manifest is built,
+// without loading every other extension (see app/layout.tsx).
+import '@/lib/extensions/_generated/branding-list'
 
 export default async function manifest(): Promise<MetadataRoute.Manifest> {
   const b = getBranding()

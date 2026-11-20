@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
-import { AlertTriangle, Archive, Loader2 } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
+import { ArchiveBoxIcon, ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -19,7 +19,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
 import {
   COMPANY_MIGRATION_RESET_COUNT_KEYS,
@@ -36,17 +36,6 @@ interface CompanyMigrationResetDialogProps {
 
 const branding = getBranding()
 
-function readApiError(body: unknown, fallback: string): string {
-  if (!body || typeof body !== 'object') return fallback
-  const error = (body as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
-}
-
 export function CompanyMigrationResetDialog({
   companyId,
   companyName,
@@ -54,6 +43,7 @@ export function CompanyMigrationResetDialog({
   onOpenChange,
 }: CompanyMigrationResetDialogProps) {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const router = useRouter()
   const { toast } = useToast()
   const { formatDateLong } = useFormat()
@@ -81,14 +71,15 @@ export function CompanyMigrationResetDialog({
         })
         const body = await response.json().catch(() => ({}))
         if (!response.ok) {
-          throw new Error(readApiError(body, loadFailedMessage))
+          if (!cancelled) {
+            setLoadError(getUserErrorMessage(body, { locale: errorLocale, fallback: loadFailedMessage }))
+          }
+          return
         }
         if (!cancelled) setEligibility(body.data as CompanyMigrationResetEligibility)
       } catch (error) {
         if (!cancelled) {
-          setLoadError(
-            error instanceof Error ? getUserErrorMessage(error) : loadFailedMessage,
-          )
+          setLoadError(getUserErrorMessage(error, { locale: errorLocale, fallback: loadFailedMessage }))
         }
       } finally {
         if (!cancelled) setIsLoading(false)
@@ -99,7 +90,7 @@ export function CompanyMigrationResetDialog({
     return () => {
       cancelled = true
     }
-  }, [companyId, loadFailedMessage, open])
+  }, [companyId, errorLocale, loadFailedMessage, open])
 
   function resetForm() {
     setEligibility(null)
@@ -185,7 +176,13 @@ export function CompanyMigrationResetDialog({
       })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(readApiError(body, t('reset_failed_default')))
+        toast({
+          title: t('reset_failed_title'),
+          description: getUserErrorMessage(body, { locale: errorLocale, fallback: t('reset_failed_default') }),
+          variant: 'destructive',
+        })
+        setIsResetting(false)
+        return
       }
 
       toast({
@@ -200,9 +197,7 @@ export function CompanyMigrationResetDialog({
     } catch (error) {
       toast({
         title: t('reset_failed_title'),
-        description: error instanceof Error
-          ? getUserErrorMessage(error)
-          : t('reset_failed_default'),
+        description: getUserErrorMessage(error, { locale: errorLocale, fallback: t('reset_failed_default') }),
         variant: 'destructive',
       })
       setIsResetting(false)
@@ -211,7 +206,7 @@ export function CompanyMigrationResetDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle data-ph-mask="">
             {t('reset_dialog_title', { companyName })}
@@ -221,17 +216,17 @@ export function CompanyMigrationResetDialog({
 
         {isLoading ? (
           <div className="flex min-h-40 items-center justify-center text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <SpinnerIcon className="mr-2 h-4 w-4 animate-spin" />
             {t('reset_checking')}
           </div>
         ) : loadError ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          <div className="bg-destructive/8 rounded-lg p-4 text-sm text-destructive">
             {loadError}
           </div>
         ) : eligibility ? (
           <div className="space-y-5">
-            <div className="flex gap-3 rounded-lg border border-border bg-muted/40 p-4">
-              <Archive className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+            <div className="flex gap-3 rounded-lg p-4 bg-control shadow-raised">
+              <ArchiveBoxIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               <div className="space-y-1 text-sm">
                 <p className="font-medium text-foreground">{t('reset_archive_title')}</p>
                 <p className="text-muted-foreground">{t('reset_archive_description')}</p>
@@ -239,9 +234,9 @@ export function CompanyMigrationResetDialog({
             </div>
 
             {eligibility.blockers.length > 0 ? (
-              <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <div className="bg-destructive/8 space-y-2 rounded-lg p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="h-4 w-4" />
                   {t('reset_blocked_title')}
                 </div>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
@@ -330,13 +325,8 @@ export function CompanyMigrationResetDialog({
             {t('danger_cancel')}
           </Button>
           {eligibility?.eligible ? (
-            <Button variant="destructive" onClick={handleReset} disabled={!canReset}>
-              {isResetting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('reset_resetting')}
-                </>
-              ) : t('reset_submit')}
+            <Button variant="destructive" onClick={handleReset} disabled={!canReset} loading={isResetting}>
+              {isResetting ? t('reset_resetting') : t('reset_submit')}
             </Button>
           ) : null}
         </DialogFooter>

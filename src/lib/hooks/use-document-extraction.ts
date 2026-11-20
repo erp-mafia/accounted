@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import type { UnderlagFacts } from '@/lib/transactions/underlag-read'
 
 // Polls GET /api/documents/:id/extraction-status until the AI extraction
 // pipeline completes, fails, or times out. Returns the derived status the
@@ -36,27 +37,30 @@ interface State {
   // copy after a few seconds ("Läser fakturan…" → "Tar lite längre än
   // vanligt…") without re-rendering.
   elapsedMs: number
+  // What the document says (supplier, totals, moms and its rate), once the
+  // extraction succeeded; null until then and for every other outcome.
+  facts: UnderlagFacts | null
 }
 
 export function useDocumentExtraction(documentId: string | null | undefined): State {
-  const [state, setState] = useState<State>({ status: 'idle', elapsedMs: 0 })
+  const [state, setState] = useState<State>({ status: 'idle', elapsedMs: 0, facts: null })
 
   useEffect(() => {
     if (!documentId) {
-      setState({ status: 'idle', elapsedMs: 0 })
+      setState({ status: 'idle', elapsedMs: 0, facts: null })
       return
     }
 
     let cancelled = false
     const startedAt = Date.now()
-    setState({ status: 'running', elapsedMs: 0 })
+    setState({ status: 'running', elapsedMs: 0, facts: null })
 
     async function tick(): Promise<void> {
       if (cancelled) return
       const elapsedMs = Date.now() - startedAt
 
       if (elapsedMs > EXTRACTION_TIMEOUT_MS) {
-        setState({ status: 'disabled', elapsedMs })
+        setState({ status: 'disabled', elapsedMs, facts: null })
         return
       }
 
@@ -65,14 +69,14 @@ export function useDocumentExtraction(documentId: string | null | undefined): St
         if (cancelled) return
         if (res.ok) {
           const json = (await res.json()) as {
-            data: { status: ExtractionStatus }
+            data: { status: ExtractionStatus; facts?: UnderlagFacts | null }
           }
           const status = json.data.status
           if (status !== 'running') {
-            setState({ status, elapsedMs })
+            setState({ status, elapsedMs, facts: status === 'succeeded' ? (json.data.facts ?? null) : null })
             return
           }
-          setState({ status: 'running', elapsedMs })
+          setState({ status: 'running', elapsedMs, facts: null })
         }
         // Non-ok responses fall through to retry; transient 5xx shouldn't
         // collapse the UI to "failed".

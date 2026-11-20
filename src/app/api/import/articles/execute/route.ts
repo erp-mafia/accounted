@@ -1,25 +1,55 @@
 import { normalizeNameKey as nameKey } from '@/lib/import/shared/column-utils'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { ArticleImportExecuteSchema } from '@/lib/api/schemas'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { checkRevenueAccount, type RevenueAccountStatus } from '@/lib/articles/validate-revenue-account'
 import type { Article } from '@/types'
 import type { ArticleImportExecuteResult } from '@/lib/import/articles/types'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
+import { planArticleUpserts, type PlannedArticleUpdate } from '@/lib/import/articles/bulk-update'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 interface ExistingArticle {
   id: string
   name: string
   article_number: string | null
+}
+
+/** A new article this batch inserts, with the file row it came from. */
+interface PlannedInsert {
+  row_index: number
+  name: string
+  payload: Record<string, unknown>
+}
+
+/**
+ * The client sends a large file in batches (lib/import/register-import-flow.ts
+ * executeBatches); one batch of new articles plus the lookups fits well inside
+ * this, as on the bank-file and SIE execute routes.
+ */
+export const maxDuration = 300
+
+/** Articles per insert or upsert statement. */
+const ARTICLE_WRITE_SLICE = 500
+
+/** Updates in flight at once: enough to overlap round trips, few enough to spare the pool. */
+const UPDATE_CONCURRENCY = 8
+
+async function runWithConcurrency<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>) {
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++]
+      await work(item)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
 }
 
 /**
@@ -55,12 +85,13 @@ export const POST = withRouteContext(
           .from('articles')
           .select('id, name, article_number')
           .eq('company_id', companyId)
+          .order('id')
           .range(from, to),
       )
       const existing = existingRaw as unknown as ExistingArticle[]
 
-      const byNumber = new Map<string, ExistingArticle>()
-      const byName = new Map<string, ExistingArticle>()
+      const byNumber = new Map<string, ExistingArticle | { planned: PlannedInsert }>()
+      const byName = new Map<string, ExistingArticle | { planned: PlannedInsert }>()
       for (const a of existing) {
         if (a.article_number) byNumber.set(a.article_number, a)
         const nk = nameKey(a.name)
@@ -121,9 +152,14 @@ export const POST = withRouteContext(
         return null
       }
 
-      const created: Article[] = []
-      const updated: Article[] = []
+      // Plan the batch in memory first, then write it set-based: one insert
+      // statement per ARTICLE_WRITE_SLICE new articles and one upsert per
+      // ARTICLE_WRITE_SLICE updated ones. Row-at-a-time writes made a
+      // supplier price list (crm#1383) take one database round trip per row.
+      const inserts: PlannedInsert[] = []
+      const updates = new Map<string, PlannedArticleUpdate>()
       let skipped = 0
+      let updatedCount = 0
       const errors: { row_index: number; name: string; reason: string }[] = []
 
       for (const row of rows) {
@@ -163,26 +199,31 @@ export const POST = withRouteContext(
             continue
           }
 
-          const { data, error } = await supabase
-            .from('articles')
-            .update(merged)
-            .eq('id', match.id)
-            .eq('company_id', companyId)
-            .select()
-            .single()
-
-          if (error) {
-            errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
+          if ('planned' in match) {
+            // A second row for an article this batch creates: the later row's
+            // values go into the same insert, as the update after it did.
+            Object.assign(match.planned.payload, merged)
+            updatedCount++
             continue
           }
-          if (data) updated.push(data as Article)
+
+          // Rows naming the same existing article become one update (later
+          // values win), so parallel updates never race on one row.
+          const planned = updates.get(match.id)
+          if (planned) {
+            Object.assign(planned.merged, merged)
+            planned.rows.push({ row_index: row.row_index, name: row.name })
+          } else {
+            updates.set(match.id, { id: match.id, merged, rows: [{ row_index: row.row_index, name: row.name }] })
+          }
           continue
         }
 
         // No match, create.
-        const { data, error } = await supabase
-          .from('articles')
-          .insert({
+        const planned: PlannedInsert = {
+          row_index: row.row_index,
+          name: row.name,
+          payload: {
             user_id: user.id,
             company_id: companyId,
             name: row.name,
@@ -198,40 +239,119 @@ export const POST = withRouteContext(
             housework_type: row.housework_type,
             notes: row.notes,
             article_number: row.article_number,
-          })
-          .select()
-          .single()
+          },
+        }
+        inserts.push(planned)
+        // Later rows in the same batch dedup against the planned article too.
+        if (row.article_number) byNumber.set(row.article_number, { planned })
+        if (nk && !byName.has(nk)) byName.set(nk, { planned })
+      }
 
+      // The full rows this batch updates, read before it writes, so the undo
+      // can put back what it changed.
+      const beforeImport = await snapshotRowsForUndo(
+        supabase,
+        companyId,
+        'articles',
+        update_duplicates,
+        [...updates.keys()],
+      )
+
+      const created: Article[] = []
+      const insertOne = async (planned: PlannedInsert) => {
+        const { data, error } = await supabase.from('articles').insert(planned.payload).select().single()
         if (error) {
           // Unique violation on (company_id, article_number): treat as a soft
           // skip (manual number collided with an existing or in-batch article).
           if (error.code === '23505') {
             skipped++
-            continue
+            return
           }
-          errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
+          errors.push({ row_index: planned.row_index, name: planned.name, reason: getUserErrorMessage(error) })
+          return
+        }
+        if (data) created.push(data as Article)
+      }
+      for (let i = 0; i < inserts.length; i += ARTICLE_WRITE_SLICE) {
+        const slice = inserts.slice(i, i + ARTICLE_WRITE_SLICE)
+        const { data, error } = await supabase
+          .from('articles')
+          .insert(slice.map((p) => p.payload))
+          .select()
+        if (!error && Array.isArray(data)) {
+          created.push(...(data as Article[]))
           continue
         }
+        // One statement is all or nothing: a row that fails (a number taken
+        // since the read, a bad value) is found by writing the slice row by row.
+        for (const planned of slice) await insertOne(planned)
+      }
 
-        if (data) {
-          // Auto-number when the file didn't supply one. Non-fatal: an
-          // unnumbered article is still usable and can be numbered later.
-          if (!data.article_number) {
-            try {
-              data.article_number = await ensureArticleNumber(supabase, companyId!, data.id)
-            } catch (err) {
-              opLog.warn('article number assignment failed', err as Error, { articleId: data.id })
-            }
-          }
-          created.push(data as Article)
-          // Track newly inserted number + name so later rows in the same batch
-          // dedup against them too.
-          const newArticle = data as ExistingArticle
-          if (newArticle.article_number) byNumber.set(newArticle.article_number, newArticle)
-          const nk = nameKey(newArticle.name)
-          if (nk && !byName.has(nk)) byName.set(nk, newArticle)
+      // Auto-number articles the file gave no number. Non-fatal: an unnumbered
+      // article is still usable and can be numbered later.
+      for (const article of created) {
+        if (article.article_number) continue
+        try {
+          article.article_number = await ensureArticleNumber(supabase, companyId!, article.id)
+        } catch (err) {
+          opLog.warn('article number assignment failed', err as Error, { articleId: article.id })
         }
       }
+
+      const updated: Article[] = []
+      const updateOne = async (planned: PlannedArticleUpdate) => {
+        const { data, error } = await supabase
+          .from('articles')
+          .update(planned.merged)
+          .eq('id', planned.id)
+          .eq('company_id', companyId)
+          .select()
+          .single()
+        if (error) {
+          const reason = getUserErrorMessage(error)
+          for (const r of planned.rows) errors.push({ row_index: r.row_index, name: r.name, reason })
+          return
+        }
+        if (data) {
+          updated.push(data as Article)
+          updatedCount += planned.rows.length
+        }
+      }
+
+      // Existing articles are updated set-based too: one upsert on the
+      // primary key per ARTICLE_WRITE_SLICE articles (lib/import/articles/
+      // bulk-update.ts groups them so no statement sets a field a row does
+      // not carry). A row the grouping cannot place, or a slice whose
+      // statement fails, is written row by row, so a bad row still fails
+      // alone and is reported with its file line.
+      const { slices: upsertSlices, rowByRow } = planArticleUpserts(
+        [...updates.values()],
+        beforeImport,
+        companyId!,
+        ARTICLE_WRITE_SLICE,
+      )
+      for (const slice of upsertSlices) {
+        const { data, error } = await supabase
+          .from('articles')
+          .upsert(slice.map((s) => s.payload), { onConflict: 'id' })
+          .select()
+        if (error || !Array.isArray(data)) {
+          if (error) opLog.warn('article upsert slice failed, writing it row by row', error, { size: slice.length })
+          rowByRow.push(...slice.map((s) => s.planned))
+          continue
+        }
+        const written = new Set<string>()
+        for (const article of data as Article[]) {
+          written.add(article.id)
+          updated.push(article)
+        }
+        for (const s of slice) {
+          if (written.has(s.planned.id)) updatedCount += s.planned.rows.length
+          else rowByRow.push(s.planned)
+        }
+      }
+      await runWithConcurrency(rowByRow, UPDATE_CONCURRENCY, updateOne)
+      errors.sort((a, b) => a.row_index - b.row_index)
 
       // Emit events for downstream listeners (non-blocking).
       for (const a of created) {
@@ -241,10 +361,12 @@ export const POST = withRouteContext(
         })
       }
 
+      await recordRegisterImportRun(supabase, { companyId, userId: user.id, kind: 'articles', created, updated, before: beforeImport }, opLog)
+
       const response: ArticleImportExecuteResult = {
         success: errors.length === 0,
         created: created.length,
-        updated: updated.length,
+        updated: updatedCount,
         skipped,
         failed: errors.length,
         errors,

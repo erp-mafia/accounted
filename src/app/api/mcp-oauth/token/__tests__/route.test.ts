@@ -1,10 +1,22 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const mocks = vi.hoisted(() => ({
   supabaseFactory: vi.fn(),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
 }))
+
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: mocks.logInfo,
+    warn: mocks.logWarn,
+    error: vi.fn(),
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
@@ -26,7 +38,14 @@ vi.mock('@/lib/company/context', () => ({
 
 import { POST } from '../route'
 import { decryptAuthCode, verifyPkce } from '@/lib/auth/oauth-codes'
-import { generateRefreshToken } from '@/lib/auth/api-keys'
+import {
+  ALL_SCOPES,
+  STAGING_SCOPES,
+  generateRefreshToken,
+  hashApiKey,
+  hashRefreshToken,
+  type ApiKeyScope,
+} from '@/lib/auth/api-keys'
 
 function formRequest(body: Record<string, string>) {
   return new Request('http://localhost/api/mcp-oauth/token', {
@@ -43,10 +62,16 @@ const codeExchange = {
   redirect_uri: 'https://claude.ai/api/cb',
 }
 
+/** The paused-connector lookup answering "not paused". */
+const NOT_PAUSED = { data: [], error: null }
+
 /**
  * Query results in the order handleAuthorizationCodeGrant issues them:
  * used-code insert, expired-code cleanup, (role lookup when a company is
- * known), api_keys insert. The role step is skipped for companyless grants.
+ * known), paused connector lookup, create_api_key_with_allowlist RPC. The
+ * role step is skipped for companyless grants. A registration lookup (for a
+ * redirect URI that is not built in) goes in at index 3, before the pause
+ * lookup.
  */
 function exchangeResults(role: { role: string } | null | 'skip' = { role: 'owner' }) {
   const results: { data?: unknown; error?: unknown }[] = [
@@ -54,14 +79,34 @@ function exchangeResults(role: { role: string } | null | 'skip' = { role: 'owner
     { data: null, error: null }, // delete expired codes (best-effort)
   ]
   if (role !== 'skip') results.push({ data: role, error: null }) // company_members role
-  results.push({ data: null, error: null }) // insert into api_keys
+  results.push(NOT_PAUSED) // agent_identities: no paused connector
+  results.push({ data: 'key-9', error: null }) // create_api_key_with_allowlist RPC (new key id)
   return results
+}
+
+/**
+ * Named arguments of the create_api_key_with_allowlist call: the key row and
+ * its allowlist rows are one RPC, so this is where the minted key's shape is
+ * asserted.
+ */
+function createKeyArgs(
+  supabase: ReturnType<typeof createQueuedMockSupabase>['supabase'],
+): Record<string, unknown> {
+  const call = supabase.rpc.mock.calls.find((c) => c[0] === 'create_api_key_with_allowlist')
+  expect(call).toBeDefined()
+  return call![1] as Record<string, unknown>
 }
 
 describe('POST /api/mcp-oauth/token', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    // The refresh grant derives the successor pair from this secret.
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-role-secret')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
   })
 
   describe('grant_type validation', () => {
@@ -132,10 +177,10 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.access_token).toMatch(/^gnubok_sk_/)
       expect(body.scope).toBe('companies:read companies:write')
 
-      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted).toBeDefined()
-      expect(inserted.user_id).toBe('user-1')
-      expect(inserted.company_id).toBeNull()
+      const created = createKeyArgs(supabase)
+      expect(created.p_user_id).toBe('user-1')
+      expect(created.p_company_id).toBeNull()
+      expect(created.p_company_ids).toBeNull()
       expect(findCall('company_members', 'select')).toBeUndefined()
     })
 
@@ -148,17 +193,30 @@ describe('POST /api/mcp-oauth/token', () => {
       })
       vi.mocked(verifyPkce).mockReturnValue(true)
 
-      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany(exchangeResults())
 
       const res = await POST(formRequest({ ...codeExchange, redirect_uri: 'https://chatgpt.com/connector_platform_oauth_redirect' }))
       expect(res.status).toBe(200)
-      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted.client).toBe('chatgpt')
+      expect(createKeyArgs(supabase).p_client).toBe('chatgpt')
     })
 
-    it('stores client null for a redirect URI that is not a built-in client', async () => {
+    it('records gemini for a Gemini custom-app callback on Google\'s relay', async () => {
+      const redirectUri = 'https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-1234567890-app_accounted_se'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults())
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_client).toBe('gemini')
+    })
+
+    it('stores client null for a redirect URI without a live registration', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',
         codeChallenge: 'challenge',
@@ -167,14 +225,39 @@ describe('POST /api/mcp-oauth/token', () => {
       })
       vi.mocked(verifyPkce).mockReturnValue(true)
 
-      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany(exchangeResults())
+      // Not a built-in client: the route looks the redirect URI up among the
+      // live registrations first (none here), then mints the key.
+      const results = exchangeResults()
+      results.splice(3, 0, { data: null, error: null })
+      enqueueMany(results)
 
       const res = await POST(formRequest({ ...codeExchange, redirect_uri: 'https://agent.testbrand.example/oauth/callback' }))
       expect(res.status).toBe(200)
-      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted.client).toBeNull()
+      expect(createKeyArgs(supabase).p_client).toBeNull()
+    })
+
+    it('stores a registered client reference without changing the OAuth key classification', async () => {
+      const redirectUri = 'https://agent.testbrand.example/oauth/callback'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      // The user's own registration of the URI: several users may each hold one (crm#1654).
+      results.splice(3, 0, { data: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', user_id: 'user-1', client_name: 'Agent' }], error: null })
+      enqueueMany(results)
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(200)
+      // The key is minted by the atomic RPC, never a direct insert.
+      expect(createKeyArgs(supabase)).toMatchObject({
+        p_client: 'registered:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        p_name: 'MCP-klient (OAuth)',
+      })
+      expect(findCall('api_keys', 'insert')).toBeUndefined()
+      expect(findCall('oauth_client_registrations', 'eq')).toEqual(['redirect_uri', redirectUri])
+      expect(findCall('oauth_client_registrations', 'is')).toEqual(['revoked_at', null])
     })
 
     it('rejects an already-used auth code (replay)', async () => {
@@ -231,7 +314,7 @@ describe('POST /api/mcp-oauth/token', () => {
         exp: Date.now() + 60_000,
       })
 
-      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany(exchangeResults({ role: 'member' }))
 
@@ -239,8 +322,7 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(res.status).toBe(200)
 
       expect(mocks.getActiveCompanyId).not.toHaveBeenCalled()
-      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted.company_id).toBe('company-7')
+      expect(createKeyArgs(supabase).p_company_id).toBe('company-7')
       // The role lookup ran against that same company.
       const eqArgs = findCalls('company_members', 'eq')
       expect(eqArgs).toContainEqual(['company_id', 'company-7'])
@@ -257,7 +339,7 @@ describe('POST /api/mcp-oauth/token', () => {
         exp: Date.now() + 60_000,
       })
 
-      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany(exchangeResults({ role: 'viewer' }))
 
@@ -266,10 +348,10 @@ describe('POST /api/mcp-oauth/token', () => {
       const body = await res.json()
       expect(body.scope.split(' ').sort()).toEqual(['reports:read', 'transactions:read'])
 
-      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted.scopes).toEqual(['transactions:read', 'reports:read'])
-      expect(inserted.sod_acknowledged_at).toBeNull()
-      expect(inserted.sod_acknowledged_by).toBeNull()
+      const created = createKeyArgs(supabase)
+      expect(created.p_scopes).toEqual(['transactions:read', 'reports:read'])
+      expect(created.p_sod_acknowledged_at).toBeNull()
+      expect(created.p_sod_acknowledged_by).toBeNull()
     })
 
     it('viewer whose code carries only write scopes falls back to the read-only defaults', async () => {
@@ -325,7 +407,7 @@ describe('POST /api/mcp-oauth/token', () => {
         exp: Date.now() + 60_000,
       })
 
-      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany(exchangeResults({ role: 'member' }))
 
@@ -334,10 +416,10 @@ describe('POST /api/mcp-oauth/token', () => {
       warn.mockRestore()
       expect(res.status).toBe(200)
 
-      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted.scopes).toEqual(['transactions:write', 'pending_operations:approve'])
-      expect(typeof inserted.sod_acknowledged_at).toBe('string')
-      expect(inserted.sod_acknowledged_by).toBe('user-1')
+      const created = createKeyArgs(supabase)
+      expect(created.p_scopes).toEqual(['transactions:write', 'pending_operations:approve'])
+      expect(typeof created.p_sod_acknowledged_at).toBe('string')
+      expect(created.p_sod_acknowledged_by).toBe('user-1')
     })
 
     it('records no acknowledgement for a non-conflicting grant', async () => {
@@ -350,14 +432,75 @@ describe('POST /api/mcp-oauth/token', () => {
         exp: Date.now() + 60_000,
       })
 
-      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany(exchangeResults({ role: 'owner' }))
 
       const res = await POST(formRequest(codeExchange))
       expect(res.status).toBe(200)
-      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
-      expect(inserted.sod_acknowledged_at).toBeNull()
+      expect(createKeyArgs(supabase).p_sod_acknowledged_at).toBeNull()
+    })
+
+    // Issue #3408: the consent click counts as the acknowledgement only when
+    // the key really gets both halves of the conflict, after the role cap.
+    describe('acknowledgement only when approve and a staging scope are both granted', () => {
+      async function exchange(scopes: ApiKeyScope[], role = 'owner') {
+        vi.mocked(decryptAuthCode).mockReturnValue({
+          userId: 'user-1',
+          codeChallenge: 'challenge',
+          redirectUri: 'https://claude.ai/api/cb',
+          scopes,
+          companyId: 'company-1',
+          exp: Date.now() + 60_000,
+        })
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(exchangeResults({ role }))
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const res = await POST(formRequest(codeExchange))
+        warn.mockRestore()
+        expect(res.status).toBe(200)
+        return createKeyArgs(supabase)
+      }
+
+      it('records nothing for the default one-click grant (every scope except approve)', async () => {
+        const created = await exchange(ALL_SCOPES.filter((s) => s !== 'pending_operations:approve'))
+        expect(created.p_scopes).toContain('transactions:write')
+        expect(created.p_sod_acknowledged_at).toBeNull()
+        expect(created.p_sod_acknowledged_by).toBeNull()
+      })
+
+      it('records nothing for approve without any staging scope', async () => {
+        const created = await exchange([
+          'transactions:read',
+          'pending_operations:read',
+          'pending_operations:approve',
+          // Writes that stage nothing (memory, webhooks) are not half of the conflict.
+          'agent:write',
+          'webhooks:manage',
+        ])
+        expect(created.p_scopes).toContain('pending_operations:approve')
+        expect(created.p_sod_acknowledged_at).toBeNull()
+        expect(created.p_sod_acknowledged_by).toBeNull()
+      })
+
+      it.each(STAGING_SCOPES)('records it for approve together with %s', async (stagingScope) => {
+        const created = await exchange([stagingScope, 'pending_operations:approve'])
+        expect(typeof created.p_sod_acknowledged_at).toBe('string')
+        expect(created.p_sod_acknowledged_by).toBe('user-1')
+      })
+
+      it('records it when an owner ticked approve on top of the full default', async () => {
+        const created = await exchange([...ALL_SCOPES])
+        expect(typeof created.p_sod_acknowledged_at).toBe('string')
+        expect(created.p_sod_acknowledged_by).toBe('user-1')
+      })
+
+      it('records nothing when the role cap strips the staging half before the key is minted', async () => {
+        const created = await exchange(['transactions:write', 'pending_operations:approve', 'reports:read'], 'viewer')
+        expect(created.p_scopes).toEqual(['reports:read'])
+        expect(created.p_sod_acknowledged_at).toBeNull()
+      })
     })
 
     it('returns 500 and mints no key when the role lookup fails', async () => {
@@ -370,7 +513,7 @@ describe('POST /api/mcp-oauth/token', () => {
         exp: Date.now() + 60_000,
       })
 
-      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany([
         { data: null, error: null },
@@ -383,25 +526,339 @@ describe('POST /api/mcp-oauth/token', () => {
       error.mockRestore()
       expect(res.status).toBe(500)
       expect((await res.json()).error).toBe('server_error')
+      expect(supabase.rpc).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('company allowlist (per-key company scoping)', () => {
+    const A = '11111111-1111-4111-8111-111111111111'
+    const B = '22222222-2222-4222-8222-222222222222'
+
+    beforeEach(() => {
+      vi.mocked(verifyPkce).mockReturnValue(true)
+    })
+
+    function codeWith(companyId: string | null, companyIds: unknown) {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['reports:read'],
+        companyId,
+        companyIds: companyIds as string[] | null,
+        exp: Date.now() + 60_000,
+      })
+    }
+
+    it('passes the consented companies to the RPC so key and allowlist rows are one transaction', async () => {
+      codeWith(A, [A, B])
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: null, error: null }, // oauth_used_codes insert
+        { data: null, error: null }, // expired-code cleanup
+        { data: { role: 'owner' }, error: null }, // role lookup in the default company
+        NOT_PAUSED, // agent_identities pause lookup
+        { data: 'key-9', error: null }, // create_api_key_with_allowlist RPC
+      ])
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+
+      expect(supabase.rpc).toHaveBeenCalledTimes(1)
+      const created = createKeyArgs(supabase)
+      expect(created.p_company_id).toBe(A)
+      expect(created.p_company_ids).toEqual([A, B])
+      expect(created.p_name).toBe('MCP-klient (OAuth)')
+      expect(created.p_mode).toBeNull()
+      expect(created.p_unattended_commit_limit).toBeNull()
+      expect(typeof created.p_refresh_token_hash).toBe('string')
+      // Never a separate allowlist insert, never a compensating revoke.
+      expect(findCall('api_key_companies', 'insert')).toBeUndefined()
       expect(findCall('api_keys', 'insert')).toBeUndefined()
+      expect(findCall('api_keys', 'update')).toBeUndefined()
+    })
+
+    it('falls back to the first allowed company as default when the consented one is outside the allowlist', async () => {
+      // /authorize guarantees the default sits inside the selection; the
+      // code is still a hostile boundary, so a default outside it is fixed
+      // here rather than trusted.
+      codeWith('company-elsewhere', [B])
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: { role: 'owner' }, error: null },
+        NOT_PAUSED,
+        { data: 'key-9', error: null },
+      ])
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      const created = createKeyArgs(supabase)
+      expect(created.p_company_id).toBe(B)
+      expect(created.p_company_ids).toEqual([B])
+      // The role cap ran against the effective default, not the stale one.
+      expect(findCalls('company_members', 'eq')).toContainEqual(['company_id', B])
+      expect(mocks.getActiveCompanyId).not.toHaveBeenCalled()
+    })
+
+    it('answers server_error and hands out no key when the RPC fails', async () => {
+      // One transaction: a refused allowlist (or any failure) leaves no key
+      // row behind, so there is nothing to revoke and nothing to return.
+      codeWith(A, [A, B])
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: { role: 'owner' }, error: null },
+        NOT_PAUSED,
+        { data: null, error: { code: '42501', message: 'user is not a live member of company' } }, // RPC
+      ])
+
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const res = await POST(formRequest(codeExchange))
+      error.mockRestore()
+
+      expect(res.status).toBe(500)
+      const body = await res.json()
+      expect(body.error).toBe('server_error')
+      expect(body.access_token).toBeUndefined()
+      expect(body.refresh_token).toBeUndefined()
+
+      // No compensation path: nothing was written outside the transaction.
+      expect(findCall('api_keys', 'update')).toBeUndefined()
+      expect(findCall('api_keys', 'insert')).toBeUndefined()
+      expect(findCall('api_key_companies', 'insert')).toBeUndefined()
+    })
+
+    it('passes null for an unrestricted consent (companyIds null)', async () => {
+      codeWith(A, null)
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      const created = createKeyArgs(supabase)
+      expect(created.p_company_ids).toBeNull()
+      expect(created.p_company_id).toBe(A)
+    })
+
+    it('passes null when the code predates the allowlist field (companyIds absent)', async () => {
+      codeWith(A, undefined)
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_company_ids).toBeNull()
+    })
+
+    it('drops non-uuid entries and keeps the valid ones (narrows, never widens)', async () => {
+      codeWith(A, ['nope', A, 42, A])
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_company_ids).toEqual([A])
+    })
+
+    it.each([
+      ['no uuid-shaped entries', ['nope', 42]],
+      ['an empty list', []],
+      ['a non-array value', A],
+    ])('fails closed with invalid_grant and mints no key for an allowlist with %s', async (_label, companyIds) => {
+      // A present allowlist that parses to nothing must never be read as
+      // "unrestricted": that would mint a key reaching every company from a
+      // consent that ticked a subset.
+      codeWith(A, companyIds)
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.access_token).toBeUndefined()
+      expect(body.refresh_token).toBeUndefined()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+      expect(findCall('oauth_used_codes', 'insert')).toBeUndefined()
+    })
+  })
+
+  describe('read-only companies (per-company access level)', () => {
+    const A = '11111111-1111-4111-8111-111111111111'
+    const B = '22222222-2222-4222-8222-222222222222'
+    const C = '33333333-3333-4333-8333-333333333333'
+
+    beforeEach(() => {
+      vi.mocked(verifyPkce).mockReturnValue(true)
+    })
+
+    function codeWith(companyIds: unknown, readOnlyCompanyIds: unknown) {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['reports:read', 'invoices:write'],
+        companyId: A,
+        companyIds: companyIds as string[] | null,
+        readOnlyCompanyIds: readOnlyCompanyIds as string[] | null,
+        exp: Date.now() + 60_000,
+      })
+    }
+
+    it('passes the read-only companies to the same RPC call as the key and its allowlist', async () => {
+      codeWith([A, B], [B])
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      expect(supabase.rpc).toHaveBeenCalledTimes(1)
+      const created = createKeyArgs(supabase)
+      expect(created.p_company_ids).toEqual([A, B])
+      expect(created.p_read_only_company_ids).toEqual([B])
+    })
+
+    it('passes null when the code carries no read-only company (absent or null)', async () => {
+      for (const readOnly of [undefined, null]) {
+        codeWith([A, B], readOnly)
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(exchangeResults({ role: 'owner' }))
+
+        const res = await POST(formRequest(codeExchange))
+        expect(res.status).toBe(200)
+        expect(createKeyArgs(supabase).p_read_only_company_ids).toBeNull()
+      }
+    })
+
+    it.each([
+      ['an empty list', [A, B], []],
+      ['a non-array value', [A, B], B],
+      // Unlike the allowlist, dropping a bad entry here would WIDEN the key
+      // (a company meant read-only would get write), so one bad entry
+      // refuses the whole code.
+      ['one entry that is not a uuid', [A, B], ['nope', B]],
+      ['a company outside the allowlist', [A, B], [C]],
+      ['an unrestricted key', null, [A]],
+    ])('fails closed with invalid_grant and mints no key for a read-only list with %s', async (_label, companyIds, readOnly) => {
+      codeWith(companyIds, readOnly)
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.access_token).toBeUndefined()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+      expect(findCall('oauth_used_codes', 'insert')).toBeUndefined()
+    })
+  })
+
+  describe('paused agent', () => {
+    beforeEach(() => {
+      vi.mocked(verifyPkce).mockReturnValue(true)
+    })
+
+    it('refuses the exchange before any key exists when the connector of this user and client is paused', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        exp: Date.now() + 60_000,
+      })
+      const { supabase, enqueueMany, findCall, findCalls } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results[3] = { data: [{ id: 'identity-1' }], error: null } // a paused connector
+      enqueueMany(results)
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toMatch(/^AGENT_PAUSED: /)
+      expect(body.access_token).toBeUndefined()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+
+      // The lookup is the live connector of exactly this user and client.
+      expect(findCalls('agent_identities', 'eq')).toEqual([
+        ['sponsor_user_id', 'user-1'],
+        ['kind', 'connector'],
+        ['client', 'claude'],
+      ])
+      expect(findCall('agent_identities', 'is')).toEqual(['revoked_at', null])
+      expect(findCall('agent_identities', 'not')).toEqual(['paused_at', 'is', null])
+    })
+
+    it('looks up the connector without a client as client null', async () => {
+      const redirectUri = 'https://agent.testbrand.example/oauth/callback'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results.splice(3, 0, { data: null, error: null }) // no live registration
+      results[4] = { data: [{ id: 'identity-1' }], error: null } // paused
+      enqueueMany(results)
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(400)
+      expect(findCalls('agent_identities', 'is')).toContainEqual(['client', null])
+    })
+
+    it('lets the exchange through when the lookup fails (the key is refused at every call anyway)', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        exp: Date.now() + 60_000,
+      })
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results[3] = { data: null, error: { code: 'PGRST205', message: 'relation not found' } }
+      enqueueMany(results)
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      expect(createKeyArgs(supabase).p_client).toBe('claude')
     })
   })
 
   describe('refresh_token grant', () => {
-    it('rotates both tokens and returns a fresh access_token', async () => {
+    function refreshRequest(refreshToken: string) {
+      return formRequest({ grant_type: 'refresh_token', refresh_token: refreshToken })
+    }
+
+    function rotateArgs(
+      supabase: ReturnType<typeof createQueuedMockSupabase>['supabase'],
+      call = 0,
+    ): Record<string, unknown> {
+      const calls = supabase.rpc.mock.calls.filter((c) => c[0] === 'rotate_mcp_refresh_token')
+      expect(calls.length).toBeGreaterThan(call)
+      return calls[call][1] as Record<string, unknown>
+    }
+
+    it('rotates: the RPC stores exactly the pair the client receives', async () => {
       const { token: refreshToken } = generateRefreshToken()
 
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      // rotate_mcp_refresh_token RPC → normal rotation
-      enqueue({ data: [{ outcome: 'rotated', scopes: null }], error: null })
+      enqueue({ data: [{ outcome: 'rotated', scopes: null, api_key_id: 'key-1' }], error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-        })
-      )
+      const res = await POST(refreshRequest(refreshToken))
 
       expect(res.status).toBe(200)
       const body = await res.json()
@@ -409,6 +866,88 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.refresh_token).toMatch(/^gnubok_rt_/)
       expect(body.refresh_token).not.toBe(refreshToken) // rotated
       expect(body.expires_in).toBe(3600)
+
+      const args = rotateArgs(supabase)
+      expect(args.p_presented_hash).toBe(hashRefreshToken(refreshToken))
+      expect(args.p_new_refresh_hash).toBe(hashRefreshToken(body.refresh_token))
+      expect(args.p_new_key_hash).toBe(hashApiKey(body.access_token))
+      expect(args.p_new_key_prefix).toBe(body.access_token.slice(0, 'gnubok_sk_'.length + 8))
+      // The grace covers only the superseded access key (in-flight requests).
+      expect(args.p_grace_seconds).toBe(120)
+      expect(mocks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('answers a replay of the same token, before its successor is used, with the same pair (crm#1043)', async () => {
+      // A lost response, two concurrent refreshes or a client that did not
+      // persist the rotated token all present the same refresh token twice.
+      // Both answers must be the same pair, whichever the client keeps; the
+      // RPC tells the two calls apart ('rotated', then 'replayed') and the
+      // route hands out the same derived successor both times.
+      const { token: refreshToken } = generateRefreshToken()
+
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'rotated', scopes: ['transactions:read'], api_key_id: 'key-1' }], error: null })
+      enqueue({ data: [{ outcome: 'replayed', scopes: ['transactions:read'], api_key_id: 'key-1' }], error: null })
+
+      const first = await POST(refreshRequest(refreshToken))
+      const replay = await POST(refreshRequest(refreshToken))
+
+      expect(first.status).toBe(200)
+      expect(replay.status).toBe(200)
+      const a = await first.json()
+      const b = await replay.json()
+      expect(b.access_token).toBe(a.access_token)
+      expect(b.refresh_token).toBe(a.refresh_token)
+      expect(b.scope).toBe('transactions:read')
+      // Same candidate hashes both times: the RPC can see a replay of the
+      // pair it already stored and write nothing.
+      expect(rotateArgs(supabase, 1)).toEqual(rotateArgs(supabase, 0))
+      expect(mocks.logInfo).toHaveBeenCalledWith(
+        'refresh token replayed: same successor returned',
+        { apiKeyId: 'key-1', outcome: 'replayed' }
+      )
+      expect(mocks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('derives a different successor for a different refresh token', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'rotated', scopes: null, api_key_id: 'key-1' }], error: null })
+      enqueue({ data: [{ outcome: 'rotated', scopes: null, api_key_id: 'key-2' }], error: null })
+
+      const a = await (await POST(refreshRequest(generateRefreshToken().token))).json()
+      const b = await (await POST(refreshRequest(generateRefreshToken().token))).json()
+      expect(a.refresh_token).not.toBe(b.refresh_token)
+      expect(a.access_token).not.toBe(b.access_token)
+    })
+
+    it('replay after the successor was used revokes: 400 invalid_grant and a warning with the key id, never the token', async () => {
+      // The RPC found the token two or more generations behind (its
+      // successor was already used: RFC 9700 4.14.2 reuse) and revoked the
+      // grant. Which generations count is pinned against real SQL in
+      // tests/pg/mcp-oauth-refresh-idempotent-replay.pg.test.ts.
+      const { token: refreshToken } = generateRefreshToken()
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'reuse_revoked', scopes: null, api_key_id: 'key-7' }], error: null })
+
+      const res = await POST(refreshRequest(refreshToken))
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toBe('Refresh token revoked')
+      expect(body.access_token).toBeUndefined()
+      expect(mocks.logWarn).toHaveBeenCalledTimes(1)
+      expect(mocks.logWarn).toHaveBeenCalledWith('refresh token reuse: grant revoked', {
+        apiKeyId: 'key-7',
+        outcome: 'reuse_revoked',
+      })
+      const logged = JSON.stringify([...mocks.logWarn.mock.calls, ...mocks.logInfo.mock.calls])
+      expect(logged).not.toContain(refreshToken)
+      expect(logged).not.toContain('gnubok_rt_')
+      expect(logged).not.toContain(hashRefreshToken(refreshToken))
     })
 
     it('returns 400 when refresh_token is missing', async () => {
@@ -421,34 +960,45 @@ describe('POST /api/mcp-oauth/token', () => {
     it('returns 400 when refresh_token is unknown', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: [{ outcome: 'invalid', scopes: null }], error: null })
+      enqueue({ data: [{ outcome: 'invalid', scopes: null, api_key_id: null }], error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_unknown',
-        })
-      )
+      const res = await POST(refreshRequest('gnubok_rt_unknown'))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toBe('Invalid or expired refresh token')
+      expect(mocks.logWarn).not.toHaveBeenCalled()
     })
 
     it('returns 400 when the api_key is revoked', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: [{ outcome: 'revoked', scopes: null }], error: null })
+      enqueue({ data: [{ outcome: 'revoked', scopes: null, api_key_id: 'key-1' }], error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
+      const res = await POST(refreshRequest('gnubok_rt_anything'))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
       expect(body.error_description).toContain('revoked')
+      // Already revoked earlier (disconnect, earlier reuse): not a new event.
+      expect(mocks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('refuses a refresh while the agent is paused, with AGENT_PAUSED and no new pair', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'paused', scopes: null, api_key_id: 'key-1' }], error: null })
+
+      const res = await POST(refreshRequest('gnubok_rt_anything'))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toMatch(/^AGENT_PAUSED: /)
+      // RFC 6749 5.2: error_description is printable ASCII.
+      expect(body.error_description).toMatch(/^[\x20-\x21\x23-\x5B\x5D-\x7E]+$/)
+      expect(body.access_token).toBeUndefined()
+      expect(body.refresh_token).toBeUndefined()
+      expect(mocks.logInfo).toHaveBeenCalledWith('refresh refused: agent paused', { apiKeyId: 'key-1', outcome: 'paused' })
     })
 
     it('returns 500 when the rotation RPC fails with a DB error', async () => {
@@ -456,56 +1006,10 @@ describe('POST /api/mcp-oauth/token', () => {
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueue({ data: null, error: { message: 'connection reset' } })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
+      const res = await POST(refreshRequest('gnubok_rt_anything'))
       expect(res.status).toBe(500)
       const body = await res.json()
       expect(body.error).toBe('server_error')
-    })
-
-    it('returns 400 invalid_grant when a refresh token is reused after its grace window (reuse_revoked)', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      // The RPC detected reuse of a previous refresh token past its grace
-      // window and already revoked the grant family (RFC 9700 §4.14.2).
-      enqueue({ data: [{ outcome: 'reuse_revoked', scopes: null }], error: null })
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
-      expect(res.status).toBe(400)
-      const body = await res.json()
-      expect(body.error).toBe('invalid_grant')
-    })
-
-    it('returns a fresh pair on idempotent in-grace replay instead of 400 (issue #710 regression)', async () => {
-      // A retried / mis-persisted / concurrent refresh presents the previous
-      // refresh token within the grace window. The old code returned 400
-      // "already used", stranding Claude Code into a re-auth loop; the RPC now
-      // replays idempotently and the client gets a working pair.
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: [{ outcome: 'replayed', scopes: ['transactions:read'] }], error: null })
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.access_token).toMatch(/^gnubok_sk_/)
-      expect(body.refresh_token).toMatch(/^gnubok_rt_/)
-      expect(body.expires_in).toBe(3600)
-      expect(body.scope).toBe('transactions:read')
     })
   })
 

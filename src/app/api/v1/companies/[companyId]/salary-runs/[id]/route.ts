@@ -18,6 +18,8 @@ import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/reg
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
+import { deleteDraftSalaryRun } from '@/lib/salary/delete-run'
+import { updateDraftSalaryRun, type SalaryRunHeaderPatch } from '@/lib/salary/update-run'
 
 // Inline; the project's shared isoDate is not exported from lib/api/schemas.
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
@@ -199,25 +201,6 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('salary_runs')
-      .select(SALARY_RUN_DETAIL_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-    if ((existing as { status: string }).status !== 'draft') {
-      return v1ErrorResponseFromCode('SALARY_RUN_PATCH_NOT_DRAFT', ctx.log, {
-        requestId: ctx.requestId,
-        details: { current_status: (existing as { status: string }).status },
-      })
-    }
-
     // Filter the explicitly-supplied keys so unmentioned columns aren't
     // overwritten to their `default()` values. Same OWASP V4.5 defense-in-
     // depth as employees PATCH: strip prototype-polluting own-properties
@@ -226,69 +209,35 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // filter makes the intent unambiguous.
     const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
     const rawKeys = Object.keys(rawBody as object).filter((k) => !POLLUTING_KEYS.has(k))
-    const updates: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(body) as Array<[string, unknown]>) {
-      if (rawKeys.includes(key)) {
-        updates[key] = value === undefined ? null : value
+    const patch: SalaryRunHeaderPatch = {}
+    if (rawKeys.includes('payment_date') && body.payment_date !== undefined) patch.payment_date = body.payment_date
+    if (rawKeys.includes('voucher_series') && body.voucher_series !== undefined) patch.voucher_series = body.voucher_series
+    if (rawKeys.includes('notes')) patch.notes = body.notes ?? null
+
+    // The draft-only guard, the optimistic lock and the calculation clear on
+    // a supplied payment_date are lib/salary/update-run.ts, shared with the
+    // dashboard PATCH and the MCP update tool.
+    const result = await updateDraftSalaryRun(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId: idParse.data,
+      patch,
+      dryRun: ctx.dryRun,
+      columns: SALARY_RUN_DETAIL_COLUMNS,
+    })
+    if (!result.ok) {
+      if (result.code === 'INTERNAL_ERROR') {
+        return v1ErrorResponse(new Error(String(result.details?.message)), ctx.log, { requestId: ctx.requestId })
       }
-    }
-
-    if (Object.keys(updates).length === 0) {
-      return ok(existing, { requestId: ctx.requestId })
-    }
-
-    // The payment date may leave the run's period month: the AGI
-    // redovisningsperiod follows payment_date (kontantprincipen, #2191), so
-    // the verifikat and the declaration always share a month. Same rule as
-    // lib/salary/update-run.ts and the dashboard PATCH.
-
-    if (ctx.dryRun) {
-      const merged = { ...(existing as object), ...updates }
-      return dryRunPreview(merged, { requestId: ctx.requestId, log: ctx.log })
-    }
-
-    // Optimistic-lock the status filter so a concurrent :calculate that flips
-    // the status to review between fetch and update yields a clean 409
-    // rather than a silently-accepted PATCH on a non-draft row.
-    const { data, error } = await ctx.supabase
-      .from('salary_runs')
-      .update(updates)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .eq('status', 'draft')
-      .select(SALARY_RUN_DETAIL_COLUMNS)
-      .maybeSingle()
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!data) {
-      // Race: status transitioned between pre-flight and update.
-      return v1ErrorResponseFromCode('SALARY_RUN_PATCH_NOT_DRAFT', ctx.log, {
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: 'race' },
+        details: result.details,
       })
     }
 
-    // A supplied payment_date invalidates any existing calculation:
-    // skatteavdrag follows the payment date, so clearing calculation_breakdown
-    // makes both book preflights refuse the roster until a recalculation has
-    // run against the new date (same invariant as setRunEmployeeSalary in
-    // lib/salary/run-employees.ts and lib/salary/update-run.ts). Gated on
-    // SUPPLIED, not on changed, so a retry after a partial failure re-clears
-    // instead of comparing against the already-updated date and skipping.
-    if (updates.payment_date !== undefined) {
-      const { error: clearError } = await ctx.supabase
-        .from('salary_run_employees')
-        .update({ calculation_breakdown: null })
-        .eq('salary_run_id', idParse.data)
-        .eq('company_id', ctx.companyId!)
-      if (clearError) {
-        return v1ErrorResponse(clearError, ctx.log, { requestId: ctx.requestId })
-      }
+    if (ctx.dryRun) {
+      return dryRunPreview(result.data.row, { requestId: ctx.requestId, log: ctx.log })
     }
-
-    return ok(data, { requestId: ctx.requestId })
+    return ok(result.data.row, { requestId: ctx.requestId })
   },
 )
 
@@ -306,7 +255,7 @@ registerEndpoint({
   useWhen:
     'You created a run by mistake or want to recreate it with different period_month. Only draft runs can be deleted.',
   doNotUseFor:
-    'Reverting a booked run (use the internal /correct flow; v1 promotion deferred). Hiding a run from listings (no soft-delete on this table: drafts are truly removed).',
+    'Reverting a booked run (POST /salary-runs/{id}/correct). Hiding a run from listings (no soft-delete on this table: drafts are truly removed).',
   pitfalls: [
     'Returns 400 SALARY_RUN_DELETE_NOT_DRAFT for any status other than draft.',
     'Hard delete: the salary_run_employees + salary_line_items rows cascade away.',
@@ -333,65 +282,29 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       })
     }
 
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('salary_runs')
-      .select('id, status')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-    if ((existing as { status: string }).status !== 'draft') {
-      return v1ErrorResponseFromCode('SALARY_RUN_DELETE_NOT_DRAFT', ctx.log, {
-        requestId: ctx.requestId,
-        details: { current_status: (existing as { status: string }).status },
-      })
+    const result = await deleteDraftSalaryRun(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId: idParse.data,
+      dryRun: ctx.dryRun,
+    })
+    if (!result.ok) {
+      switch (result.code) {
+        case 'DB_ERROR':
+          return v1ErrorResponse(result.error, ctx.log, { requestId: ctx.requestId })
+        case 'SALARY_RUN_NOT_FOUND':
+          return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+        default:
+          // SALARY_RUN_DELETE_NOT_DRAFT, or SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY
+          // when the locked write matched no row (lib/salary/delete-run.ts).
+          return v1ErrorResponseFromCode(result.code, ctx.log, {
+            requestId: ctx.requestId,
+            details: result.details,
+          })
+      }
     }
 
     if (ctx.dryRun) {
-      return dryRunPreview(
-        { id: idParse.data, deleted: true },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
-    }
-
-    // BFL 5 kap räkenskapsinformation defense: in addition to optimistic-
-    // locking on status='draft', require all journal-entry foreign keys to
-    // be null. status='draft' is the primary gate (the lifecycle never
-    // populates salary_entry_id / avgifter_entry_id / vacation_entry_id
-    // before advancing past draft), but if a partial PR-2 failure ever
-    // leaves the run in a status='draft' state with a posted JE attached,
-    // a hard delete would orphan räkenskapsinformation. The null guards
-    // turn that hypothetical into a clean 400 instead.
-    const { error, count } = await ctx.supabase
-      .from('salary_runs')
-      .delete({ count: 'exact' })
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .eq('status', 'draft')
-      .is('salary_entry_id', null)
-      .is('avgifter_entry_id', null)
-      .is('vacation_entry_id', null)
-
-    if (error) {
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (count === 0) {
-      // Pre-flight saw status='draft', so a status race is one explanation,
-      // but the more concerning interpretation is that the FK-null guards
-      // tripped (a journal entry has somehow attached to a draft row,
-      // which would be a partial-failure path in PR-2's lifecycle code).
-      // Surface the distinct BFL 5 kap code so an operator seeing this in
-      // logs can immediately look for a misrouted verifikation rather
-      // than chalking it up to concurrency.
-      return v1ErrorResponseFromCode('SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'fk_non_null_or_status_race' },
-      })
+      return dryRunPreview(result.data, { requestId: ctx.requestId, log: ctx.log })
     }
 
     return noContent({ requestId: ctx.requestId })

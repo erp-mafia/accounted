@@ -15,8 +15,19 @@ import { describe, it, expect } from 'vitest'
 import {
   applyDimensionRules,
   assertMandatoryDimensions,
+  DIMENSION_RULE_EXEMPT_SOURCE_TYPES,
+  DIMENSION_RULE_POLICY,
+  DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES,
+  isDimensionRuleExemptSource,
+  isDimensionValidationExemptSource,
   type AccountDimensionRule,
 } from '../dimension-rules'
+import {
+  API_VOUCHER_SOURCE_TYPES,
+  CreateApiJournalEntrySchema,
+  DASHBOARD_VOUCHER_SOURCE_TYPES,
+  JournalEntrySourceTypeSchema,
+} from '@/lib/api/schemas'
 import {
   MANDATORY_DIMENSION_MISSING,
   MandatoryDimensionMissingError,
@@ -75,7 +86,7 @@ describe('applyDimensionRules', () => {
     ]
 
     // normalize folds cost_center into key '1', so the default has nothing to
-    // fill — nothing applies and the SAME array comes back.
+    // fill - nothing applies and the SAME array comes back.
     expect(applyDimensionRules(lines, rules)).toBe(lines)
     expect(lines[0].cost_center).toBe('KS-ALIAS')
   })
@@ -127,7 +138,7 @@ describe('applyDimensionRules', () => {
     expect(out).not.toBe(lines)
     expect(out[0]).not.toBe(lines[0])
     expect(out[0].dimensions).toEqual({ '6': 'P001' })
-    // The 1930 line has no rule — the exact same object rides through.
+    // The 1930 line has no rule - the exact same object rides through.
     expect(out[1]).toBe(lines[1])
   })
 
@@ -135,7 +146,7 @@ describe('applyDimensionRules', () => {
     const lines: TestLine[] = [{ account_number: '4010' }]
 
     expect(applyDimensionRules(lines, [])).toBe(lines)
-    // 'required' rules carry no value — they never apply at draft time.
+    // 'required' rules carry no value - they never apply at draft time.
     expect(
       applyDimensionRules(lines, [
         makeRule({ rule_type: 'required', value_code: null }),
@@ -214,7 +225,7 @@ describe('assertMandatoryDimensions', () => {
   it('uses the Swedish message format naming account and dimension', () => {
     expect(() =>
       assertMandatoryDimensions([{ account_number: '4010' }], [requiredProjekt]),
-    ).toThrow('Konto 4010 kräver Projekt — välj ett värde innan bokföring.')
+    ).toThrow('Konto 4010 kräver Projekt: välj ett värde innan bokföring.')
   })
 
   it('is satisfied via the deprecated cost_center alias through normalize', () => {
@@ -251,5 +262,127 @@ describe('assertMandatoryDimensions', () => {
     const rules = [makeRule({ account_number: '5010', rule_type: 'required', value_code: null })]
 
     expect(() => assertMandatoryDimensions(lines, rules)).not.toThrow()
+  })
+})
+
+/**
+ * The source-type policy is a closed classification: every value of the
+ * journal source_type enum sits in exactly one bucket, and the lists below
+ * are the spec. A new source type fails here (and in the typecheck, through
+ * the Record in dimension-rules.ts) until someone decides whether a user can
+ * tag the lines it books.
+ */
+describe('dimension rule policy per source type', () => {
+  const ENFORCED = [
+    'manual',
+    'bank_transaction',
+    'inbox_item',
+    'invoice_created',
+    'invoice_paid',
+    'invoice_cash_payment',
+    'supplier_invoice_registered',
+    'supplier_invoice_paid',
+    'supplier_invoice_cash_payment',
+    'supplier_invoice_privately_paid',
+    'salary_payment',
+    'webshop_order',
+    'pos_daily_sales',
+    'expense_claim',
+    'reminder_fee',
+  ]
+  const EXEMPT = [
+    'opening_balance',
+    'import',
+    'year_end',
+    'result_appropriation',
+    'currency_revaluation',
+    'storno',
+    'correction',
+    'credit_note',
+    'supplier_credit_note',
+    'system',
+    'tax_account',
+    'accrual',
+    'vat_settlement',
+    'rot_rut_payout',
+    'rot_rut_reclaim',
+    'customer_loss',
+    'counterparty_setoff',
+    'rot_rut_reclassification',
+    'expense_payout',
+    'stripe_payout',
+    'collection_settlement',
+  ]
+
+  it('classifies every source type of the enum into exactly one bucket', () => {
+    const all = [...JournalEntrySourceTypeSchema.options].sort()
+    expect([...ENFORCED, ...EXEMPT].sort()).toEqual(all)
+    expect(ENFORCED.filter((t) => EXEMPT.includes(t))).toEqual([])
+    expect(Object.keys(DIMENSION_RULE_POLICY).sort()).toEqual(all)
+  })
+
+  it('exempts exactly the exempt bucket from rules', () => {
+    for (const sourceType of ENFORCED) {
+      expect(isDimensionRuleExemptSource(sourceType), sourceType).toBe(false)
+    }
+    for (const sourceType of EXEMPT) {
+      expect(isDimensionRuleExemptSource(sourceType), sourceType).toBe(true)
+    }
+    expect([...DIMENSION_RULE_EXEMPT_SOURCE_TYPES].sort()).toEqual([...EXEMPT].sort())
+    // Unknown or missing source types are never exempt: the engine enforces.
+    expect(isDimensionRuleExemptSource(undefined)).toBe(false)
+    expect(isDimensionRuleExemptSource(null)).toBe(false)
+    expect(isDimensionRuleExemptSource('not_a_source_type')).toBe(false)
+  })
+
+  it('exempts accrual dissolutions from rules, not only from registry validation', () => {
+    expect(isDimensionRuleExemptSource('accrual')).toBe(true)
+    expect(isDimensionValidationExemptSource('accrual')).toBe(true)
+  })
+
+  it('lets a caller claim no exemption through a generic voucher door beyond the documented label', () => {
+    // The caller-authorable labels of the generic create doors (v1 POST and
+    // batch-create, the dashboard route). A caller never picks a
+    // validation-exempt label. The API door has no rule-exempt label at all
+    // ('import' needs the SIE import's batch identity, which the database
+    // demands); the dashboard's one is 'vat_settlement' for the reviewed
+    // momsredovisning.
+    for (const doorTypes of [API_VOUCHER_SOURCE_TYPES, DASHBOARD_VOUCHER_SOURCE_TYPES]) {
+      for (const sourceType of doorTypes) {
+        expect(JournalEntrySourceTypeSchema.options, sourceType).toContain(sourceType)
+        expect(isDimensionValidationExemptSource(sourceType), sourceType).toBe(false)
+      }
+    }
+    expect(API_VOUCHER_SOURCE_TYPES.filter((t) => isDimensionRuleExemptSource(t))).toEqual([])
+    expect(DASHBOARD_VOUCHER_SOURCE_TYPES.filter((t) => isDimensionRuleExemptSource(t))).toEqual([
+      'vat_settlement',
+    ])
+  })
+
+  it('opens the v1 voucher doors to exactly the enforced source types', () => {
+    // Classified once in DIMENSION_RULE_POLICY, followed by the API: a new
+    // enforced type becomes postable, a new exempt type is refused.
+    const body = (sourceType: string) => ({
+      fiscal_period_id: '550e8400-e29b-41d4-a716-446655440000',
+      entry_date: '2026-05-12',
+      description: 'Verifikat',
+      source_type: sourceType,
+      lines: [
+        { account_number: '6570', debit_amount: 50, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 50 },
+      ],
+    })
+    const accepted = JournalEntrySourceTypeSchema.options.filter(
+      (sourceType) => CreateApiJournalEntrySchema.safeParse(body(sourceType)).success
+    )
+    expect([...accepted].sort()).toEqual([...ENFORCED].sort())
+    expect([...API_VOUCHER_SOURCE_TYPES].sort()).toEqual([...ENFORCED].sort())
+  })
+
+  it('keeps the registry-validation exemption a narrow subset of the rule exemption', () => {
+    expect([...DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES]).toEqual(['accrual'])
+    for (const sourceType of DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES) {
+      expect(DIMENSION_RULE_EXEMPT_SOURCE_TYPES.has(sourceType), sourceType).toBe(true)
+    }
   })
 })

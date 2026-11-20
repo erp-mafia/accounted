@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { emailExtension } from '@/extensions/general/email'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 const claimMock = vi.fn()
@@ -56,7 +56,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
 }))
 
 function findRoute(method: string, path: string) {
-  return emailExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  return testRoutes(emailExtension).find((r) => r.method === method && r.path === path)!
 }
 
 function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}): ExtensionContext {
@@ -67,7 +67,6 @@ function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}):
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
     ...overrides,
@@ -104,19 +103,15 @@ beforeEach(() => {
 describe('GET /sending-domain', () => {
   const route = findRoute('GET', '/sending-domain')
 
-  it('returns 401 without context', async () => {
-    const res = await route.handler(createMockRequest('/sending-domain'), undefined)
-    expect(res.status).toBe(401)
-  })
-
-  it('returns 403 capability_blocked without the opt-in grant (the UI hides on this)', async () => {
+  it('answers 200 available: false without the opt-in grant (the UI hides on this)', async () => {
+    // The settings page asks on every visit; "no" is an answer, not a refusal.
     hasCapabilityMock.mockResolvedValue(false)
     const { supabase } = createQueuedMockSupabase()
     const res = await route.handler(createMockRequest('/sending-domain'), buildCtx(supabase))
-    const { status, body } = await parseJsonResponse<{ capability_blocked: boolean; capability: string }>(res)
-    expect(status).toBe(403)
-    expect(body.capability_blocked).toBe(true)
-    expect(body.capability).toBe('custom_sender_domain')
+    const { status, body } = await parseJsonResponse<{ data: null; available: boolean }>(res)
+    expect(status).toBe(200)
+    expect(body.available).toBe(false)
+    expect(body.data).toBeNull()
     expect(getMock).not.toHaveBeenCalled()
   })
 
@@ -170,7 +165,23 @@ describe('POST /sending-domain', () => {
   it('propagates the helper status code', async () => {
     claimMock.mockResolvedValue({ ok: false, status: 409, error: 'Domänen är redan registrerad.' })
     const res = await route.handler(request(), adminCtx())
-    expect(res.status).toBe(409)
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+    expect(status).toBe(409)
+    expect(body).toEqual({ error: 'Domänen är redan registrerad.' })
+  })
+
+  it('passes the provider-limit code through so the page can explain it (crm#1288)', async () => {
+    claimMock.mockResolvedValue({
+      ok: false,
+      status: 503,
+      code: 'SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT',
+      error: 'Det går inte att lägga till en egen avsändardomän just nu.',
+    })
+    const res = await route.handler(request(), adminCtx())
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(503)
+    expect(body.code).toBe('SENDING_DOMAIN_CLAIM_PROVIDER_LIMIT')
+    expect(body.error).toMatch(/egen avsändardomän/)
   })
 })
 
@@ -181,6 +192,22 @@ describe('POST /sending-domain/verify', () => {
     verifyMock.mockResolvedValue({ ok: false, status: 404, error: 'Ingen avsändardomän är registrerad.' })
     const res = await route.handler(createMockRequest('/sending-domain/verify', { method: 'POST' }), adminCtx())
     expect(res.status).toBe(404)
+  })
+
+  it('passes a provider-failure code through with the Swedish sentence (crm#1288)', async () => {
+    verifyMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      code: 'SENDING_DOMAIN_VERIFY_PROVIDER_ERROR',
+      error: 'Kunde inte kontrollera domänen hos e-postleverantören just nu.',
+    })
+    const res = await route.handler(createMockRequest('/sending-domain/verify', { method: 'POST' }), adminCtx())
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+    expect(status).toBe(502)
+    expect(body).toEqual({
+      code: 'SENDING_DOMAIN_VERIFY_PROVIDER_ERROR',
+      error: 'Kunde inte kontrollera domänen hos e-postleverantören just nu.',
+    })
   })
 
   it('returns the re-checked row', async () => {
@@ -222,6 +249,20 @@ describe('DELETE /sending-domain', () => {
     const res = await route.handler(createMockRequest('/sending-domain', { method: 'DELETE' }), adminCtx('member'))
     expect(res.status).toBe(403)
     expect(removeMock).not.toHaveBeenCalled()
+  })
+
+  it('passes a provider-failure code through with the Swedish sentence (crm#1288)', async () => {
+    removeMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      code: 'SENDING_DOMAIN_REMOVE_PROVIDER_ERROR',
+      error: 'Kunde inte ta bort domänen hos e-postleverantören just nu, så den ligger kvar.',
+    })
+    const res = await route.handler(createMockRequest('/sending-domain', { method: 'DELETE' }), adminCtx())
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(502)
+    expect(body.code).toBe('SENDING_DOMAIN_REMOVE_PROVIDER_ERROR')
+    expect(body.error).toMatch(/ligger kvar/)
   })
 
   it('removes for an owner', async () => {

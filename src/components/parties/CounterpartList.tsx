@@ -2,7 +2,8 @@
 
 import { Fragment } from 'react'
 import { useTranslations } from 'next-intl'
-import { MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon } from '@/components/icons'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { HOVER_REVEAL_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
@@ -12,10 +13,10 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AccountChip } from './AccountChip'
 import { BrandMark } from './BrandMark'
 import { reasonText } from './format'
-import { regionName } from './SuggestionQueue'
+import { regionName } from './region-name'
 
-// What named a reading, in the row's own words. A model reading says
-// nothing here: its chip ("läst ur texten") already does.
+// What named a reading, in the row's own words. A model reading has no key
+// here: it says "läst ur texten" in the same muted place.
 const WHY_KEY = { document: 'cp_why_document', directory: 'cp_why_directory', anchor: 'cp_why_anchor' } as const
 
 function money(n: number): string {
@@ -25,9 +26,10 @@ function money(n: number): string {
 /**
  * Motparter as one list. Every row is a counterpart, whoever named it: a
  * confirmed party, a suggestion not yet acted on ("ny"), or a name the
- * resolver read out of the bank text. The state sits in a quiet chip, the
- * actions in the row menu, and nothing asks to be confirmed before it can
- * be used.
+ * resolver read out of the bank text. Each row is one line: the name, a
+ * chip only for an uncertain reading (convention 5), and what is known about
+ * it as a muted suffix; the actions sit in the row menu, and nothing asks to
+ * be confirmed before it can be used.
  *
  * The register comes first and the newly recognised follow, under headings
  * that appear only when both are on screen: a company whose counterparts are
@@ -60,11 +62,11 @@ export function CounterpartList({
   const mixed = confirmedCount > 0 && confirmedCount < rows.length
 
   return (
-    <div className="overflow-x-auto">
+    <div className="-mx-2 overflow-x-auto">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
-            <th className={TH_CLASS}>{t('cp_th_name')}</th>
+            <th className={`${TH_CLASS} w-full`}>{t('cp_th_name')}</th>
             <th className={TH_CLASS}>{t('cp_th_account')}</th>
             <th className={`${TH_CLASS} text-right`}>{t('cp_th_count')}</th>
             <th className={`${TH_CLASS} text-right`}>{t('cp_th_in')}</th>
@@ -81,19 +83,25 @@ export function CounterpartList({
             // their first row, only when the register is on screen above them.
             const startsNewGroup = mixed && !mine && (i === 0 || rows[i - 1]!.status === 'confirmed')
             const whyKey = !row.partyId && row.source ? WHY_KEY[row.source as keyof typeof WHY_KEY] : undefined
-            const why = row.status === 'suggested' && row.reason ? reasonText(t, row.reason, row.rhythm, row.orgNumber) : whyKey ? t(whyKey) : null
+            const why =
+              row.status === 'suggested' && row.reason
+                ? reasonText(t, row.reason, row.rhythm, row.orgNumber)
+                : whyKey
+                  ? t(whyKey)
+                  : row.status === 'read'
+                    ? t('cp_status_read')
+                    : null
             // A reading with no party has no dossier to open, so its why stays on the line.
             const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null, row.partyId ? null : why]
               .filter(Boolean)
               .join(' · ')
-            const chip = row.status === 'read' ? t('cp_status_read') : row.status === 'tentative' ? t('cp_status_tentative') : null
             return (
               <Fragment key={row.id}>
               {startsNewGroup ? (
                 <tr>
-                  <th colSpan={7} scope="colgroup" className="px-4 pb-2 pt-9 text-left font-normal">
-                    <p className="text-[13px] font-semibold text-foreground">{t('cp_group_new', { count: rows.length - confirmedCount })}</p>
-                    <p className="mt-0.5 text-[12px] text-muted-foreground">{t('cp_group_new_desc')}</p>
+                  {/* What to do with them is in the page's "?" (cp_help). */}
+                  <th colSpan={7} scope="colgroup" className="px-2 pb-2 pt-8 text-left text-[15px] font-medium leading-[22px] text-strong">
+                    {t('cp_group_new', { count: rows.length - confirmedCount })}
                   </th>
                 </tr>
               ) : null}
@@ -105,31 +113,25 @@ export function CounterpartList({
                   onOpen(row)
                 }}
               >
-                <td className={`${TD_CLASS} min-w-[260px]`}>
-                  <div className="flex items-start gap-2.5">
-                    <BrandMark name={row.name} className="mt-0.5" />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        {row.partyId ? (
-                          <button type="button" className="truncate text-left text-foreground hover:underline underline-offset-4" onClick={() => onOpen(row)}>
-                            {row.name}
-                          </button>
-                        ) : (
-                          <span className="truncate text-foreground">{row.name}</span>
-                        )}
-                        {chip ? (
-                          <span
-                            className={cn(
-                              'rounded-full border border-border px-2 py-0.5 text-[11px] leading-none whitespace-nowrap',
-                              row.status === 'tentative' ? 'text-warning' : 'text-muted-foreground',
-                            )}
-                          >
-                            {chip}
-                          </span>
-                        ) : null}
-                      </div>
-                      {detail ? <div className="truncate text-[12px] text-muted-foreground">{detail}</div> : null}
-                    </div>
+                {/* One line (convention 4): the name keeps its width and the
+                    muted detail takes what is left, so neither wraps nor
+                    widens the table (the w-full max-w-0 column trick). */}
+                <td className={`${TD_CLASS} w-full max-w-0 min-w-[260px]`}>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <BrandMark name={row.name} className="shrink-0" />
+                    {row.partyId ? (
+                      <button type="button" className="min-w-0 truncate text-left text-foreground hover:underline underline-offset-4" onClick={() => onOpen(row)}>
+                        {row.name}
+                      </button>
+                    ) : (
+                      <span className="min-w-0 truncate text-foreground">{row.name}</span>
+                    )}
+                    {row.status === 'tentative' ? (
+                      <Badge variant="warning" className="shrink-0 font-normal">
+                        {t('cp_status_tentative')}
+                      </Badge>
+                    ) : null}
+                    {detail ? <span className="min-w-0 flex-1 basis-0 truncate text-xs text-muted-foreground">{detail}</span> : null}
                   </div>
                 </td>
                 <td className={TD_CLASS}>
@@ -138,13 +140,14 @@ export function CounterpartList({
                 <td className={`${TD_CLASS} text-right tabular-nums text-muted-foreground`}>{row.count || ''}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.inSek)}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.outSek)}</td>
-                <td className={`${TD_CLASS} whitespace-nowrap text-muted-foreground`}>{row.lastSeen ? formatDate(row.lastSeen) : ''}</td>
-                <td className={`${TD_CLASS} text-right`}>
+                <td className={`${TD_CLASS} date-figures whitespace-nowrap text-muted-foreground`}>{row.lastSeen ? formatDate(row.lastSeen) : ''}</td>
+                {/* py-2: the 28px menu button sits centred in the 44px row. */}
+                <td className={`${TD_CLASS} py-2 text-right`}>
                   {canWrite ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className={cn('h-7 w-7', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')} aria-label={row.name}>
-                          <MoreHorizontal className="h-4 w-4" />
+                        <Button variant="ghost" size="icon" className={cn(HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')} aria-label={row.name}>
+                          <EllipsisHorizontalIcon className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">

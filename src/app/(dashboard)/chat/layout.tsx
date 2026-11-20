@@ -5,6 +5,7 @@ import {
   getDashboardCompanyId,
   getResolvedDashboardAgentProfile,
 } from '../request-context'
+import { chatSwitchedOnFor } from './chat-switch'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,12 +21,17 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
 
-  // Block the chat surface until the agent is built. Without this a user
-  // who deep-links to /chat (bookmark, ⌘K, "+ Ny" elsewhere) lands on an
-  // empty conversations list with no Anna to talk to. The home route at /
-  // renders NewUserChecklist for the same state, so we forward there
-  // instead of duplicating the welcome screen here.
-  if (!agent?.verified_at) redirect('/')
+  // The built-in assistant switched off for the company
+  // (ASSISTANT_CHAT_ENABLED): /chat shows what took its place and every other
+  // chat page leads there, built agent or not, so nobody is sent into the
+  // build from here and the conversation list is never read.
+  if (!chatSwitchedOnFor(companyId)) return <>{children}</>
+
+  // Until the agent is built, the Assistent entry leads to building it
+  // (crm#1135): the build ends in /chat/intake, and the build page itself
+  // sends a company without the ai capability to billing. Forwarding to Hem
+  // instead left a new account with no visible way to the assistant at all.
+  if (!agent?.verified_at) redirect('/onboarding/agent')
 
   const { data: conversations } = await supabase
     .from('agent_conversations')
@@ -47,7 +53,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
     // visible viewport exactly. Desktop: fill the frame panel (<main> has an
     // explicit height there, so h-full resolves).
     <div className="flex h-[calc(100dvh-var(--bottom-nav-h))] md:h-full">
-      <ChatSidebar initialConversations={conversations ?? []} />
+      <ChatSidebar initialConversations={conversations ?? []} renderedAt={new Date().getTime()} />
       <div className="flex-1 min-w-0 flex flex-col bg-background">{children}</div>
     </div>
   )

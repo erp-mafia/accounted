@@ -4,8 +4,17 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe, priceIdForPlan } from '@/lib/stripe/client'
+import {
+  NOTHING_ON_FILE,
+  checkoutIdentityNotice,
+  loadCompanyBillingIdentity,
+  syncStripeCustomerIdentity,
+  type SyncedBillingIdentity,
+} from '@/lib/stripe/customer-identity'
+import { payingCompanySubscription, readCompanyStripeRef } from '@/lib/stripe/company-subscription'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
+import { localeFromCookieHeader } from '@/i18n/config'
 
 const CheckoutSchema = z.object({
   plan: z.enum(['monthly', 'yearly']).default('monthly'),
@@ -16,7 +25,7 @@ const CheckoutSchema = z.object({
  * The client redirects to it; provisioning happens via the webhook on
  * checkout.session.completed (never trust the success redirect for fulfilment).
  *
- * company_subscriptions is read/written via the service client on purpose —
+ * company_subscriptions is read/written via the service client on purpose:
  * the row is webhook-owned and not member-readable under RLS; every query
  * still filters by the membership-validated companyId.
  */
@@ -58,13 +67,11 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
 
   // Reuse the company's Stripe customer if we already created one, and read
   // the trial expiry for the deferred-first-charge decision below. Independent
-  // reads, so one round-trip batch.
-  const [{ data: existing }, { data: trialGrant, error: trialGrantError }] = await Promise.all([
-    service
-      .from('company_subscriptions')
-      .select('stripe_customer_id')
-      .eq('company_id', companyId)
-      .maybeSingle(),
+  // reads, so one round-trip batch. A failed customer read throws (500): read
+  // as "no customer" it would mint a second customer and skip the one-
+  // subscription check below.
+  const [existing, { data: trialGrant, error: trialGrantError }] = await Promise.all([
+    readCompanyStripeRef(service, companyId),
     service
       .from('capability_grants')
       .select('expires_at')
@@ -105,7 +112,30 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       ? Math.floor(trialExpiryMs / 1000)
       : undefined
 
-  let customerId = (existing as { stripe_customer_id: string | null } | null)?.stripe_customer_id ?? null
+  // One subscription per company (crm#1373). Stripe lets a customer hold
+  // any number, so a second checkout would start a second subscription that
+  // charges alongside the first; the billing page hides the button for a
+  // paying company, but only once the webhook has landed. A plan change is a
+  // change of the one subscription, in the portal.
+  if (existing) {
+    const paying = await payingCompanySubscription(stripe, companyId, existing)
+    if (paying) {
+      log.info('billing.checkout: refused, the company already has a subscription', { subscriptionId: paying })
+      return NextResponse.json(
+        {
+          error: {
+            code: 'SUBSCRIPTION_EXISTS',
+            message: 'Företaget har redan ett abonnemang. Byt plan under Hantera abonnemang.',
+            message_en: 'The company already has a subscription. Change plan under Manage subscription.',
+          },
+        },
+        { status: 409 },
+      )
+    }
+  }
+
+  let customerId = existing?.customerId ?? null
+  const justCreated = !customerId
   if (!customerId) {
     const customer = await stripe.customers.create({
       email: user.email ?? undefined,
@@ -115,6 +145,29 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
     await service
       .from('company_subscriptions')
       .upsert({ company_id: companyId, stripe_customer_id: customerId }, { onConflict: 'company_id' })
+  }
+
+  // Checkout in the language the app is shown in (sv and en are both Stripe
+  // locales); left out, Stripe picks the browser's language.
+  const locale = localeFromCookieHeader(request.headers.get('cookie'))
+
+  // The user is logged in to a company we already know (PH 191): put its
+  // legal name, address, org number and VAT number on the Stripe customer so
+  // Checkout does not ask for them again and every invoice and receipt
+  // carries them. Best effort: on any failure Checkout opens as before and
+  // collects the details itself, so a prefill problem never blocks payment.
+  let synced: SyncedBillingIdentity = NOTHING_ON_FILE
+  // A prefilled identity is invisible in Checkout (no tax ID form, no
+  // business name field), so the page says what the invoice will carry.
+  let identityNotice: string | null = null
+  try {
+    const identity = await loadCompanyBillingIdentity(supabase, companyId)
+    synced = await syncStripeCustomerIdentity(stripe, customerId, identity, { justCreated })
+    identityNotice = checkoutIdentityNotice(identity, synced, locale)
+  } catch (err) {
+    log.warn('billing.checkout: prefilling the Stripe customer failed, Checkout collects the details', {
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 
   // Return the user to the host they started on. Sessions are per domain, so
@@ -133,19 +186,30 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
     // a valid VAT number. automatic_tax carries onto the created subscription, so
     // renewals (and the first charge after a deferred trial) stay taxed. The rate
     // can only compute with a customer address, and a compliant momsfaktura needs
-    // it too; customer_update persists the address + tax id onto the pre-created
-    // customer for future invoices.
+    // it too.
     automatic_tax: { enabled: true },
-    tax_id_collection: { enabled: true },
-    billing_address_collection: 'required',
-    customer_update: { name: 'auto', address: 'auto' },
+    // What the customer already holds is not asked again. With the company's
+    // address on file, Stripe Tax uses it and Checkout asks only for what the
+    // card needs ('auto'); 'never' keeps a partial card address from replacing
+    // it. With a tax ID on file Stripe hides tax ID collection anyway, so it is
+    // left off and the company name is kept rather than replaced by the
+    // cardholder's. Otherwise Checkout collects both, as before, and
+    // customer_update persists them onto the customer for future invoices.
+    ...(synced.taxIdOnFile ? {} : { tax_id_collection: { enabled: true } }),
+    billing_address_collection: synced.addressOnFile ? 'auto' : 'required',
+    customer_update: {
+      name: synced.taxIdOnFile && synced.nameOnFile ? 'never' : 'auto',
+      address: synced.addressOnFile ? 'never' : 'auto',
+    },
     client_reference_id: companyId,
     metadata: { company_id: companyId },
     subscription_data: {
       metadata: { company_id: companyId },
       ...(trialEnd ? { trial_end: trialEnd } : {}),
     },
+    ...(identityNotice ? { custom_text: { submit: { message: identityNotice } } } : {}),
     allow_promotion_codes: true,
+    locale,
     success_url: `${appOrigin}/settings/billing?success=1`,
     cancel_url: `${appOrigin}/settings/billing?canceled=1`,
   })

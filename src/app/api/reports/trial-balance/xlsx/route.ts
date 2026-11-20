@@ -1,6 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { parseReportDateRange } from '@/lib/reports/date-range'
 import {
   reportToWorkbook,
   textColumn,
@@ -10,6 +11,7 @@ import {
 } from '@/lib/reports/xlsx-export'
 import type { TrialBalanceRow } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const GET = withRouteContext('report.trial_balance.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -37,10 +39,17 @@ export const GET = withRouteContext('report.trial_balance.xlsx', async (request,
     return NextResponse.json({ error: 'Räkenskapsperioden kunde inte läsas.' }, { status: 400 })
   }
 
-  try {
-    const report = await generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' })
+  // The same range as the report on screen (GET /api/reports/trial-balance).
+  const parsed = parseReportDateRange(searchParams, period)
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 })
+  }
+  const range = parsed.range
 
-    const buffer = reportToWorkbook<TrialBalanceRow>([
+  try {
+    const report = await generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include', ...range })
+
+    const buffer = await reportToWorkbook<TrialBalanceRow>([
       {
         name: 'Saldobalans',
         columns: [
@@ -69,13 +78,9 @@ export const GET = withRouteContext('report.trial_balance.xlsx', async (request,
       },
     ])
 
-    const filename = xlsxFilename('saldobalans', companyRow?.company_name ?? '', period.period_end)
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    // Named after the balansdag the UB columns stand on.
+    const filename = xlsxFilename('saldobalans', companyRow?.company_name ?? '', range.toDate ?? period.period_end)
+    return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera saldobalans' },

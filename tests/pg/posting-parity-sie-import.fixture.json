@@ -1,0 +1,480 @@
+{
+  "imported": {
+    "job": {
+      "job_state": "completed",
+      "job_phase": "finalize",
+      "error_message": null,
+      "transactions_count": 4,
+      "chunks_total": 1,
+      "chunks_done": 1,
+      "result": {
+        "success": true,
+        "journalEntriesCreated": 4,
+        "accountsCreated": 9,
+        "accountsRenamed": 2,
+        "warnings": [],
+        "opening_balance_entry": true
+      }
+    },
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 1,
+        "entry_date": "2026-01-15",
+        "description": "Kundfaktura 1001",
+        "source_type": "import",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "12500",
+            "credit_amount": "0",
+            "account_number": "1510",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "2500",
+            "account_number": "2611",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "10000",
+            "account_number": "3001",
+            "line_description": null
+          }
+        ]
+      },
+      {
+        "voucher_series": "A",
+        "voucher_number": 2,
+        "entry_date": "2026-02-10",
+        "description": "Inbetalning faktura 1001",
+        "source_type": "import",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "12500",
+            "credit_amount": "0",
+            "account_number": "1930",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "12500",
+            "account_number": "1510",
+            "line_description": null
+          }
+        ]
+      },
+      {
+        "voucher_series": "B",
+        "voucher_number": 1,
+        "entry_date": "2026-03-01",
+        "description": "Bankavgift mars",
+        "source_type": "import",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "150",
+            "credit_amount": "0",
+            "account_number": "6570",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "150",
+            "account_number": "1930",
+            "line_description": null
+          }
+        ]
+      },
+      {
+        "voucher_series": "M",
+        "voucher_number": 1,
+        "entry_date": "2026-01-01",
+        "description": "Ingående balanser från SIE-import",
+        "source_type": "opening_balance",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "75000",
+            "credit_amount": "0",
+            "account_number": "1930",
+            "line_description": "Ingående balanser från SIE-import"
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "25000",
+            "account_number": "2081",
+            "line_description": "Ingående balanser från SIE-import"
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "50000",
+            "account_number": "2091",
+            "line_description": "Ingående balanser från SIE-import"
+          }
+        ]
+      }
+    ]
+  },
+  "undone": {
+    "job": {
+      "job_state": "undone",
+      "job_phase": "undo",
+      "error_message": null,
+      "transactions_count": 4,
+      "chunks_total": 1,
+      "chunks_done": 1,
+      "result": {
+        "success": true,
+        "journalEntriesCreated": 4,
+        "accountsCreated": 9,
+        "accountsRenamed": 2,
+        "warnings": [],
+        "opening_balance_entry": true
+      }
+    },
+    "entries": [
+      {
+        "voucher_series": "A",
+        "voucher_number": 1,
+        "entry_date": "2026-01-15",
+        "description": "Kundfaktura 1001",
+        "source_type": "import",
+        "status": "reversed",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "12500",
+            "credit_amount": "0",
+            "account_number": "1510",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "2500",
+            "account_number": "2611",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "10000",
+            "account_number": "3001",
+            "line_description": null
+          }
+        ]
+      },
+      {
+        "voucher_series": "A",
+        "voucher_number": 2,
+        "entry_date": "2026-02-10",
+        "description": "Inbetalning faktura 1001",
+        "source_type": "import",
+        "status": "reversed",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "12500",
+            "credit_amount": "0",
+            "account_number": "1930",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "12500",
+            "account_number": "1510",
+            "line_description": null
+          }
+        ]
+      },
+      {
+        "voucher_series": "A",
+        "voucher_number": 3,
+        "entry_date": "2026-01-15",
+        "description": "Makulering: Kundfaktura 1001",
+        "source_type": "storno",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE undo",
+        "reverses_voucher": "A1",
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "0",
+            "credit_amount": "12500",
+            "account_number": "1510",
+            "line_description": "Reversal: "
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "2500",
+            "credit_amount": "0",
+            "account_number": "2611",
+            "line_description": "Reversal: "
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "10000",
+            "credit_amount": "0",
+            "account_number": "3001",
+            "line_description": "Reversal: "
+          }
+        ]
+      },
+      {
+        "voucher_series": "A",
+        "voucher_number": 4,
+        "entry_date": "2026-02-10",
+        "description": "Makulering: Inbetalning faktura 1001",
+        "source_type": "storno",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE undo",
+        "reverses_voucher": "A2",
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "0",
+            "credit_amount": "12500",
+            "account_number": "1930",
+            "line_description": "Reversal: "
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "12500",
+            "credit_amount": "0",
+            "account_number": "1510",
+            "line_description": "Reversal: "
+          }
+        ]
+      },
+      {
+        "voucher_series": "B",
+        "voucher_number": 1,
+        "entry_date": "2026-03-01",
+        "description": "Bankavgift mars",
+        "source_type": "import",
+        "status": "reversed",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "150",
+            "credit_amount": "0",
+            "account_number": "6570",
+            "line_description": null
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "150",
+            "account_number": "1930",
+            "line_description": null
+          }
+        ]
+      },
+      {
+        "voucher_series": "B",
+        "voucher_number": 2,
+        "entry_date": "2026-03-01",
+        "description": "Makulering: Bankavgift mars",
+        "source_type": "storno",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE undo",
+        "reverses_voucher": "B1",
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "0",
+            "credit_amount": "150",
+            "account_number": "6570",
+            "line_description": "Reversal: "
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "150",
+            "credit_amount": "0",
+            "account_number": "1930",
+            "line_description": "Reversal: "
+          }
+        ]
+      },
+      {
+        "voucher_series": "M",
+        "voucher_number": 1,
+        "entry_date": "2026-01-01",
+        "description": "Ingående balanser från SIE-import",
+        "source_type": "opening_balance",
+        "status": "reversed",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE import",
+        "reverses_voucher": null,
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "75000",
+            "credit_amount": "0",
+            "account_number": "1930",
+            "line_description": "Ingående balanser från SIE-import"
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "0",
+            "credit_amount": "25000",
+            "account_number": "2081",
+            "line_description": "Ingående balanser från SIE-import"
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "0",
+            "credit_amount": "50000",
+            "account_number": "2091",
+            "line_description": "Ingående balanser från SIE-import"
+          }
+        ]
+      },
+      {
+        "voucher_series": "M",
+        "voucher_number": 2,
+        "entry_date": "2026-01-01",
+        "description": "Makulering: Ingående balanser från SIE-import",
+        "source_type": "storno",
+        "status": "posted",
+        "commit_method": "migration",
+        "committed_actor_type": "user",
+        "committed_actor_label": "SIE undo",
+        "reverses_voucher": "M1",
+        "lines": [
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 0,
+            "debit_amount": "0",
+            "credit_amount": "75000",
+            "account_number": "1930",
+            "line_description": "Reversal: Ingående balanser från SIE-import"
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 1,
+            "debit_amount": "25000",
+            "credit_amount": "0",
+            "account_number": "2081",
+            "line_description": "Reversal: Ingående balanser från SIE-import"
+          },
+          {
+            "currency": "SEK",
+            "dimensions": {},
+            "sort_order": 2,
+            "debit_amount": "50000",
+            "credit_amount": "0",
+            "account_number": "2091",
+            "line_description": "Reversal: Ingående balanser från SIE-import"
+          }
+        ]
+      }
+    ]
+  }
+}

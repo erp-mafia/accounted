@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSalaryLineItemSchema } from '@/lib/api/schemas'
 import { createPayslipLine } from '@/lib/salary/payslip-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-
-ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.line.create',
@@ -27,8 +24,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (!result.ok) {
       const entry = getErrorEntry(result.code)
+      // A line rule names its own Swedish reason (details.message); the
+      // registry text alone only says the request was invalid.
+      const reason = typeof result.details?.message === 'string' ? result.details.message : null
       return NextResponse.json(
-        { error: entry?.message_sv ?? 'Något gick fel', code: result.code },
+        { error: reason ?? entry?.message_sv ?? 'Något gick fel', code: result.code },
         { status: entry?.httpStatus ?? 500 },
       )
     }

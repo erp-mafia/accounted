@@ -23,7 +23,8 @@ import { Deadline, DeadlineType, DeadlinePriority } from '@/types'
 import { formatDateISO, DEADLINE_TYPE_LABELS, PRIORITY_LABELS } from '@/lib/calendar/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Only the fields the form actually manages. Both API routes whitelist to
@@ -75,7 +76,7 @@ export function DeadlineForm({
       if (initialData) {
         setFormData({
           title: initialData.title || '',
-          due_date: initialData.due_date || formatDateISO(new Date()),
+          due_date: initialData.due_date || todayIsoStockholm(),
           due_time: initialData.due_time || '',
           deadline_type: initialData.deadline_type || 'other',
           priority: initialData.priority || 'normal',
@@ -95,7 +96,7 @@ export function DeadlineForm({
       } else {
         setFormData({
           title: '',
-          due_date: formatDateISO(new Date()),
+          due_date: todayIsoStockholm(),
           due_time: '',
           deadline_type: 'other',
           priority: 'normal',
@@ -134,7 +135,7 @@ export function DeadlineForm({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>
             {initialData?.id ? 'Redigera deadline' : 'Ny deadline'}
@@ -225,6 +226,7 @@ export function DeadlineForm({
                 id="deadline-customer"
                 value={formData.customer_id || ''}
                 customers={customers}
+                keepId={initialData?.customer_id}
                 onChange={(v) => updateField('customer_id', v)}
                 placeholder="Välj kund..."
                 noneLabel="Ingen kund"
@@ -244,7 +246,7 @@ export function DeadlineForm({
             />
           </div>
 
-          <DialogFooter className="flex-row justify-between sm:justify-between gap-2">
+          <DialogFooter className="flex-row flex-wrap justify-between sm:justify-between gap-2">
             {/* Delete (only when editing an existing deadline) */}
             {initialData?.id && onDelete ? (
               <div className="flex items-center gap-2">
@@ -254,7 +256,6 @@ export function DeadlineForm({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
                       onClick={() => setConfirmDelete(false)}
                     >
                       Avbryt
@@ -262,7 +263,6 @@ export function DeadlineForm({
                     <Button
                       type="button"
                       variant="destructive"
-                      size="sm"
                       onClick={() => {
                         onDelete(initialData)
                         onOpenChange(false)
@@ -275,7 +275,6 @@ export function DeadlineForm({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="sm"
                     className="text-destructive hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setConfirmDelete(true)}
                   >
@@ -300,7 +299,7 @@ export function DeadlineForm({
                 disabled={isLoading || !formData.title || !canWrite}
                 title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
               >
-                {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                 {isLoading ? 'Sparar...' : initialData?.id ? 'Spara' : 'Skapa'}
               </Button>
             </div>

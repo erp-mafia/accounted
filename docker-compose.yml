@@ -3,7 +3,7 @@ services:
     image: ghcr.io/erp-mafia/gnubok:${IMAGE_TAG:-latest}
     env_file: .env
     # Bound to loopback by default: put a TLS-terminating reverse proxy in
-    # front (see docker-compose.caddy.yml). Override PORT in .env to change
+    # front (see docker/compose.caddy.yml). Override PORT in .env to change
     # the host port, or use the caddy overlay to remove the host binding.
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
@@ -13,18 +13,31 @@ services:
       - ALL
     read_only: true
     init: true
-    # tmpfs ordering matters: the parent /app/.next must be mounted before
-    # any sub-mounts. The entrypoint cp's image-baked templates into these
-    # mounts at startup, then sed-substitutes the NEXT_PUBLIC_* placeholders,
-    # then drops the write bits.
+    # The root filesystem is read-only, so the served bundle lives on writable
+    # mounts: at every start the entrypoint empties them, copies the image-baked
+    # templates in, sed-substitutes the NEXT_PUBLIC_* placeholders, then drops
+    # the write bits.
     #
-    # uid=1001 (nextjs), mode=750: the entrypoint runs UNPRIVILEGED as nextjs
-    # and owns these mounts, so it can populate them with no CAP_CHOWN/CAP_SETUID,
-    # which is what lets the container run under `cap_drop: ALL`. nodejs-group
-    # members can read the served bundle; nothing else on the host can.
+    # /app/.next is a named volume, not a tmpfs (#3164). A tmpfs needs a fixed
+    # size cap, and the bundle grows past any cap as releases add features; its
+    # pages also count against mem_limit and cannot be reclaimed, so raising
+    # the cap only trades "No space left on device" for an OOM kill. The volume
+    # has no ceiling of its own and its page cache is reclaimable. It holds
+    # nothing worth keeping: the entrypoint rebuilds it from the image on every
+    # start, so it needs no backup and can be removed whenever the app is down.
+    #
+    # Docker seeds a new named volume from the image's /app/.next, which the
+    # Dockerfile creates owned by nextjs (uid 1001) with mode 750, matching the
+    # uid=1001,mode=750 of the /app/public tmpfs; the entrypoint re-applies 750
+    # at every start, in case an older image created the volume. It runs
+    # UNPRIVILEGED as nextjs and owns both, so it can populate them with no
+    # CAP_CHOWN/CAP_SETUID, which is what lets the container run under
+    # `cap_drop: ALL`. nodejs-group members can read the served bundle; no
+    # other user can.
+    volumes:
+      - next_runtime:/app/.next
     tmpfs:
       - /tmp
-      - /app/.next:uid=1001,gid=1001,mode=750,size=400m
       - /app/public:uid=1001,gid=1001,mode=750,size=200m
     # CPU limits are intentionally left to host tooling or a local override.
     # Some Compose builds bundled with NAS platforms reject the `cpus` key.
@@ -76,3 +89,7 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+volumes:
+  # The app's runtime copy of the Next.js bundle (see the app service above).
+  next_runtime:

@@ -18,7 +18,7 @@ import { seedCompany, insertDraftJournalEntry, insertTransaction } from './fixtu
  *     (pending -> committing) bumps updated_at via the
  *     update_updated_at_column() BEFORE UPDATE trigger.
  *  3. Transition legality: the CAS-guarded committing -> committed and
- *     committing -> rejected writes (the exact payload shapes
+ *     committing -> unknown writes (the exact payload shapes
  *     buildRecoveryUpdate emits) pass the immutability + input-frozen
  *     triggers; terminal rows are untouchable both via the CAS (0 rows) and
  *     outright (trigger exception).
@@ -221,7 +221,7 @@ describe('pending_operations stuck-committing recovery (pg-real)', () => {
     }
   })
 
-  it('finalizes a stuck committing row to rejected through the real triggers', async () => {
+  it('finalizes a stuck committing row to unknown through the real triggers, then freezes it', async () => {
     const client = await getPool().connect()
     try {
       await client.query('BEGIN')
@@ -236,19 +236,19 @@ describe('pending_operations stuck-committing recovery (pg-real)', () => {
 
       // Exact payload shape from buildRecoveryUpdate(evidence == null).
       const resultData = {
-        auto_rejected: true,
+        outcome_unknown: true,
         reason: 'stuck_committing',
         recovery: {
           reason: 'stuck_committing',
           evidence: null,
           stuck_since: '2026-07-22T00:00:00.000Z',
           swept_at: '2026-07-22T02:30:00.000Z',
-          note: 'Operation was stuck in committing and no trace of posted side effects was found.',
+          note: 'Operation was interrupted and no trace of posted side effects was found.',
         },
       }
       const update = await client.query(
         `UPDATE public.pending_operations
-         SET status = 'rejected', resolved_at = now(), result_data = $2
+         SET status = 'unknown', resolved_at = now(), result_data = $2
          WHERE id = $1 AND status = 'committing'`,
         [id, JSON.stringify(resultData)],
       )
@@ -258,9 +258,19 @@ describe('pending_operations stuck-committing recovery (pg-real)', () => {
         `SELECT status, resolved_at, result_data FROM public.pending_operations WHERE id = $1`,
         [id],
       )
-      expect(rows[0].status).toBe('rejected')
+      expect(rows[0].status).toBe('unknown')
       expect(rows[0].resolved_at).not.toBeNull()
       expect(rows[0].result_data).toEqual(resultData)
+
+      // Terminal both ways: never re-opened for a replay, never deleted.
+      await client.query('SAVEPOINT frozen')
+      await expect(
+        client.query(`UPDATE public.pending_operations SET status = 'pending' WHERE id = $1`, [id]),
+      ).rejects.toThrow(/terminal state unknown and cannot be modified/)
+      await client.query('ROLLBACK TO SAVEPOINT frozen')
+      await expect(
+        client.query(`DELETE FROM public.pending_operations WHERE id = $1`, [id]),
+      ).rejects.toThrow(/terminal state unknown and cannot be deleted/)
       await client.query('ROLLBACK')
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {})
@@ -329,6 +339,7 @@ describe('pending_operations stuck-committing recovery (pg-real)', () => {
     const bookedTx = await insertTransaction({
       companyId,
       userId,
+      amount: 1000,
       journalEntryId,
       externalId: `recovery-booked-${randomUUID()}`,
     })

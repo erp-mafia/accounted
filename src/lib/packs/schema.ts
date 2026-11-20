@@ -52,7 +52,7 @@ export const PACK_CATEGORIES = [
 ] as const
 
 /** Which entity types a pack applies to. Mirrors the `entity_type` CHECK. */
-export const PACK_ENTITY_TYPES = ['all', 'enskild_firma', 'aktiebolag', 'ideell_forening'] as const
+export const PACK_ENTITY_TYPES = ['all', 'enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'] as const
 
 /** Line roles. Drives the amount maths in `applyTemplate()`. */
 export const PACK_LINE_TYPES = ['business', 'vat', 'settlement'] as const
@@ -118,8 +118,7 @@ export const PackMetaSchema = z
      * Optional Swedish note on the statutory rule behind the pattern, e.g. the
      * 300 kr per person cap on representation VAT. Rendered next to the pack so
      * a user knows *when* the template applies, not just what it posts.
-     * Stays Swedish in both locales: it is statutory content, per
-     * `.claude/rules/i18n.md`.
+     * Stays Swedish in both locales: it is statutory content.
      */
     legal_note: z.string().max(2000).optional(),
     category: z.enum(PACK_CATEGORIES),

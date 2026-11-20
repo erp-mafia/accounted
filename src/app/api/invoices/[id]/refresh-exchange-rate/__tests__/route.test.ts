@@ -60,7 +60,7 @@ function createRecordingSupabase() {
   const supabase = {
     from: vi.fn(from),
     rpc: vi.fn(),
-    auth: { getUser: vi.fn() },
+    auth: { getUser: vi.fn(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   }
 
   return { supabase, enqueue, reset, recorded }

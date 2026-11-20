@@ -4,6 +4,8 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, linesWithoutDimensions } from '@/lib/bookkeeping/template-library'
+import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
 import {
   BookingTemplateCategorySchema,
   BookingTemplateEntityTypeSchema,
@@ -105,8 +107,15 @@ export const GET = withRouteContext(
     }
 
     const templates = templatesRes.data ?? []
+    // System templates name the skattekonto as 1630; a company that runs it
+    // on 2012 (an enskild firma, PH 175) gets them on 2012, so every client
+    // that applies one books where the skattekonto guards look.
+    const skattekontoAccount = templates.some((t) => t.is_system && libraryLinesTouchSkattekonto(t.lines))
+      ? await resolveSkattekontoAccount(supabase, companyId)
+      : undefined
     const decorated = templates.map((t) => ({
       ...t,
+      ...(t.is_system && Array.isArray(t.lines) ? { lines: libraryLinesForSkattekonto(t.lines, skattekontoAccount) } : {}),
       last_used_at: usageByTemplate.get(t.id) ?? null,
       is_hidden: hiddenIds.has(t.id),
     }))
@@ -134,7 +143,9 @@ export const GET = withRouteContext(
 
 /**
  * POST /api/settings/booking-templates
- * Create a company-scoped or team-scoped template.
+ * Create a company-scoped or team-scoped template. A team-scoped template is
+ * stored without the dimensions on its lines: the codes are one company's
+ * own, and every company of the team books the template.
  */
 export const POST = withRouteContext(
   'booking_template.create',
@@ -157,7 +168,7 @@ export const POST = withRouteContext(
         description: body.description,
         category: body.category,
         entity_type: body.entity_type,
-        lines: body.lines,
+        lines: body.team_id ? linesWithoutDimensions(body.lines) : body.lines,
         is_system: false,
       })
       .select()

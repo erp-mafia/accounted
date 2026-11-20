@@ -11,7 +11,6 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { CashAccount } from '@/types'
 
@@ -78,7 +77,7 @@ export default function MoveTransactionCashAccountDialog({
         onOpenChange(v)
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
           <DialogTitle>{t('move_account_dialog_title')}</DialogTitle>
           <DialogDescription>{t('move_account_dialog_description')}</DialogDescription>
@@ -92,7 +91,7 @@ export default function MoveTransactionCashAccountDialog({
               <label
                 key={account.id}
                 className={cn(
-                  'flex min-h-11 items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm transition-colors duration-150',
+                  'flex min-h-11 items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-150 bg-control shadow-raised',
                   disabled ? 'opacity-60' : 'cursor-pointer hover:bg-secondary/35',
                   selected === account.ledger_account && !disabled && 'bg-secondary/40',
                 )}
@@ -131,16 +130,14 @@ export default function MoveTransactionCashAccountDialog({
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={isSaving}
-            className="min-h-11 w-full sm:w-auto"
           >
             {t('move_account_cancel')}
           </Button>
           <Button
             onClick={() => void persist()}
             disabled={!canSave}
-            className="min-h-11 w-full sm:w-auto"
+            loading={isSaving}
           >
-            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {t('move_account_save')}
           </Button>
         </DialogFooter>

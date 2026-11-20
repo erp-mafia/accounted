@@ -1,0 +1,202 @@
+[
+  {
+    "name": "a bank fee on a supplier payment",
+    "postings": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-05",
+          "description": "Bankavgift: Faktura 1234",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "6570",
+              "debit_amount": 10,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 10
+            }
+          ]
+        }
+      ]
+    ],
+    "junction": [
+      {
+        "user_id": "00000000-0000-4000-8000-00000000a001",
+        "company_id": "00000000-0000-4000-8000-00000000c001",
+        "transaction_id": "00000000-0000-4000-8000-0000000a0001",
+        "journal_entry_id": "residual-0",
+        "allocated_amount": -10,
+        "role": "other",
+        "link_basis": "user_created",
+        "link_evidence": null
+      }
+    ],
+    "unmatched": 0,
+    "outcome": {
+      "dry_run": false,
+      "residual_journal_entry_id": "residual-0",
+      "residual_amount": -10,
+      "applied": [
+        {
+          "external_id": "00000000-0000-4000-8000-0000000a0001",
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0100"
+        }
+      ],
+      "skipped": []
+    }
+  },
+  {
+    "name": "interest received on two deposits, own date and text",
+    "postings": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-31",
+          "description": "Ränta augusti",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 12.5,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "8310",
+              "debit_amount": 0,
+              "credit_amount": 12.5
+            }
+          ]
+        }
+      ]
+    ],
+    "junction": [
+      {
+        "user_id": "00000000-0000-4000-8000-00000000a001",
+        "company_id": "00000000-0000-4000-8000-00000000c001",
+        "transaction_id": "00000000-0000-4000-8000-0000000a0011",
+        "journal_entry_id": "residual-1",
+        "allocated_amount": 12.5,
+        "role": "other",
+        "link_basis": "user_created",
+        "link_evidence": null
+      }
+    ],
+    "unmatched": 0,
+    "outcome": {
+      "dry_run": false,
+      "residual_journal_entry_id": "residual-1",
+      "residual_amount": 12.5,
+      "applied": [
+        {
+          "external_id": "00000000-0000-4000-8000-0000000a0011",
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0100"
+        },
+        {
+          "external_id": "00000000-0000-4000-8000-0000000a0012",
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0100"
+        }
+      ],
+      "skipped": []
+    }
+  },
+  {
+    "name": "öresavrundning on a card payment",
+    "postings": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-08",
+          "description": "Öresavrundning: Faktura 1234",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "1930",
+              "debit_amount": 0.01,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.01
+            }
+          ]
+        }
+      ]
+    ],
+    "junction": [
+      {
+        "user_id": "00000000-0000-4000-8000-00000000a001",
+        "company_id": "00000000-0000-4000-8000-00000000c001",
+        "transaction_id": "00000000-0000-4000-8000-0000000a0021",
+        "journal_entry_id": "residual-2",
+        "allocated_amount": 0.01,
+        "role": "other",
+        "link_basis": "user_created",
+        "link_evidence": null
+      }
+    ],
+    "unmatched": 0,
+    "outcome": {
+      "dry_run": false,
+      "residual_journal_entry_id": "residual-2",
+      "residual_amount": 0.01,
+      "applied": [
+        {
+          "external_id": "00000000-0000-4000-8000-0000000a0021",
+          "journal_entry_id": "00000000-0000-4000-8000-0000000e0100"
+        }
+      ],
+      "skipped": []
+    }
+  },
+  {
+    "name": "interest expense the engine refuses (a locked period): the links are undone",
+    "postings": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-09",
+          "description": "Räntekostnad: Faktura 1234",
+          "source_type": "manual",
+          "lines": [
+            {
+              "account_number": "8410",
+              "debit_amount": 40,
+              "credit_amount": 0
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 40
+            }
+          ]
+        }
+      ]
+    ],
+    "junction": [],
+    "unmatched": 1,
+    "outcome": {
+      "error": "BookkeepingDatabaseError"
+    }
+  }
+]

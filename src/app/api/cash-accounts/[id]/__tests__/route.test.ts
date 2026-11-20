@@ -217,8 +217,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
 
     it('blocks disabling an account with an open (unbooked, non-ignored) transaction', async () => {
       enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } }) // existing-row guard lookup
-      enqueue({ data: [{ id: 'tx-1' }] }) // unbooked candidates
-      enqueue({ data: [] }) // transaction_voucher_links: tx-1 is not junction-anchored
+      enqueue({ count: 1 }) // open_bank_rows
 
       const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
       const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
@@ -227,40 +226,35 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
       expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
     })
 
-    // Split-row case (#1553): journal_entry_id is NULL but the row is booked
-    // through transaction_voucher_links (PR crm-48), so it must not count as
-    // open work and block the disable.
-    it('does not treat a junction-anchored (split) transaction as open work', async () => {
-      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
-      enqueue({ data: [{ id: 'tx-1' }] })
-      enqueue({ data: [{ transaction_id: 'tx-1' }] })
-      enqueue({ data: { id: CA_1, enabled: false, source: 'manual' } }) // setEnabled update
-
-      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
-      expect(response.status).toBe(200)
-    })
-
     // Regression (Superagent P2): a fixed row cap on the candidate query could
     // return a page where every row happens to be junction-anchored while a
-    // genuinely open row sits past the cap, waving the disable through. 60
-    // candidates, 59 junction-linked and 1 genuinely open, must still block.
-    it('finds an open transaction beyond the old 50-row cap', async () => {
-      const candidates = Array.from({ length: 60 }, (_, i) => ({ id: `tx-${i}` }))
-      const linked = candidates.slice(0, 59).map((c) => ({ transaction_id: c.id })) // tx-59 stays open
-
+    // genuinely open row sits past the cap, waving the disable through. The
+    // guard is one head count on the view, so there is no page to fall off.
+    it('asks open_bank_rows for one head count of this account: no row cap can hide an open row', async () => {
       enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
-      enqueue({ data: candidates })
-      enqueue({ data: linked })
+      enqueue({ count: 1 }) // open_bank_rows
 
       const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
       const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
       expect(status).toBe(400)
       expect(body.error.code).toBe('CASH_ACCOUNT_DISABLE_UNRESOLVED')
+      expect(findCalls('open_bank_rows', 'select')).toEqual([['id', { count: 'exact', head: true }]])
+      expect(findCalls('open_bank_rows', 'eq')).toEqual([['company_id', 'company-1'], ['cash_account_id', CA_1]])
+      expect(findCalls('transaction_voucher_links', 'select')).toEqual([])
+    })
+
+    it('refuses the disable when the open-row count fails: a guard that did not run lets nothing through', async () => {
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
+      enqueue({ error: { message: 'statement timeout' } }) // open_bank_rows
+
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      expect(response.status).toBe(500)
+      expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
     })
 
     it('disables a manual, non-primary account with no open transactions', async () => {
       enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
-      enqueue({ data: [] }) // no unbooked candidates
+      enqueue({ count: 0 }) // open_bank_rows
       enqueue({ data: { id: CA_1, enabled: false, source: 'manual' } })
 
       const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))

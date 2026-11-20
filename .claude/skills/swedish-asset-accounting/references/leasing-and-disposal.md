@@ -1,5 +1,16 @@
 # Leasing Treatment & Asset Disposal
 
+<!-- toc -->
+**Contents**
+
+- [Leasing Across Frameworks](#leasing-across-frameworks)
+- [Avyttring (Disposal/Sale)](#avyttring-disposalsale)
+- [Utrangering (Scrapping)](#utrangering-scrapping)
+- [VAT on Asset Disposal](#vat-on-asset-disposal)
+- [Tax Treatment of Disposal (IL)](#tax-treatment-of-disposal-il)
+
+<!-- /toc -->
+
 ## Leasing Across Frameworks
 
 ### K2 (BFNAR 2016:10)

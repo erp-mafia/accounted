@@ -23,6 +23,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
+import { markdownProblems, SkillBodySchema } from '../src/lib/agent-skills/validation'
+import { discoverCommunitySkills } from './lib/community-skills'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const ENTRIES_DIR = path.join(ROOT, 'registry', 'entries')
@@ -106,44 +108,7 @@ function isIsoDate(v: unknown): v is string {
  * skipped; everything else must be plain Markdown.
  */
 function checkBodySafety(file: string, body: string): void {
-  let inFence = false
-  const lines = body.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence
-      continue
-    }
-    if (inFence) continue
-    const stripped = line.replace(/`[^`]*`/g, '')
-    if (/^\s*import\s/.test(stripped) || /^\s*export\s/.test(stripped)) {
-      failures.push({
-        file,
-        message: `line ${i + 1}: import/export statements are not allowed (MDX would execute them in the site build)`,
-      })
-    }
-    // MDX treats ANY tag as JSX, lowercase HTML included (<div>, <img
-    // onerror=...>), and a bare {...} as a JS expression to evaluate. Both
-    // must be banned entirely, not just capitalized component tags.
-    if (/<\/?[A-Za-z]/.test(stripped)) {
-      failures.push({
-        file,
-        message: `line ${i + 1}: raw HTML/JSX tags are not allowed; entry bodies are plain Markdown (put literal tags in backticks)`,
-      })
-    }
-    if (/[{}]/.test(stripped)) {
-      failures.push({
-        file,
-        message: `line ${i + 1}: { } are not allowed outside code (MDX evaluates {...} as a JS expression)`,
-      })
-    }
-    if (/javascript:/i.test(stripped)) {
-      failures.push({ file, message: `line ${i + 1}: javascript: URLs are not allowed` })
-    }
-  }
-  if (inFence) {
-    failures.push({ file, message: 'unclosed fenced code block' })
-  }
+  for (const message of markdownProblems(body)) failures.push({ file, message })
 }
 
 function checkUrls(file: string, data: Record<string, unknown>): void {
@@ -281,21 +246,34 @@ function validateEntries(authorHandles: Set<string>): number {
     checkBodySafety(file, body)
 
     if (body.trim().length === 0) {
+      // Registry descriptions and loadable bodies are separate Markdown files.
       failures.push({ file, message: 'entry body is empty; describe what it does and how to use it' })
     }
+  }
+  for (const slug of fs.existsSync(path.join(ROOT, 'registry/skills')) ? fs.readdirSync(path.join(ROOT, 'registry/skills')) : []) {
+    const file = `registry/skills/${slug}/SKILL.md`
+    if (!slugs.has(slug)) failures.push({ file, message: 'Loadable body needs a matching registry entry.' })
+    if (!fs.existsSync(path.join(ROOT, file))) { failures.push({ file, message: 'SKILL.md is required.' }); continue }
+    const validated = SkillBodySchema.safeParse(fs.readFileSync(path.join(ROOT, file), 'utf8'))
+    if (!validated.success) for (const issue of validated.error.issues) failures.push({ file, message: issue.message })
   }
   return files.length
 }
 
-const authorHandles = validateAuthors()
-const entryCount = validateEntries(authorHandles)
+async function main() {
+  const authorHandles = validateAuthors()
+  const entryCount = validateEntries(authorHandles)
+  try { await discoverCommunitySkills(ROOT) }
+  catch (error) { failures.push({ file: 'registry/skills', message: error instanceof Error ? error.message : 'Invalid community publication metadata' }) }
 
-if (process.argv.includes('--json')) {
-  console.log(JSON.stringify({ entries: entryCount, authors: authorHandles.size, failures }, null, 2))
-} else {
-  for (const f of failures) {
-    console.error(`FAIL ${f.file}: ${f.message}`)
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify({ entries: entryCount, authors: authorHandles.size, failures }, null, 2))
+  } else {
+    for (const f of failures) {
+      console.error(`FAIL ${f.file}: ${f.message}`)
+    }
+    console.log(`${entryCount} entries, ${authorHandles.size} authors, ${failures.length} failures`)
   }
-  console.log(`${entryCount} entries, ${authorHandles.size} authors, ${failures.length} failures`)
+  process.exit(failures.length > 0 ? 1 : 0)
 }
-process.exit(failures.length > 0 ? 1 : 0)
+void main()

@@ -1,17 +1,16 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { sendTeamInviteMail } from '@/lib/email/send-team-invite'
-
-// Loads the email extension so getEmailService() returns the Resend
-// implementation instead of the noop default (same reason as the company
-// invite route: without this the invite mail silently no-ops in a fresh
-// process).
-ensureInitialized()
+import {
+  ChosenCompanyIdsSchema,
+  COMPANIES_OUTSIDE_TEAM_MESSAGE,
+  filterTeamClientCompanyIds,
+  MANAGERS_HAVE_ALL_COMPANIES_MESSAGE,
+} from '@/lib/company/member-company-access'
 
 /**
  * Kept verbatim from the pre-unfreeze hardcoded 403: personal teams remain
@@ -27,6 +26,12 @@ const InviteSchema = z.object({
   // Optional explicit team target for users in several teams; validated
   // against the caller's own memberships below.
   teamId: z.string().uuid().optional(),
+  // The client companies a member invite grants; omitted means every company
+  // of the team, including new ones. Owners and admins always have all.
+  companyIds: ChosenCompanyIdsSchema.optional(),
+}).refine((body) => !body.companyIds || body.role === 'member', {
+  message: MANAGERS_HAVE_ALL_COMPANIES_MESSAGE,
+  path: ['companyIds'],
 })
 
 interface TeamMembershipRow {
@@ -43,6 +48,7 @@ interface TeamMembershipRow {
  *   - authenticated (MFA enforced by requireAuth on hosted)
  *   - the target team is kind='byra' (personal teams keep the legacy 403)
  *   - the caller is team owner or admin
+ *   - chosen companies (member invites only) are the team's own clients
  *
  * Team-scoped rather than company-scoped (requireAuth, not withRouteContext):
  * a byrå admin's active company is irrelevant to team membership, mirroring
@@ -62,7 +68,7 @@ export async function POST(request: NextRequest) {
     operation: 'team.invite',
   })
   if (!validation.success) return validation.response
-  const { email, role, teamId: requestedTeamId } = validation.data
+  const { email, role, teamId: requestedTeamId, companyIds } = validation.data
 
   const serviceClient = createServiceClient()
 
@@ -102,6 +108,15 @@ export async function POST(request: NextRequest) {
   }
 
   const teamId = target.team_id
+
+  // Chosen companies must be the team's own clients.
+  if (companyIds) {
+    const onTeam = await filterTeamClientCompanyIds(serviceClient, teamId, companyIds)
+    if (onTeam.length !== companyIds.length) {
+      return NextResponse.json({ error: COMPANIES_OUTSIDE_TEAM_MESSAGE }, { status: 400 })
+    }
+  }
+  const invitedCompanyIds = companyIds ?? null
 
   // Already a member? (profiles.email is lowercased like the schema output.)
   const { data: profile } = await serviceClient
@@ -155,6 +170,7 @@ export async function POST(request: NextRequest) {
       .from('team_invitations')
       .update({
         role,
+        company_ids: invitedCompanyIds,
         token_hash: hash,
         invited_by: user.id,
         status: 'pending',
@@ -174,6 +190,7 @@ export async function POST(request: NextRequest) {
         team_id: teamId,
         email,
         role,
+        company_ids: invitedCompanyIds,
         token_hash: hash,
         invited_by: user.id,
         status: 'pending',
@@ -205,6 +222,7 @@ export async function POST(request: NextRequest) {
       teamId,
       email,
       role,
+      company_ids: invitedCompanyIds,
       status: 'pending',
       expires_at: expiresAt.toISOString(),
       email_sent: emailSent,

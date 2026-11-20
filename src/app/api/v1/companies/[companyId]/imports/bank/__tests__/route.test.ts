@@ -18,6 +18,7 @@
  *     stayed `status: 'processing'` with zeroed counters forever.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as XLSX from 'xlsx'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
@@ -52,6 +53,7 @@ vi.mock('@/lib/api/v1/operations', () => ({
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { RawTransaction } from '@/types'
+import { CAMT053_PRETTY_WITH_REFS } from '@/tests/fixtures/camt053'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -83,20 +85,21 @@ type RecordedCall = { table: string; method: string; args: unknown[] }
 
 /**
  * Per-table Supabase double that also records every chained call, so a test
- * can assert on the exact payload handed to `.update()` / `.upsert()`.
+ * can assert on the exact payload handed to `.update()` / `.upsert()`. A key
+ * `<table>.update` answers that table's updates alone.
  */
 function makeSupabase(byTable: Record<string, MockResult>) {
   const calls: RecordedCall[] = []
-  const buildChain = (table: string): unknown => {
+  const buildChain = (table: string, updating = false): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
+            resolve(byTable[updating ? `${table}.update` : table] ?? byTable[table] ?? { data: null, error: null })
         }
         return (...args: unknown[]) => {
           calls.push({ table, method: String(prop), args })
-          return buildChain(table)
+          return buildChain(table, updating || prop === 'update')
         }
       },
     }
@@ -174,7 +177,7 @@ beforeEach(() => {
   })
   supabase = makeSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    bank_file_imports: { data: null, error: null },
+    bank_file_imports: { data: { id: 'import-1' }, error: null },
   })
   mockServiceClient.mockReturnValue(supabase)
 })
@@ -291,12 +294,18 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(ingestMock.mock.calls[0][4]).toEqual({ bankFileImportId: 'import-1' })
   })
 
-  it('still ingests (rows unlinked) when the upsert returns no batch id', async () => {
-    // Default beforeEach supabase: bank_file_imports resolves { data: null }.
-    await callRoute()
+  it('fails the operation when the import cannot be recorded: no batch lands outside undo', async () => {
+    supabase = makeSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      bank_file_imports: { data: null, error: { message: 'connection reset' } },
+    })
+    mockServiceClient.mockReturnValue(supabase)
 
-    expect(ingestMock).toHaveBeenCalledTimes(1)
-    expect(ingestMock.mock.calls[0][4]).toBeUndefined()
+    const res = await callRoute()
+
+    expect((await res.json()).error.code).toBe('BANK_IMPORT_FAILED')
+    expect(ingestMock).not.toHaveBeenCalled()
+    expect(failOperationMock).toHaveBeenCalledTimes(1)
   })
 
   it('stamps ids and provenance with the fallback format when an explicit override parses nothing', async () => {
@@ -327,6 +336,25 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     }
   })
 
+  it('carries what a camt file says beyond the booking date, the counterparty as merchant_name', async () => {
+    const res = await callRoute({ fileContent: CAMT053_PRETTY_WITH_REFS, filename: 'statement.xml' })
+    expect(res.status).toBe(202)
+
+    const [incoming, outgoing] = ingestedRows()
+    expect(incoming).toMatchObject({
+      external_id: 'camt053_2025-03-10_ACSR-1_NTRY-1',
+      import_source: 'camt053',
+      reference: '1001000000017',
+      merchant_name: 'Kund AB',
+      value_date: '2025-03-11',
+      end_to_end_id: 'E2E-INCOMING-1',
+      provider_transaction_id: 'ACSR-1',
+      counterparty_iban: 'SE4550000000058398257466',
+      bank_transaction_code: 'PMNT-RCDT-DMCT',
+    })
+    expect(outgoing).toMatchObject({ merchant_name: 'Leverantör AB', end_to_end_id: null })
+  })
+
   it('carries external_id, date, amount, currency and description through', async () => {
     await callRoute()
 
@@ -351,6 +379,7 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
       imported_count: 3,
       duplicate_count: 1,
       matched_count: 2,
+      error_message: null,
     })
     // `imported_at` exists on sie_imports, NOT on bank_file_imports. Writing it
     // made PostgREST reject the statement, leaving status 'processing' forever.
@@ -363,7 +392,8 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
   it('still returns 202 when the completion status write fails', async () => {
     supabase = makeSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      bank_file_imports: { data: null, error: { message: 'permission denied' } },
+      bank_file_imports: { data: { id: 'import-1' }, error: null },
+      'bank_file_imports.update': { data: null, error: { message: 'permission denied' } },
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -373,6 +403,46 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     // not fail the request, but it is logged rather than swallowed.
     expect(res.status).toBe(202)
     expect(completeOperationMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the file as it came and records the import as a bank_file arrival', async () => {
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const storageFrom = vi.fn().mockReturnValue({ upload, download: vi.fn() })
+    supabase = makeSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      bank_file_imports: { data: { id: 'import-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue({ ...supabase, storage: { from: storageFrom } })
+
+    const res = await callRoute()
+    expect(res.status).toBe(202)
+
+    expect(storageFrom).toHaveBeenCalledWith('documents')
+    const [path, bytes, options] = upload.mock.calls[0] as [string, Uint8Array, Record<string, unknown>]
+    expect(path).toMatch(new RegExp(`^documents/${COMPANY_ID}/arrivals/bank_file/[0-9a-f]{64}/kontoutdrag\\.csv$`))
+    expect(new TextDecoder().decode(bytes)).toBe(SEB_CSV)
+    expect(options).toEqual({ contentType: 'text/csv', upsert: false })
+
+    const arrival = supabase.calls.find((c) => c.table === 'arrivals' && c.method === 'upsert')?.args[0] as Record<string, unknown>
+    expect(arrival).toMatchObject({
+      company_id: COMPANY_ID,
+      source: 'bank_file',
+      source_ref: 'import-1',
+      fetched_by: { type: 'api_key', user_id: 'user-1', api_key_id: 'ak_1' },
+      original_path: path,
+      original_size: new TextEncoder().encode(SEB_CSV).byteLength,
+      original_mime: 'text/csv',
+    })
+    expect(arrival.source_meta).toMatchObject({ via: 'partner_api', bank_file_import_id: 'import-1', format: 'seb', imported_count: 3 })
+  })
+
+  it('records no arrival when every row failed', async () => {
+    ingestMock.mockResolvedValue({
+      imported: 0, duplicates: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, errors: 3, transaction_ids: [],
+    })
+    const res = await callRoute()
+    expect(res.status).toBe(202)
+    expect(supabase.from).not.toHaveBeenCalledWith('arrivals')
   })
 
   it('fails the operation and returns an error envelope when ingest throws', async () => {
@@ -385,5 +455,102 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(body.error.code).toBe('BANK_IMPORT_FAILED')
     expect(failOperationMock).toHaveBeenCalledTimes(1)
     expect(completeOperationMock).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1236: Länsförsäkringar's kontoutdrag is an .xls file per month, and a
+// file whose columns nothing recognizes is answered with the columns it has.
+describe('POST /api/v1/companies/:companyId/imports/bank (Excel files and unrecognized columns)', () => {
+  function excelSerial(iso: string): number {
+    const [y, m, d] = iso.split('-').map(Number)
+    return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86_400_000
+  }
+
+  function monthStatementXls(): ArrayBuffer {
+    const sheet: XLSX.WorkSheet = {
+      A1: { t: 's', v: 'Kontoutdrag oktober 2025' },
+      A3: { t: 's', v: 'Bokföringsdag' },
+      B3: { t: 's', v: 'Transaktionsdag' },
+      C3: { t: 's', v: 'Transaktionstyp' },
+      D3: { t: 's', v: 'Meddelande' },
+      E3: { t: 's', v: 'Belopp' },
+      A4: { t: 'n', v: excelSerial('2025-10-03'), z: 'yyyy-mm-dd' },
+      B4: { t: 'n', v: excelSerial('2025-10-01'), z: 'yyyy-mm-dd' },
+      C4: { t: 's', v: 'Kortköp' },
+      D4: { t: 's', v: 'ICA NÄRA TESTBY' },
+      E4: { t: 'n', v: -1234.5 },
+      '!ref': 'A1:E4',
+    }
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Kontoutdrag')
+    return XLSX.write(workbook, { bookType: 'biff8', type: 'array' }) as ArrayBuffer
+  }
+
+  function callWithBytes(bytes: ArrayBuffer | string, filename: string, search = '') {
+    const fd = new FormData()
+    fd.append('file', new File([bytes], filename))
+    return POST(
+      new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/imports/bank${search}`, {
+        method: 'POST',
+        body: fd,
+        headers: { Authorization: 'Bearer test-fixture-not-a-real-key' },
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+  }
+
+  it('imports a Länsförsäkringar .xls kontoutdrag on its booking date', async () => {
+    const res = await callWithBytes(monthStatementXls(), 'Kontoutdrag 2025-10.xls')
+
+    expect(res.status).toBe(202)
+    expect(ingestedRows()).toHaveLength(1)
+    expect(ingestedRows()[0]).toMatchObject({
+      import_source: 'csv_lansforsakringar',
+      date: '2025-10-03',
+      description: 'ICA NÄRA TESTBY',
+      amount: -1234.5,
+    })
+  })
+
+  it('names the columns it found when no bank format matches', async () => {
+    const res = await callWithBytes('Kontoutdrag oktober 2025\nDag;Vad;Summa kronor\n3 okt;ICA;-500\n', 'okand.csv')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('BANK_FILE_FORMAT_UNKNOWN')
+    expect(body.error.details.found_columns).toEqual(['Dag', 'Vad', 'Summa kronor'])
+    expect(body.error.message).toContain('Kolumner i filen: Dag, Vad, Summa kronor.')
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('answers BANK_FILE_COLUMNS_UNRECOGNIZED with found and expected columns for a forced format', async () => {
+    const res = await callWithBytes('Dag;Vad;Summa kronor\n3 okt;ICA;-500\n', 'okand.csv', '?format=lansforsakringar')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('BANK_FILE_COLUMNS_UNRECOGNIZED')
+    expect(body.error.details).toMatchObject({
+      format: 'lansforsakringar',
+      found_columns: ['Dag', 'Vad', 'Summa kronor'],
+      expected_columns: { date: expect.arrayContaining(['Bokföringsdag']), amount: ['Belopp', 'Insättning + Uttag'] },
+    })
+    expect(body.error.message).toContain('Filen behöver en datumkolumn')
+    expect(body.error.message_en).toContain('Columns found: Dag, Vad, Summa kronor.')
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a file that is Excel by its bytes but cannot be read, saying what to do as the app does', async () => {
+    const broken = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 1, 2, 3, 4]).buffer
+    const res = await callWithBytes(broken, 'trasig.xls')
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    // The published code stays; the sentences and the next step are the app's.
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details).toMatchObject({ field: 'file' })
+    expect(body.error.message).toContain('Excelfilen kunde inte läsas')
+    expect(body.error.message_en).toContain('The Excel file could not be read')
+    expect(body.error.recovery_hint).toContain('CSV')
+    expect(ingestMock).not.toHaveBeenCalled()
   })
 })

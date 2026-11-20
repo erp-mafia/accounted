@@ -10,6 +10,7 @@ const KEYS = [
   'AI_ASSISTANT_MODEL',
   'AI_HEAVY_MODEL',
   'AI_EXTRACTION_MODEL',
+  'AI_CHEAP_MODEL',
   'AI_EXTRACTION_MAX_TOKENS',
   'AI_VISION',
   'AI_STRICT_JSON',
@@ -22,6 +23,7 @@ const KEYS = [
   'BEDROCK_MODEL_ID',
   'BEDROCK_SONNET_MODEL_ID',
   'BEDROCK_OPUS_MODEL_ID',
+  'BEDROCK_HAIKU_MODEL_ID',
   'BEDROCK_MAX_TOKENS',
 ] as const
 
@@ -97,18 +99,30 @@ describe('provider resolution with an OpenAI-compatible endpoint', () => {
 
   // The chat loop and the other direct SDK callers cannot run here: fail
   // loudly at construction rather than with an opaque error at call time.
-  it('refuses to build an Anthropic client for it', () => {
+  it('refuses to build an Anthropic client for it', async () => {
     byo()
-    expect(() => createAiClient()).toThrow(AiProviderUnsupportedError)
+    await expect(createAiClient()).rejects.toThrow(AiProviderUnsupportedError)
   })
 })
 
 describe('resolveTierModel precedence', () => {
-  it('defaults every tier to Claude on the Anthropic family', () => {
+  it('defaults conversation and deep reasoning to Sonnet on the Anthropic family', () => {
     hosted()
     expect(resolveTierModel('assistant')).toBe('claude-sonnet-5')
     expect(resolveTierModel('heavy')).toBe('claude-sonnet-5')
-    expect(resolveTierModel('extraction')).toBe('claude-sonnet-5')
+  })
+
+  it('defaults the reading tiers (extraction, cheap) to Haiku 5.5 under one id on both Anthropic-family backends', () => {
+    hosted()
+    for (const tier of ['extraction', 'cheap'] as const) {
+      expect(resolveTierModel(tier)).toBe('claude-haiku-5-5')
+      expect(getAiStatus().models[tier]).toBe('eu.anthropic.claude-haiku-5-5')
+      expect(resolveTierModel(tier, 'anthropic')).toBe('claude-haiku-5-5')
+    }
+    process.env.BEDROCK_HAIKU_MODEL_ID = 'legacy-cheap'
+    process.env.BEDROCK_MODEL_ID = 'legacy-extraction'
+    expect(resolveTierModel('cheap')).toBe('legacy-cheap')
+    expect(resolveTierModel('extraction')).toBe('legacy-extraction')
   })
 
   // Hosted operators set BEDROCK_* today; those must keep winning over the
@@ -196,7 +210,7 @@ describe('getAiStatus', () => {
     expect(s.configured).toBe(true)
     expect(s.assistantAvailable).toBe(true)
     expect(s.capabilities.pdfNative).toBe(true)
-    expect(s.models.extraction).toBe('eu.anthropic.claude-sonnet-5')
+    expect(s.models.extraction).toBe('eu.anthropic.claude-haiku-5-5')
   })
 
   it('is configured and assistant-capable on a direct Anthropic key', () => {

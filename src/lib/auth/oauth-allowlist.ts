@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from './api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { scopeKind, type ApiKeyScope } from './scope-catalog'
+import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
 
 /**
  * What an OAuth consent may grant: which redirect URIs a code may be sent
@@ -14,13 +15,24 @@ import { scopeKind, type ApiKeyScope } from './scope-catalog'
 /**
  * Identity of a built-in client, derived from the redirect URI pattern that
  * matched. Rendered on the consent page so the user can tell a real Claude /
- * ChatGPT / Grok / Cursor connector from a look-alike registration.
+ * ChatGPT / Grok / Gemini / Cursor / Squidler / Celemine connector from a
+ * look-alike registration.
  */
-export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'cursor' | 'cursor_deeplink' | 'local'
+export type BuiltInProvider =
+  | 'claude'
+  | 'chatgpt'
+  | 'grok'
+  | 'gemini'
+  | 'cursor'
+  | 'cursor_deeplink'
+  | 'squidler'
+  | 'celemine'
+  | 'flytt_extension'
+  | 'local'
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * the Claude, ChatGPT, Grok and Cursor connectors keep working without seeded rows, and so
+ * the Claude, ChatGPT, Grok, Gemini, Cursor, Squidler and Celemine connectors keep working without seeded rows, and so
  * local development never depends on having a registration.
  *
  * ChatGPT uses a per-connector-instance callback path
@@ -36,6 +48,17 @@ export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'cursor' | 'cursor
  * itself: the slash form 308s to the no-slash form on the same origin, so
  * both are accepted. Matched as an exact path, never a prefix, so a future
  * grok.com path cannot ride on this entry.
+ *
+ * Gemini (custom apps in the Gemini web app) registers itself through
+ * /register with one callback per user and connector on Google's OAuth
+ * relay: https://oauth-redirect.googleusercontent.com/r/user_bound_custom-mcp-<id>-<server host>
+ * (reported by other MCP servers, github.com/makeplane/plane-mcp-server
+ * issue 230 and github.com/a91453/mml-tools pull 136; Google does not
+ * publish it). The relay forwards /r/<id> to whoever owns <id>, and a Google
+ * Cloud project id can take that place, so the whole /r/ path would let any
+ * project receive codes and show up here as Gemini. Only the
+ * `user_bound_custom-mcp-` form is matched: project ids cannot contain
+ * underscores, so no project can claim it.
  *
  * Cursor (IDE and CLI) registers through /register with three redirect URIs
  * in one request: the legacy custom-scheme deeplink
@@ -53,6 +76,29 @@ export type BuiltInProvider = 'claude' | 'chatgpt' | 'grok' | 'cursor' | 'cursor
  * local-machine trust. It is its own provider, `cursor_deeplink`, so the
  * consent page can show it unverified like localhost: a scheme proves
  * nothing about who receives the code, an https host does.
+ *
+ * Squidler (squidler.io, AI colleagues for small companies) is a partner
+ * that connects its customers' agents over MCP and uses one fixed callback
+ * for all of them, one for production and one for its dev environment. Both
+ * are built in, so its customers connect without registering the callback
+ * under Agenter first. Each is an exact path on Squidler's own https host,
+ * never a prefix, so no other squidler.io path and no other subdomain rides
+ * on it.
+ *
+ * Celemine (celemine.com, a policy and security gateway between a company's
+ * AI agents and the systems they work in) connects to Accounted as one of its
+ * upstream MCP servers. It registers itself through /register with callbacks
+ * under https://celemine.com/upstream/ on its own host, so the entry is a
+ * prefix, like Claude's /api/. Each path
+ * segment must start with a letter, digit, `_` or `-` and hold only those and
+ * `.`: no dot segment (`..`), percent-encoding, query or fragment can take the
+ * browser off /upstream/ once the check has passed. Only the bare
+ * celemine.com host matches, no subdomain.
+ *
+ * The browser extension "Flytta till Accounted" (flytt-extension.ts) signs
+ * in through chrome.identity, whose redirect is https://<id>.chromiumapp.org/.
+ * Chrome hands that URL only to the extension with that id, so it is matched
+ * for the one id, as the exact root path.
  */
 const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }[] = [
   { pattern: /^https:\/\/claude\.ai\/api\//, provider: 'claude' },
@@ -60,13 +106,16 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^https:\/\/chatgpt\.com\/connector\/oauth\//, provider: 'chatgpt' },
   { pattern: /^https:\/\/chatgpt\.com\/connector_platform_oauth_redirect$/, provider: 'chatgpt' },
   { pattern: /^https:\/\/grok\.com\/connectors-oauth-exchange-code\/?$/, provider: 'grok' },
+  { pattern: /^https:\/\/oauth-redirect\.googleusercontent\.com\/r\/user_bound_custom-mcp-[A-Za-z0-9_-]+$/, provider: 'gemini' },
   { pattern: /^cursor:\/\/anysphere\.cursor-mcp\/oauth\/callback$/, provider: 'cursor_deeplink' },
   { pattern: /^https:\/\/www\.cursor\.com\/agents\/mcp\/oauth\/callback$/, provider: 'cursor' },
+  { pattern: /^https:\/\/squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
+  { pattern: /^https:\/\/dev\.squidler\.io\/api\/oauth\/callback\/accounted$/, provider: 'squidler' },
+  { pattern: /^https:\/\/celemine\.com\/upstream(\/[A-Za-z0-9_-][A-Za-z0-9._-]*)+\/?$/, provider: 'celemine' },
+  { pattern: /^https:\/\/ooeaogbjfhciekiidjaehikcbccomkmj\.chromiumapp\.org\/$/, provider: 'flytt_extension' },
   { pattern: /^http:\/\/localhost(:\d+)?(\/|$)/, provider: 'local' },
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },
 ]
-
-export const BUILT_IN_REDIRECT_PATTERNS: readonly RegExp[] = BUILT_IN_PATTERNS.map((p) => p.pattern)
 
 /** Which built-in client a redirect URI belongs to, or null when none matches. */
 export function builtInRedirectProvider(uri: string): BuiltInProvider | null {
@@ -78,11 +127,39 @@ export function isBuiltInRedirectUri(uri: string): boolean {
   return builtInRedirectProvider(uri) !== null
 }
 
+/**
+ * Origins a built-in callback is known to forward the browser to before it
+ * answers. The consent page posts a form, and a browser that enforces CSP
+ * form-action re-checks every hop of the redirect chain, so an onward hop to
+ * an origin the policy does not name stops the navigation and the Allow
+ * button looks dead.
+ *
+ * Cursor's web callback https://www.cursor.com/agents/mcp/oauth/callback
+ * answers 308 to the same path on https://cursor.com (observed 2026-11-14,
+ * crm#1720). The code is still only ever sent to the exact allowlisted URI;
+ * this names where that host forwards it, nothing else.
+ */
+const BUILT_IN_ONWARD_ORIGINS: Readonly<Record<string, readonly string[]>> = {
+  'https://www.cursor.com': ['https://cursor.com'],
+}
+
+/** Onward origins the consent page's form-action must also allow for a built-in callback. */
+export function builtInOnwardOrigins(uri: string): readonly string[] {
+  if (!isBuiltInRedirectUri(uri)) return []
+  try {
+    return BUILT_IN_ONWARD_ORIGINS[new URL(uri).origin] ?? []
+  } catch {
+    return []
+  }
+}
+
 export type RedirectUriResolution =
   | { allowed: true; kind: 'built_in'; provider: BuiltInProvider }
   | {
       allowed: true
       kind: 'registered'
+      /** The registration the URI resolved to (the token route records it as the client). */
+      registrationId: string
       /** Display name the registering user gave the client (settings UI). */
       clientName: string
       /** True when the consenting user registered the URI themselves. */
@@ -108,11 +185,24 @@ export interface RedirectUriOptions {
 
 type RegistrationRow = { id: string; user_id: string; client_name: string }
 
+/** Registrants checked per company_members read; keeps the `.in()` URL short. */
+const REGISTRANT_CHUNK = 100
+
+function registered(row: RegistrationRow, byConsentingUser: boolean): RedirectUriResolution {
+  return {
+    allowed: true, kind: 'registered', registrationId: row.id,
+    clientName: row.client_name, registeredByConsentingUser: byConsentingUser,
+  }
+}
+
 /**
  * Resolve a redirect URI to the client behind it. Built-in patterns
  * short-circuit; otherwise we look for a non-revoked registration in
- * oauth_client_registrations and, when a consenting user is given, check
- * that the registration is theirs or a colleague's.
+ * oauth_client_registrations and, when a consenting user is given, take
+ * the one they made themselves, else one a colleague made. Several users may
+ * each register the same URI (crm#1654): a tool with one fixed callback for
+ * all its customers is registered once per customer, and one customer's
+ * registration never opens the URI for another customer.
  *
  * The lookup runs with the service role. The table's SELECT policy is
  * user_id = auth.uid(), so a user-scoped client cannot see a colleague's
@@ -122,7 +212,7 @@ type RegistrationRow = { id: string; user_id: string; client_name: string }
  *
  * Fails closed on any error (client construction, DB query): for an
  * allowlist, "unknown → deny" is the safe default. The lookup is by exact
- * URI; the unique partial index on the table ensures at most one active row.
+ * URI, oldest registration first.
  */
 export async function resolveRedirectUri(
   uri: string,
@@ -143,29 +233,32 @@ export async function resolveRedirectUri(
     return { allowed: false }
   }
 
-  const { data, error } = await client
-    .from('oauth_client_registrations')
-    .select('id, user_id, client_name')
-    .eq('redirect_uri', uri)
-    .is('revoked_at', null)
-    .limit(1)
-    .maybeSingle()
-
-  if (error || !data) return { allowed: false }
-  const registration = data as RegistrationRow
+  let registrations: RegistrationRow[]
+  try {
+    registrations = await fetchAllRows<RegistrationRow>(({ from, to }) =>
+      client
+        .from('oauth_client_registrations')
+        .select('id, user_id, client_name')
+        .eq('redirect_uri', uri)
+        .is('revoked_at', null)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch {
+    // Fail closed: an allowlist that cannot be read denies the URI.
+    return { allowed: false }
+  }
+  if (registrations.length === 0) return { allowed: false }
 
   const { consentingUserId } = options
-  if (consentingUserId === undefined) {
-    return { allowed: true, kind: 'registered', clientName: registration.client_name, registeredByConsentingUser: false }
-  }
+  if (consentingUserId === undefined) return registered(registrations[0], false)
 
-  if (registration.user_id === consentingUserId) {
-    return { allowed: true, kind: 'registered', clientName: registration.client_name, registeredByConsentingUser: true }
-  }
+  const own = registrations.find((r) => r.user_id === consentingUserId)
+  if (own) return registered(own, true)
 
-  const shared = await usersShareCompany(client, consentingUserId, registration.user_id)
-  if (!shared) return { allowed: false }
-  return { allowed: true, kind: 'registered', clientName: registration.client_name, registeredByConsentingUser: false }
+  const colleague = await firstColleagueRegistration(client, consentingUserId, registrations)
+  return colleague ? registered(colleague, false) : { allowed: false }
 }
 
 /**
@@ -182,32 +275,48 @@ export async function isAllowedRedirectUri(
 }
 
 /**
- * True when the two users are both members of at least one common company.
- * Both membership lists are paginated (a byrå consultant can sit in hundreds
- * of companies) and intersected here rather than via an `.in()` filter, whose
- * URL length would grow with the membership count. Any query failure counts
- * as "not shared" (fail closed).
+ * The oldest of `registrations` made by someone who shares at least one
+ * company with `userId`, or null. The user's own memberships are paginated
+ * (a byrå consultant can sit in hundreds of companies) and intersected here;
+ * the registrants' memberships are read in chunks so the `.in()` filter stays
+ * short however many customers registered the URI. Any query failure counts
+ * as "no colleague" (fail closed).
  */
-async function usersShareCompany(
+async function firstColleagueRegistration(
   client: SupabaseClient,
-  userA: string,
-  userB: string,
-): Promise<boolean> {
+  userId: string,
+  registrations: RegistrationRow[],
+): Promise<RegistrationRow | null> {
   try {
-    const companyIdsOf = (userId: string) =>
-      fetchAllRows<{ company_id: string }>(({ from, to }) =>
+    const ownRows = await fetchAllRows<{ company_id: string }>(({ from, to }) =>
+      client
+        .from('company_members')
+        .select('company_id')
+        .eq('user_id', userId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    const companies = new Set(ownRows.map((r) => r.company_id))
+    if (companies.size === 0) return null
+    const registrants = [...new Set(registrations.map((r) => r.user_id))]
+    for (let i = 0; i < registrants.length; i += REGISTRANT_CHUNK) {
+      const chunk = registrants.slice(i, i + REGISTRANT_CHUNK)
+      const rows = await fetchAllRows<{ user_id: string; company_id: string }>(({ from, to }) =>
         client
           .from('company_members')
-          .select('company_id')
-          .eq('user_id', userId)
+          .select('user_id, company_id')
+          .in('user_id', chunk)
           .order('id', { ascending: true })
           .range(from, to),
       )
-    const [rowsA, rowsB] = await Promise.all([companyIdsOf(userA), companyIdsOf(userB)])
-    const companiesA = new Set(rowsA.map((r) => r.company_id))
-    return rowsB.some((r) => companiesA.has(r.company_id))
+      const colleagues = new Set(rows.filter((r) => companies.has(r.company_id)).map((r) => r.user_id))
+      const hit = registrations.find((r) => colleagues.has(r.user_id))
+      if (hit) return hit
+    }
+    return null
   } catch {
-    return false
+    // Fail closed: a membership read that errors counts as no colleague.
+    return null
   }
 }
 
@@ -233,6 +342,9 @@ export function capScopesForRole(
   role: string | null,
 ): ApiKeyScope[] {
   if (role !== null && WRITER_ROLES.has(role)) return [...scopes]
+  // The invoicing-only role (lib/auth/invoicer-role.ts): its own scopes,
+  // read and write, and nothing else.
+  if (isInvoicerRole(role)) return scopes.filter((s) => INVOICER_API_SCOPES.includes(s))
   return scopes.filter((s) => scopeKind(s) === 'read')
 }
 

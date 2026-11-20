@@ -24,7 +24,9 @@ function makeInboxItem(overrides: Record<string, unknown> = {}) {
     email_from: null,
     email_subject: null,
     error_message: null,
-    document_attachments: [],
+    // PostgREST embeds the one document an inbox item points at as an object
+    // (many-to-one), or null when there is none.
+    document_attachments: null,
     ...overrides,
   }
 }
@@ -66,6 +68,13 @@ describe('gnubok_list_inbox_items', () => {
     expect(schema.properties.items.items.required).toContain('file_name')
   })
 
+  it('says it lists the inbox only and names the archive list (feedback seq 876431)', () => {
+    expect(tool.description).toMatch(/^Inbox items only/)
+    expect(tool.description).toContain('generated customer invoices')
+    expect(tool.description).toContain('gnubok_list_records')
+    expect(tools.some((t) => t.name === 'gnubok_list_records')).toBe(true)
+  })
+
   it('advertises optional cursor pagination without changing required output fields', () => {
     const inputSchema = tool.inputSchema as { properties: Record<string, unknown> }
     const outputSchema = tool.outputSchema as {
@@ -78,14 +87,42 @@ describe('gnubok_list_inbox_items', () => {
     expect(outputSchema.required).toEqual(['items', 'count'])
   })
 
+  it('returns each row\'s document_id, the id the document tools take', async () => {
+    // A mail or WhatsApp arrival's document has an id of its own. The list
+    // returned only the item id, so agents sent it as document_id and
+    // gnubok_get_document_content answered NOT_FOUND (72 calls,
+    // 2026-10-29..11-11).
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'inbox-mail', source: 'email', document_id: 'doc-of-its-own', created_at: '2026-07-31T12:00:00Z' }),
+        makeInboxItem({ id: 'inbox-empty', source: 'email', document_id: null, created_at: '2026-07-30T12:00:00Z' }),
+      ],
+      error: null,
+    })
+
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; document_id: string | null }>
+    }
+
+    expect(findCall('invoice_inbox_items', 'select')?.[0]).toMatch(/\bid, document_id,/)
+    expect(result.items.map((item) => [item.id, item.document_id])).toEqual([
+      ['inbox-mail', 'doc-of-its-own'],
+      ['inbox-empty', null],
+    ])
+  })
+
   it('joins the document and returns its file_name on each list row', async () => {
+    // The embed is an OBJECT: invoice_inbox_items.document_id is many-to-one.
+    // Reading it as an array gave every row file_name null in production
+    // (agent feedback seq 876431) while a mock of the wrong shape passed.
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({
       data: [
         makeInboxItem({
           id: 'inbox-1',
           created_at: '2026-07-31T12:00:00Z',
-          document_attachments: [{ file_name: 'dooer-export-2026-07.pdf' }],
+          document_attachments: { file_name: 'leverantor-export-2026-07.pdf' },
         }),
         makeInboxItem({
           id: 'inbox-2',
@@ -102,12 +139,128 @@ describe('gnubok_list_inbox_items', () => {
     }
 
     const select = findCall('invoice_inbox_items', 'select')?.[0]
-    expect(select).toContain('document_attachments(file_name)')
+    expect(select).toContain('document_attachments(file_name, upload_source)')
+    expect(select).toContain('document_hold:document_attachments(journal_entry_id')
     expect(result.items.map((item) => item.file_name)).toEqual([
-      'dooer-export-2026-07.pdf',
+      'leverantor-export-2026-07.pdf',
       null,
     ])
     expect(result.count).toBe(2)
+  })
+
+  it('reads an item whose document a verifikat holds as processed, stamp or not (agent feedback seq 1003926)', async () => {
+    // The document was linked before the inbox row existed, so nothing
+    // stamped the row: the document's own link is what says it is handled.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({
+          id: 'inbox-linked',
+          created_at: '2026-07-31T12:00:00Z',
+          document_attachments: { file_name: 'kvitto.pdf' },
+          document_hold: { journal_entry_id: 'je-a30', entry: { status: 'posted' } },
+        }),
+        makeInboxItem({
+          id: 'inbox-open',
+          created_at: '2026-07-30T12:00:00Z',
+          document_attachments: { file_name: 'oppen.pdf' },
+          document_hold: { journal_entry_id: null, entry: null },
+        }),
+      ],
+      error: null,
+    })
+
+    const all = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; processed: boolean }>
+    }
+    expect(all.items.map((i) => [i.id, i.processed])).toEqual([
+      ['inbox-linked', true],
+      ['inbox-open', false],
+    ])
+  })
+
+  // A paper invoice photographed a page at a time (agent feedback
+  // 2026-11-06): each page names the other, so the agent registers it once.
+  it('names the other pages of the same supplier invoice, only on the rows that have one', async () => {
+    const read = (total: number | null) => ({
+      documentKind: 'supplier_invoice',
+      supplier: { name: 'Bygg AB' },
+      invoice: { invoiceNumber: 'F1001', invoiceDate: '2026-09-15', currency: 'SEK' },
+      totals: { total },
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'page-2', created_at: '2026-11-01T09:00:02Z', extracted_data: read(1250) }),
+        makeInboxItem({ id: 'page-1', created_at: '2026-11-01T09:00:00Z', extracted_data: read(null) }),
+        makeInboxItem({ id: 'other', created_at: '2026-10-31T10:00:00Z' }),
+      ],
+      error: null,
+    })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; same_invoice_as?: string[] }>
+    }
+    const byId = Object.fromEntries(result.items.map((i) => [i.id, i]))
+    expect(byId['page-1'].same_invoice_as).toEqual(['page-2'])
+    expect(byId['page-2'].same_invoice_as).toEqual(['page-1'])
+    expect('same_invoice_as' in byId.other).toBe(false)
+  })
+
+  it('leaves an item whose document a verifikat holds out of unprocessed_only', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'inbox-linked', document_hold: { journal_entry_id: 'je-a30', entry: { status: 'posted' } } }),
+        makeInboxItem({ id: 'inbox-open', document_hold: { journal_entry_id: null, entry: null } }),
+      ],
+      error: null,
+    })
+
+    const open = (await tool.execute({ unprocessed_only: true }, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string }>
+    }
+    expect(open.items.map((i) => i.id)).toEqual(['inbox-open'])
+  })
+
+  it('reads the one open reading: Arkiv took it is processed, a document on a reversed verifikat is not', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'inbox-routed', routed_to_arkiv_at: '2026-07-31T12:00:00Z' }),
+        makeInboxItem({ id: 'inbox-reversed', document_hold: { journal_entry_id: 'je-a30', entry: { status: 'reversed' } } }),
+      ],
+      error: null,
+    })
+
+    const all = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; processed: boolean }>
+    }
+    expect(all.items.map((i) => [i.id, i.processed])).toEqual([
+      ['inbox-routed', true],
+      ['inbox-reversed', false],
+    ])
+  })
+
+  it('carries the inbox address the listed mail arrived at (crm#1174)', async () => {
+    process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
+    try {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [makeInboxItem({ source: 'email' })], error: null })
+      enqueue({ data: { local_part: 'acme-7f3k' }, error: null })
+
+      const result = await tool.execute({}, 'company-1', 'user-1', supabase as never)
+      expect(result).toMatchObject({ count: 1, inbox_address: 'acme-7f3k@in.example.test' })
+    } finally {
+      delete process.env.RESEND_INBOUND_DOMAIN
+    }
+  })
+
+  it('reports a null inbox address when none is provisioned', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [makeInboxItem()], error: null })
+
+    const result = await tool.execute({}, 'company-1', 'user-1', supabase as never)
+    expect(result).toMatchObject({ inbox_address: null })
   })
 
   it('preserves the first-page response when there are no more items', async () => {
@@ -198,6 +351,7 @@ describe('gnubok_list_inbox_items', () => {
       items: [],
       count: 0,
       next_cursor: `${rows[199].created_at}__${rows[199].id}`,
+      inbox_address: null,
     })
   })
 

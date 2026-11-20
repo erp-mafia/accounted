@@ -5,7 +5,7 @@ import { peppolParticipantSchema } from '@accounted/connect-contract'
  * transport noise is stripped, shared by the document reader (EndpointID as
  * the sender wrote it), the recipient resolver (what our registrations hold)
  * and any comparison between the two. Mirrors the hosted connector's rules
- * (accounted-connect) so both sides route the same document to the same
+ * (the Connect service) so both sides route the same document to the same
  * registration.
  *
  * - 0007 (Swedish organisation number): digits only; the twelve-digit form

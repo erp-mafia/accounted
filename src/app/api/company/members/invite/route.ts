@@ -1,31 +1,25 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
-import { getEmailService } from '@/lib/email/service'
-import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
-import {
-  generateInviteEmailSubject,
-  generateInviteEmailHtml,
-  generateInviteEmailText,
-} from '@/lib/email/invite-templates'
+import { sendCompanyInviteMail } from '@/lib/email/send-company-invite'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
-
-// Loads the email extension so getEmailService() returns the Resend
-// implementation instead of the noop default. Without this, the invite email
-// is silently skipped in dev whenever this route is hit before any other
-// init'd route in the process.
-ensureInitialized()
+import { readClientProfileChoice, storeClientProfile } from '@/lib/company/client-profile'
+import { PROFILE_IDS } from '@/lib/modules/profiles'
 
 const InviteSchema = z.object({
   email: z.string().trim().toLowerCase().pipe(z.string().email('Ogiltig e-postadress.')),
-  role: z.enum(['admin', 'member', 'viewer']).default('viewer'),
+  role: z.enum(['admin', 'member', 'viewer', 'invoicer']).default('viewer'),
+  /**
+   * The client's profile (lib/modules/profiles.ts): required when the caller
+   * is the byrå of this client company, refused from anyone else.
+   */
+  profile_id: z.enum(PROFILE_IDS).optional(),
 })
 
 /**
@@ -46,13 +40,18 @@ function maskEmail(email: string): string {
  * Invite a user to the current company (e.g., a client as viewer).
  * Only company owners and admins can invite.
  *
+ * On a byrå's client company, the byrå's people must also pick the client's
+ * profile (profile_id): it is stored on the company before the invitation,
+ * so the client sees it on /invite/[token]. Anyone else sending profile_id
+ * is refused; their invite is unchanged otherwise.
+ *
  * The accept link (inviteUrl) is ALWAYS returned in the response, whether or
  * not the invitation email went out, so the inviter can share it directly.
  * This is the only place the raw link exists: tokens are stored hashed
  * (lib/auth/invite-tokens.ts), so a self-hosted operator without a mail
  * provider (#1710) or an inviter whose mail bounced would otherwise hold an
- * invitation nobody can accept. There is no re-send for company invites:
- * revoke and invite again to get a fresh link.
+ * invitation nobody can accept. A lost or expired link is renewed with
+ * POST /api/company/members/invite/[id] (re-send), which issues a fresh token.
  */
 export const POST = withRouteContext(
   'company_members.invite',
@@ -95,7 +94,17 @@ export const POST = withRouteContext(
       operation: 'company_members.invite',
     })
     if (!validation.success) return validation.response
-    const { email, role } = validation.data
+    const { email, role, profile_id: profileId } = validation.data
+
+    // Profiles and Suggestions: a byrå inviting into its client company picks
+    // the client's profile; nobody else may set one through an invite.
+    const profileChoice = await readClientProfileChoice(serviceClient, companyId, user.id)
+    if (profileChoice && !profileId) {
+      return NextResponse.json({ error: 'Välj vilken profil kunden ska starta med.' }, { status: 400 })
+    }
+    if (!profileChoice && profileId) {
+      return NextResponse.json({ error: 'Bara kundens byrå kan välja profil.' }, { status: 403 })
+    }
 
     // Check if email is already a member of this company
     const { data: existingMembers } = await serviceClient
@@ -118,15 +127,24 @@ export const POST = withRouteContext(
       }
     }
 
-    // Check for existing pending invite
+    // Check for an existing invitation. One that is still pending AND still
+    // valid blocks a second send. A pending one whose link has run out does
+    // not: with a 24 hour lifetime (lib/auth/invite-ttl.ts) inviting the same
+    // address again is the natural next step, so it falls through to the
+    // update below, which issues a fresh link in place like the re-send
+    // button does.
     const { data: existingInvite } = await serviceClient
       .from('company_invitations')
-      .select('id, status')
+      .select('id, status, expires_at')
       .eq('company_id', companyId)
       .eq('email', email)
       .single()
 
-    if (existingInvite && existingInvite.status === 'pending') {
+    const existingStillValid =
+      existingInvite?.status === 'pending' &&
+      typeof existingInvite.expires_at === 'string' &&
+      new Date(existingInvite.expires_at) > new Date()
+    if (existingStillValid) {
       return NextResponse.json({ error: 'En inbjudan har redan skickats till denna e-post.' }, { status: 409 })
     }
 
@@ -205,6 +223,16 @@ export const POST = withRouteContext(
       }
     }
 
+    // The byrå's profile pick, stored before the invitation exists so the
+    // invite page shows what the byrå prepared. Unchanged picks write nothing.
+    if (profileChoice && profileId && profileId !== profileChoice.current) {
+      const { error: profileError } = await storeClientProfile(serviceClient, companyId, profileId)
+      if (profileError) {
+        log.error('client profile write failed', new Error(String((profileError as { message?: string }).message ?? profileError)))
+        return NextResponse.json({ error: 'Kunde inte spara kundens profil.' }, { status: 500 })
+      }
+    }
+
     // Upsert invitation
     if (existingInvite) {
       const { error } = await serviceClient
@@ -241,43 +269,17 @@ export const POST = withRouteContext(
 
     // Send email. email_sent is surfaced in the response so the UI can tell
     // the user when the invitation exists but the mail never went out:
-    // previously a send failure was invisible (invite looked sent).
-    // Brand mail (WL-13): sender identity and the invite link follow the
-    // brand of the company the invite concerns; a company without a brand
-    // uses the validated request origin (appOrigin) and sender exactly as
-    // before.
-    const sender = await getSenderForCompany(companyId)
-    const appUrl = sender.brand ? getBaseUrlForBrand(sender.brand) : appOrigin
-    const inviteUrl = `${appUrl}/invite/${token}`
-    const emailService = getEmailService()
-    let emailSent = false
-    if (emailService.isConfigured()) {
-      const emailData = {
-        companyName: company?.name || 'Företag',
-        inviterEmail: user.email || '',
-        inviteUrl,
-        appName: sender.brand?.appName,
-      }
-
-      const result = await emailService.sendEmail({
-        to: email,
-        subject: generateInviteEmailSubject(emailData),
-        html: generateInviteEmailHtml(emailData),
-        text: generateInviteEmailText(emailData),
-        fromName: sender.fromName ?? undefined,
-        fromAddress: sender.fromAddress ?? undefined,
-        replyTo: sender.replyTo ?? undefined,
-      })
-
-      if (result.success) {
-        emailSent = true
-        log.info('invite email sent', { to: email, messageId: result.messageId })
-      } else {
-        log.error('invite email send failed', new Error(result.error ?? 'unknown'), { to: email })
-      }
-    } else {
-      log.warn('email service not configured: invite email skipped', { to: email })
-    }
+    // previously a send failure was invisible (invite looked sent). Brand
+    // mail (WL-13) and the link base live in the helper shared with re-send.
+    const { inviteUrl, emailSent } = await sendCompanyInviteMail({
+      companyId,
+      companyName: company?.name,
+      email,
+      inviterEmail: user.email || '',
+      token,
+      appOrigin,
+      log,
+    })
 
     return NextResponse.json({
       data: {

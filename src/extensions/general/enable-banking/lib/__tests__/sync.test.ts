@@ -4,6 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockGetAllTransactionsWithRaw = vi.fn()
 const mockConvertTransaction = vi.fn()
 const mockGetAccountBalance = vi.fn()
+const archiveLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => archiveLog }))
+
 vi.mock('../api-client', () => ({
   getAllTransactionsWithRaw: (...args: unknown[]) => mockGetAllTransactionsWithRaw(...args),
   convertTransaction: (...args: unknown[]) => mockConvertTransaction(...args),
@@ -16,10 +19,18 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
 }))
 
+const mockResolveBankIngestRoute = vi.fn()
+vi.mock('@/lib/bank-sync/ingest-route', () => ({ resolveBankIngestRoute: (...args: unknown[]) => mockResolveBankIngestRoute(...args) }))
+
+const mockRecordPageArrival = vi.fn()
+vi.mock('@/lib/bank-feed/page-arrival', () => ({
+  recordBankFeedPageArrival: (...args: unknown[]) => mockRecordPageArrival(...args),
+}))
+
 // Mock ingest
 const mockIngest = vi.fn()
 
-import { syncAccountTransactions } from '../sync'
+import { bookedDateOf, notBookedReasons, syncAccountTransactions } from '../sync'
 import type { StoredAccount } from '../../types'
 
 const USER_ID = 'user-1'
@@ -37,8 +48,37 @@ function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
 describe('syncAccountTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockResolveBankIngestRoute.mockImplementation(async (_db, _company, connectionId, accountUid, currency) => ({
+      connectionId, accountUid, currency, sessionId: 'session', cashAccountId: 'cash', ledgerAccount: '1930', token: 'route-token',
+    }))
     mockGetAccountBalance.mockRejectedValue(new Error('skip'))
     mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: ['tx-1'] })
+  })
+
+  it('does not fetch or ingest when the authoritative route cannot be read', async () => {
+    mockResolveBankIngestRoute.mockRejectedValue(new Error('route unavailable'))
+    await expect(syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)).rejects.toThrow('route unavailable')
+    expect(mockGetAllTransactionsWithRaw).not.toHaveBeenCalled()
+    expect(mockIngest).not.toHaveBeenCalled()
+  })
+
+  it('rejects a changed destination before provider or persistence calls with a reloadable conflict', async () => {
+    await expect(syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount({ ledger_account: '1931' }), '2024-01-01', '2024-12-31', mockIngest))
+      .rejects.toMatchObject({ code: 'PT409' })
+    expect(mockGetAllTransactionsWithRaw).not.toHaveBeenCalled()
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+    expect(mockIngest).not.toHaveBeenCalled()
+  })
+
+  it('rejects a partially persisted batch after archiving it, so callers cannot advance the cursor', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: ['{"transactions":[]}'] })
+    mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 1, first_error: { code: 'PT409', message: 'route changed' } })
+    await expect(syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)).rejects.toMatchObject({ code: 'PT409', message: expect.stringContaining('route changed') })
+    expect(mockUploadDocument).toHaveBeenCalledTimes(1)
+    expect(mockGetAccountBalance).not.toHaveBeenCalled()
   })
 
   it('calls uploadDocument for each raw page with correct filename pattern', async () => {
@@ -86,6 +126,58 @@ describe('syncAccountTransactions', () => {
 
     const secondCall = mockUploadDocument.mock.calls[1]
     expect(secondCall[3].name).toMatch(/^psd2-response_conn-1_acc-uid-1_.*_p2\.json$/)
+
+    // Each archived page is recorded as a bank_feed arrival.
+    expect(mockRecordPageArrival.mock.calls.map((call) => call[1])).toEqual([1, 2].map((page) => ({
+      companyId: COMPANY_ID, userId: USER_ID, documentId: 'doc-1', connectionId: CONNECTION_ID,
+      accountUid: 'acc-uid-1', page, aggregator: 'enable_banking',
+    })))
+  })
+
+  it('links every row to the archived page it came in and keeps the bank fields', async () => {
+    const page1 = [
+      { entry_reference: 'E1', booking_date: '2024-06-15', transaction_amount: { amount: '100', currency: 'SEK' } },
+      { booking_date: null, transaction_amount: { amount: '150', currency: 'SEK' } }, // pending, skipped
+    ]
+    const page2 = [
+      { entry_reference: 'E3', booking_date: '2024-06-16', transaction_amount: { amount: '200', currency: 'SEK' } },
+    ]
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [...page1, ...page2],
+      rawPages: [JSON.stringify({ transactions: page1 }), JSON.stringify({ transactions: page2 })],
+    })
+    mockConvertTransaction.mockImplementation((tx: { entry_reference?: string; transaction_amount: { amount: string } }) => ({
+      id: tx.entry_reference ?? 'x',
+      date: '2024-06-15',
+      booking_date: '2024-06-15',
+      amount: parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'Test',
+      reference: `OCR-${tx.entry_reference}`,
+      value_date: '2024-06-17',
+      provider_transaction_id: tx.entry_reference,
+    }))
+    mockUploadDocument.mockResolvedValueOnce({ id: 'doc-p1' }).mockResolvedValueOnce({ id: 'doc-p2' })
+
+    await syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)
+
+    const rows = mockIngest.mock.calls[0][3]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ raw_document_id: 'doc-p1', provider_transaction_id: 'E1', value_date: '2024-06-17', reference: 'OCR-E1' })
+    expect(rows[1]).toMatchObject({ raw_document_id: 'doc-p2', provider_transaction_id: 'E3' })
+  })
+
+  it('links no row to a page whose archive failed', async () => {
+    const page = [{ booking_date: '2024-06-15', transaction_amount: { amount: '100', currency: 'SEK' } }]
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: page, rawPages: [JSON.stringify({ transactions: page })] })
+    mockConvertTransaction.mockReturnValue({ id: 'x', date: '2024-06-15', booking_date: '2024-06-15', amount: 100, currency: 'SEK', description: 'Test' })
+    mockUploadDocument.mockRejectedValue(new Error('storage down'))
+
+    await syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)
+
+    expect(mockIngest.mock.calls[0][3][0].raw_document_id).toBeNull()
   })
 
   it('completes sync even if uploadDocument throws', async () => {
@@ -105,8 +197,6 @@ describe('syncAccountTransactions', () => {
 
     mockUploadDocument.mockRejectedValue(new Error('Storage error'))
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
     const account = makeAccount()
     const result = await syncAccountTransactions(
       {} as never,
@@ -121,12 +211,12 @@ describe('syncAccountTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.errors).toBe(0)
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to archive raw response'),
-      expect.any(Error)
+    // The rows landed without their BFL 7 kap evidence, for good: an error that reaches error tracking.
+    expect(archiveLog.error).toHaveBeenCalledWith(
+      'raw bank response page not archived',
+      expect.any(Error),
+      expect.objectContaining({ connectionId: CONNECTION_ID, companyId: COMPANY_ID, page: 1 }),
     )
-
-    errorSpy.mockRestore()
   })
 
   it('forwards strategy from sync options to getAllTransactionsWithRaw', async () => {
@@ -247,7 +337,7 @@ describe('syncAccountTransactions', () => {
       rawPages: ['{}'],
     })
 
-    await syncAccountTransactions(
+    const result = await syncAccountTransactions(
       {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
       '2026-01-01', '2026-06-01', mockIngest
     )
@@ -256,6 +346,179 @@ describe('syncAccountTransactions', () => {
     expect(batch).toHaveLength(1)
     expect(batch[0].date).toBe('2026-03-01')
     expect(batch[0].external_id).toBe('eb_acc-uid-1_2026-03-01_-7500_0')
+    // The skipped entry is counted, so an empty sync can say why (PH 221).
+    expect(result.notBooked).toBe(1)
+  })
+
+  it('says in its log why each entry was skipped: the bank\'s status and which dates it carried, never a value (PH 221)', async () => {
+    // Every Wamo entry was skipped for twelve days; the log said only "3 of 3",
+    // not whether the bank marks them pending or books them without a booking_date.
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string }, booking_date?: string, value_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date || tx.value_date,
+      booking_date: tx.booking_date || tx.value_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        // No status and no booking_date: nothing says it is settled.
+        { transaction_amount: { amount: '50', currency: 'SEK' }, value_date: '2026-10-31', transaction_date: '2026-10-31' },
+        { transaction_amount: { amount: '60', currency: 'SEK' }, value_date: '2026-11-03', transaction_date: '2026-11-03' },
+        { status: 'PDNG', transaction_amount: { amount: '70', currency: 'SEK' }, booking_date: '2026-11-05', value_date: '2026-11-05' },
+        { status: 'BOOK', transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-11-04' },
+      ],
+      rawPages: ['{}'],
+    })
+    archiveLog.info.mockClear()
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-10-30', '2026-11-06', mockIngest
+    )
+
+    expect(result.notBooked).toBe(3)
+    expect(archiveLog.info).toHaveBeenCalledWith('Skipped pending transactions (not booked or no booking_date)', expect.objectContaining({
+      skippedPending: 3,
+      total: 4,
+      reasons: { 'NONE/value_date+transaction_date': 2, 'PDNG/booking_date+value_date': 1 },
+    }))
+  })
+
+  it('reports no unbooked entries when every entry is booked (PH 221)', async () => {
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string }, booking_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date,
+      booking_date: tx.booking_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-03-01' }],
+      rawPages: ['{}'],
+    })
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    expect(result).not.toHaveProperty('notBooked')
+  })
+
+  it('skips entries the bank marks as not booked even when they carry a booking_date (Svea PDNG card purchase in USD)', async () => {
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string, currency: string }, booking_date?: string, value_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date || tx.value_date,
+      booking_date: tx.booking_date || tx.value_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: tx.transaction_amount.currency,
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { status: 'BOOK', transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-10-12' },
+        { status: 'PDNG', transaction_amount: { amount: '20', currency: 'USD' }, booking_date: '2026-10-11' }, // pending, dated: skipped
+        { status: 'hold', transaction_amount: { amount: '30', currency: 'SEK' }, booking_date: '2026-10-11' }, // held: skipped
+        { status: 'OTHR', transaction_amount: { amount: '40', currency: 'SEK' }, booking_date: '2026-10-10' }, // other: the date rule stands
+        { transaction_amount: { amount: '50', currency: 'SEK' }, booking_date: '2026-10-09' },                // no status: the date rule stands
+      ],
+      rawPages: ['{}'],
+    })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-10-01', '2026-10-15', mockIngest
+    )
+
+    const batch = mockIngest.mock.calls[0][3]
+    expect(batch.map((row: { date: string }) => row.date)).toEqual(['2026-10-12', '2026-10-10', '2026-10-09'])
+    expect(batch.every((row: { currency: string }) => row.currency === 'SEK')).toBe(true)
+  })
+
+  it('imports entries the bank marks BOOK without a booking_date, dated by value_date else transaction_date (crm#1767)', async () => {
+    // PayPal sends every settled entry as status BOOK with only a
+    // transaction_date; read as pending, its whole feed stayed empty.
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string } }) => ({
+      id: 'x',
+      date: '2099-01-01', // convertTransaction's own fallback, never the ledger date
+      booking_date: '2099-01-01',
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { status: 'BOOK', transaction_amount: { amount: '10', currency: 'SEK' }, transaction_date: '2026-11-02' },
+        { status: 'book', transaction_amount: { amount: '20', currency: 'SEK' }, value_date: '2026-11-04', transaction_date: '2026-11-03' },
+        { status: 'RJCT', transaction_amount: { amount: '30', currency: 'SEK' }, transaction_date: '2026-11-05' }, // rejected: skipped
+        { status: 'PDNG', transaction_amount: { amount: '40', currency: 'SEK' }, transaction_date: '2026-11-06' }, // pending: skipped
+        { status: 'BOOK', transaction_amount: { amount: '50', currency: 'SEK' } },                                  // no date at all: skipped
+      ],
+      rawPages: ['{}'],
+    })
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-11-01', '2026-11-08', mockIngest
+    )
+
+    const batch = mockIngest.mock.calls[0][3]
+    expect(batch.map((row: { date: string; amount: number }) => [row.date, row.amount])).toEqual([
+      ['2026-11-02', -10],
+      ['2026-11-04', -20],
+    ])
+    expect(batch[0].external_id).toBe('eb_acc-uid-1_2026-11-02_-1000_0')
+    expect(result.notBooked).toBe(3)
+    expect(result.returnedMinBookingDate).toBe('2026-11-02')
+    expect(result.returnedMaxBookingDate).toBe('2026-11-04')
+  })
+
+  it('reports the rows ingest set aside as another currency, and the rest of the sync stands (crm#1767)', async () => {
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string, currency: string } }) => ({
+      id: 'x',
+      date: '2026-11-02',
+      booking_date: '2026-11-02',
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: tx.transaction_amount.currency,
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { status: 'BOOK', transaction_amount: { amount: '10', currency: 'SEK' }, transaction_date: '2026-11-02' },
+        { status: 'BOOK', transaction_amount: { amount: '20', currency: 'USD' }, transaction_date: '2026-11-02' },
+        { status: 'BOOK', transaction_amount: { amount: '30', currency: 'EUR' }, transaction_date: '2026-11-02' },
+      ],
+      rawPages: ['{}'],
+    })
+    mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0,
+      auto_matched_invoices: 0, transaction_ids: ['tx-1'], other_currency: { USD: 1, EUR: 1 } })
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-11-01', '2026-11-08', mockIngest
+    )
+
+    // Every row goes to ingest with its own currency; the route decides there.
+    expect(mockIngest.mock.calls[0][3].map((row: { currency: string }) => row.currency)).toEqual(['SEK', 'USD', 'EUR'])
+    expect(result).toMatchObject({ imported: 1, errors: 0, otherCurrency: 2 })
+  })
+
+  it('omits otherCurrency when every row is in the account currency', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-11-01', '2026-11-08', mockIngest
+    )
+    expect(result).not.toHaveProperty('otherCurrency')
   })
 
   it('does not re-import a booked transaction when a later sync returns it pending (no booking_date)', async () => {
@@ -330,6 +593,72 @@ describe('syncAccountTransactions', () => {
       'eb_acc-uid-1_2024-06-15_-25000_0',
       'eb_acc-uid-1_2024-06-15_-25000_1',
     ])
+  })
+
+  describe('a bank entry the response serves more than once (crm#1295)', () => {
+    type ApiTx = { entry_reference?: string; booking_date: string; transaction_amount: { amount: string; currency: string }; text: string }
+    const swish = (ref: string | undefined, text: string, amount = '250'): ApiTx =>
+      ({ entry_reference: ref, booking_date: '2026-06-15', transaction_amount: { amount, currency: 'SEK' }, text })
+    const convert = (tx: ApiTx) => ({
+      id: tx.entry_reference ?? 'x',
+      date: tx.booking_date,
+      booking_date: tx.booking_date,
+      amount: parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: tx.text,
+      provider_transaction_id: tx.entry_reference,
+    })
+    const sync = async (pages: ApiTx[][]) => {
+      mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
+        transactions: pages.flat(),
+        rawPages: pages.map((rows) => JSON.stringify({ transactions: rows })),
+      })
+      await syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+        '2026-06-01', '2026-06-30', mockIngest)
+      return mockIngest.mock.calls[mockIngest.mock.calls.length - 1][3] as Array<{ external_id: string; provider_transaction_id: string | null; raw_document_id: string | null }>
+    }
+
+    beforeEach(() => {
+      mockConvertTransaction.mockImplementation(convert)
+      mockUploadDocument.mockImplementation(async (_db: unknown, _u: unknown, _c: unknown, file: { name: string }) => ({ id: file.name.replace(/^.*_(p\d+)\.json$/, '$1') }))
+    })
+
+    it('ingests each entry once when a later page repeats rows of an earlier one', async () => {
+      const rows = await sync([
+        [swish('E3', 'Swish ref-3'), swish('E2', 'Swish ref-2')],
+        [swish('E2', 'Swish ref-2'), swish('E1', 'Swish ref-1')],
+      ])
+      expect(rows.map((r) => r.provider_transaction_id)).toEqual(['E3', 'E2', 'E1'])
+      expect(rows.map((r) => r.external_id)).toEqual([
+        'eb_acc-uid-1_2026-06-15_25000_0',
+        'eb_acc-uid-1_2026-06-15_25000_1',
+        'eb_acc-uid-1_2026-06-15_25000_2',
+      ])
+      // The kept copy stays linked to the page it first came in.
+      expect(rows.map((r) => r.raw_document_id)).toEqual(['p1', 'p1', 'p2'])
+    })
+
+    it('mints the same ids as a response without the repeat, so a re-sync dedupes', async () => {
+      const clean = await sync([[swish('E3', 'Swish ref-3'), swish('E2', 'Swish ref-2'), swish('E1', 'Swish ref-1')]])
+      const repeated = await sync([
+        [swish('E3', 'Swish ref-3'), swish('E2', 'Swish ref-2')],
+        [swish('E2', 'Swish ref-2'), swish('E3', 'Swish ref-3'), swish('E1', 'Swish ref-1')],
+      ])
+      expect(repeated.map((r) => r.external_id)).toEqual(clean.map((r) => r.external_id))
+    })
+
+    it('keeps two equal Swish payments on the same day: the bank ids differ', async () => {
+      const rows = await sync([[swish('E1', 'Swish'), swish('E2', 'Swish')]])
+      expect(rows.map((r) => r.external_id)).toEqual([
+        'eb_acc-uid-1_2026-06-15_25000_0',
+        'eb_acc-uid-1_2026-06-15_25000_1',
+      ])
+    })
+
+    it('keeps identical rows the bank sent without an id', async () => {
+      const rows = await sync([[swish(undefined, 'Swish'), swish(undefined, 'Swish')]])
+      expect(rows).toHaveLength(2)
+    })
   })
 
   it('prefers IBAN over uid for the external_id account scope', async () => {
@@ -606,6 +935,32 @@ describe('syncAccountTransactions', () => {
     warnSpy.mockRestore()
   })
 
+  // PH 195: the read stopped at the page cap while the bank still had pages.
+  it('passes on a read the bank had not finished as truncated', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [],
+      rawPages: ['{"transactions":[],"continuation_key":"k"}'],
+      requestedDateFrom: '2025-10-20',
+      effectiveDateFrom: '2025-10-20',
+      narrowed: false,
+      truncated: true,
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    const result = await syncAccountTransactions(
+      {} as never,
+      COMPANY_ID,
+      USER_ID,
+      CONNECTION_ID,
+      makeAccount(),
+      '2025-10-20',
+      '2026-10-20',
+      mockIngest
+    )
+
+    expect(result.truncated).toBe(true)
+  })
+
   it('never shrinks accepted_history_days: an incremental sync keeps the wider record', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [],
@@ -654,7 +1009,9 @@ describe('syncAccountTransactions', () => {
     expect(result.effectiveFromDate).toBeUndefined()
   })
 
-  it('passes account.ledger_account as IngestOptions.settlementAccount when set', async () => {
+  it('passes the verified route into ingestion', async () => {
+    mockResolveBankIngestRoute.mockResolvedValue({ connectionId: CONNECTION_ID, accountUid: 'eur-acc', currency: 'EUR',
+      sessionId: 'session', cashAccountId: 'eur-cash', ledgerAccount: '1932', token: 'route-token' })
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'EUR' }, booking_date: '2026-04-01' }],
       rawPages: ['{}'],
@@ -682,7 +1039,7 @@ describe('syncAccountTransactions', () => {
     )
 
     const ingestOptions = mockIngest.mock.calls[0][4]
-    expect(ingestOptions).toMatchObject({ settlementAccount: '1932' })
+    expect(ingestOptions).toMatchObject({ settlementAccount: '1932', bankRoute: { cashAccountId: 'eur-cash', token: 'route-token' } })
   })
 
   it('skips the balance call when the stored balance is fresher than 12 hours', async () => {
@@ -705,7 +1062,7 @@ describe('syncAccountTransactions', () => {
 
   it('refreshes the balance when the stored balance is older than 12 hours', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
-    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01', available: 1100.5 })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, referenceDate: '2026-05-31', type: 'closingBooked', available: 1100.5 })
 
     const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
     const account = makeAccount({ balance: 500, balance_updated_at: staleAt })
@@ -715,10 +1072,11 @@ describe('syncAccountTransactions', () => {
       '2026-01-01', '2026-06-01', mockIngest
     )
 
-    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1')
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined, 'SEK')
     expect(account.balance).toBe(1234.56)
     expect(account.available_balance).toBe(1100.5)
     expect(account.balance_updated_at).not.toBe(staleAt)
+    expect(account.balance_reference).toEqual({ date: '2026-05-31', type: 'closingBooked' })
   })
 
   it('keeps the previous balance and timestamp when the bank reports no balances (null result)', async () => {
@@ -728,7 +1086,8 @@ describe('syncAccountTransactions', () => {
     mockGetAccountBalance.mockResolvedValue(null)
 
     const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
-    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt })
+    const reference = { date: '2026-05-01', type: 'closingBooked', fetched_at: staleAt }
+    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt, balance_reference: reference })
 
     await syncAccountTransactions(
       {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
@@ -739,16 +1098,20 @@ describe('syncAccountTransactions', () => {
     expect(account.balance).toBe(500)
     expect(account.available_balance).toBe(480)
     expect(account.balance_updated_at).toBe(staleAt)
+    expect(account.balance_reference).toEqual(reference)
   })
 
   it('clears a stored available balance when the refresh reports none', async () => {
     // A stale available figure next to a fresh booked figure would misstate
     // what can be spent: null from the bank overwrites, never keeps.
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
-    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01', available: null })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, referenceDate: null, type: 'ITBD', available: null })
 
     const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
-    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt })
+    const account = makeAccount({
+      balance: 500, available_balance: 480, balance_updated_at: staleAt,
+      balance_reference: { date: '2026-05-01', type: 'closingBooked', fetched_at: staleAt },
+    })
 
     await syncAccountTransactions(
       {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
@@ -757,13 +1120,15 @@ describe('syncAccountTransactions', () => {
 
     expect(account.balance).toBe(1234.56)
     expect(account.available_balance).toBeUndefined()
+    // No day from the bank: the old day must not date the new balance.
+    expect(account.balance_reference).toBeNull()
   })
 
   it('treats a future balance_updated_at as stale and refreshes', async () => {
     // Clock skew or bad data can store a future timestamp; its negative age
     // must not count as fresh, or refreshes would be suppressed indefinitely.
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
-    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01' })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, referenceDate: '2026-06-01', type: 'closingBooked', available: null })
 
     const futureAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
     const account = makeAccount({ balance: 500, balance_updated_at: futureAt })
@@ -773,7 +1138,7 @@ describe('syncAccountTransactions', () => {
       '2026-01-01', '2026-06-01', mockIngest
     )
 
-    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1')
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', undefined, 'SEK')
     expect(account.balance).toBe(1234.56)
     expect(account.balance_updated_at).not.toBe(futureAt)
   })
@@ -794,7 +1159,7 @@ describe('syncAccountTransactions', () => {
     expect(account.balance_updated_at).toBeUndefined()
   })
 
-  it('omits settlementAccount when account.ledger_account is unset (mapping engine defaults to 1930)', async () => {
+  it('uses the verified destination when the cached account has no ledger', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2026-04-01' }],
       rawPages: ['{}'],
@@ -822,6 +1187,95 @@ describe('syncAccountTransactions', () => {
     )
 
     const ingestOptions = mockIngest.mock.calls[0][4]
-    expect(ingestOptions.settlementAccount).toBeUndefined()
+    expect(ingestOptions.settlementAccount).toBe('1930')
+  })
+})
+
+describe('syncAccountTransactions: the person asking', () => {
+  const SIGNER = { personalNumber: null, ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0 test' }
+  const PSU = { 'Psu-Ip-Address': '203.0.113.7', 'Psu-User-Agent': 'Mozilla/5.0 test' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResolveBankIngestRoute.mockImplementation(async (_db, _company, connectionId, accountUid, currency) => ({
+      connectionId, accountUid, currency, sessionId: 'session', cashAccountId: 'cash', ledgerAccount: '1930', token: 'route-token',
+    }))
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
+    mockGetAccountBalance.mockResolvedValue(null)
+  })
+
+  it('reads transactions and the balance with the PSU headers when a person asked', async () => {
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-07-01', '2026-10-01', mockIngest, { signer: SIGNER }
+    )
+
+    expect(mockGetAllTransactionsWithRaw).toHaveBeenCalledWith(
+      'acc-uid-1', '2026-07-01', '2026-10-01', undefined, { acceptedHistoryDays: undefined, psu: PSU }
+    )
+    expect(mockGetAccountBalance).toHaveBeenCalledWith('acc-uid-1', PSU, 'SEK')
+  })
+
+  it('reads in the background without a person (the cron, the agent)', async () => {
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-07-01', '2026-10-01', mockIngest
+    )
+
+    expect(mockGetAllTransactionsWithRaw.mock.calls[0][4]).not.toHaveProperty('psu')
+    expect(mockGetAccountBalance.mock.calls[0][1]).toBeUndefined()
+  })
+
+  it('reads in the background when the person cannot be named in full', async () => {
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-07-01', '2026-10-01', mockIngest, { signer: { ...SIGNER, userAgent: null } }
+    )
+
+    expect(mockGetAllTransactionsWithRaw.mock.calls[0][4]).not.toHaveProperty('psu')
+  })
+})
+
+describe('bookedDateOf (crm#1767)', () => {
+  it('books a dated entry unless the bank marks it as not booked', () => {
+    expect(bookedDateOf({ booking_date: ' 2026-11-02 ' })).toBe('2026-11-02')
+    expect(bookedDateOf({ status: 'OTHR', booking_date: '2026-11-02' })).toBe('2026-11-02')
+    expect(bookedDateOf({ status: 'PDNG', booking_date: '2026-11-02' })).toBeNull()
+    expect(bookedDateOf({ status: 'RJCT', transaction_date: '2026-11-02' })).toBeNull()
+  })
+
+  it('books an entry the bank marks BOOK without a booking_date on its value_date, else its transaction_date', () => {
+    expect(bookedDateOf({ status: 'BOOK', value_date: '2026-11-04', transaction_date: '2026-11-03' })).toBe('2026-11-04')
+    expect(bookedDateOf({ status: 'BOOK', transaction_date: '2026-11-03' })).toBe('2026-11-03')
+    expect(bookedDateOf({ status: ' book ', value_date: '', transaction_date: '2026-11-03' })).toBe('2026-11-03')
+    expect(bookedDateOf({ status: 'BOOK' })).toBeNull()
+  })
+
+  it('dates a booking time with an offset on the Swedish day it fell on', () => {
+    expect(bookedDateOf({ booking_date: '2026-08-31T22:01:00Z' })).toBe('2026-09-01')
+    expect(bookedDateOf({ booking_date: '2026-11-16T00:01:00+01:00' })).toBe('2026-11-16')
+    expect(bookedDateOf({ status: 'BOOK', value_date: '2026-11-15T23:30:00Z' })).toBe('2026-11-16')
+  })
+
+  it('keeps an undated entry without that status out', () => {
+    expect(bookedDateOf({ value_date: '2026-11-04' })).toBeNull()
+    expect(bookedDateOf({ status: 'OTHR', transaction_date: '2026-11-03' })).toBeNull()
+    expect(bookedDateOf({ booking_date: null, value_date: null, transaction_date: null })).toBeNull()
+  })
+})
+
+describe('notBookedReasons (PH 221)', () => {
+  it('counts by status and the dates present, and never logs a status the bank made up verbatim', () => {
+    expect(notBookedReasons([
+      { status: ' book ', value_date: '2026-10-31' },
+      { status: 'PDNG', booking_date: '2026-11-05', value_date: '2026-11-05', transaction_date: '2026-11-04' },
+      { status: 'weird-status-123', booking_date: '' },
+      {},
+    ])).toEqual({
+      'BOOK/value_date': 1,
+      'PDNG/booking_date+value_date+transaction_date': 1,
+      'OTHER/no_dates': 1,
+      'NONE/no_dates': 1,
+    })
   })
 })

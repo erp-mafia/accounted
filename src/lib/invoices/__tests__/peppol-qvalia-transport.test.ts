@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const logMock = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => logMock }))
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
@@ -11,13 +14,31 @@ import {
   describeQvaliaErrorBody,
   extractUblDocumentId,
   extractUblJsonSupplierEndpoint,
+  mapQvaliaOutgoingStatus,
   normalizePeppolDocumentTypeId,
   normalizeQvaliaWebhook,
   readQvaliaConfigFromEnv,
+  readQvaliaOutgoingStatus,
   type QvaliaConfig,
 } from '@/lib/invoices/transports/qvalia'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
 import { getPeppolTransport } from '@/lib/invoices/peppol-transport'
+// `/invoices/outgoing/status` answers captured read-only from the Qvalia
+// sandbox on 2026-09-29: unedited response bodies, named by integrationId.
+import processedA from './fixtures/qvalia/outgoing-status-processed-9f178d7a.json'
+import processedB from './fixtures/qvalia/outgoing-status-processed-d3581a0b.json'
+import errorA from './fixtures/qvalia/outgoing-status-error-783b9b55.json'
+import errorB from './fixtures/qvalia/outgoing-status-error-9ff52b0e.json'
+import emptyMetadata from './fixtures/qvalia/outgoing-status-empty-metadata-0ff1b116.json'
+// SYNTHESIZED, not captured: on 2026-09-29 no sandbox message answered with
+// the create-only object (the one message without an outcome, 0ff1b116,
+// answers `metadata: {}` above). Built from the metadata.status object
+// captured for a just-accepted message on 2026-09-28 (event
+// message-log/create, no status); the integrationId is a placeholder.
+import created from './fixtures/qvalia/outgoing-status-created-synthesized.json'
+// A document as Qvalia's inbound listing answers it: only `Invoice` and
+// `integrationId` at the top level.
+import realInboundInvoice from './fixtures/qvalia-inbound-invoice.json'
 
 const config: QvaliaConfig = {
   apiKey: 'test-key',
@@ -61,6 +82,17 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
   })
 }
 
+function thrown(fn: () => unknown): unknown {
+  try {
+    fn()
+  } catch (error) {
+    return error
+  }
+  throw new Error('expected a throw')
+}
+
+const SHAPE_ERROR = { kind: 'shape', code: 'CONNECTOR_UPSTREAM_SHAPE', retryable: false }
+
 describe('readQvaliaConfigFromEnv', () => {
   it('returns null until key, partner number and base URL are all present', () => {
     expect(readQvaliaConfigFromEnv({})).toBeNull()
@@ -87,7 +119,19 @@ describe('readQvaliaConfigFromEnv', () => {
       authScheme: 'raw',
       webhookSecret: 's',
       webhookHeader: 'x-accounted-webhook-key',
+      webhookSigningSecret: null,
     })
+  })
+
+  it('reads the webhook signing secret, trimmed', () => {
+    const parsed = readQvaliaConfigFromEnv({
+      QVALIA_API_KEY: 'k',
+      QVALIA_PARTNER_REG_NO: 'SE1',
+      QVALIA_BASE_URL: 'https://api.qvalia.com',
+      QVALIA_WEBHOOK_SIGNING_SECRET: ' qv_whsec_1 ',
+    })
+    expect(parsed?.webhookSigningSecret).toBe('qv_whsec_1')
+    expect(parsed?.webhookSecret).toBeNull()
   })
 
   it('honours an explicit account number, the ApiKey prefix and a custom header', () => {
@@ -110,7 +154,7 @@ describe('registerConfiguredPeppolTransports', () => {
     expect(registerConfiguredPeppolTransports({})).toEqual([])
   })
 
-  it('registers the Qvalia adapter once when configured', () => {
+  it('registers the Qvalia adapter once when configured', async () => {
     const env = {
       QVALIA_API_KEY: 'k',
       QVALIA_PARTNER_REG_NO: 'SE1',
@@ -118,8 +162,34 @@ describe('registerConfiguredPeppolTransports', () => {
     }
     const first = registerConfiguredPeppolTransports(env)
     expect(first.map((t) => t.provider)).toEqual(['qvalia'])
-    expect(getPeppolTransport('qvalia')).toBe(first[0])
+    expect(await getPeppolTransport('qvalia')).toBe(first[0])
     expect(registerConfiguredPeppolTransports(env)).toEqual([])
+  })
+})
+
+describe('Qvalia transport: tenant label', () => {
+  const env = { QVALIA_API_KEY: 'k', QVALIA_PARTNER_REG_NO: 'SE1', QVALIA_BASE_URL: 'https://api-test.qvalia.com' }
+
+  it('labels its deliveries with the sending account, which defaults to the partner number', () => {
+    expect(createQvaliaTransport(config).tenantId).toBe('SE5560000000')
+    expect(createQvaliaTransport(readQvaliaConfigFromEnv(env)!).tenantId).toBe('SE1')
+    expect(createQvaliaTransport(readQvaliaConfigFromEnv({ ...env, QVALIA_ACCOUNT_REG_NO: 'SE2' })!).tenantId).toBe('SE2')
+  })
+
+  it('stamps its own label on a webhook event whatever account number the payload spells', async () => {
+    const transport = createQvaliaTransport(config)
+    const payload = {
+      eventType: 'document_delivery',
+      accountRegNo: '5560000000',
+      direction: 'outgoing',
+      integrationId: 'int-1',
+      globalTransactionId: 'int-1',
+      status: { status: 'processed', event: 'message-log/update', updatedAt: '2026-09-29T19:11:47.070Z' },
+    }
+    const headers = new Headers({ 'X-Accounted-Webhook-Key': config.webhookSecret! })
+    const [event] = await transport.verifyWebhook({ headers, rawBody: new TextEncoder().encode(JSON.stringify(payload)) })
+    expect(event.providerTenantId).toBe(transport.tenantId)
+    expect(event.rawPayload).toMatchObject({ accountRegNo: '5560000000' })
   })
 })
 
@@ -297,6 +367,47 @@ describe('Qvalia transport: submit', () => {
     }))
     await expect(transport.submit(submission())).rejects.toMatchObject({ kind: 'duplicate', retryable: false })
   })
+
+  it('resends with overwrite=true when the submission replaces a failed one, and answers the new integrationId', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      status: 'success',
+      data: { message: 'invoice F-2026-42 sent', invoice_id: 'F-2026-42', integrationId: 'int-new' },
+    }))
+
+    const receipt = await transport.submit(submission({ replacesSubmissionId: 'int-failed' }))
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'https://api-qa.qvalia.com/partner/SE5560000000/transaction/SE5560000000/invoices/outgoing?overwrite=true',
+    )
+    expect(fetchMock.mock.calls[0][1]?.body).toBe(XML)
+    expect(receipt.providerSubmissionId).toBe('int-new')
+  })
+
+  it('never adopts an earlier integrationId for a resend: its 409 stays a duplicate error', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(409, { status: 'error', data: 'duplicate' }))
+
+    await expect(transport.submit(submission({ replacesSubmissionId: 'int-failed' })))
+      .rejects.toMatchObject({ kind: 'duplicate', retryable: false })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('never gives a send up on a clock of its own, not even a resend that can only be undone by a second e-invoice', async () => {
+    // Cut at 20 s after Qvalia took the document, the delivery read as a
+    // retryable failure and the resend (overwrite=true, never a 409) went out
+    // under a new integrationId.
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      for (const replacesSubmissionId of [undefined, 'int-failed']) {
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'success', data: { integrationId: 'int-1' } }))
+        await transport.submit(submission({ replacesSubmissionId }))
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock.mock.calls.map(([, init]) => init?.signal)).toEqual([undefined, undefined])
+      expect(timeout).not.toHaveBeenCalled()
+    } finally {
+      timeout.mockRestore()
+    }
+  })
 })
 
 describe('Qvalia transport: verifyWebhook', () => {
@@ -377,6 +488,55 @@ describe('Qvalia transport: verifyWebhook', () => {
   })
 })
 
+describe('Qvalia transport: verifyWebhook with a signing secret', () => {
+  // Fixed vector: HMAC-SHA256('qv_whsec_transport', '1790000000.' + BODY),
+  // cross-checked with openssl dgst -sha256 -hmac.
+  const SIGNING = 'qv_whsec_transport'
+  const T = 1790000000
+  const BODY = '{"eventId":"evt_1","eventType":"document_delivery","direction":"outgoing","integrationId":"int-9","globalTransactionId":"int-9","status":{"status":"processed","updatedAt":"2026-09-21T14:13:19.000Z"}}'
+  const V1 = 'f92a01f19779983acc443a620aee3612a8babf2928cbd59038cc8e0212d3872b'
+  const transport = createQvaliaTransport(
+    { ...config, webhookSecret: null, webhookSigningSecret: SIGNING },
+    { fetch: vi.fn<typeof fetch>(), now: () => new Date(T * 1000) },
+  )
+
+  function signed(signature: string | null, body = BODY) {
+    const headers = new Headers({ 'content-type': 'application/json' })
+    if (signature) headers.set('X-Qvalia-Signature', signature)
+    return { headers, rawBody: new TextEncoder().encode(body) }
+  }
+
+  it('accepts a valid signature over the raw bytes and marks the verification method', async () => {
+    const [event] = await transport.verifyWebhook(signed(`t=${T},v1=${V1}`))
+    expect(event).toMatchObject({
+      providerSubmissionId: 'int-9',
+      providerEventId: 'document_delivery:int-9:processed',
+      verificationMethod: 'hmac_sha256_signature',
+    })
+  })
+
+  it('rejects a missing, tampered, re-timestamped or stale signature as an auth failure', async () => {
+    await expect(transport.verifyWebhook(signed(null))).rejects.toMatchObject({ kind: 'auth' })
+    await expect(transport.verifyWebhook(signed(`t=${T},v1=${V1}`, BODY.replace('processed', 'rejected')))).rejects.toMatchObject({ kind: 'auth' })
+    await expect(transport.verifyWebhook(signed(`t=${T - 1},v1=${V1}`))).rejects.toMatchObject({ kind: 'auth' })
+    const later = createQvaliaTransport(
+      { ...config, webhookSecret: null, webhookSigningSecret: SIGNING },
+      { fetch: vi.fn<typeof fetch>(), now: () => new Date((T + 301) * 1000) },
+    )
+    await expect(later.verifyWebhook(signed(`t=${T},v1=${V1}`))).rejects.toMatchObject({ kind: 'auth' })
+  })
+
+  it('does not fall back to the shared-secret header once a signing secret is set', async () => {
+    const both = createQvaliaTransport(
+      { ...config, webhookSigningSecret: SIGNING },
+      { fetch: vi.fn<typeof fetch>(), now: () => new Date(T * 1000) },
+    )
+    const request = signed(null)
+    request.headers.set('X-Accounted-Webhook-Key', config.webhookSecret!)
+    await expect(both.verifyWebhook(request)).rejects.toMatchObject({ kind: 'auth' })
+  })
+})
+
 describe('normalizeQvaliaWebhook', () => {
   const base = { eventType: 'document_delivery', direction: 'outgoing' }
   it.each([
@@ -402,17 +562,18 @@ describe('normalizeQvaliaWebhook', () => {
 
 describe('Qvalia transport: retrieveEvidence', () => {
   it('captures the message-log status and the provider-held XML copy', async () => {
+    const id = processedA.data[0].integrationId
     const fetchMock = vi.fn<typeof fetch>()
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ uuid: 'int-1', readAt: null, metadata: { status: 'processed' } }]))
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, processedA))
     fetchMock.mockResolvedValueOnce(new Response(XML, { status: 200, headers: { 'content-type': 'application/xml' } }))
     const transport = createQvaliaTransport(config, {
       fetch: fetchMock,
       now: () => new Date('2026-08-21T11:00:00.000Z'),
     })
 
-    const [evidence] = await transport.retrieveEvidence('int-1')
+    const [evidence] = await transport.retrieveEvidence(id)
 
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/invoices/outgoing/status?integrationId=int-1')
+    expect(String(fetchMock.mock.calls[0][0])).toContain(`/invoices/outgoing/status?integrationId=${id}`)
     expect((fetchMock.mock.calls[1][1]?.headers as Record<string, string>).accept).toBe('application/xml')
     expect(evidence).toMatchObject({
       provider: 'qvalia',
@@ -421,7 +582,7 @@ describe('Qvalia transport: retrieveEvidence', () => {
       exactDocumentSha256: sha256Hex(XML),
       retrievedAt: '2026-08-21T11:00:00.000Z',
     })
-    expect(evidence.payload).toMatchObject({ integrationId: 'int-1', status: [{ uuid: 'int-1' }] })
+    expect(evidence.payload).toMatchObject({ integrationId: id, status: processedA })
   })
 })
 
@@ -523,6 +684,78 @@ describe('Qvalia transport: receiving side', () => {
     expect(messages[0].payload).toHaveProperty('Invoice')
   })
 
+  it('lists the real answer shape with no receipt time: Qvalia sends no createdAt beside the document', async () => {
+    // The inbound sync must not read a missing receipt time as an old one
+    // (the re-listing judges such a document by its IssueDate instead).
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'success', data: [realInboundInvoice] }))
+    const [listed] = await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10 })
+    expect(Object.keys(realInboundInvoice).sort()).toEqual(['Invoice', 'integrationId'])
+    expect(listed.providerDocumentId).toBe(realInboundInvoice.integrationId)
+    expect(listed.receivedAt).toBeNull()
+    expect(listed.payload).toHaveProperty('Invoice')
+  })
+
+  it('reads a credit note whose integrationId sits under CreditNote, and logs a listed document it cannot name', async () => {
+    // The read endpoint has marked both read: a silent skip lost them for good (accounted#115).
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      status: 'success',
+      data: [
+        { CreditNote: { integrationId: 'cn-1', 'cbc:ID': [{ _: 'K-1' }] } },
+        { CreditNote: { 'cbc:ID': [{ _: 'K-2' }] } },
+      ],
+    }))
+    const messages = await transport.listInboundDocuments!({ documentType: 'CreditNote', limit: 10 })
+    expect(messages.map((m) => m.providerDocumentId)).toEqual(['cn-1'])
+    expect(logMock.error).toHaveBeenCalledWith('Qvalia listed an inbound document without an integrationId; it is not archived', {
+      documentType: 'CreditNote',
+      markedRead: true,
+      keys: ['CreditNote'],
+    })
+    expect(transport.inboundListingConsumes).toBe(true)
+  })
+
+  it('gives up a read that hangs at 20 s, and the listing that marks its page read only at the limit its caller gives', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    fetchMock.mockResolvedValueOnce(new Response(XML, { status: 200 }))
+    await transport.fetchInboundDocumentXml!('in-1', 'Invoice')
+    expect(timeout.mock.calls).toEqual([[20_000]])
+
+    // readinvoices hands the page over when it answers: the caller's limit
+    // (the time its function has left), and no limit when it gives none.
+    timeout.mockClear()
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10, timeoutMs: 200_000 })
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10 })
+    expect(timeout.mock.calls).toEqual([[200_000]])
+    expect(fetchMock.mock.calls.at(-1)?.[1]?.signal).toBeUndefined()
+
+    // The includeRead listing marks nothing: 60 s at most, less when the caller has less.
+    timeout.mockClear()
+    for (const timeoutMs of [200_000, 30_000, undefined]) {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      await transport.listInboundDocuments!({ documentType: 'Invoice', includeRead: true, ...(timeoutMs ? { timeoutMs } : {}) })
+    }
+    expect(timeout.mock.calls).toEqual([[60_000], [30_000], [60_000]])
+
+    // The timeout firing is a network failure (retryable), whether the call
+    // never answers or the body stalls after the headers.
+    timeout.mockReturnValueOnce(AbortSignal.abort(new DOMException('The operation timed out', 'TimeoutError')))
+    fetchMock.mockImplementationOnce(async (_url: unknown, init?: RequestInit) => {
+      if (init?.signal?.aborted) throw init.signal.reason
+      return new Response(null, { status: 204 })
+    })
+    await expect(transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10, timeoutMs: 200_000 })).rejects.toSatisfy(
+      (err: unknown) => err instanceof QvaliaApiError && err.kind === 'network' && err.retryable,
+    )
+    const stalled = new ReadableStream({ start: (controller) => controller.error(new DOMException('The operation timed out', 'TimeoutError')) })
+    fetchMock.mockResolvedValueOnce(new Response(stalled, { status: 200 }))
+    await expect(transport.fetchInboundDocumentXml!('in-1', 'Invoice')).rejects.toSatisfy(
+      (err: unknown) => err instanceof QvaliaApiError && err.kind === 'network',
+    )
+    timeout.mockRestore()
+  })
+
   it('re-syncs with includeRead, handles 204 as empty, and reads credit notes from their own collection', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
     expect(await transport.listInboundDocuments!({ documentType: 'CreditNote', includeRead: true })).toEqual([])
@@ -540,38 +773,139 @@ describe('Qvalia transport: receiving side', () => {
   })
 })
 
-describe('Qvalia transport: pollDeliveryStatus', () => {
+describe('readQvaliaOutgoingStatus', () => {
+  it('reads the message-log object the endpoint actually answers with', () => {
+    expect(readQvaliaOutgoingStatus(processedA.data[0])).toEqual({ status: 'processed', updatedAt: '2026-09-29T19:11:47.070Z' })
+    expect(readQvaliaOutgoingStatus(errorA.data[0])).toEqual({ status: 'error', updatedAt: '2026-09-28T13:55:29.357Z' })
+  })
+
+  it('reads a message without an outcome (create-only object, empty metadata) as no status', () => {
+    expect(readQvaliaOutgoingStatus(created.data[0])).toEqual({ status: null, updatedAt: '2026-09-28T13:55:00.844Z' })
+    expect(readQvaliaOutgoingStatus(emptyMetadata.data[0])).toEqual({ status: null, updatedAt: null })
+  })
+
+  it('reads the documented flat string; updatedAt from the object, else metadata, else the record', () => {
+    expect(readQvaliaOutgoingStatus({ metadata: { status: 'processed', updatedAt: 'm' }, updatedAt: 'r' }))
+      .toEqual({ status: 'processed', updatedAt: 'm' })
+    expect(readQvaliaOutgoingStatus({ metadata: { status: 'processed' }, updatedAt: 'r' }))
+      .toEqual({ status: 'processed', updatedAt: 'r' })
+    expect(readQvaliaOutgoingStatus({ metadata: { status: { status: 'error', updatedAt: 'o' }, updatedAt: 'm' }, updatedAt: 'r' }))
+      .toEqual({ status: 'error', updatedAt: 'o' })
+    expect(readQvaliaOutgoingStatus({ metadata: { status: { status: 'error' }, updatedAt: 'm' }, updatedAt: 'r' }))
+      .toEqual({ status: 'error', updatedAt: 'm' })
+  })
+
+  it.each([
+    ['a number', { metadata: { status: 3 } }, 'metadata.status is number'],
+    ['an array', { metadata: { status: ['processed'] } }, 'metadata.status is array'],
+    ['null', { metadata: { status: null } }, 'metadata.status is null'],
+    ['an object with a non-string status', { metadata: { status: { event: 'message-log/update', status: 200 } } }, 'metadata.status.status is number'],
+    ['a record without metadata', { integrationId: 'int-1', readAt: null }, 'status record metadata is undefined'],
+    ['a record that is not an object', 'processed', 'status record is string'],
+  ])('throws a non-retryable shape error for %s instead of skipping it', (_label, record, detail) => {
+    const error = thrown(() => readQvaliaOutgoingStatus(record))
+    expect(error).toBeInstanceOf(QvaliaApiError)
+    expect(error).toMatchObject({ ...SHAPE_ERROR, detail })
+  })
+})
+
+describe('mapQvaliaOutgoingStatus', () => {
+  it.each([
+    [null, null],
+    ['pending', null],
+    ['delayed', null],
+    ['warning', null],
+    ['processed', { normalizedStatus: 'transport_succeeded', isTerminal: false }],
+    ['processed_with_warning', { normalizedStatus: 'transport_succeeded', isTerminal: false }],
+    ['error', { normalizedStatus: 'failed', isTerminal: true }],
+    [' Processed ', { normalizedStatus: 'transport_succeeded', isTerminal: false }],
+    ['ERROR', { normalizedStatus: 'failed', isTerminal: true }],
+  ])('maps %j to %j', (status, expected) => {
+    expect(mapQvaliaOutgoingStatus(status)).toEqual(expected)
+  })
+
+  it.each(['delivered', 'rejected', 'failed', ''])('throws on the undocumented value %j instead of guessing from its wording', (status) => {
+    const error = thrown(() => mapQvaliaOutgoingStatus(status))
+    expect(error).toBeInstanceOf(QvaliaApiError)
+    expect(error).toMatchObject({ ...SHAPE_ERROR, detail: `undocumented outgoing status ${JSON.stringify(status)}` })
+  })
+})
+
+describe('Qvalia transport: pollDeliveryStatus (sandbox answers)', () => {
   const fetchMock = vi.fn<typeof fetch>()
-  const transport = createQvaliaTransport(config, { fetch: fetchMock, now: () => new Date('2026-08-21T12:00:00.000Z') })
+  const transport = createQvaliaTransport(config, { fetch: fetchMock, now: () => new Date('2026-09-29T20:00:00.000Z') })
 
   beforeEach(() => {
     fetchMock.mockReset()
   })
 
-  it('turns a message-log status into the same event a webhook would carry', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
-      status: 'success',
-      data: [{ uuid: 'int-1', readAt: null, metadata: { status: 'processed', updatedAt: '2026-08-21T11:59:00.000Z' } }],
-    }))
-    const [event] = await transport.pollDeliveryStatus!('int-1')
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/invoices/outgoing/status?integrationId=int-1&includeRead=true&limit=1')
-    expect(event).toMatchObject({
+  it.each([
+    ['9f178d7a', 'processed', 'transport_succeeded', false, processedA],
+    ['d3581a0b', 'processed', 'transport_succeeded', false, processedB],
+    ['783b9b55', 'error', 'failed', true, errorA],
+    ['9ff52b0e', 'error', 'failed', true, errorB],
+  ] as const)('%s: records %s as %s (terminal: %s)', async (_label, status, normalizedStatus, isTerminal, fixture) => {
+    const record = fixture.data[0]
+    const { integrationId } = record
+    const { updatedAt } = record.metadata.status
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, fixture))
+    const events = await transport.pollDeliveryStatus!(integrationId)
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      `https://api-qa.qvalia.com/partner/SE5560000000/transaction/SE5560000000/invoices/outgoing/status?integrationId=${integrationId}&includeRead=true&limit=1`,
+    )
+    expect(events).toEqual([{
       provider: 'qvalia',
-      providerSubmissionId: 'int-1',
-      providerEventId: 'document_delivery:int-1:processed',
+      providerTenantId: transport.tenantId,
+      providerSubmissionId: integrationId,
+      providerEventId: `document_delivery:${integrationId}:${status}`,
       idempotencyKey: null,
       eventCode: 'status_poll',
-      normalizedStatus: 'transport_succeeded',
-      isTerminal: false,
-      occurredAt: '2026-08-21T11:59:00.000Z',
+      normalizedStatus,
+      isTerminal,
+      detail: status,
+      occurredAt: updatedAt,
+      rawPayload: record,
+      eventSha256: sha256Hex(`${integrationId}:${status}:${updatedAt}`),
       verificationMethod: 'provider_poll',
-    })
+    }])
   })
 
-  it('yields nothing when the provider has no status yet or answers 204', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'success', data: [{ uuid: 'int-1', readAt: null, metadata: {} }] }))
-    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([])
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
-    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([])
+  it('gives the same transition the same identity on every poll, whatever the body looks like', async () => {
+    const id = processedA.data[0].integrationId
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, processedA))
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(processedA, null, 2), { status: 200 }))
+    const [first] = await transport.pollDeliveryStatus!(id)
+    const [second] = await transport.pollDeliveryStatus!(id)
+    expect(second.providerEventId).toBe(first.providerEventId)
+    expect(second.eventSha256).toBe(first.eventSha256)
+  })
+
+  it('yields nothing while the message has no outcome or a non-final one, for an empty data array, and for an id Qvalia does not know', async () => {
+    const pending = { status: 'success', data: [{ ...created.data[0], metadata: { status: { event: 'message-log/update', status: 'pending', updatedAt: 't' } } }] }
+    for (const body of [created, emptyMetadata, pending, { status: 'success', data: [] }]) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, body))
+      expect(await transport.pollDeliveryStatus!('int-1')).toEqual([])
+    }
+    // 204 is the sandbox's answer for an integrationId it does not know (captured 2026-09-29).
+    for (const status of [204, 404]) {
+      fetchMock.mockResolvedValueOnce(new Response(null, { status }))
+      expect(await transport.pollDeliveryStatus!('int-1')).toEqual([])
+    }
+  })
+
+  it('throws a non-retryable shape error for an answer it cannot read, instead of skipping the record', async () => {
+    const cases: Array<[Response, string]> = [
+      [jsonResponse(200, { status: 'success', data: [{ integrationId: 'int-1', metadata: { status: 7 } }] }), 'metadata.status is number'],
+      [jsonResponse(200, { status: 'success', data: [{ integrationId: 'int-1', readAt: null }] }), 'status record metadata is undefined'],
+      [jsonResponse(200, { status: 'success', data: [{ integrationId: 'int-1', metadata: { status: { event: 'message-log/update', status: 'bounced' } } }] }), 'undocumented outgoing status "bounced"'],
+      [jsonResponse(200, { status: 'success' }), 'status answer without a data array (data: undefined)'],
+      [jsonResponse(200, [{ integrationId: 'int-1', metadata: { status: 'processed' } }]), 'status answer without a data array (array body)'],
+      [new Response('<html><body>Gateway</body></html>', { status: 200 }), 'status answer without a data array (non-JSON body)'],
+      [new Response('', { status: 200 }), 'status answer without a data array (empty body)'],
+    ]
+    for (const [response, detail] of cases) {
+      fetchMock.mockResolvedValueOnce(response)
+      await expect(transport.pollDeliveryStatus!('int-1')).rejects.toMatchObject({ ...SHAPE_ERROR, detail })
+    }
   })
 })

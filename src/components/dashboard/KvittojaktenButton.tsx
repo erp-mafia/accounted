@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Check, ChevronDown, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, CheckIcon, ChevronDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -21,7 +21,6 @@ import {
 import {
   AI_CLIENTS,
   aiPrefilledChatLink,
-  kvittojaktenSkillSlug,
   openAiConnector,
   pickConnectedAiClient,
   type AiClient,
@@ -53,31 +52,30 @@ function markPrereqSeen(): void {
   }
 }
 
-const pillClass =
-  'inline-flex h-6 shrink-0 items-center gap-2 rounded-full bg-primary px-3 text-[11.5px] text-primary-foreground transition-colors duration-150 hover:bg-primary/85 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-
 /**
  * "Kvittojakten": one click opens the connected AI client with the prompt
- * already typed in. The agent then loads the skill written for that client
- * (kvittojakten-claude, -chatgpt, -grok), searches the user's own mailbox for
- * the underlag that are missing and stages the links for approval.
+ * already typed in. The AI then starts it with get_task kind
+ * "agent:kvittojakten", as the Instruktioner page does, so the knowledge the
+ * company chose there and its company facts come along with the workflow
+ * written for that client (kvittojakten-claude, -chatgpt, -grok). It searches
+ * the user's own mailbox for the underlag that are missing and stages the
+ * links for approval.
  *
  * Unlike AiTaskAction there is no review dialog and no clipboard step: the
- * prompt names a skill and nothing else, so it may travel in the chat URL
- * (see aiPrefilledChatLink). Renders nothing while no client is connected.
+ * prompt names the flow and the client and nothing else, so it may travel in
+ * the chat URL (see aiPrefilledChatLink). Renders nothing while no client is
+ * connected.
  *
- * `pill` sits on an Att göra row; `button` sits in a page header.
+ * The same outline button on an Att göra row and in a page header alike.
  */
 export function KvittojaktenButton({
   clients,
   preferredClient,
-  variant = 'pill',
   onOpen,
   disabled = false,
 }: {
   clients: AiClient[]
   preferredClient?: AiClient
-  variant?: 'pill' | 'button'
   onOpen?: () => void
   disabled?: boolean
 }) {
@@ -104,7 +102,7 @@ export function KvittojaktenButton({
   function run(client: AiClient) {
     markPrereqSeen()
     setPending(null)
-    const prompt = t('ai_kvittojakten_prompt', { skill: kvittojaktenSkillSlug(client) })
+    const prompt = t('ai_kvittojakten_prompt', { client })
     openAiConnector(aiPrefilledChatLink(client, prompt))
     onOpen?.()
   }
@@ -117,42 +115,22 @@ export function KvittojaktenButton({
   return (
     <>
     <span className="inline-flex items-center gap-1">
-      {variant === 'pill' ? (
-        <button
-          type="button"
-          className={pillClass}
-          onClick={() => open(primary.id)}
-          disabled={disabled}
-          title={t('ai_kvittojakten_hint', { client: primary.name })}
-        >
-          {logo(primary.logo, 'h-3 w-3 rounded-full')}
-          {t('ai_kvittojakten')}
-        </button>
-      ) : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => open(primary.id)}
-          disabled={disabled}
-          title={t('ai_kvittojakten_hint', { client: primary.name })}
-        >
-          {logo(primary.logo, 'mr-1.5 h-3.5 w-3.5 rounded-full')}
-          {t('ai_kvittojakten')}
-        </Button>
-      )}
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => open(primary.id)}
+        disabled={disabled}
+        title={t('ai_kvittojakten_hint', { client: primary.name })}
+      >
+        {logo(primary.logo, 'mr-1.5 h-3.5 w-3.5 rounded-full')}
+        {t('ai_kvittojakten')}
+      </Button>
       {others.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            {variant === 'pill' ? (
-              <button type="button" className={`${pillClass} px-2`} disabled={disabled} aria-label={t('ai_fix_first_other')}>
-                <ChevronDown className="h-3 w-3" aria-hidden />
-              </button>
-            ) : (
-              <Button type="button" variant="ghost" size="sm" className="px-2" disabled={disabled} aria-label={t('ai_fix_first_other')}>
-                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-              </Button>
-            )}
+            <Button type="button" variant="outline" size="icon" disabled={disabled} aria-label={t('ai_fix_first_other')}>
+              <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden />
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {others.map((c) => (
@@ -175,7 +153,7 @@ export function KvittojaktenButton({
         </DialogHeader>
         <ul className="space-y-3 text-[13px]">
           <li className="flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0 text-success" aria-hidden />
+            <CheckIcon className="h-4 w-4 shrink-0 text-success" aria-hidden />
             <span>{t('ai_kvittojakten_prereq_done', { client: pendingClient?.name ?? '' })}</span>
           </li>
           <li className="flex items-center gap-2">
@@ -185,12 +163,12 @@ export function KvittojaktenButton({
             </span>
           </li>
         </ul>
-        <DialogFooter>
+        <DialogFooter className="sm:flex-wrap sm:gap-2 sm:space-x-0">
           {pendingClient && (
             <Button type="button" variant="outline" asChild>
               <a href={pendingClient.home} target="_blank" rel="noopener noreferrer">
                 {t('ai_kvittojakten_prereq_open', { client: pendingClient.name })}
-                <ExternalLink className="ml-2 h-4 w-4" aria-hidden />
+                <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" aria-hidden />
               </a>
             </Button>
           )}

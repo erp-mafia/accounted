@@ -13,12 +13,15 @@ import {
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { Loader2, Search, Trash2 } from 'lucide-react'
+import { CheckCircleIcon, MagnifyingGlassIcon, TrashIcon } from '@/components/icons'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface PruneCandidate {
@@ -39,7 +42,7 @@ interface PruneAccountsDialogProps {
 
 /**
  * Bulk deletion of unused accounts. Fetches the server-computed deletable set
- * (dry run) and presents it in two groups — imported/custom accounts and
+ * (dry run) and presents it in two groups - imported/custom accounts and
  * untouched accounts from the seeded base plan. Nothing is preselected:
  * deletion is opt-in per account or per group. Used accounts never appear
  * here; the server re-verifies every guard at execute time anyway.
@@ -51,6 +54,9 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
 
   const [loading, setLoading] = useState(false)
+  // The dry run failed: said in the dialog with "Försök igen" (Stil v3 states).
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [candidates, setCandidates] = useState<PruneCandidate[]>([])
   const [usedCount, setUsedCount] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -70,6 +76,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
     let cancelled = false
     async function load() {
       setLoading(true)
+      setLoadFailed(false)
       setCandidates([])
       setSelected(new Set())
       setSearchQuery('')
@@ -85,13 +92,10 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
         const deletable: PruneCandidate[] = data?.deletable ?? []
         setCandidates(deletable)
         setUsedCount((data?.used ?? []).length)
-        // Nothing starts selected — deletion is opt-in per account (or per
+        // Nothing starts selected - deletion is opt-in per account (or per
         // group via the header checkbox), never a preloaded default.
       } catch {
-        if (!cancelled) {
-          toast({ title: t('toast_prune_failed'), variant: 'destructive' })
-          onOpenChange(false)
-        }
+        if (!cancelled) setLoadFailed(true)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -100,9 +104,9 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
     return () => {
       cancelled = true
     }
-  }, [open, onOpenChange, t, toast])
+  }, [open, loadAttempt])
 
-  // Charts bloated by an import easily reach hundreds of candidates — filter
+  // Charts bloated by an import easily reach hundreds of candidates - filter
   // by number or name, same semantics as the kontoplan page search. Selection
   // is keyed by account number, so it survives filter changes; the confirm
   // button always shows the true selected count.
@@ -227,7 +231,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
             <p className="text-xs text-muted-foreground">{t(hintKey)}</p>
           </div>
         </div>
-        <div className="w-full rounded-lg border border-border divide-y divide-border">
+        <div className="w-full divide-y divide-border">
           {group.map((c) => (
             <label
               key={c.account_number}
@@ -242,7 +246,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
               </span>
               <span className="min-w-0 flex-1 truncate">{c.account_name}</span>
               {!c.is_active && (
-                <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
+                <span className="ml-auto text-xs text-muted-foreground shrink-0">
                   {t('prune_inactive_badge')}
                 </span>
               )}
@@ -256,27 +260,32 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
   return (
     <>
     <Dialog open={open} onOpenChange={(v) => !isDeleting && onOpenChange(v)}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('prune_title')}</DialogTitle>
           <DialogDescription>{t('prune_description')}</DialogDescription>
         </DialogHeader>
 
         {loading ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-            {t('prune_loading')}
-          </div>
+          <LateReveal className="space-y-3 py-4" aria-label={t('prune_loading')}>
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-4 w-4/6" />
+            <Skeleton className="h-4 w-5/6" />
+          </LateReveal>
+        ) : loadFailed ? (
+          <LoadError title={t('prune_load_failed')} onRetry={() => setLoadAttempt((n) => n + 1)} />
         ) : candidates.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">{t('prune_empty')}</p>
+          <EmptyState tone="done" icon={CheckCircleIcon} title={t('prune_empty')} />
         ) : (
           // min-w-0: DialogContent is a grid, and grid items default to
-          // min-width auto — without this, the nowrap (truncate) account
+          // min-width auto - without this, the nowrap (truncate) account
           // names propagate their full width up and blow the dialog open
           // horizontally instead of truncating.
           <div className="min-w-0 space-y-3">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder={t('search_placeholder')}
                 value={searchQuery}
@@ -301,7 +310,13 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
             )}
             <div className="space-y-4 max-h-[60vh] overflow-y-auto overflow-x-hidden pr-1">
               {filteredCandidates.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">{t('no_matches')}</p>
+                // No hits: one muted line with the quiet way back.
+                <p className="py-3 text-[13px] text-muted-foreground">
+                  {t('no_matches')}{' '}
+                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSearchQuery('')}>
+                    {tCommon('clear_search')}
+                  </button>
+                </p>
               ) : (
                 <>
                   {renderGroup(customGroup, 'prune_group_custom', 'prune_group_custom_hint')}
@@ -324,13 +339,10 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
           <Button
             variant="destructive"
             onClick={handlePrune}
-            disabled={loading || isDeleting || selected.size === 0}
+            disabled={loading || selected.size === 0}
+            loading={isDeleting}
           >
-            {isDeleting ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            )}
+            {!isDeleting && <TrashIcon className="h-3.5 w-3.5" />}
             {t('prune_confirm', { count: selected.size })}
           </Button>
         </DialogFooter>

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
-import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { roundOre } from '@/lib/money'
 import type {
   BalanceImbalanceDiagnosis,
   BalanceSheetReport,
@@ -27,7 +28,23 @@ export async function generateBalanceSheet(
     fromDate: options?.fromDate,
     toDate: options?.toDate,
   })
+  return balanceSheetFromTrialBalance(supabase, companyId, fiscalPeriodId, rows)
+}
 
+/**
+ * The balance sheet from trial balance rows the caller already holds, so a
+ * report that built the period's trial balance does not build it again.
+ * The rows must come from generateTrialBalance with closingEntry 'include'
+ * over the same period and range: 2099 has to carry årets resultat. The
+ * imbalance diagnosis still reads the ledger, and only when the sheet does
+ * not balance.
+ */
+export async function balanceSheetFromTrialBalance(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  rows: TrialBalanceRow[],
+): Promise<BalanceSheetReport> {
   // Filter to balance sheet accounts (class 1-2)
   const balanceRows = rows.filter(
     (r) => r.account_class >= 1 && r.account_class <= 2
@@ -69,24 +86,9 @@ export async function generateBalanceSheet(
     'credit' // Equity/liabilities have credit normal balance
   )
 
-  // Calculate the period result from every row OUTSIDE the balance-sheet
-  // classes (1-2), not just class 3-8. Invariant: synthetic result =
-  // everything outside the balance-sheet classes, so a resultatavslut that
-  // was posted to 2099 but whose counter-line landed on a class 0/9 or
-  // class-less account self-cancels here instead of double-counting the
-  // result (2099 already carries it inside the class 2 sections). The
-  // negated range is deliberate: it keeps null/undefined account_class rows
-  // in the result. A genuinely untransferred prior-year result still yields
-  // a real differens and the imbalance diagnosis below.
-  const incomeExpenseRows = rows.filter(
-    (r) => !(r.account_class >= 1 && r.account_class <= 2)
-  )
-  const periodResult = Math.round(
-    incomeExpenseRows.reduce(
-      (sum, r) => sum + (r.closing_credit - r.closing_debit),
-      0
-    ) * 100
-  ) / 100
+  // A genuinely untransferred prior-year result still yields a real
+  // differens and the imbalance diagnosis below.
+  const periodResult = computedResult(rows)
 
   // Add period result as a synthetic section under equity if non-zero
   if (Math.abs(periodResult) > 0.005) {
@@ -108,28 +110,11 @@ export async function generateBalanceSheet(
   const totalEquityLiabilities =
     Math.round(equityLiabilitySections.reduce((sum, s) => sum + s.subtotal, 0) * 100) / 100
 
-  // Explain a broken balance instead of leaving a bare differens. The usual
-  // cause after multi-year migrations is a prior year whose result was never
-  // transferred to equity (see imbalance-diagnosis.ts). Only runs on the
-  // unbalanced path and must never break the report itself.
-  let imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined
+  // Name a broken balance instead of leaving a bare differens. An earlier
+  // year's untransferred result no longer causes one: the derived opening
+  // balance carries it (prior_opening_balance_lines).
   const differens = Math.round((totalAssets - totalEquityLiabilities) * 100) / 100
-  if (Math.abs(differens) >= 0.01) {
-    try {
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('period_start')
-        .eq('id', fiscalPeriodId)
-        .eq('company_id', companyId)
-        .single()
-      const untransferred = await findUntransferredResults(supabase, companyId, {
-        beforePeriodStart: period?.period_start,
-      })
-      imbalanceDiagnosis = buildImbalanceDiagnosis(untransferred, differens) ?? undefined
-    } catch {
-      // Best-effort diagnosis only — the report still renders without it.
-    }
-  }
+  const imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined = buildImbalanceDiagnosis(differens) ?? undefined
 
   return {
     asset_sections: assetSections.filter((s) => s.rows.length > 0),
@@ -139,6 +124,25 @@ export async function generateBalanceSheet(
     period: { start: '', end: '' },
     ...(imbalanceDiagnosis ? { imbalance_diagnosis: imbalanceDiagnosis } : {}),
   }
+}
+
+/**
+ * Årets resultat as the balance side reads it before bokslut: the closing
+ * balance of every trial balance row OUTSIDE the balance-sheet classes (1-2),
+ * credit-positive, not just class 3-8. Invariant: the result = everything
+ * outside the balance-sheet classes, so a resultatavslut that was posted to
+ * 2099 but whose counter-line landed on a class 0/9 or class-less account
+ * self-cancels here instead of double-counting the result (2099 already
+ * carries it among the class 2 rows). The negated range is deliberate: it
+ * keeps null/undefined account_class rows in the result. Balansräkning and
+ * Balansrapport both read it here, so the two cannot show different results.
+ */
+export function computedResult(rows: readonly TrialBalanceRow[]): number {
+  return roundOre(
+    rows
+      .filter((r) => !(r.account_class >= 1 && r.account_class <= 2))
+      .reduce((sum, r) => sum + (r.closing_credit - r.closing_debit), 0),
+  )
 }
 
 function buildBalanceSections(

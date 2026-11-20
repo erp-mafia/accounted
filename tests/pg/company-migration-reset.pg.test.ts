@@ -68,13 +68,7 @@ describe('company migration reset RPCs (pg)', () => {
       execute_anon: boolean
       execute_authenticated: boolean
       snapshot_authenticated: boolean
-      legacy_snapshot_141018_authenticated: boolean
-      legacy_snapshot_143004_authenticated: boolean
-      legacy_snapshot_224000_authenticated: boolean
-      legacy_snapshot_231500_authenticated: boolean
-      legacy_snapshot_20260826150000_authenticated: boolean
-      legacy_snapshot_20260909100400_authenticated: boolean
-      legacy_reset_20260909100400_authenticated: boolean
+      snapshot_service_role: boolean
     }>(`
       SELECT
         has_function_privilege(
@@ -103,40 +97,10 @@ describe('company migration reset RPCs (pg)', () => {
           'EXECUTE'
         ) AS snapshot_authenticated,
         has_function_privilege(
-          'authenticated',
-          'public.company_migration_reset_snapshot_before_20260818141018(uuid)',
+          'service_role',
+          'public.company_migration_reset_snapshot(uuid)',
           'EXECUTE'
-        ) AS legacy_snapshot_141018_authenticated,
-        has_function_privilege(
-          'authenticated',
-          'public.company_migration_reset_snapshot_before_20260818143004(uuid)',
-          'EXECUTE'
-        ) AS legacy_snapshot_143004_authenticated,
-        has_function_privilege(
-          'authenticated',
-          'public.company_migration_reset_snapshot_before_20260818224000(uuid)',
-          'EXECUTE'
-        ) AS legacy_snapshot_224000_authenticated,
-        has_function_privilege(
-          'authenticated',
-          'public.company_migration_reset_snapshot_before_20260818231500(uuid)',
-          'EXECUTE'
-        ) AS legacy_snapshot_231500_authenticated,
-        has_function_privilege(
-          'authenticated',
-          'public.company_migration_reset_snapshot_before_20260826150000(uuid)',
-          'EXECUTE'
-        ) AS legacy_snapshot_20260826150000_authenticated,
-        has_function_privilege(
-          'authenticated',
-          'public.company_migration_reset_snapshot_before_20260909100400(uuid)',
-          'EXECUTE'
-        ) AS legacy_snapshot_20260909100400_authenticated,
-        has_function_privilege(
-          'authenticated',
-          'public.reset_company_for_migration_before_20260909100400(uuid,text,text,boolean,boolean)',
-          'EXECUTE'
-        ) AS legacy_reset_20260909100400_authenticated
+        ) AS snapshot_service_role
     `)
 
     expect(rows[0]).toEqual({
@@ -145,14 +109,30 @@ describe('company migration reset RPCs (pg)', () => {
       execute_anon: false,
       execute_authenticated: true,
       snapshot_authenticated: false,
-      legacy_snapshot_141018_authenticated: false,
-      legacy_snapshot_143004_authenticated: false,
-      legacy_snapshot_224000_authenticated: false,
-      legacy_snapshot_231500_authenticated: false,
-      legacy_snapshot_20260826150000_authenticated: false,
-      legacy_snapshot_20260909100400_authenticated: false,
-      legacy_reset_20260909100400_authenticated: false,
+      snapshot_service_role: false,
     })
+  })
+
+  // 20261012100700 flattened the rename-and-wrap chain into one body per
+  // function: none of the renamed layers may linger as a callable path.
+  it('keeps no renamed snapshot or reset layer', async () => {
+    const legacy = [
+      'public.company_migration_reset_snapshot_before_20260818141018(uuid)',
+      'public.company_migration_reset_snapshot_before_20260818143004(uuid)',
+      'public.company_migration_reset_snapshot_before_20260818224000(uuid)',
+      'public.company_migration_reset_snapshot_before_20260818231500(uuid)',
+      'public.company_migration_reset_snapshot_before_20260826150000(uuid)',
+      'public.company_migration_reset_snapshot_before_20260909100400(uuid)',
+      'public.company_migration_reset_snapshot_before_sie_jobs(uuid)',
+      'public.company_migration_reset_snapshot_before_20261011203600(uuid)',
+      'public.reset_company_for_migration_before_20260909100400(uuid,text,text,boolean,boolean)',
+    ]
+    const { rows } = await getPool().query<{ signature: string; dropped: boolean }>(
+      `SELECT signature, to_regprocedure(signature) IS NULL AS dropped
+       FROM unnest($1::text[]) AS signature`,
+      [legacy],
+    )
+    expect(rows).toEqual(legacy.map((signature) => ({ signature, dropped: true })))
   })
 
   it('denies anon at call time', async () => {
@@ -349,6 +329,39 @@ describe('company migration reset RPCs (pg)', () => {
       count: 1,
     })
 
+    // So is a live POS sales connection (20261011203600), and it adds to the
+    // same blocker; an ended one does not count.
+    await getPool().query(
+      `INSERT INTO public.pos_connections
+         (company_id, provider, provider_name, venue_ref, venue_name, connection_handle, sync_from)
+       VALUES ($1, 'heynow', 'Heynow', 'venue-1', 'Restaurang Test', 'pos_' || repeat('h', 40), '2026-09-30'),
+              ($1, 'heynow', 'Heynow', 'venue-2', 'Restaurang Test', 'pos_' || repeat('i', 40), '2026-09-30')`,
+      [pos.companyId],
+    )
+    await getPool().query(
+      `UPDATE public.pos_connections
+          SET status = 'disconnected', ended_at = now(), connection_handle = NULL
+        WHERE company_id = $1 AND venue_ref = 'venue-2'`,
+      [pos.companyId],
+    )
+    expect((await preview(pos.userId, pos.companyId)).eligibility?.blockers).toContainEqual({
+      code: 'active_integrations_or_schedules',
+      count: 2,
+    })
+    const tills = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.pos_connections
+         (company_id, provider, provider_name, venue_ref, venue_name, connection_handle, sync_from)
+       VALUES ($1, 'heynow', 'Heynow', 'venue-1', 'Restaurang Test', 'pos_' || repeat('h', 40), '2026-09-30')`,
+      [tills.companyId],
+    )
+    const tillsPreview = await preview(tills.userId, tills.companyId)
+    expect(tillsPreview.eligibility?.eligible).toBe(false)
+    expect(tillsPreview.eligibility?.blockers).toContainEqual({
+      code: 'active_integrations_or_schedules',
+      count: 1,
+    })
+
     const busy = await seedCompany()
     await getPool().query(
       `INSERT INTO public.operations (company_id, user_id, operation_type, status)
@@ -384,6 +397,213 @@ describe('company migration reset RPCs (pg)', () => {
       code: 'sandbox_company',
       count: 1,
     })
+  })
+
+  // The preview lists blockers in a fixed order and the UI renders them in
+  // that order, so the order is part of the contract. Three fixtures raise
+  // several blockers at once: one with every counted blocker (Zettle and POS
+  // folded into the integrations count), one with the two late appends (a
+  // Zettle-only integration after the authority blocker, and a durable SIE
+  // job that replaces the counted import blocker with a count-less one at the
+  // end), and one where a POS-only integration comes after even that.
+  it('lists combined blockers in a fixed order', async () => {
+    const all = await seedCompany()
+    await insertDraftJournalEntry({
+      ...all,
+      status: 'posted',
+      sourceType: 'manual',
+      voucherSeries: 'A',
+      voucherNumber: 1,
+    })
+    await getPool().query(
+      `INSERT INTO public.invoices
+         (user_id, company_id, invoice_number, invoice_date, due_date, status)
+       VALUES ($1, $2, 1, '2026-08-01', '2026-08-31', 'sent')`,
+      [all.userId, all.companyId],
+    )
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`,
+      [all.fiscalPeriodId],
+    )
+    await getPool().query(
+      `INSERT INTO public.company_settings
+         (user_id, company_id, entity_type, company_name, is_sandbox)
+       VALUES ($1, $2, 'aktiebolag', 'Sandbox AB', true)`,
+      [all.userId, all.companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.bank_connections
+         (company_id, user_id, provider, bank_name, status)
+       VALUES ($1, $2, 'enable_banking', 'Test Bank', 'active')`,
+      [all.companyId, all.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.bank_file_imports
+         (user_id, company_id, filename, file_hash, file_format, status)
+       VALUES ($1, $2, 'pending.csv', $3, 'seb', 'pending')`,
+      [all.userId, all.companyId, randomUUID()],
+    )
+    await getPool().query(
+      `INSERT INTO public.stripe_connections (company_id, user_id, status)
+       VALUES ($1, $2, 'pending')`,
+      [all.companyId, all.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.zettle_connections (company_id, user_id, status)
+       VALUES ($1, $2, 'pending')`,
+      [all.companyId, all.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.pos_connections
+         (company_id, provider, provider_name, venue_ref, venue_name, connection_handle, sync_from)
+       VALUES ($1, 'heynow', 'Heynow', 'venue-1', 'Restaurang Test', 'pos_' || repeat('h', 40), '2026-09-30')`,
+      [all.companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.operations (company_id, user_id, operation_type, status)
+       VALUES ($1, $2, 'imports.sie', 'queued')`,
+      [all.companyId, all.userId],
+    )
+    // Five authority evidence sources, one each: an AGI submit, a direct VAT
+    // submit for another period, an unlogged VAT draft, an AGI awaiting
+    // signature (row and cache are one workflow) and a generated ROT file.
+    await getPool().query(
+      `INSERT INTO public.skatteverket_api_audit_log
+         (company_id, user_id, endpoint, outcome, response_status, redovisningsperiod)
+       VALUES ($1, $2, 'agi/submit', 'ok', 200, NULL),
+              ($1, $2, 'declaration/submit', 'ok', 200, '202605')`,
+      [all.companyId, all.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.extension_data
+         (user_id, company_id, extension_id, key, value)
+       VALUES ($1, $2, 'skatteverket', 'submission_202606', to_jsonb('{}'::text)),
+              ($1, $2, 'skatteverket', 'agi_submission_2026-08', to_jsonb('{}'::text))`,
+      [all.userId, all.companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.agi_declarations
+         (company_id, user_id, period_year, period_month, xml_content, status,
+          individuppgifter)
+       VALUES ($1, $2, 2026, 8, '<agd/>', 'pending_signature', '[]'::jsonb)`,
+      [all.companyId, all.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_requests
+         (company_id, user_id, deduction_type, name, status, requested_total,
+          file_name)
+       VALUES ($1, $2, 'rot', 'TESTBEGARAN', 'generated', 1000,
+               'rot-begaran.xml')`,
+      [all.companyId, all.userId],
+    )
+    await getPool().query(
+      `UPDATE public.companies
+       SET created_at = now() - interval '31 days', archived_at = now()
+       WHERE id = $1`,
+      [all.companyId],
+    )
+
+    const allPreview = await preview(all.userId, all.companyId)
+    expect(allPreview.eligibility?.eligible).toBe(false)
+    expect(allPreview.eligibility?.blockers).toEqual([
+      { code: 'company_already_archived', count: 1 },
+      { code: 'migration_window_expired', count: 1 },
+      { code: 'sandbox_company', count: 1 },
+      { code: 'locked_or_closed_periods', count: 1 },
+      { code: 'live_bank_connections', count: 1 },
+      { code: 'imports_in_progress', count: 1 },
+      { code: 'active_integrations_or_schedules', count: 3 },
+      { code: 'background_work_in_progress', count: 1 },
+      { code: 'authority_submission_detected', count: 5 },
+    ])
+
+    const late = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.bank_connections
+         (company_id, user_id, provider, bank_name, status)
+       VALUES ($1, $2, 'enable_banking', 'Test Bank', 'active')`,
+      [late.companyId, late.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.bank_file_imports
+         (user_id, company_id, filename, file_hash, file_format, status)
+       VALUES ($1, $2, 'pending.csv', $3, 'seb', 'pending')`,
+      [late.userId, late.companyId, randomUUID()],
+    )
+    await getPool().query(
+      `INSERT INTO public.zettle_connections (company_id, user_id, status)
+       VALUES ($1, $2, 'pending')`,
+      [late.companyId, late.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_requests
+         (company_id, user_id, deduction_type, name, status, requested_total,
+          file_name)
+       VALUES ($1, $2, 'rot', 'TESTBEGARAN', 'generated', 1000,
+               'rot-begaran.xml')`,
+      [late.companyId, late.userId],
+    )
+    // A running durable SIE job (its operations projection is background
+    // work too).
+    await getPool().query(
+      `INSERT INTO public.sie_imports
+         (user_id, company_id, filename, file_hash, sie_type, status,
+          job_state, job_phase)
+       VALUES ($1, $2, 'running.se', $3, 4, 'pending', 'running', 'vouchers')`,
+      [late.userId, late.companyId, randomUUID()],
+    )
+
+    const latePreview = await preview(late.userId, late.companyId)
+    expect(latePreview.eligibility?.eligible).toBe(false)
+    expect(latePreview.eligibility?.blockers).toEqual([
+      { code: 'live_bank_connections', count: 1 },
+      { code: 'background_work_in_progress', count: 1 },
+      { code: 'authority_submission_detected', count: 1 },
+      { code: 'active_integrations_or_schedules', count: 1 },
+      { code: 'imports_in_progress' },
+    ])
+
+    // A POS connection with no other integration is appended last
+    // (20261011203600), after the count-less durable import blocker.
+    const tills = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.bank_connections
+         (company_id, user_id, provider, bank_name, status)
+       VALUES ($1, $2, 'enable_banking', 'Test Bank', 'active')`,
+      [tills.companyId, tills.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.pos_connections
+         (company_id, provider, provider_name, venue_ref, venue_name, connection_handle, sync_from)
+       VALUES ($1, 'heynow', 'Heynow', 'venue-1', 'Restaurang Test', 'pos_' || repeat('h', 40), '2026-09-30'),
+              ($1, 'heynow', 'Heynow', 'venue-2', 'Restaurang Test', 'pos_' || repeat('i', 40), '2026-09-30')`,
+      [tills.companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_requests
+         (company_id, user_id, deduction_type, name, status, requested_total,
+          file_name)
+       VALUES ($1, $2, 'rot', 'TESTBEGARAN', 'generated', 1000,
+               'rot-begaran.xml')`,
+      [tills.companyId, tills.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.sie_imports
+         (user_id, company_id, filename, file_hash, sie_type, status,
+          job_state, job_phase)
+       VALUES ($1, $2, 'running.se', $3, 4, 'pending', 'running', 'vouchers')`,
+      [tills.userId, tills.companyId, randomUUID()],
+    )
+
+    const tillsPreview = await preview(tills.userId, tills.companyId)
+    expect(tillsPreview.eligibility?.eligible).toBe(false)
+    expect(tillsPreview.eligibility?.blockers).toEqual([
+      { code: 'live_bank_connections', count: 1 },
+      { code: 'background_work_in_progress', count: 1 },
+      { code: 'authority_submission_detected', count: 1 },
+      { code: 'imports_in_progress' },
+      { code: 'active_integrations_or_schedules', count: 2 },
+    ])
   })
 
   // Journal entries, voucher sequences, and linked documents are retained
@@ -814,6 +1034,92 @@ describe('company migration reset RPCs (pg)', () => {
         DROP FUNCTION IF EXISTS public.pg_test_fail_company_reset_audit();
       `)
     }
+  })
+
+  it('moves the invoice sending domain to the replacement with its verification intact (crm#1288)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const domain = `reset-${randomUUID().slice(0, 8)}.example`
+    const resendDomainId = `rd_${randomUUID()}`
+    const seeded = await getPool().query<{ id: string; verified_at: string }>(
+      `INSERT INTO public.company_sending_domains
+         (company_id, domain, status, sender_local_part, resend_domain_id, dns_records,
+          verified_at, last_checked_at)
+       VALUES ($1, $2, 'verified', 'ekonomi', $3, '[{"record":"DKIM"}]'::jsonb, now(), now())
+       RETURNING id, verified_at::text`,
+      [companyId, domain, resendDomainId],
+    )
+    const row = seeded.rows[0]!
+
+    // The reset runs under the owner's tenant JWT claims, so the sending-domain
+    // tenant guard is live for the move (20261018134300).
+    await withUserContext(userId, async (client) => {
+      const { rows } = await client.query<{ result: RpcResult }>(
+        `SELECT public.reset_company_for_migration($1, $2, $3, true, true) AS result`,
+        [companyId, 'Test AB', 'The first migration used the wrong fiscal periods.'],
+      )
+      const result = rows[0]!.result
+      expect(result.ok).toBe(true)
+      const replacementId = result.replacement_company_id!
+      await client.query('RESET ROLE')
+
+      const moved = await client.query(
+        `SELECT id, company_id::text, status, sender_local_part, resend_domain_id, dns_records,
+                verified_at::text
+         FROM public.company_sending_domains
+         WHERE domain = $1`,
+        [domain],
+      )
+      expect(moved.rows).toEqual([
+        {
+          id: row.id,
+          company_id: replacementId,
+          status: 'verified',
+          sender_local_part: 'ekonomi',
+          resend_domain_id: resendDomainId,
+          dns_records: [{ record: 'DKIM' }],
+          verified_at: row.verified_at,
+        },
+      ])
+
+      const snapshot = await client.query<{ n: number }>(
+        `SELECT (confirmation_snapshot ->> 'sending_domains_transferred')::int AS n
+         FROM public.company_migration_resets
+         WHERE id = $1`,
+        [result.reset_id],
+      )
+      expect(snapshot.rows[0]!.n).toBe(1)
+
+      // Only the recorded source -> replacement direction passes the guard:
+      // moving it back under the same tenant claims is refused.
+      await client.query('SAVEPOINT sending_domain_back_to_source')
+      await expect(
+        client.query(`UPDATE public.company_sending_domains SET company_id = $1 WHERE domain = $2`, [
+          companyId,
+          domain,
+        ]),
+      ).rejects.toThrow(/server-managed/)
+      await client.query('ROLLBACK TO SAVEPOINT sending_domain_back_to_source')
+    })
+  })
+
+  it('records zero sending domains transferred for a company without one', async () => {
+    const { userId, companyId } = await seedCompany()
+    await withUserContext(userId, async (client) => {
+      const { rows } = await client.query<{ result: RpcResult }>(
+        `SELECT public.reset_company_for_migration($1, $2, $3, true, true) AS result`,
+        [companyId, 'Test AB', 'The first migration used the wrong fiscal periods.'],
+      )
+      const result = rows[0]!.result
+      expect(result.ok).toBe(true)
+      await client.query('RESET ROLE')
+      const snapshot = await client.query<{ n: number }>(
+        `SELECT (confirmation_snapshot ->> 'sending_domains_transferred')::int AS n
+         FROM public.company_migration_resets
+         WHERE id = $1`,
+        [result.reset_id],
+      )
+      expect(snapshot.rows[0]!.n).toBe(0)
+    })
   })
 
   it('requires the exact display name, audit reason, and both attestations', async () => {

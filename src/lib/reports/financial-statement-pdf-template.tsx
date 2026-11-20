@@ -6,7 +6,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer'
 import { formatDateSv, pdfAmount } from '@/lib/pdf/number-text'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import type { CompanySettings } from '@/types'
 
 const styles = StyleSheet.create({
@@ -271,7 +271,7 @@ export function FinancialStatementPDF({
             )}
             {company.org_number && (
               <Text style={styles.companyMeta}>
-                Org.nr: {formatOrgNumber(company.org_number)}
+                Org.nr: {formatOrgNumberDisplay(company.org_number)}
               </Text>
             )}
             {company.vat_number && (
@@ -351,7 +351,7 @@ export function FinancialStatementPDF({
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {companyDisplayName}
-            {company.org_number ? ` · ${formatOrgNumber(company.org_number)}` : ''}
+            {company.org_number ? ` · ${formatOrgNumberDisplay(company.org_number)}` : ''}
           </Text>
           <Text
             style={styles.footerText}

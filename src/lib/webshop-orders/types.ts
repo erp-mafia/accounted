@@ -39,7 +39,17 @@ export interface WebshopOrderUpsert {
   customer_company: string | null
   customer_email: string | null
   customer_orgnr: string | null
+  /**
+   * Billing country for WooCommerce; for Shopify the shipping (destination)
+   * country, or the billing country when nothing on the order ships.
+   */
   customer_country: string | null
+  /**
+   * Shopify: no line of the order needs shipping (digital products,
+   * services); a refund row takes its order's. Omitted by the other
+   * platforms, stored as false.
+   */
+  ships_nothing?: boolean
   payment_method: string | null
   payment_method_title: string | null
   gateway_reference: string | null

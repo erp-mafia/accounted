@@ -1,5 +1,7 @@
 // Enable Banking extension types
 
+import type { BankBalanceReference } from '@/lib/bank-sync/persist-sync-result'
+
 export interface StoredAccount {
   uid: string
   iban?: string
@@ -14,6 +16,11 @@ export interface StoredAccount {
   // `balance` (booked). Absent when the ASPSP returns no available type.
   available_balance?: number
   balance_updated_at?: string
+  // The bank's own day and type for `balance` (reference_date, balance_type),
+  // null when it gave no day. Set only by a balance refresh and sent to
+  // persist_bank_sync_result, which keeps it on the cash account (stamped
+  // with balance_updated_at as fetched_at), never in accounts_data.
+  balance_reference?: BankBalanceReference | null
   // When false, the account is part of the PSD2 consent but the user has
   // chosen not to sync transactions from it. Treated as true if missing
   // (back-compat with rows that predate the per-account toggle).
@@ -44,13 +51,6 @@ export interface StoredAccount {
   // silent; cleared by the selection save when the user re-enables the
   // account.
   deselected_elsewhere?: boolean
-  // Set by the OAuth callback when the account is a known card sub-account
-  // that only mirrors the main account (lib/mirror-card-account.ts: Svea's
-  // BOKIO_Debit_Business, no IBAN, no BBAN). Stored disabled so its
-  // opposite-sign "Okänd transaktion" twins never sync; the picker renders
-  // the reason next to the unchecked box. Cleared by the selection save when
-  // the user turns the account on, which is always allowed (issue #2565).
-  mirror_card_account?: boolean
   // Widest transactions history window (whole days before date_to) this
   // account's bank has ever ACCEPTED, stamped by lib/sync.ts after each
   // successful fetch. ASPSP_ERROR is Enable Banking's generic wrapper for any

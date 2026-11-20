@@ -17,6 +17,11 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NoteOverrides } from './note-overrides'
+import type { DisclosureAnswers } from './disclosures/types'
+import type { EquityMovementKind } from './equity-kinds'
+
+/** The user's classification of equity verifikat, by journal entry id. */
+export type EquityMovementOverridesRow = Record<string, EquityMovementKind>
 
 export interface NarrativeOverrides {
   description: string | null
@@ -47,6 +52,17 @@ export interface NarrativeOverrides {
    *  average over the employees table. A whole number replaces the computed
    *  value in the note and the iXBRL fact for this period. */
   medelantal_anstallda_override: number | null
+  /** ÅRL 6 kap. 3 § (ekonomisk förening): väsentliga förändringar i
+   *  medlemsantalet, free text. Required before the document is fileable. */
+  member_count_change: string | null
+  /** ÅRL 6 kap. 3 § p. 2: insatser to be repaid next fiscal year (EFL 10
+   *  kap. 11 and 16 §§). Null renders "inga". */
+  insatser_repayable_next_year: number | null
+  /** ÅRL 6 kap. 3 § p. 3: the distribution right förlagsinsatser carry. */
+  forlagsinsatser_dividend_right: string | null
+  /** ÅRL 6 kap. 3 § p. 4: förlagsinsatser given notice, redeemable within
+   *  the next two fiscal years (EFL 11 kap. 7 §). Null renders "inga". */
+  forlagsinsatser_redeemable_two_years: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -62,6 +78,12 @@ export interface NarrativeOverrides {
   /** The user confirmed the company is not a större företag under ÅRL
    *  1 kap. 3 §, needed when the product cannot determine the size. */
   kassaflodesanalys_omission_confirmed: boolean
+  /** K3 disclosure matrix answers per requirement id (disclosures/). */
+  disclosure_answers: DisclosureAnswers
+  /** Equity verifikat the ledger cannot classify, classified by the user. */
+  equity_movement_overrides: EquityMovementOverridesRow
+  /** Print the equity specification as a statement of its own (K3 3.10). */
+  equity_statement_separate: boolean
 }
 
 /**
@@ -85,6 +107,17 @@ export interface NarrativeRow {
   parent_company_org_number: string | null
   parent_company_city: string | null
   medelantal_anstallda_override: number | null
+  /** ÅRL 6 kap. 3 § (ekonomisk förening): väsentliga förändringar i
+   *  medlemsantalet, free text. Required before the document is fileable. */
+  member_count_change: string | null
+  /** ÅRL 6 kap. 3 § p. 2: insatser to be repaid next fiscal year (EFL 10
+   *  kap. 11 and 16 §§). Null renders "inga". */
+  insatser_repayable_next_year: number | null
+  /** ÅRL 6 kap. 3 § p. 3: the distribution right förlagsinsatser carry. */
+  forlagsinsatser_dividend_right: string | null
+  /** ÅRL 6 kap. 3 § p. 4: förlagsinsatser given notice, redeemable within
+   *  the next two fiscal years (EFL 11 kap. 7 §). Null renders "inga". */
+  forlagsinsatser_redeemable_two_years: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -94,6 +127,9 @@ export interface NarrativeRow {
   note_overrides: NoteOverrides
   omit_kassaflodesanalys: boolean
   kassaflodesanalys_omission_confirmed: boolean
+  disclosure_answers: DisclosureAnswers
+  equity_movement_overrides: EquityMovementOverridesRow
+  equity_statement_separate: boolean
   updated_at: string
 }
 
@@ -103,7 +139,7 @@ const TABLE = 'arsredovisning_narratives'
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
-  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, note_overrides, omit_kassaflodesanalys, kassaflodesanalys_omission_confirmed, updated_at'
+  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, member_count_change, insatser_repayable_next_year, forlagsinsatser_dividend_right, forlagsinsatser_redeemable_two_years, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, note_overrides, omit_kassaflodesanalys, kassaflodesanalys_omission_confirmed, disclosure_answers, equity_movement_overrides, equity_statement_separate, updated_at'
 
 /**
  * The medelantal anställda override alone, for a period other than the one
@@ -127,6 +163,35 @@ export async function getMedelantalOverride(
   const value = (data as { medelantal_anstallda_override: number | null })
     .medelantal_anstallda_override
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** What the årsstämma decided, as recorded on the narrative. */
+export interface AgmDecision {
+  agm_date: string | null
+  agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
+  agm_disposition_decision: string | null
+}
+
+/**
+ * The AGM date and decision alone. A locked version froze the
+ * fastställelseintyg as it stood at lock time, but the AGM is recorded after
+ * the board has signed, so the filed intyg reads it from here. Null when no
+ * narrative row exists; a read error throws, because filing without the AGM
+ * the user did record would be wrong.
+ */
+export async function getAgmDecision(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<AgmDecision | null> {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('agm_date, agm_disposition_outcome, agm_disposition_decision')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to load the AGM decision: ${error.message}`)
+  return (data as AgmDecision | null) ?? null
 }
 
 /**

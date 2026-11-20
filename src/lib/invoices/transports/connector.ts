@@ -1,6 +1,7 @@
-import { PEPPOL_OPERATIONS, connectorErrorSchema } from '@accounted/connect-contract'
+import { PEPPOL_OPERATIONS, connectorErrorSchema, type PeppolOperation } from '@accounted/connect-contract'
 import type { z } from 'zod'
-import { CONNECTOR_COMPANY_HEADER, type ConnectorUpstream } from '@/lib/connect/instance/upstreams'
+import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
+import type { ConnectorUpstream } from '@/lib/connect/instance/upstreams'
 import {
   CONNECTOR_PEPPOL_PROVIDER,
   PeppolTransportError,
@@ -22,21 +23,47 @@ import {
  * Instance-side Peppol transport for connector mode (WS3).
  *
  * A self-hosted instance with a connector key and no Qvalia keys of its own
- * reaches Arcim's contracted access point through the hosted proxy
- * (`app/api/connect/peppol/*`). The proxy speaks the PeppolTransport
- * operations, not Qvalia paths, so the instance never learns Arcim's partner
- * or account numbers and the hosted side can enforce ownership: a key can
+ * reaches the access point through the Accounted Connect
+ * service (`/api/connect/peppol/*` under GNUBOK_CONNECT_URL). The service
+ * is a separate service; this repo keeps only the wire contract
+ * (`@accounted/connect-contract`). The service speaks the PeppolTransport
+ * operations, not Qvalia paths, so the instance never holds partner
+ * or account numbers and the service can enforce ownership: a key can
  * only poll, fetch evidence for, or receive documents belonging to
  * participants and submissions it registered itself.
  *
- * Webhooks are not brokered: Qvalia posts to the hosted webhook, which only
- * knows hosted deliveries. The instance learns outbound status by polling
- * (`pollDeliveryStatus`, already driven by /api/peppol/outbound/status/cron).
+ * Webhooks are not brokered: Qvalia posts to the service's own webhook route,
+ * which keeps only failure reasons and attaches them to the polled status.
+ * The instance learns outbound status by polling (`pollDeliveryStatus`,
+ * already driven by /api/peppol/outbound/status/cron).
  */
 
 export const CONNECTOR_PROVIDER = CONNECTOR_PEPPOL_PROVIDER
 
-const FETCH_TIMEOUT_MS = 60_000
+/**
+ * The connector's tenant label (PeppolTransport.tenantId). The access point
+ * account behind the service is the service's, never the instance's, so the
+ * label is the provider name itself.
+ */
+const CONNECTOR_TENANT_ID = CONNECTOR_PEPPOL_PROVIDER
+
+/**
+ * How long one hosted call may take, body read included. The ladder: Qvalia
+ * call 20 s < Connect route 45 s < hosted submit 50 s < hosted route 90 s.
+ * Waiting past Connect's 45 s cap means the caller hears the service's answer
+ * (its timeout included) instead of abandoning a call the service is still
+ * making: the submit, and the registration calls, which may make up to three
+ * access point calls under that cap. A lookup is one access point call; the
+ * reads (status, evidence, inbound) wait 30 s. A send route runs one lookup
+ * and one submit (25 + 50 s) inside its 90 s.
+ */
+const OPERATION_TIMEOUT_MS: Partial<Record<PeppolOperation, number>> = {
+  lookup: 25_000,
+  submit: 50_000,
+  register: 50_000,
+  unregister: 50_000,
+}
+const DEFAULT_TIMEOUT_MS = 30_000
 
 export interface ConnectorTransportDeps {
   fetch?: typeof fetch
@@ -119,7 +146,7 @@ export function createConnectorPeppolTransport(
   assertTransportSecurity(baseUrl)
 
   async function call<T>(
-    operation: string,
+    operation: PeppolOperation,
     schema: z.ZodType<T>,
     method: 'POST' | 'PUT' | 'DELETE',
     path: string,
@@ -127,7 +154,7 @@ export function createConnectorPeppolTransport(
     options: { companyRef?: string | null } = {},
   ): Promise<T> {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+    const timeout = setTimeout(() => controller.abort(), OPERATION_TIMEOUT_MS[operation] ?? DEFAULT_TIMEOUT_MS)
     // The body is read INSIDE the timeout window: a response whose headers
     // arrive and whose body then stalls must not hold the caller forever,
     // and a body-read failure is a transport failure like any other.
@@ -137,12 +164,8 @@ export function createConnectorPeppolTransport(
         signal: controller.signal,
         redirect: 'error',
         cache: 'no-store',
-        headers: {
-          Authorization: `Bearer ${upstream.key}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(options.companyRef ? { [CONNECTOR_COMPANY_HEADER]: options.companyRef } : {}),
-        },
+        // Bearer key, contract version and (when known) the company header.
+        headers: connectorHeaders({ key: upstream.key, companyId: options.companyRef, json: true }),
         body: body === undefined ? undefined : JSON.stringify(body),
       })
       const json = await readJson(response)
@@ -162,6 +185,16 @@ export function createConnectorPeppolTransport(
 
   function withProvider<T extends { provider: string }>(value: T): T {
     return { ...value, provider: CONNECTOR_PROVIDER }
+  }
+
+  // A status event arrives stamped with the access point's own tenant (the
+  // service's account number at the provider). The send wrote this
+  // transport's label on the delivery row with its first event, and
+  // record_peppol_delivery_event refuses an event whose tenant differs from
+  // the row's, so the event takes the connector's label: the provider's own
+  // account number must never reach the instance.
+  function asConnectorEvent(event: PeppolVerifiedEvent): PeppolVerifiedEvent {
+    return { ...event, provider: CONNECTOR_PROVIDER, providerTenantId: CONNECTOR_TENANT_ID }
   }
 
   async function lookupRecipient(participant: PeppolParticipant): Promise<PeppolRecipientLookup> {
@@ -199,7 +232,7 @@ export function createConnectorPeppolTransport(
     const events = await call('status', PEPPOL_OPERATIONS.status.response, 'POST', PEPPOL_OPERATIONS.status.path, { providerSubmissionId }, {
       companyRef: await companyFor(providerSubmissionId),
     })
-    return (events ?? []).map(withProvider)
+    return (events ?? []).map(asConnectorEvent)
   }
 
   async function registerRecipient(input: PeppolRecipientRegistrationInput): Promise<PeppolRecipientRegistration> {
@@ -223,7 +256,10 @@ export function createConnectorPeppolTransport(
   }
 
   async function listInboundDocuments(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]> {
-    const items = await call('inboundList', PEPPOL_OPERATIONS.inboundList.response, 'POST', PEPPOL_OPERATIONS.inboundList.path, options)
+    // The caller's time limit is not part of the hosted request: this listing
+    // is a cursor read that consumes nothing, given up at the read limit.
+    const { timeoutMs: _callerLimit, ...request } = options
+    const items = await call('inboundList', PEPPOL_OPERATIONS.inboundList.response, 'POST', PEPPOL_OPERATIONS.inboundList.path, request)
     return (items ?? []).map(withProvider)
   }
 
@@ -237,6 +273,7 @@ export function createConnectorPeppolTransport(
 
   return {
     provider: CONNECTOR_PROVIDER,
+    tenantId: CONNECTOR_TENANT_ID,
     lookupRecipient,
     submit,
     verifyWebhook,

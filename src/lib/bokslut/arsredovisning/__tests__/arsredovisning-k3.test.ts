@@ -19,6 +19,7 @@ vi.mock('@/lib/reports/balance-sheet', () => ({
 }))
 vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
+  fetchTrialBalanceChart: vi.fn(async () => []),
 }))
 vi.mock('@/lib/reports/kassaflodesanalys', () => ({
   generateKassaflodesanalys: vi.fn(),
@@ -30,19 +31,33 @@ const mockFetchAllRows = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/supabase/fetch-all', () => ({
   fetchAllRows: mockFetchAllRows,
 }))
+// The registers in Avtal och åtaganden (lib/commitments): nothing registered
+// unless a test plants it, so every other test reads the narrative alone.
+const mockRegisterNoteTexts = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/commitments/disclosures', () => ({
+  loadRegisterNoteTexts: mockRegisterNoteTexts,
+}))
 
-import { buildArsredovisningData, resolveMedelantalNote } from '../build-data'
+import {
+  buildArsredovisningData, resolveMedelantalNote,
+  K3_CASH_FLOW_FAILED_WARNING, K3_CASH_FLOW_TAX_ALLOCATION_WARNING,
+} from '../build-data'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
+import { CashFlowTaxAllocationError } from '@/lib/reports/cash-flow-tax'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
+import type { TrialBalanceRowLike } from '@/lib/bokslut/ixbrl/k2-mapper'
+import { CURRENT, PREVIOUS } from '@/lib/bokslut/ixbrl/__tests__/fixtures'
+import type { TrialBalanceRow } from '@/types'
 // Captured from the sequential (pre-dedupe) implementation: the parallel
 // TB-pair fetch must reproduce it byte for byte.
 import multiYearSnapshot from './arsredovisning-k3-multiyear-snapshot.json'
 
 interface ChainableMock {
   from: ReturnType<typeof vi.fn>
+  rpc: ReturnType<typeof vi.fn>
 }
 
 function makeSupabase(opts: {
@@ -52,15 +67,50 @@ function makeSupabase(opts: {
   antalAktier?: number | null
   agmDate?: string | null
   previousPeriodId?: string | null
+  /** The current period's dates; the comparison year must end the day before it starts. */
+  period?: { name: string; period_start: string; period_end: string }
   medelantalOverride?: number | null
   noteOverrides?: Record<string, string>
   omitCashFlow?: boolean
+  registeredOffice?: string | null
+  city?: string | null
+  /** Verifikat on equity accounts, as get_entries_with_account_lines answers them. */
+  equityEntries?: unknown[]
+  /** The year's own row in fiscal_period_frameworks; absent means none (company default). */
+  yearFramework?: { framework: 'k2' | 'k3'; source?: string; change_reason?: string | null }
 }): ChainableMock {
   const from = vi.fn((table: string) => {
+    if (table === 'fiscal_period_frameworks' && opts.yearFramework) {
+      return {
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    fiscal_period_id: 'fp1',
+                    source: 'election',
+                    previous_framework: null,
+                    change_reason: null,
+                    previously_applied_k2: null,
+                    special_reasons_confirmed: null,
+                    decided_at: '2026-01-10T10:00:00Z',
+                    ...opts.yearFramework,
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+        }),
+      }
+    }
     if (table === 'fiscal_periods') {
       return {
         select: () => ({
           eq: () => ({
+            // The equity specification reads the years' ingående balans
+            // verifikat ids: none in these books.
+            in: () => Promise.resolve({ data: [], error: null }),
             eq: () => ({
               single: () =>
                 Promise.resolve({
@@ -69,6 +119,7 @@ function makeSupabase(opts: {
                     name: '2025',
                     period_start: '2025-01-01',
                     period_end: '2025-12-31',
+                    ...opts.period,
                     previous_period_id: opts.previousPeriodId ?? null,
                     closing_entry_id: null,
                   },
@@ -89,6 +140,8 @@ function makeSupabase(opts: {
                   company_name: 'Testbolaget AB',
                   org_number: '556677-8899',
                   address: { city: 'Stockholm' },
+                  registered_office: opts.registeredOffice ?? null,
+                  city: opts.city ?? null,
                   entity_type: opts.entityType ?? 'aktiebolag',
                   aktiekapital: opts.aktiekapital ?? null,
                   antal_aktier:
@@ -167,7 +220,19 @@ function makeSupabase(opts: {
       }),
     }
   })
-  return { from }
+  // get_entries_with_account_lines: the equity verifikat of the year. The
+  // tests that read the specification plant their own (opts.equityEntries).
+  const rpc = vi.fn(async (name: string, args: { p_start?: string; p_end?: string } = {}) =>
+    name === 'get_entries_with_account_lines'
+      ? {
+          data: ((opts.equityEntries ?? []) as Array<{ entry_date: string }>).filter(
+            (entry) => (!args.p_start || entry.entry_date >= args.p_start) && (!args.p_end || entry.entry_date <= args.p_end),
+          ),
+          error: null,
+        }
+      : { data: null, error: { message: `unexpected rpc ${name}` } },
+  )
+  return { from, rpc }
 }
 
 const mockedIncomeStatement = vi.mocked(generateIncomeStatement)
@@ -263,11 +328,14 @@ function plantStandardReports() {
       delta_varulager: 0,
       delta_kortfristiga_skulder: 0,
       skatt_betald: 0,
+      koncernbidrag: 0,
+      ovriga_poster: 0,
       total: 300_000,
     },
     investerings: {
       forvarv_anlaggningar: 0,
       avyttring_anlaggningar: 0,
+      kortfristiga_placeringar: 0,
       total: 0,
     },
     finansierings: {
@@ -278,6 +346,7 @@ function plantStandardReports() {
       total: 0,
     },
     total_cash_flow: 300_000,
+    unclassified_accounts: [],
     reconciliation: {
       opening_cash_1xxx: 300_000,
       closing_cash_1xxx: 600_000,
@@ -293,7 +362,41 @@ function plantStandardReports() {
 beforeEach(() => {
   vi.clearAllMocks()
   mockFetchAllRows.mockResolvedValue([])
+  mockRegisterNoteTexts.mockResolvedValue(null)
   plantStandardReports()
+})
+
+describe('buildArsredovisningData: the registers in Avtal och åtaganden', () => {
+  const registers = {
+    securities_pledged: 'Företagsinteckningar 500 000 kr.',
+    contingent_liabilities: 'Borgensförbindelser 300 000 kr.',
+    parent_company: { name: 'Ägarbolaget AB', org_number: '559000-0000', city: 'Stockholm' },
+  }
+
+  it.each(['k2', 'k3'] as const)('%s: writes the säkerheter, eventualförpliktelser and parent notes from the registers', async (framework) => {
+    mockRegisterNoteTexts.mockResolvedValue(registers)
+    const supabase = makeSupabase({ accountingFramework: framework })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(mockRegisterNoteTexts).toHaveBeenCalledWith(supabase, 'co1', '2025-12-31')
+    expect(data.noter.find((n) => n.title === 'Ställda säkerheter')?.body).toBe('Företagsinteckningar 500 000 kr.')
+    expect(data.noter.find((n) => n.title === 'Eventualförpliktelser')?.body).toBe('Borgensförbindelser 300 000 kr.')
+    expect(data.noter.find((n) => n.title === 'Koncernförhållanden')?.body).toBe(
+      'Moderföretag: Ägarbolaget AB. Organisationsnummer: 559000-0000. Säte: Stockholm.',
+    )
+    expect(data.disclosures.from_registers).toEqual(registers)
+    // The narrative fields stay what the person wrote (here nothing).
+    expect(data.disclosures.securities_pledged).toBeNull()
+  })
+
+  it('leaves the document as before when nothing is registered', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.noter.find((n) => n.title === 'Ställda säkerheter')?.body).toBe('Inga.')
+    expect(data.noter.find((n) => n.title === 'Koncernförhållanden')).toBeUndefined()
+    expect(data.disclosures).not.toHaveProperty('from_registers')
+  })
 })
 
 describe('buildArsredovisningData: medelantal anställda override (ÅRL 5:20 §)', () => {
@@ -322,6 +425,25 @@ describe('buildArsredovisningData: medelantal anställda override (ÅRL 5:20 §)
   )
 })
 
+describe('buildArsredovisningData: säte', () => {
+  it('prints registered_office as säte, never the postal town', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', registeredOffice: 'Sateskommunen', city: 'Postorten' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.company.registered_office).toBe('Sateskommunen')
+  })
+
+  it('carries no säte when none is stored: the postal town never stands in', async () => {
+    for (const registeredOffice of [null, '  ']) {
+      const supabase = makeSupabase({ accountingFramework: 'k2', registeredOffice, city: 'Postorten' })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      expect(data.company.registered_office).toBeNull()
+      expect(JSON.stringify(data)).not.toContain('Postorten')
+    }
+  })
+})
+
 describe('buildArsredovisningData: K3', () => {
   it('records accounting_framework=k3 in the output', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
@@ -339,12 +461,22 @@ describe('buildArsredovisningData: K3', () => {
     expect(data.kassaflodesanalys?.reconciliation.is_reconciled).toBe(true)
   })
 
-  it('includes a separate equity_changes_statement when framework is K3', async () => {
+  it('preserves an unallocatable tax explanation instead of blaming bank balances', async () => {
+    vi.mocked(generateKassaflodesanalys).mockRejectedValueOnce(new CashFlowTaxAllocationError())
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock is not a complete SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.kassaflodesanalys).toBeUndefined()
+    expect(data.warnings).toContain(K3_CASH_FLOW_TAX_ALLOCATION_WARNING)
+    expect(data.warnings).not.toContain(K3_CASH_FLOW_FAILED_WARNING)
+  })
+
+  it('prints the equity specification in förvaltningsberättelsen by default, never the old residual statement', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
-    expect(data.equity_changes_statement).toBeDefined()
-    expect(data.equity_changes_statement!.rows.length).toBeGreaterThan(0)
+    expect(data.equity_specification?.placement).toBe('management_report')
+    expect(data.equity_changes_statement).toBeUndefined()
   })
 
   it('emits the K3-style redovisningsprinciper note with framework citation', async () => {
@@ -380,6 +512,54 @@ describe('buildArsredovisningData: K3', () => {
     expect(uppskjuten).toBeDefined()
     expect(principles.body).toContain('konto 2240')
     expect(principles.body).toContain('Uppskjutna skatter')
+    expect(principles.body).not.toContain('särredovisas inte')
+  })
+
+  it('discloses an uppskjuten skattefordran on 1370 that the K3 deferred tax posting booked', async () => {
+    // commit_deferred_tax books 8940 against 2240 and 1370 (a deductible
+    // difference or a recognised loss): the fordran is a post of the K3
+    // balance sheet, so the note and the principles must show it too.
+    mockedTrialBalance.mockResolvedValue({
+      rows: [
+        {
+          account_number: '1370',
+          account_name: 'Uppskjuten skattefordran',
+          account_class: 1,
+          opening_debit: 10_000,
+          opening_credit: 0,
+          period_debit: 30_900,
+          period_credit: 0,
+          closing_debit: 40_900,
+          closing_credit: 0,
+        },
+        {
+          account_number: '8940',
+          account_name: 'Uppskjuten skatt',
+          account_class: 8,
+          opening_debit: 0,
+          opening_credit: 0,
+          period_debit: 0,
+          period_credit: 30_900,
+          closing_debit: 0,
+          closing_credit: 30_900,
+        },
+      ],
+      totalDebit: 30_900,
+      totalCredit: 30_900,
+      isBalanced: true,
+    })
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const uppskjuten = data.noter.find((n) => n.title === 'Uppskjutna skatter')
+    expect(uppskjuten).toBeDefined()
+    expect(uppskjuten!.body).toMatch(/Ingående saldo \(1370\): 10\s000 kr/)
+    expect(uppskjuten!.body).toMatch(/Årets förändring: 30\s900 kr/)
+    expect(uppskjuten!.body).toMatch(/Utgående saldo \(1370\): 40\s900 kr/)
+    expect(uppskjuten!.body).toMatch(/\(8940\): -30\s900 kr/)
+    expect(uppskjuten!.body).not.toContain('2240')
+    const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))!
+    expect(principles.body).toContain('Uppskjuten skattefordran redovisas på konto 1370.')
     expect(principles.body).not.toContain('särredovisas inte')
   })
 
@@ -570,13 +750,15 @@ describe('buildArsredovisningData: K3', () => {
     expect(data.noter.find((n) => n.title === 'Eventualförpliktelser')).toBeDefined()
   })
 
-  it('emits Väsentliga händelser efter balansdagen for K3', async () => {
+  it('leaves Väsentliga händelser efter balansdagen to the disclosure matrix, never a default "Inga"', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    // ÅRL 5 kap. 22 §: the user answers it (disclosures/k3-mindre.ts); the
+    // model prints the answer once the size class is known.
     expect(
       data.noter.find((n) => n.title === 'Väsentliga händelser efter balansdagen'),
-    ).toBeDefined()
+    ).toBeUndefined()
   })
 
   it('derives kvotvärde in the aktiekapital note instead of reading a stored column', async () => {
@@ -595,7 +777,10 @@ describe('buildArsredovisningData: K3', () => {
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.noter.find((n) => n.title === 'Aktiekapital')).toBeUndefined()
-    expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten saknas'))).toBeDefined()
+    // ÅRL 5 kap. 34 § binds a större företag only: the note is voluntary for a mindre one.
+    const warning = data.warnings.find((w) => w.startsWith('Aktiekapitalnoten utelämnas'))
+    expect(warning).toContain('För ett mindre företag är noten frivillig')
+    expect(warning).toContain('ÅRL 5 kap. 34 §')
   })
 
   it('treats a partial share-capital pair as missing (warns, no note) for K3', async () => {
@@ -607,7 +792,7 @@ describe('buildArsredovisningData: K3', () => {
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.noter.find((n) => n.title === 'Aktiekapital')).toBeUndefined()
-    expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten saknas'))).toBeDefined()
+    expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten utelämnas'))).toBeDefined()
   })
 
   it('never queries depreciation_schedules when the asset register is empty', async () => {
@@ -634,6 +819,219 @@ describe('buildArsredovisningData: K3', () => {
   })
 })
 
+// R2: write-downs are offered to K2 and K3 alike, and ÅRL 5 kap. 8 § p. 5
+// asks for årets nedskrivningar in the note. A note that leaves them out
+// neither says so nor ties to the balansräkning.
+describe('buildArsredovisningData: write-downs in the anläggningar note (ÅRL 5:8 § p. 5)', () => {
+  const PERIODS = [{ id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }]
+  const adjustment = (id: string, kind: 'impairment' | 'reversal', date: string, amount: number) => ({
+    id,
+    asset_id: 'mark-1',
+    component_id: null,
+    kind,
+    adjustment_date: date,
+    fiscal_period_id: 'fp1',
+    amount,
+    recoverable_amount: null,
+    reason: 'Värdenedgång',
+    expense_account: '7720',
+    accumulated_account: '1118',
+    journal_entry_id: `je-${id}`,
+    created_at: '2025-06-30T00:00:00Z',
+    journal_entry: { status: 'posted' },
+  })
+  // Mark for 900 000: 100 000 written down in 2024, 50 000 more in 2025 and
+  // 20 000 of it reversed. Utgående nedskrivningar 130 000, redovisat värde 770 000.
+  const mark = {
+    id: 'mark-1',
+    name: 'Tomt',
+    category: 'land',
+    acquisition_date: '2020-01-01',
+    acquisition_cost: 900_000,
+    salvage_value: 0,
+    useful_life_months: 0,
+    depreciation_method: 'linear',
+    bas_asset_account: '1130',
+    bas_accumulated_account: '1118',
+    bas_expense_account: '7820',
+    disposed_at: null,
+    k3_components: null,
+    components: [],
+    value_adjustments: [
+      adjustment('w1', 'impairment', '2024-12-31', 100_000),
+      adjustment('w2', 'impairment', '2025-06-30', 50_000),
+      adjustment('r1', 'reversal', '2025-12-31', 20_000),
+    ],
+  }
+  const tbRow = (account: string, debit: number, credit: number) => ({
+    account_number: account,
+    account_name: account,
+    account_class: 1,
+    opening_debit: 0,
+    opening_credit: 0,
+    period_debit: 0,
+    period_credit: 0,
+    closing_debit: debit,
+    closing_credit: credit,
+  })
+  function plantMark(writtenDownOnBooks: number) {
+    mockFetchAllRows.mockResolvedValue(PERIODS)
+    mockedListAssets.mockResolvedValue([mark] as never)
+    mockedTrialBalance.mockResolvedValue({
+      rows: [tbRow('1130', 900_000, 0), tbRow('1118', 0, writtenDownOnBooks)],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    } as never)
+  }
+
+  for (const framework of ['k2', 'k3'] as const) {
+    it(`${framework.toUpperCase()}: shows the year's write-down and reversal and ties to the books`, async () => {
+      plantMark(130_000)
+      const supabase = makeSupabase({ accountingFramework: framework })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Anläggningstillgångar')
+      expect(note?.body).toContain('Mark')
+      expect(note?.body).toMatch(/Ingående ackumulerade nedskrivningar: -100\s000 kr/)
+      expect(note?.body).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(note?.body).toMatch(/Årets återförda nedskrivningar: 20\s000 kr/)
+      expect(note?.body).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+      expect(note?.body).toMatch(/Utgående redovisat värde: 770\s000 kr/)
+      expect(data.errors).toBeUndefined()
+      expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+    })
+
+    it(`${framework.toUpperCase()}: blocks a note that does not tie while the register holds write-downs`, async () => {
+      // The reversal never reached 1118: the books say 150 000.
+      plantMark(150_000)
+      const supabase = makeSupabase({ accountingFramework: framework })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      expect(data.errors).toEqual([expect.stringMatching(/^Anläggningsnotens .*innan årsredovisningen kan låsas/)])
+      expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+    })
+  }
+})
+
+// The merge of Phases 1 and 2: each nedskrivning has one source. Posted
+// through the register, it is in the roll-forward; the ledger's write-down
+// accounts beyond that (booked by hand, or before Accounted) are in the
+// ledger note. Never both, and the tie-out counts each once.
+describe('buildArsredovisningData: one source per nedskrivning', () => {
+  const PERIODS = [{ id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }]
+  const IMPAIRMENT_ACCOUNT = 'Ackumulerade nedskrivningar på byggnader och mark'
+  const adjustment = (id: string, kind: 'impairment' | 'reversal', date: string, amount: number) => ({
+    id,
+    asset_id: 'mark-1',
+    component_id: null,
+    kind,
+    adjustment_date: date,
+    fiscal_period_id: 'fp1',
+    amount,
+    recoverable_amount: null,
+    reason: 'Värdenedgång',
+    expense_account: '7720',
+    accumulated_account: '1118',
+    journal_entry_id: `je-${id}`,
+    created_at: '2025-06-30T00:00:00Z',
+    journal_entry: { status: 'posted' },
+  })
+  const mark = (valueAdjustments: unknown[]) => ({
+    id: 'mark-1',
+    name: 'Tomt',
+    category: 'land',
+    acquisition_date: '2020-01-01',
+    acquisition_cost: 900_000,
+    salvage_value: 0,
+    useful_life_months: 0,
+    depreciation_method: 'linear',
+    bas_asset_account: '1130',
+    bas_accumulated_account: '1118',
+    bas_expense_account: '7820',
+    disposed_at: null,
+    k3_components: null,
+    components: [],
+    value_adjustments: valueAdjustments,
+  })
+  // Through the register: 100 000 in 2024; in 2025 50 000 more and 20 000 reversed.
+  const REGISTER = [
+    adjustment('w1', 'impairment', '2024-12-31', 100_000),
+    adjustment('w2', 'impairment', '2025-06-30', 50_000),
+    adjustment('r1', 'reversal', '2025-12-31', 20_000),
+  ]
+  function plant(adjustments: unknown[], ledger: { opening: number; written: number; released: number }) {
+    const closing = ledger.opening + ledger.written - ledger.released
+    mockFetchAllRows.mockResolvedValue(PERIODS)
+    mockedListAssets.mockResolvedValue([mark(adjustments)] as never)
+    mockedTrialBalance.mockResolvedValue({
+      rows: [
+        {
+          account_number: '1130', account_name: 'Mark', account_class: 1,
+          opening_debit: 900_000, opening_credit: 0, period_debit: 0, period_credit: 0,
+          closing_debit: 900_000, closing_credit: 0,
+        },
+        {
+          account_number: '1118', account_name: IMPAIRMENT_ACCOUNT, account_class: 1,
+          opening_debit: 0, opening_credit: ledger.opening, period_debit: ledger.released, period_credit: ledger.written,
+          closing_debit: 0, closing_credit: closing,
+        },
+      ],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    } as never)
+  }
+  async function build(framework: 'k2' | 'k3') {
+    const supabase = makeSupabase({ accountingFramework: framework })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    return {
+      data,
+      rollforward: data.noter.find((n) => n.title === 'Anläggningstillgångar')?.body ?? '',
+      ledger: data.noter.find((n) => n.title === 'Nedskrivningar av anläggningstillgångar')?.body,
+    }
+  }
+  const tiesOut = (data: { errors?: string[]; warnings: string[] }) => {
+    expect(data.errors).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Anläggningsnotens'))).toBeUndefined()
+  }
+
+  for (const framework of ['k3', 'k2'] as const) {
+    it(`${framework.toUpperCase()}: a write-down posted through the register is shown once, in the roll-forward`, async () => {
+      plant(REGISTER, { opening: 100_000, written: 50_000, released: 20_000 })
+      const { data, rollforward, ledger } = await build(framework)
+      expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(rollforward).toMatch(/Utgående redovisat värde: 770\s000 kr/)
+      expect(ledger).toBeUndefined()
+      tiesOut(data)
+    })
+
+    it(`${framework.toUpperCase()}: a write-down booked by hand is shown from the ledger`, async () => {
+      plant([], { opening: 0, written: 40_000, released: 0 })
+      const { data, rollforward, ledger } = await build(framework)
+      expect(rollforward).not.toContain('nedskrivningar')
+      expect(ledger).toContain(IMPAIRMENT_ACCOUNT)
+      expect(ledger).toMatch(/Årets nedskrivningar: -40\s000 kr/)
+      expect(ledger).not.toContain('utanför anläggningsregistret')
+      tiesOut(data)
+    })
+
+    it(`${framework.toUpperCase()}: with both, the ledger note shows only what the register did not book`, async () => {
+      // 30 000 more booked by hand on 1118 in 2025, beside the register's.
+      plant(REGISTER, { opening: 100_000, written: 80_000, released: 20_000 })
+      const { data, rollforward, ledger } = await build(framework)
+      expect(rollforward).toMatch(/Årets nedskrivningar: -50\s000 kr/)
+      expect(rollforward).toMatch(/Utgående ackumulerade nedskrivningar: -130\s000 kr/)
+      expect(ledger).toContain('utanför anläggningsregistret')
+      expect(ledger).toMatch(/Ingående nedskrivningar: 0 kr/)
+      expect(ledger).toMatch(/Årets nedskrivningar: -30\s000 kr/)
+      expect(ledger).toMatch(/Utgående nedskrivningar: -30\s000 kr/)
+      tiesOut(data)
+    })
+  }
+})
+
 describe('buildArsredovisningData: note overrides', () => {
   it('K3: replaces note 1 with the user text and keeps the generated text for reset', async () => {
     const supabase = makeSupabase({
@@ -646,9 +1044,19 @@ describe('buildArsredovisningData: note overrides', () => {
     expect(principles?.number).toBe(1)
     expect(principles?.body).toBe('Egen principtext.')
     expect(principles?.generated_body).toContain('BFNAR 2012:1')
-    const events = data.noter.find((n) => n.key === 'vasentliga_handelser_efter_balansdagen')
-    expect(events?.generated_body).toBeUndefined()
-    expect(events?.body).toContain('Inga väsentliga händelser')
+  })
+
+  it('K3: a text written for the events-after note before the matrix stands as its answer', async () => {
+    const supabase = makeSupabase({
+      accountingFramework: 'k3',
+      noteOverrides: { vasentliga_handelser_efter_balansdagen: 'Bolaget sålde sin fastighet i mars.' },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.disclosures.disclosure_answers?.['not.handelser_efter_balansdagen']).toEqual({
+      applies: true,
+      text: 'Bolaget sålde sin fastighet i mars.',
+    })
   })
 
   it('K3: ignores unknown keys stored in the column', async () => {
@@ -693,13 +1101,13 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
       expect.anything(),
       'co1',
       'fp1',
-      { closingEntry: 'exclude-final' },
+      expect.objectContaining({ closingEntry: 'exclude-final' }),
     )
     expect(mockedTrialBalance).not.toHaveBeenCalledWith(
       expect.anything(),
       'co1',
       'fp1',
-      { closingEntry: 'exclude-all-year-end' },
+      expect.objectContaining({ closingEntry: 'exclude-all-year-end' }),
     )
   })
 
@@ -735,11 +1143,14 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
     expect(data.kassaflodesanalys).toBeUndefined()
   })
 
-  it('OMITS equity_changes_statement when framework is K2', async () => {
+  it('carries the same equity specification for K2 (ÅRL 6 kap. 2 § andra stycket)', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k2' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(data.equity_changes_statement).toBeUndefined()
+    expect(data.equity_specification?.current.totals.closing).toBe(
+      data.balansrakning.equity_liabilities.find((r) => r.semantic_key === 'balance_sheet_equity_total')?.current,
+    )
   })
 
   it('emits the K2-style redovisningsprinciper note (BFNAR 2016:10)', async () => {
@@ -778,6 +1189,65 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(mockedKassaflode).not.toHaveBeenCalled()
+  })
+})
+
+describe('buildArsredovisningData: K3 balance sheet posts (K3 4.3, ÅRL bilaga 1)', () => {
+  beforeEach(() => {
+    plantStandardReports()
+  })
+
+  it('K3: shows the deferred tax liability (2240) as a post of its own, with the totals unchanged', async () => {
+    const k3 = makeSupabase({ accountingFramework: 'k3' })
+    const k2 = makeSupabase({ accountingFramework: 'k2' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const k3Data = await buildArsredovisningData(k3, 'co1', 'fp1')
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const k2Data = await buildArsredovisningData(k2, 'co1', 'fp1')
+    const label = (rows: { label: string; current: number | null }[], name: string) =>
+      rows.find((r) => r.label === name)?.current
+    expect(label(k3Data.balansrakning.equity_liabilities, 'Avsättningar för uppskjutna skatter')).toBe(70_600)
+    expect(label(k3Data.balansrakning.equity_liabilities, 'Övriga avsättningar')).toBeUndefined()
+    expect(label(k2Data.balansrakning.equity_liabilities, 'Uppskjuten skatteskuld')).toBeUndefined()
+    expect(label(k2Data.balansrakning.equity_liabilities, 'Övriga avsättningar')).toBe(70_600)
+    expect(k3Data.balansrakning.total_equity_liabilities).toBe(k2Data.balansrakning.total_equity_liabilities)
+    expect(label(k3Data.balansrakning.equity_liabilities, 'Summa avsättningar')).toBe(
+      label(k2Data.balansrakning.equity_liabilities, 'Summa avsättningar'),
+    )
+  })
+})
+
+describe('buildArsredovisningData: framework per räkenskapsår (BFNAR 2012:4)', () => {
+  it('builds the year under its own framework, not the company default', async () => {
+    // The company has since moved to K3; this year was prepared under K2.
+    const supabase = makeSupabase({ accountingFramework: 'k3', yearFramework: { framework: 'k2' } })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.accounting_framework).toBe('k2')
+    expect(data.kassaflodesanalys).toBeUndefined()
+  })
+
+  it('states the reasons for a switch from K3 to K2 in the principles note (punkt 3)', async () => {
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      yearFramework: { framework: 'k2', change_reason: 'Verksamheten har minskat och bolaget är ett mindre företag.' },
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))!
+    expect(principles.body).toContain('BFNAR 2016:10')
+    expect(principles.body).toContain('Byte av regelverk')
+    expect(principles.body).toContain('Verksamheten har minskat och bolaget är ett mindre företag.')
+  })
+
+  it('leaves the K2 principles note unchanged without a switch', async () => {
+    const withRow = makeSupabase({ accountingFramework: 'k2', yearFramework: { framework: 'k2' } })
+    const without = makeSupabase({ accountingFramework: 'k2' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const a = await buildArsredovisningData(withRow, 'co1', 'fp1')
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const b = await buildArsredovisningData(without, 'co1', 'fp1')
+    expect(a.noter[0]).toEqual(b.noter[0])
   })
 })
 
@@ -848,7 +1318,7 @@ describe('buildArsredovisningData: comparison year without bookkeeping', () => {
     mockedTrialBalance.mockImplementation(async (client, companyId, periodId, opts) =>
       periodId === 'fp0' ? EMPTY_TB : standard!(client, companyId, periodId, opts),
     )
-    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0', period: TWO_PERIODS[0] })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
 
@@ -863,11 +1333,155 @@ describe('buildArsredovisningData: comparison year without bookkeeping', () => {
 
   it('stays silent when the previous year carries balances', async () => {
     mockFetchAllRows.mockResolvedValue(TWO_PERIODS)
-    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0', period: TWO_PERIODS[0] })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
 
     expect(data.warnings.find((w) => w.startsWith('Föregående räkenskapsår'))).toBeUndefined()
+  })
+})
+
+describe('buildArsredovisningData: comparison year never closed in the books (crm#1080)', () => {
+  // 2024 was closed in another system and came in without its closing entry:
+  // the 40 000 kr result is still on the result accounts, 2099 is empty. 2025
+  // is closed here. Every consumer below reads the one mapping, so the
+  // statements, the flerårsöversikt and the K3 equity statement agree.
+  const TWO_YEARS = [
+    { id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+    { id: 'fp0', name: '2024', period_start: '2024-01-01', period_end: '2024-12-31' },
+  ]
+  const NEVER_CLOSED = { full: PREVIOUS.preClosing, preClosing: PREVIOUS.preClosing }
+  // Equity at each year's start (credit): 2024 opened on 25 000 + 60 000; 2025
+  // opened with the 2024 result still on 2099, as the other system's IB left it.
+  const EQUITY_OPENING: Record<string, Record<string, number>> = {
+    fp0: { '2081': 25_000, '2091': 60_000 },
+    fp1: { '2081': 25_000, '2091': 60_000, '2099': 40_000 },
+  }
+  const tbRows = (rows: TrialBalanceRowLike[], periodId: string): TrialBalanceRow[] =>
+    rows.map((r) => ({
+      ...r,
+      account_class: Number(r.account_number[0]),
+      opening_debit: 0,
+      opening_credit: EQUITY_OPENING[periodId]?.[r.account_number] ?? 0,
+      period_debit: 0,
+      period_credit: 0,
+    }))
+  // 2025's equity verifikat: last year's result balanced, the year closed.
+  const EQUITY_ENTRIES = [
+    {
+      id: 'je-disp',
+      voucher_series: 'A',
+      voucher_number: 1,
+      entry_date: '2025-01-01',
+      description: 'Resultatdisposition',
+      status: 'posted',
+      source_type: 'result_appropriation',
+      source_id: null,
+      reverses_id: null,
+      correction_of_id: null,
+      lines: [
+        { id: 'l1', account_number: '2099', debit_amount: 40_000, credit_amount: 0 },
+        { id: 'l2', account_number: '2091', debit_amount: 0, credit_amount: 40_000 },
+      ],
+    },
+    {
+      id: 'je-close',
+      voucher_series: 'A',
+      voucher_number: 99,
+      entry_date: '2025-12-31',
+      description: 'Årets resultat',
+      status: 'posted',
+      source_type: 'year_end',
+      source_id: null,
+      reverses_id: null,
+      correction_of_id: null,
+      lines: [
+        { id: 'l3', account_number: '8999', debit_amount: 120_000, credit_amount: 0 },
+        { id: 'l4', account_number: '2099', debit_amount: 0, credit_amount: 120_000 },
+      ],
+    },
+  ]
+
+  beforeEach(() => {
+    mockFetchAllRows.mockResolvedValue(TWO_YEARS)
+    mockedTrialBalance.mockImplementation(async (_client, _companyId, periodId, opts) => {
+      const pair = periodId === 'fp0' ? NEVER_CLOSED : CURRENT
+      return {
+        rows: tbRows(opts.closingEntry === 'include' ? pair.full : pair.preClosing, periodId),
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+      }
+    })
+  })
+
+  it('K2: the comparison column shows the result and balances, with one notice', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    expect(data.balansrakning.total_assets_previous).toBe(253_000)
+    expect(data.balansrakning.total_equity_liabilities_previous).toBe(253_000)
+    const equityRow = (key: string) =>
+      data.balansrakning.equity_liabilities.find((r) => r.semantic_key === key)
+    expect(equityRow('balance_sheet_current_year_result')).toMatchObject({
+      current: 120_000,
+      previous: 40_000,
+    })
+    expect(equityRow('balance_sheet_equity_total')).toMatchObject({
+      current: 245_000,
+      previous: 125_000,
+    })
+    expect(
+      data.resultatrakning.find((r) => r.semantic_key === 'income_statement_result'),
+    ).toMatchObject({ current: 120_000, previous: 40_000 })
+    expect(data.warnings.filter((w) => w.includes('ämförelse'))).toEqual([
+      'Jämförelseåret avslutades aldrig i bokföringen: årets resultat (40000 kr) står kvar på resultatkontona. Årets resultat i jämförelseårets balansräkning är därför hämtat från resultaträkningen. Stäm av jämförelsetalen mot föregående års fastställda årsredovisning.',
+    ])
+    // The current year is as booked: nothing to demand, nothing derived.
+    expect(data.balansrakning.total_assets).toBe(380_000)
+    expect(data.balansrakning.total_equity_liabilities).toBe(380_000)
+    expect(data.warnings.some((w) => w.startsWith('Årets resultat enligt'))).toBe(false)
+  })
+
+  it('K2: the flerårsöversikt computes soliditet for that year on the same equity', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    // 2024: (125 000 eget kapital + 79,4 % of 30 000 periodiseringsfond) /
+    // 253 000. On the booked equity (85 000) it read 43,0 %.
+    expect(data.forvaltningsberattelse.flerarsoversikt).toEqual([
+      { year: '2024', net_revenue: 500_000, result_after_financial: 60_000, soliditet_pct: 58.8 },
+      { year: '2025', net_revenue: 1_000_000, result_after_financial: 151_340, soliditet_pct: 72.8 },
+    ])
+  })
+
+  it('K3: the equity specification opens on the derived equity and reads the year from its verifikat', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k3', previousPeriodId: 'fp0', equityEntries: EQUITY_ENTRIES })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    // Opening on the comparison column (the 40 000 kr result derived for
+    // 2024); the year's movements from its two verifikat. Read as booked the
+    // opening was 85 000 and the old statement printed the gap as a
+    // nyemission that never took place.
+    const spec = data.equity_specification!
+    expect(spec.current.posts.map(({ concept, opening, movements, closing }) => ({ concept, opening, movements, closing }))).toEqual([
+      { concept: 'Aktiekapital', opening: 25_000, movements: {}, closing: 25_000 },
+      { concept: 'BalanseratResultat', opening: 60_000, movements: { resultatdisposition: 40_000 }, closing: 100_000 },
+      {
+        concept: 'AretsResultatEgetKapital',
+        opening: 40_000,
+        movements: { resultatdisposition: -40_000, arets_resultat: 120_000 },
+        closing: 120_000,
+      },
+    ])
+    expect(spec.current.totals).toMatchObject({ opening: 125_000, closing: 245_000 })
+    // 2024 was never closed here: its result is the derived one.
+    expect(spec.previous?.derived).toBe(true)
+    expect(spec.previous?.totals.movements).toEqual({ arets_resultat: 40_000 })
+    expect(spec.integrity_issues).toEqual([])
   })
 })
 

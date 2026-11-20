@@ -10,7 +10,7 @@ import { toRedovisare12 } from '@/lib/invariants/org-number'
  * - Separators (hyphens and spaces) are stripped before processing
  *
  * Delegates to `lib/invariants/org-number.ts` so that this converter, the AGI
- * and KU10 generators, and the årsredovisning validator cannot drift apart.
+ * generator, and the årsredovisning validator cannot drift apart.
  * The previous local implementation stripped hyphens only and threw on any
  * input containing a space.
  */

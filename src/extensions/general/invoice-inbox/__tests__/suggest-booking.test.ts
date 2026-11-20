@@ -3,7 +3,7 @@
  *
  * The route is read-only and advisory: it proposes, the user approves, and the
  * posting still goes through book-direct. So the tests are mostly about what it
- * must NOT do — propose beside an already-posted verifikat, invent a booking for
+ * must NOT do - propose beside an already-posted verifikat, invent a booking for
  * an unmatched document, or turn an unmappable transaction into an error the
  * user cannot act on.
  *
@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 const evaluateMappingRules = vi.fn()
@@ -25,7 +25,7 @@ vi.mock('@/lib/bookkeeping/settlement-account', () => ({
   resolveSettlementAccount: vi.fn(async () => '1930'),
 }))
 
-const route = invoiceInboxExtension.apiRoutes!.find(
+const route = testRoutes(invoiceInboxExtension).find(
   (r) => r.method === 'POST' && r.path === '/items/:id/suggest-booking',
 )!
 
@@ -37,7 +37,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as unknown as ExtensionContext
@@ -106,9 +105,6 @@ beforeEach(() => {
 })
 
 describe('POST /items/:id/suggest-booking', () => {
-  it('returns 401 without a context', async () => {
-    expect((await route.handler(req())).status).toBe(401)
-  })
 
   it('returns 404 for an item in another company', async () => {
     const mock = createQueuedMockSupabase()
@@ -365,6 +361,31 @@ describe('POST /items/:id/suggest-booking', () => {
       await route.handler(req(), buildCtx(mock.supabase)),
     )
     expect(body.data.source).toBe('counterparty_template')
+  })
+
+  it('carries each line\'s dimensions bag, as the booking would post it', async () => {
+    // A learned multi-line pattern tags its business lines one by one; the
+    // top-level `dimensions` cannot say that, so the lines carry their bags.
+    evaluateMappingRules.mockResolvedValue(
+      mappingResult({
+        rule: null,
+        template_id: undefined,
+        all_lines_complete: true,
+        vat_lines: [
+          { account_number: '2641', debit_amount: 4327.8, credit_amount: 0, description: 'Ingående moms' },
+          { account_number: '5410', debit_amount: 17311.2, credit_amount: 0, description: '', business_line: true, dimensions: { '6': 'P001' } },
+        ],
+      }),
+    )
+    const mock = createQueuedMockSupabase()
+    queueRows(mock)
+    const { body } = await parseJsonResponse<{
+      data: { lines: { account_number: string; dimensions?: Record<string, string> }[] }
+    }>(await route.handler(req(), buildCtx(mock.supabase)))
+
+    expect(body.data.lines.find((l) => l.account_number === '5410')?.dimensions).toEqual({ '6': 'P001' })
+    expect(body.data.lines.find((l) => l.account_number === '2641')).not.toHaveProperty('dimensions')
+    expect(body.data.lines.find((l) => l.account_number === '1930')).not.toHaveProperty('dimensions')
   })
 
   it('withholds a rule-branch proposal on a foreign-currency row', async () => {

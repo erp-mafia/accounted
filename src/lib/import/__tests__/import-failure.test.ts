@@ -132,6 +132,14 @@ describe('describeSIEJobFailure', () => {
     expect(describeSIEJobFailure(job({ job_state: 'paused' })).message).toBe('Importen behöver granskas.')
     expect(describeSIEJobFailure(job({ job_state: 'undone' })).message).toBe('Importen är ångrad.')
   })
+
+  it('never shows a recorded database error raw; the import reference stays (crm#1653)', () => {
+    const raw = 'Database operation "import_sie_chunk" failed: duplicate key value violates unique constraint "journal_import_source_owned_idx"'
+    const paused = describeSIEJobFailure(job({ job_state: 'paused', error_message: raw }))
+    expect(paused.message).toBe('Importen stannade på ett tekniskt fel och behöver granskas.')
+    expect(paused.importId).toBe('11111111-1111-4111-8111-111111111111')
+    expect(describeSIEJobFailure(job({ error_message: raw })).message).toBe('Importen stannade på ett tekniskt fel.')
+  })
 })
 
 describe('formatImportFailure', () => {

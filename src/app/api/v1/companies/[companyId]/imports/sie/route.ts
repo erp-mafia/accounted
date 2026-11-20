@@ -1,6 +1,5 @@
 /** Submit durable SIE work and return its operation id before ledger writes. */
 import { readSIERequestFile } from '@/lib/import/sie-intake'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { z } from 'zod'
 import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -12,12 +11,15 @@ import {
   detectEncoding,
   decodeBuffer,
 } from '@/lib/import/sie-parser'
-import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
-import { suggestMappings } from '@/lib/import/account-mapper'
+import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
-import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { loadMappings } from '@/lib/import/sie-import'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { SIEJobOptionsSchema } from '@/lib/api/schemas'
+import { apiKeyArrivalActor } from '@/lib/intake/arrivals'
+import { userFacingCode } from '@/lib/errors/user-facing'
 
 const SieImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -45,9 +47,14 @@ registerEndpoint({
     'Body content-type must be multipart/form-data with either a `file` field carrying the .se / .sie / .si file, or `storagePath` and `filename` fields from the signed-upload endpoint.',
     'Files up to 50 MB use POST /imports/sie/upload, then upload bytes to Storage and submit storagePath + filename. Inline multipart is limited by the hosting gateway.',
     'An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.',
+    'A fiscal year that already has a posted ingående balans booked outside an import (by hand or by a year-end close) answers 409 SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE when the import would book the file\'s IB on top of it (importOpeningBalances true and no earlier bookkeeping): resend with options.importOpeningBalances=false to import the vouchers on top of the posted IB. A year that already holds an import answers 409 SIE_IMPORT_PERIOD_ALREADY_IMPORTED.',
+    'To add only the file\'s vouchers the year does not hold yet (the last weeks booked in the old system, a card provider, payroll or POS export), send options.onExistingPeriod=append: they post as their own batch beside the year\'s import, numbers continuing per series, and undo alone. A voucher with the same source series and number as a posted one is skipped when identical and refuses the whole append when changed (409 SIE_IMPORT_APPEND_CONFLICT, details.conflicts). One with the same date and lines as a posted entry but no matching number is a possible duplicate, skipped unless options.includePossibleDuplicates=true. Also 409: an #IB unlike the year\'s (SIE_IMPORT_APPEND_OPENING_BALANCE_DIFFERS), an unbalanced or unmapped new voucher (SIE_IMPORT_APPEND_INVALID_VOUCHERS), nothing new (SIE_IMPORT_APPEND_NOTHING_NEW), a closed or locked period (SIE_IMPORT_PERIOD_LOCKED). options.seriesMap books a source series in another ({"K":"A"}). The year\'s import cannot be undone or replaced while an append is live (409 SIE_IMPORT_HAS_LIVE_APPEND).',
+    'A file with #VER and no #IB, #UB or #RES (a card provider, payroll or POS export) is never a replacement of an imported year: 409 SIE_IMPORT_VOUCHERS_ONLY_FILE. Never undo the year\'s import for it: append it (options.onExistingPeriod=append).',
+    'A file whose #ORGNR is not the company\'s organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.',
     'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.',
-    'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides). By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
+    'options (a JSON string field) takes createFiscalPeriod, importOpeningBalances, importTransactions, updateAccountNames (each default true), voucherSeries (for vouchers the file gives no series; default B, as the dashboard), openingBalanceSeries (default: a series the file does not use), markImportedNoDocRequired (default false), onlyUsedAccounts (default false; true leaves out the BAS accounts with no balance and no voucher line in the file, while the file\'s own non-BAS accounts are still created and the archived file keeps everything), onExistingPeriod (block, replace or append), supersedesImportId, includePossibleDuplicates, seriesMap and confirmOrgNumberMismatch; any other key is 400.',
+    'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
   ],
   example: {
     response: {
@@ -100,9 +107,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Optional execution flags. Defaults mirror the dashboard's "import all"
-    // behavior. The schema is permissive: agents can omit and get sane
-    // defaults.
+    // Optional execution flags: the job's own options schema, the one the
+    // dashboard and the MCP tool use, so an omitted flag gets the same
+    // default on every door ("import all", series-less vouchers to series B).
+    // This route used to keep its own copy, with series-less vouchers to A.
     const optionsRaw = formData.get('options')
     let parsedOptions: unknown = {}
     if (typeof optionsRaw === 'string') {
@@ -118,26 +126,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
       }
     }
-    const optionsParse = z
-      .object({
-        createFiscalPeriod: z.boolean().optional().default(true),
-        importOpeningBalances: z.boolean().optional().default(true),
-        importTransactions: z.boolean().optional().default(true),
-        voucherSeries: z.string().min(1).max(2).optional().default('A'),
-        // Series for the Ingående balanser voucher (issue #1882). No default
-        // here: executeSIEImport picks a series the file's vouchers do not
-        // use, so the IB entry never shifts the file's own numbering.
-        openingBalanceSeries: z.string().min(1).max(2).optional(),
-        updateAccountNames: z.boolean().optional().default(true),
-        onExistingPeriod:z.enum(['block','replace']).default('block'),
-        supersedesImportId:z.string().uuid().optional(),
-      })
-      // OWASP V4.5: reject unknown keys so a future schema-extension
-      // (or a careless edit) doesn't silently pass mass-assigned fields
-      // through. Zod's default is to strip unknowns: `.strict()` is
-      // belt-and-suspenders.
-      .strict()
-      .safeParse(parsedOptions)
+    // OWASP V4.5: unknown keys are refused, so a careless edit cannot pass
+    // mass-assigned fields through (zod's default is to strip them).
+    const optionsParse = SIEJobOptionsSchema.strict().safeParse(parsedOptions)
     if (!optionsParse.success) return v1ValidationError(ctx, optionsParse.error)
     const options = optionsParse.data
 
@@ -177,20 +168,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     // Build account mappings server-side from the file's #KONTO records and
-    // any stored per-company overrides: same as the dashboard execute route.
-    // (This route used to pass [] as mappings, which executeSIEImport's
+    // any stored per-company overrides, by the same decision the dashboard
+    // upload makes (#3312): class 9 amounts to 2999, unused definitions kept.
+    // (This route used to pass [] as mappings, which the import's
     // mapping-coverage guard rejects for any real file.)
-    const storedMappings = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => ctx.supabase
-      .from('sie_account_mappings').select('*').eq('company_id',ctx.companyId).order('source_account').range(from,to))
-    const mappings = suggestMappings(
-      parsed.accounts,
-      BAS_REFERENCE,
-      (storedMappings as SIEAccountMappingRecord[]) || undefined,
-    )
+    const storedMappings = await loadMappings(ctx.supabase, ctx.companyId!)
+    const { mappings } = suggestSIEMappings(parsed, BAS_REFERENCE, storedMappings)
 
     // Reject unmappable files with a clean 400 before starting the operation
     // row, mirroring the dashboard route: the alternative is a permanently
-    // failed operation from executeSIEImport's coverage guard.
+    // failed operation from the import's coverage guard.
     const unmapped = mappings.filter((m) => !m.targetAccount)
     if (unmapped.length > 0) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -206,13 +193,29 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    const job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{
-      filename:file.name,createFiscalPeriod:options.createFiscalPeriod,
-      importOpeningBalances:options.importOpeningBalances,importTransactions:options.importTransactions,
-      voucherSeries:options.voucherSeries,openingBalanceSeries:options.openingBalanceSeries,
-      updateAccountNames:options.updateAccountNames,onExistingPeriod:options.onExistingPeriod,
-      supersedesImportId:options.supersedesImportId,
-    },file)
+    let job
+    try {
+      job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{filename:file.name,...options},file,'sie_file',{
+        source:'sie', via:'partner_api',
+        fetchedBy:apiKeyArrivalActor(ctx),
+      })
+    } catch (err) {
+      // Both numbers travel in details so the caller can show them; every
+      // other refusal keeps the wrapper's mapping.
+      if (
+        err instanceof SIEJobValidationError &&
+        (err.code === 'SIE_IMPORT_ORG_NUMBER_MISMATCH' || err.code === 'SIE_IMPORT_VOUCHERS_ONLY_FILE')
+      ) {
+        return v1ErrorResponseFromCode(err.code, ctx.log, { requestId: ctx.requestId, details: err.details })
+      }
+      // An append refusal (issue #108): its sentence names the vouchers, and
+      // details carries the list.
+      if (err instanceof SIEJobValidationError && err.code !== 'VALIDATION_ERROR' && userFacingCode(err)) {
+        return v1ErrorResponseFromCode(err.code, ctx.log, { requestId: ctx.requestId, details: err.details,
+          messageSv: getUserErrorMessage(err) })
+      }
+      throw err
+    }
     after(async () => { await runSIEWorker({importId:job.id}) })
     return accepted(job.id, 'import.sie', { requestId: ctx.requestId })
   },

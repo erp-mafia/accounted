@@ -1,6 +1,6 @@
-import type { LedgerStats, PartyRole, RegisterRow } from '@/lib/parties/register'
+import type { LedgerStats, RegisterRow } from '@/lib/parties/register'
 import type { SuggestionReason } from '@/lib/parties/suggest'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 
 /** next-intl translator shape the register components accept. */
 export type Translate = (key: string, values?: Record<string, string | number>) => string
@@ -16,14 +16,6 @@ export function roleLabel(t: Translate, roles: RegisterRow['roles']): string {
   return parts.length ? parts.join(' · ') : t('role_none')
 }
 
-/** "Leverantör", "Kund" or "Leverantör · Kund": what a suggestion becomes. */
-export function rolesLabel(t: Translate, roles: PartyRole[]): string {
-  const parts: string[] = []
-  if (roles.includes('supplier')) parts.push(t('role_supplier'))
-  if (roles.includes('customer')) parts.push(t('role_customer'))
-  return parts.join(' · ')
-}
-
 /** "Org.nr 556354-5185 i 3 underlag · 12 verifikat · varje månad": why a row is in the queue. */
 export function reasonText(t: Translate, reason: SuggestionReason | null, rhythm: LedgerStats['rhythm'], orgNumber: string | null = null): string {
   if (!reason) return ''
@@ -32,8 +24,8 @@ export function reasonText(t: Translate, reason: SuggestionReason | null, rhythm
   // An org number the person picked from the register (no document carries
   // it) is stated as such; the stored reason predates the pick.
   const picked = Boolean(orgNumber) && !reason.org_number
-  if (reason.org_number) parts.push(t('reason_org', { org: formatOrgNumber(reason.org_number), docs }))
-  else if (picked) parts.push(t('reason_org_picked', { org: formatOrgNumber(orgNumber!) }))
+  if (reason.org_number) parts.push(t('reason_org', { org: formatOrgNumberDisplay(reason.org_number), docs }))
+  else if (picked) parts.push(t('reason_org_picked', { org: formatOrgNumberDisplay(orgNumber!) }))
   else if (reason.ambiguous_orgs?.length) parts.push(t('reason_ambiguous'))
   else if (docs > 0) parts.push(t('reason_docs', { docs }))
   parts.push(t('reason_vouchers', { count: reason.occurrences ?? 0 }))
@@ -49,12 +41,4 @@ export function formatPaymentIdentity(scheme: string, value: string): string {
   if (scheme === 'bankgiro' && (d.length === 7 || d.length === 8)) return `${d.slice(0, d.length - 4)}-${d.slice(-4)}`
   if (scheme === 'plusgiro' && d.length >= 2) return `${d.slice(0, -1)}-${d.slice(-1)}`
   return value
-}
-
-export function isDuplicateCandidate(row: RegisterRow): boolean {
-  return row.similar.length > 0 || Boolean(row.reason?.similar_to?.length)
-}
-
-export function hasHardKey(row: RegisterRow): boolean {
-  return Boolean(row.reason?.org_number || row.orgNumber)
 }

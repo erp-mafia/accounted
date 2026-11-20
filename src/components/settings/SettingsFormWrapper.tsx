@@ -3,10 +3,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Loader2, Check, Lock } from 'lucide-react'
-import { useToast } from '@/components/ui/use-toast'
+import { CheckIcon, LockClosedIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useSaveSettings, type SaveSettingsOptions } from '@/components/settings/use-save-settings'
+import { SettingsViewerScope } from '@/components/settings/SettingsRows'
+import type { CompanySettings } from '@/types'
 import { cn } from '@/lib/utils'
 
 type SaveResult =
@@ -16,6 +17,8 @@ type SaveResult =
 interface SettingsFormWrapperProps {
   children: React.ReactNode
   onSave?: (formData: FormData) => SaveResult
+  /** Asked before this form's save reopens filed momsperioder (see SaveSettingsOptions). */
+  confirmReopeningFiledVat?: SaveSettingsOptions['confirmReopeningFiledVat']
   className?: string
 }
 
@@ -24,9 +27,9 @@ interface SettingsFormWrapperProps {
  * affordance is a sticky bar that fades in only when the form is dirty
  * (Fönster concept): a quiet page until you actually change something.
  */
-export function SettingsFormWrapper({ children, onSave, className }: SettingsFormWrapperProps) {
+export function SettingsFormWrapper({ children, onSave, confirmReopeningFiledVat, className }: SettingsFormWrapperProps) {
   const t = useTranslations('settings_company')
-  const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const { canWrite } = useCanWrite()
   const [isSaving, setIsSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -56,48 +59,19 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     setIsSaving(true)
     setSaved(false)
 
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      })
-
-      const result = await response.json()
-
-      if (!response.ok) {
-        // Surface the specific Zod field message when the API sent a
-        // validation_error envelope: generic "Validation failed" is useless
-        // to the user.
-        if (
-          result?.type === 'validation_error'
-          && Array.isArray(result.errors)
-          && result.errors.length > 0
-        ) {
-          const messages = result.errors
-            .map((e: { message?: string }) => e.message)
-            .filter((m: unknown): m is string => typeof m === 'string' && m.length > 0)
-          if (messages.length > 0) {
-            throw new Error(messages.join(' • '))
-          }
-        }
-        throw new Error(result.error || t('wrapper_save_failed_default'))
-      }
-
-      onSuccess?.(result.data ?? updates)
+    const result = await saveSettings(updates as Partial<CompanySettings>, {
+      failedTitle: t('wrapper_save_failed_title'),
+      confirmReopeningFiledVat,
+    })
+    if (result) {
+      onSuccess?.((result.data as Record<string, unknown> | undefined) ?? (updates as Record<string, unknown>))
       setDirty(false)
       setSaved(true)
       timerRef.current = setTimeout(() => setSaved(false), 2000)
-    } catch (error) {
-      toast({
-        title: t('wrapper_save_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('wrapper_try_again'),
-        variant: 'destructive',
-      })
     }
 
     setIsSaving(false)
-  }, [onSave, toast, t])
+  }, [onSave, confirmReopeningFiledVat, saveSettings, t])
 
   const barVisible = dirty || isSaving || saved
 
@@ -114,49 +88,86 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
       }}
       className={className}
     >
-      {children}
+      {/* Saves company settings: a read-only member's rows are locked. */}
+      <SettingsViewerScope>{children}</SettingsViewerScope>
 
-      {/* Sticky save bar: invisible until the form is dirty. The gradient
-          lets rows scroll away underneath without a hard edge. */}
-      <div
-        className={cn(
-          'sticky bottom-0 flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-200',
-          barVisible
-            ? 'mt-2 pb-3 pt-6 opacity-100'
-            : 'pointer-events-none h-0 overflow-hidden py-0 opacity-0',
-        )}
-        aria-hidden={!barVisible}
-      >
-        <Button
-          type="submit"
-          disabled={isSaving || !canWrite}
-          size="sm"
-          tabIndex={barVisible ? 0 : -1}
-          title={!canWrite ? t('wrapper_readonly_tooltip') : undefined}
-        >
-          {isSaving ? (
-            <>
-              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              {t('wrapper_saving')}
-            </>
-          ) : !canWrite ? (
-            <>
-              <Lock className="mr-2 h-3.5 w-3.5" />
-              {t('wrapper_save_changes')}
-            </>
-          ) : (
-            t('wrapper_save_changes')
-          )}
-        </Button>
-        {saved ? (
-          <span className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in duration-200">
-            <Check className="h-3.5 w-3.5" />
-            {t('wrapper_saved')}
-          </span>
-        ) : (
-          <span className="text-xs text-muted-foreground">{t('wrapper_unsaved')}</span>
-        )}
-      </div>
+      <SettingsSaveBar visible={barVisible} saving={isSaving} saved={saved} canWrite={canWrite} />
     </form>
+  )
+}
+
+interface SettingsSaveBarProps {
+  visible: boolean
+  saving: boolean
+  saved: boolean
+  /** False for a read-only member: the button locks with a tooltip. */
+  canWrite?: boolean
+  /** Extra reasons the save cannot run yet (an invalid field). */
+  disabled?: boolean
+  /**
+   * Outside a <form>: what the button runs. Without it the button submits
+   * the form it sits in (SettingsFormWrapper).
+   */
+  onSave?: () => void
+  /** A quiet secondary action beside the save button (e.g. "Återställ"). */
+  secondary?: React.ReactNode
+}
+
+/**
+ * The Fönster save bar: sticky at the bottom of its container and invisible
+ * until something changed. SettingsFormWrapper renders it for the forms
+ * that save to /api/settings; a section that saves elsewhere (the first
+ * fiscal year) renders it directly with `onSave`.
+ */
+export function SettingsSaveBar({
+  visible,
+  saving,
+  saved,
+  canWrite = true,
+  disabled = false,
+  onSave,
+  secondary,
+}: SettingsSaveBarProps) {
+  const t = useTranslations('settings_company')
+  return (
+    // The gradient lets rows scroll away underneath without a hard edge.
+    <div
+      className={cn(
+        'sticky bottom-[var(--bottom-nav-h)] flex items-center gap-4 bg-gradient-to-t from-background via-background/95 to-transparent px-1 transition-opacity duration-150',
+        visible
+          ? 'mt-2 pb-3 pt-6 opacity-100'
+          : 'pointer-events-none h-0 overflow-hidden py-0 opacity-0',
+      )}
+      aria-hidden={!visible}
+    >
+      <Button
+        type={onSave ? 'button' : 'submit'}
+        onClick={onSave}
+        disabled={!canWrite || disabled}
+        loading={saving}
+        tabIndex={visible ? 0 : -1}
+        title={!canWrite ? t('wrapper_readonly_tooltip') : undefined}
+      >
+        {saving ? (
+          t('wrapper_saving')
+        ) : !canWrite ? (
+          <>
+            <LockClosedIcon className="h-3.5 w-3.5" />
+            {t('wrapper_save_changes')}
+          </>
+        ) : (
+          t('wrapper_save_changes')
+        )}
+      </Button>
+      {secondary}
+      {saved ? (
+        <span className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in duration-150">
+          <CheckIcon className="h-3.5 w-3.5" />
+          {t('wrapper_saved')}
+        </span>
+      ) : (
+        <span className="text-xs text-muted-foreground">{t('wrapper_unsaved')}</span>
+      )}
+    </div>
   )
 }

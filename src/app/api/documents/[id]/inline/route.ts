@@ -4,6 +4,11 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { HEIC_MIME_TYPES, decodeHeicToJpeg } from '@/lib/documents/read/image'
+import { PREVIEW_VERSION, ensurePreview, needsPreview } from '@/lib/documents/preview'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('documents/inline')
 
 /**
  * GET /api/documents/:id/inline
@@ -35,6 +40,8 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   jpeg: 'image/jpeg',
   png: 'image/png',
   webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
 }
 
 /**
@@ -54,15 +61,17 @@ function resolveContentType(fileName: string, dbMimeType: string | null): string
 }
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'document.inline',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId }, { params }) => {
     const { id } = await params
+    // ?original=1 is "open in a new tab": the file itself, not the viewer's preview.
+    const wantsOriginal = new URL(request.url).searchParams.get('original') === '1'
 
     // Authorize via the auth-bound client and the active tenant. RLS remains
     // the second layer, while the explicit company filter prevents a document
     // from another membership being opened through a guessed identifier.
     const { data: doc, error: docError } = await supabase
       .from('document_attachments')
-      .select('id, company_id, file_name, mime_type, storage_path')
+      .select('id, company_id, file_name, mime_type, storage_path, file_size_bytes')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -74,6 +83,26 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Use the service-role client to read from the non-public bucket only after
     // the active-company authorization check above has succeeded.
     const serviceClient = createServiceClient()
+    const resolvedType = resolveContentType(doc.file_name, doc.mime_type)
+
+    // The viewer gets a photo's preview: made once, kept, a fraction of the size (lib/documents/preview.ts).
+    if (!wantsOriginal && needsPreview(resolvedType, doc.file_size_bytes)) {
+      const preview = await ensurePreview(serviceClient, { id: doc.id, company_id: doc.company_id, mime: resolvedType, storage_path: doc.storage_path })
+      if (preview) {
+        return new NextResponse(new Uint8Array(preview), {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'Content-Disposition': contentDisposition('inline', `${doc.file_name.replace(/\.[^.]+$/, '')}.jpg`),
+            // The document never changes (WORM) and neither does its preview: the browser may keep it a while.
+            'Cache-Control': 'private, max-age=3600',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Preview': PREVIEW_VERSION,
+          },
+        })
+      }
+    }
+
     const { data: blob, error: downloadError } = await serviceClient.storage
       .from('documents')
       .download(doc.storage_path)
@@ -85,16 +114,32 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    const contentType = resolveContentType(doc.file_name, doc.mime_type)
+    let contentType = resolvedType
+    let body: Blob | ArrayBuffer = blob
+    let fileName = doc.file_name
+    // An iPhone photo is HEIC, which no browser draws: the viewer showed a
+    // broken image. The reader already decodes HEIC to JPEG for the model;
+    // the same decode serves the picture. A file the decoder rejects is
+    // served as it is, as before.
+    if ((HEIC_MIME_TYPES as readonly string[]).includes(contentType)) {
+      try {
+        const jpeg = await decodeHeicToJpeg(Buffer.from(await blob.arrayBuffer()))
+        body = jpeg.buffer.slice(jpeg.byteOffset, jpeg.byteOffset + jpeg.byteLength) as ArrayBuffer
+        contentType = 'image/jpeg'
+        fileName = `${fileName.replace(/\.hei[cf]$/i, '')}.jpg`
+      } catch (err) {
+        log.warn('heic not decoded for inline view', { documentId: doc.id, reason: err instanceof Error ? err.message : String(err) })
+      }
+    }
 
-    return new NextResponse(blob, {
+    return new NextResponse(body, {
       status: 200,
       headers: {
         'Content-Type': contentType,
         // RFC 5987 dual form: NFD filenames from macOS/iOS uploads contain
         // combining marks (> 0xFF), which undici Headers reject as non-
         // ByteString values; splicing the raw name here 500ed the route.
-        'Content-Disposition': contentDisposition('inline', doc.file_name),
+        'Content-Disposition': contentDisposition('inline', fileName),
         'Cache-Control': 'private, no-store',
         // Block MIME sniffing: Content-Type is derived from DB metadata
         // (with extension fallback for legacy rows), never from response

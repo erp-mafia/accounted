@@ -140,6 +140,76 @@ describe('commit_journal_entry: actor attribution (committed_actor_* + audit GUC
     ).rejects.toThrow(/Cannot modify a posted journal entry/i)
   })
 
+  // The storno paths (reverseEntry, correctEntry) insert their storno and
+  // rättelse as unnumbered drafts and post them through this RPC
+  // (commitStornoOrCorrectionDraft). The new verifikat carry the correcting
+  // actor; the original keeps its own stamp and is never re-stamped.
+  it('stamps a storno and its rättelse with the correcting actor and leaves the original alone', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const pool = getPool()
+    const originalId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
+    await insertBalancedLines(originalId)
+    await pool.query(`SELECT voucher_number FROM public.commit_journal_entry($1::uuid, $2::uuid)`, [
+      companyId,
+      originalId,
+    ])
+
+    async function draft(sourceType: 'storno' | 'correction', link: string): Promise<string> {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO public.journal_entries
+           (user_id, company_id, fiscal_period_id, voucher_number, voucher_series, entry_date,
+            description, source_type, status, reverses_id, correction_of_id)
+         VALUES ($1, $2, $3, 0, 'A', '2026-06-15', $4, $4, 'draft', $5, $6)
+         RETURNING id`,
+        [userId, companyId, fiscalPeriodId, sourceType,
+          sourceType === 'storno' ? link : null, sourceType === 'correction' ? link : null],
+      )
+      return rows[0]!.id
+    }
+    async function commitAs(entryId: string) {
+      const { rows } = await pool.query<{ voucher_number: number }>(
+        `SELECT voucher_number FROM public.commit_journal_entry(
+           $1::uuid, $2::uuid, 'api_key', NULL, 'mcp_oauth', 'Claude (Anthropic)')`,
+        [companyId, entryId],
+      )
+      return rows[0]!.voucher_number
+    }
+
+    const stornoId = await draft('storno', originalId)
+    await pool.query(
+      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, '1930', 0, 1000), ($1, '3001', 1000, 0)`,
+      [stornoId],
+    )
+    const stornoNumber = await commitAs(stornoId)
+    const correctionId = await draft('correction', originalId)
+    await insertBalancedLines(correctionId, 1200)
+    const correctionNumber = await commitAs(correctionId)
+    await pool.query(
+      `UPDATE public.journal_entries SET status = 'reversed', reversed_by_id = $2
+        WHERE id = $1 AND status = 'posted'`,
+      [originalId, stornoId],
+    )
+
+    expect(correctionNumber).toBe(stornoNumber + 1)
+    const { rows } = await pool.query(
+      `SELECT id, status, commit_method, committed_actor_type, committed_actor_label
+         FROM public.journal_entries WHERE id = ANY($1::uuid[])`,
+      [[originalId, stornoId, correctionId]],
+    )
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
+    expect(byId[originalId]).toMatchObject({ status: 'reversed', committed_actor_type: null, commit_method: null })
+    for (const id of [stornoId, correctionId]) {
+      expect(byId[id]).toMatchObject({
+        status: 'posted',
+        commit_method: 'api_key',
+        committed_actor_type: 'mcp_oauth',
+        committed_actor_label: 'Claude (Anthropic)',
+      })
+      expect(await fetchCommitAudit(id)).toEqual([{ actor_type: 'mcp_oauth', actor_label: 'Claude (Anthropic)' }])
+    }
+  })
+
   it('exposes exactly one commit_journal_entry signature (no PostgREST overload ambiguity)', async () => {
     const { rows } = await getPool().query(
       `SELECT pg_get_function_identity_arguments(p.oid) AS args

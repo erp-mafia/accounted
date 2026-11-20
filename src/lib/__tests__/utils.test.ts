@@ -42,6 +42,45 @@ describe('formatCurrency', () => {
   it('still honours a real currency code', () => {
     expect(formatCurrency(10, 'EUR')).toContain('€')
   })
+
+  // Intl separates groups and the symbol with U+00A0 and prints a minus as U+2212.
+  const nbsp = (s: string) => s.replace(/ /g, ' ').replace(/^-/, '−')
+
+  it('shows öre as two digits, never one: 174.5 is 174,50 kr', () => {
+    expect(formatCurrency(174.5)).toBe(nbsp('174,50 kr'))
+    expect(formatCurrency(1234.5)).toBe(nbsp('1 234,50 kr'))
+    expect(formatCurrency(0.5)).toBe(nbsp('0,50 kr'))
+    expect(formatCurrency(-174.5)).toBe(nbsp('-174,50 kr'))
+    expect(formatCurrency(174.5, 'EUR')).toBe(nbsp('174,50 €'))
+  })
+
+  it('leaves whole amounts without decimals, also after rounding to öre', () => {
+    expect(formatCurrency(1000)).toBe(nbsp('1 000 kr'))
+    expect(formatCurrency(1000.004)).toBe(nbsp('1 000 kr'))
+    expect(formatCurrency(1000, 'EUR')).toBe(nbsp('1 000 €'))
+  })
+
+  it('gives a caller that passes minimumFractionDigits exactly that', () => {
+    expect(formatCurrency(1000, 'SEK', { minimumFractionDigits: 2 })).toBe(nbsp('1 000,00 kr'))
+    expect(formatCurrency(174.5, 'SEK', { minimumFractionDigits: 0 })).toBe(nbsp('174,5 kr'))
+  })
+
+  it('lets a maximum below two pull the minimum down instead of throwing', () => {
+    expect(formatCurrency(174.5, 'SEK', { maximumFractionDigits: 0 })).toBe(nbsp('175 kr'))
+    expect(formatCurrency(174.25, 'SEK', { maximumFractionDigits: 1 })).toBe(nbsp('174,3 kr'))
+  })
+
+  it('degrades to the number plus the raw value for an invalid code instead of throwing', () => {
+    // A webshop plugin wrote the HTML-encoded "kr" symbol into an order's
+    // currency; Intl throws RangeError on it and took the Orders page down.
+    expect(() => formatCurrency(1250, '&#107;&#114;')).not.toThrow()
+    expect(formatCurrency(1250, '&#107;&#114;')).toBe(
+      `${new Intl.NumberFormat('sv-SE').format(1250)} &#107;&#114;`,
+    )
+    expect(formatCurrency(10.5, 'KR', { minimumFractionDigits: 2 })).toBe(
+      `${new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2 }).format(10.5)} KR`,
+    )
+  })
 })
 
 describe('withTimeout', () => {

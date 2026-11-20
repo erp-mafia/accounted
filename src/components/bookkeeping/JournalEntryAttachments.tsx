@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   Dialog,
   DialogContent,
@@ -13,26 +15,32 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
+import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
+import { documentPreviewKind } from '@/lib/documents/preview-kind'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
+import { prepareDocumentUpload } from '@/lib/documents/shrink-image'
 import {
-  FileText,
-  ImageIcon,
-  Download,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  Trash2,
-  RefreshCw,
-  Loader2,
-  Lock,
-  AlertTriangle,
-  Inbox,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  DocumentTextIcon,
+  ExclamationTriangleIcon,
+  InboxIcon,
+  LockClosedIcon,
+  PhotoIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { useBranding } from '@/lib/branding/brand-context'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 
 interface DocumentRecord {
   id: string
@@ -42,7 +50,6 @@ interface DocumentRecord {
   storage_path: string
   created_at: string
   sha256_hash?: string | null
-  download_url?: string
   referenced?: boolean
 }
 
@@ -65,18 +72,6 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function isImageType(type: string | null): boolean {
-  return type?.startsWith('image/') ?? false
-}
-
-function isPdfType(type: string | null): boolean {
-  return type === 'application/pdf'
-}
-
-function isPreviewable(type: string | null): boolean {
-  return isImageType(type) || isPdfType(type)
-}
-
 export default function JournalEntryAttachments({
   journalEntryId,
   onCountChange,
@@ -86,9 +81,14 @@ export default function JournalEntryAttachments({
   const t = useTranslations('journal_attachments')
   const tCommon = useTranslations('common')
   const { appName } = useBranding()
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(true)
+  // The underlag list could not load: said in place with "Försök igen"
+  // (Stil v3 states), never an empty list that reads as "no underlag".
+  const [loadFailed, setLoadFailed] = useState(false)
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [showInboxPicker, setShowInboxPicker] = useState(false)
@@ -103,6 +103,10 @@ export default function JournalEntryAttachments({
   const [detachingDocId, setDetachingDocId] = useState<string | null>(null)
   const replaceFileInputRef = useRef<HTMLInputElement | null>(null)
   const replaceTargetIdRef = useRef<string | null>(null)
+  // The upload zone's own file input: "Lägg till underlag" opens the OS
+  // picker in the same click. It used to only toggle the zone, so a second
+  // click (the one users made, expecting the picker) closed it again.
+  const addFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
@@ -113,6 +117,10 @@ export default function JournalEntryAttachments({
         fetch(`/api/documents?journal_entry_id=${journalEntryId}&current_only=true`),
         fetch(`/api/bookkeeping/journal-entries/${journalEntryId}/references`),
       ])
+      if (!documentsRes.ok) {
+        setLoadFailed(true)
+        return
+      }
       const { data: directDocuments } = await documentsRes.json()
       const direct = (directDocuments || []) as DocumentRecord[]
       const directIds = new Set(direct.map((document) => document.id))
@@ -148,8 +156,9 @@ export default function JournalEntryAttachments({
       const allDocuments = [...direct, ...referenced]
       setDocuments(allDocuments)
       onCountChangeRef.current?.(allDocuments.length)
+      setLoadFailed(false)
     } catch {
-      // Non-critical: silently ignore
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
@@ -191,27 +200,17 @@ export default function JournalEntryAttachments({
     }
   }
 
-  const handlePreviewToggle = async (doc: DocumentRecord) => {
-    if (expandedDoc === doc.id) {
-      setExpandedDoc(null)
-      return
-    }
+  // Opens at once: the preview loads from the same-origin inline route, so
+  // nothing has to be fetched first. A signed-URL round trip used to sit
+  // before the expand with no feedback, and the clicks made while waiting
+  // toggled the preview shut again.
+  const handlePreviewToggle = (doc: DocumentRecord) => {
+    setExpandedDoc((current) => (current === doc.id ? null : doc.id))
+  }
 
-    if (!doc.download_url) {
-      try {
-        const res = await fetch(`/api/documents/${doc.id}`)
-        const { data } = await res.json()
-        if (data?.download_url) {
-          setDocuments((prev) =>
-            prev.map((d) => (d.id === doc.id ? { ...d, download_url: data.download_url } : d))
-          )
-        }
-      } catch {
-        return
-      }
-    }
-
-    setExpandedDoc(doc.id)
+  const handleAddClick = () => {
+    setShowUpload(true)
+    addFileInputRef.current?.click()
   }
 
   const handleRequestRemove = (doc: DocumentRecord) => {
@@ -234,10 +233,10 @@ export default function JournalEntryAttachments({
     try {
       const res = await fetch(`/api/documents/${doc.id}/detach`, { method: 'POST' })
       if (!res.ok) {
-        const { error } = await res.json().catch(() => ({ error: undefined }))
+        const failure = await res.json().catch(() => null)
         toast({
           title: t('detach_failed'),
-          description: typeof error === 'string' ? error : undefined,
+          description: getErrorMessage(failure, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
       } else {
@@ -266,17 +265,17 @@ export default function JournalEntryAttachments({
 
     setReplacingDocId(docId)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await fetch(`/api/documents/${docId}/versions`, {
-        method: 'POST',
-        body: fd,
-      })
+      const prepared = await prepareDocumentUpload(file)
+      if (!prepared.ok) {
+        toast({ title: t('replace_failed'), description: prepared.message, variant: 'destructive' })
+        return
+      }
+      const res = await postDocumentForm(`/api/documents/${docId}/versions`, new FormData(), prepared.file)
       if (!res.ok) {
-        const { error } = await res.json().catch(() => ({ error: undefined }))
+        const failure = await res.json().catch(() => null)
         toast({
           title: t('replace_failed'),
-          description: error || undefined,
+          description: getErrorMessage(failure, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
       } else {
@@ -292,9 +291,10 @@ export default function JournalEntryAttachments({
 
   if (loading) {
     return (
-      <div className="py-2 text-sm text-muted-foreground">
-        {t('loading')}
-      </div>
+      <LateReveal className="space-y-2 py-2" aria-label={t('loading')}>
+        <Skeleton className="h-4 w-56" />
+        <Skeleton className="h-4 w-40" />
+      </LateReveal>
     )
   }
 
@@ -303,7 +303,7 @@ export default function JournalEntryAttachments({
       <input
         ref={replaceFileInputRef}
         type="file"
-        accept="application/pdf,image/jpeg,image/png,image/webp"
+        accept={DOCUMENT_UPLOAD_ACCEPT}
         className="hidden"
         onChange={(e) => handleReplaceFileSelected(e.target.files?.[0] ?? null)}
       />
@@ -317,37 +317,41 @@ export default function JournalEntryAttachments({
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
-            size="sm"
-            className="h-7 text-xs"
             onClick={() => setShowInboxPicker(true)}
+            disabled={!canWrite}
+            title={lockedTitle}
           >
-            <Inbox className="h-3 w-3 mr-1" />
+            <InboxIcon className="h-3 w-3" />
             {t('choose_from_inbox')}
           </Button>
           <Button
             variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setShowUpload(!showUpload)}
+            onClick={handleAddClick}
+            disabled={!canWrite}
+            title={lockedTitle}
           >
-            <Plus className="h-3 w-3 mr-1" />
+            <PlusIcon className="h-3 w-3" />
             {t('add')}
           </Button>
         </div>
       </div>
 
-      {showUpload && (
-        <div className="mb-3">
-          <DocumentUploadZone
-            files={uploadFiles}
-            onFilesChange={setUploadFiles}
-            journalEntryId={journalEntryId}
-            compact
-          />
-        </div>
-      )}
+      {/* Always mounted so the button can reach its file input; shown once
+          the button was used, for drag and drop and the upload progress. */}
+      <div className={showUpload ? 'mb-3' : 'hidden'}>
+        <DocumentUploadZone
+          files={uploadFiles}
+          onFilesChange={setUploadFiles}
+          journalEntryId={journalEntryId}
+          fileInputRef={addFileInputRef}
+          disabled={!canWrite}
+          compact
+        />
+      </div>
 
-      {documents.length === 0 && !showUpload ? (
+      {loadFailed && documents.length === 0 ? (
+        <LoadError title={t('load_failed')} onRetry={() => void fetchDocuments()} />
+      ) : documents.length === 0 && !showUpload ? (
         !embedded && (
           <p className="text-sm text-muted-foreground py-1">
             {t('empty')}
@@ -357,33 +361,42 @@ export default function JournalEntryAttachments({
         <div className="space-y-1">
           {documents.map((doc) => {
             const isReplacing = replacingDocId === doc.id
+            const kind = documentPreviewKind(doc.mime_type, doc.file_name)
+            const previewable = kind === 'pdf' || kind === 'image'
+            const isExpanded = expandedDoc === doc.id
             return (
               <div key={doc.id}>
                 <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
-                  {isPreviewable(doc.mime_type) ? (
+                  {previewable ? (
+                    // The chevron, the icon and the file name are one toggle:
+                    // the 16 px chevron alone was the most rage-clicked target
+                    // on /bookkeeping.
                     <button
+                      type="button"
                       onClick={() => handlePreviewToggle(doc)}
-                      className="shrink-0 hover:text-primary transition-colors"
+                      aria-expanded={isExpanded}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-primary transition-colors"
                     >
-                      {expandedDoc === doc.id ? (
-                        <ChevronUp className="h-4 w-4" />
+                      {isExpanded ? (
+                        <ChevronUpIcon className="h-4 w-4 shrink-0" />
                       ) : (
-                        <ChevronDown className="h-4 w-4" />
+                        <ChevronDownIcon className="h-4 w-4 shrink-0" />
                       )}
+                      {!isExpanded && (
+                        kind === 'image' ? (
+                          <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        ) : (
+                          <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        )
+                      )}
+                      <span className="truncate flex-1">{doc.file_name}</span>
                     </button>
                   ) : (
-                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <>
+                      <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className="truncate flex-1">{doc.file_name}</span>
+                    </>
                   )}
-
-                  {isPreviewable(doc.mime_type) && expandedDoc !== doc.id && (
-                    isImageType(doc.mime_type) ? (
-                      <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
-                    ) : (
-                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                    )
-                  )}
-
-                  <span className="truncate flex-1">{doc.file_name}</span>
                   {doc.referenced && (
                     <Badge variant="secondary" className="shrink-0">
                       {t('via_supplier_invoice')}
@@ -397,76 +410,61 @@ export default function JournalEntryAttachments({
                     <>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 shrink-0 min-h-[44px] min-w-[44px]"
+                        size="icon"
+                        className="shrink-0"
                         onClick={() => handleOpenReplacePicker(doc.id)}
-                        disabled={isReplacing}
-                        title={t('replace')}
+                        loading={isReplacing}
+                        disabled={!canWrite}
+                        title={lockedTitle ?? t('replace')}
                         aria-label={t('replace')}
                       >
-                        {isReplacing ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-3 w-3" />
-                        )}
+                        {!isReplacing && <ArrowPathIcon className="h-3 w-3" />}
                       </Button>
 
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 shrink-0 min-h-[44px] min-w-[44px]"
+                        size="icon"
+                        className="shrink-0"
                         onClick={() => handleRequestRemove(doc)}
-                        title={t('remove')}
+                        disabled={!canWrite}
+                        title={lockedTitle ?? t('remove')}
                         aria-label={t('remove')}
                       >
-                        <Trash2 className="h-3 w-3" />
+                        <TrashIcon className="h-3 w-3" />
                       </Button>
                     </>
                   )}
 
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="h-6 w-6 p-0 shrink-0 min-h-[44px] min-w-[44px]"
+                    size="icon"
+                    className="shrink-0"
                     onClick={() => handleDownload(doc.id)}
                     title={t('download')}
                     aria-label={t('download')}
                   >
-                    <Download className="h-3 w-3" />
+                    <ArrowDownTrayIcon className="h-3 w-3" />
                   </Button>
                 </div>
 
-                {expandedDoc === doc.id && doc.download_url && isImageType(doc.mime_type) && (
+                {isExpanded && previewable && (
                   <div className="px-2 py-2">
-                    <img
+                    <DocumentPreview
                       src={`/api/documents/${doc.id}/inline`}
-                      alt={doc.file_name}
-                      className="max-h-48 rounded-lg object-contain"
+                      kind={kind}
+                      label={doc.file_name}
+                      className="h-[60vh] w-full rounded-lg bg-control shadow-raised"
+                      imageClassName="max-h-48 rounded-lg object-contain"
+                      fallback={
+                        <button
+                          type="button"
+                          onClick={() => handleDownload(doc.id)}
+                          className="block px-4 py-2 text-sm text-muted-foreground underline"
+                        >
+                          {t('download')}
+                        </button>
+                      }
                     />
-                  </div>
-                )}
-
-                {expandedDoc === doc.id && doc.download_url && isPdfType(doc.mime_type) && (
-                  <div className="px-2 py-2">
-                    {/* <object> + type="application/pdf" invokes Chrome's PDF
-                        plugin directly. <iframe> intermittently surfaced
-                        "Det här innehållet har blockerats" in Chrome even
-                        with a permissive CSP. See crbug.com/271452. */}
-                    <object
-                      data={`/api/documents/${doc.id}/inline`}
-                      type="application/pdf"
-                      aria-label={doc.file_name}
-                      className="w-full h-[60vh] rounded-lg border"
-                    >
-                      <a
-                        href={doc.download_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block px-4 py-2 text-sm text-muted-foreground underline"
-                      >
-                        {t('download')}
-                      </a>
-                    </object>
                   </div>
                 )}
               </div>
@@ -485,7 +483,7 @@ export default function JournalEntryAttachments({
           <DialogHeader>
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted shrink-0">
-                <Lock className="h-5 w-5 text-attn" />
+                <LockClosedIcon className="h-5 w-5 text-attn" />
               </div>
               <DialogTitle>{t('remove_blocked_title')}</DialogTitle>
             </div>
@@ -494,9 +492,9 @@ export default function JournalEntryAttachments({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+          <div className="rounded-lg p-3 text-sm bg-control shadow-raised">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+              <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <p className="text-muted-foreground">
                 {blockedDoc !== null && hasDuplicateSibling(blockedDoc)
                   ? t('detach_hint')
@@ -515,13 +513,10 @@ export default function JournalEntryAttachments({
                 onClick={() => {
                   if (blockedDoc) handleDetach(blockedDoc)
                 }}
-                disabled={blockedDoc !== null && detachingDocId === blockedDoc.id}
+                loading={blockedDoc !== null && detachingDocId === blockedDoc.id}
               >
                 {blockedDoc !== null && detachingDocId === blockedDoc.id ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('detaching')}
-                  </>
+                  t('detaching')
                 ) : (
                   t('detach_cta')
                 )}
@@ -531,13 +526,10 @@ export default function JournalEntryAttachments({
               onClick={() => {
                 if (blockedDoc) handleOpenReplacePicker(blockedDoc.id)
               }}
-              disabled={blockedDoc !== null && replacingDocId === blockedDoc.id}
+              loading={blockedDoc !== null && replacingDocId === blockedDoc.id}
             >
               {blockedDoc !== null && replacingDocId === blockedDoc.id ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('replace_uploading')}
-                </>
+                t('replace_uploading')
               ) : (
                 t('remove_blocked_replace_cta')
               )}

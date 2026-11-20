@@ -9,7 +9,7 @@ exposed as a REST API designed for agents and integrations first.
 backend job, an agent tool layer). If the goal is to *operate* a ledger
 conversationally (book receipts, run month close), use the Accounted MCP
 connector and its workflow skills instead: install the `accounted` plugin or
-see https://app.gnubok.se/docs/api/connect-claude.
+see https://app.accounted.se/docs/api/connect-claude.
 
 If you have used Stripe's API the shape will feel familiar: bearer keys, dated
 versions, idempotency keys, webhook signatures, cursor pagination. The domain

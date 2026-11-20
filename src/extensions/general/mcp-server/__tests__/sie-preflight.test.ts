@@ -6,6 +6,15 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// The append planner reads the books (sie-append.test.ts covers it); here
+// only what the preflight does with its answer.
+const appendPlan = vi.hoisted(() => ({
+  fiscalPeriodId: 'period-1', baseImportId: 'imp-2', fiscalYear: null,
+  counts: { total: 1, present: 0, conflicts: 0, possibleDuplicates: 0, new: 1, toAdd: 1 },
+  vouchers: [], vouchersTruncated: false, series: [], yearSeries: [], warnings: [], refusal: null as null | { code: string; message: string },
+}))
+vi.mock('@/lib/import/sie-append', () => ({ planSIEAppend: vi.fn(async () => appendPlan) }))
+
 import { tools } from '../server'
 
 const tool = tools.find((t) => t.name === 'gnubok_sie_preflight')!
@@ -33,15 +42,39 @@ const VALID_SIE = [
 
 const UNBALANCED_SIE = VALID_SIE.replace('#TRANS 3001 {} -1000.00', '#TRANS 3001 {} -900.00')
 
+// A whole-year export: the same verifikat with the year's #UB and #RES.
+// VALID_SIE alone carries verifikat and no balances, the shape of a card
+// provider's or payroll's file (crm#1049).
+const WHOLE_YEAR_SIE = VALID_SIE.replace(
+  '#KONTO 3001 "Försäljning"',
+  '#KONTO 3001 "Försäljning"\n#UB 0 1930 1000.00\n#RES 0 3001 -1000.00',
+)
+
 type MockConfig = {
+  storedMappings?: unknown[]
   companyOrg?: string | null
+  settingsOrg?: string | null
   duplicateFile?: { id: string; imported_at: string } | null
   duplicatePeriod?: Record<string, unknown> | null
+  /** Posted bookkeeping up to the file year's end: the import carries the prior year forward. */
+  priorActivity?: boolean
+  /** compute_prior_opening_balances rows: the balance carried to the file year's first day. */
+  carried?: Array<{ account_number: string; debit: number; credit: number }>
+  /** The company year containing the file's dates (precheckFiscalPeriod); null when none does. */
+  period?: Record<string, unknown> | null
+  /** The year's posted IB verifikat, read by the continuity check. */
+  bookedIbEntry?: Record<string, unknown> | null
+  /** sie_import_admission_refusal's answer: the import's own admission rule (crm#1272). */
+  admission?: Record<string, unknown> | null
 }
+
+const rpcCalls: Array<[string, unknown]> = []
 
 function mockSupabase(config: MockConfig = {}) {
   const makeChain = (table: string) => {
     const called: string[] = []
+    // PostgREST's max-rows: a read answers at most 1,000 rows, `.range()` picks the window.
+    let window: [number, number] = [0, 999]
     const chain: Record<string | symbol, unknown> = new Proxy(
       {},
       {
@@ -55,6 +88,8 @@ function mockSupabase(config: MockConfig = {}) {
                   },
                   error: null,
                 })
+              } else if (table === 'company_settings') {
+                resolve({ data: { org_number: config.settingsOrg ?? null }, error: null })
               } else if (table === 'sie_imports') {
                 if (called.includes('single')) {
                   resolve({ data: config.duplicateFile ?? null, error: null })
@@ -64,13 +99,30 @@ function mockSupabase(config: MockConfig = {}) {
                     error: null,
                   })
                 }
+              } else if (table === 'sie_account_mappings') {
+                resolve({ data: (config.storedMappings ?? []).slice(window[0], Math.min(window[1], window[0] + 999) + 1), error: null })
+              } else if (table === 'journal_entries' && called.includes('maybeSingle')) {
+                resolve({ data: config.bookedIbEntry ?? null, error: null })
+              } else if (table === 'journal_entries') {
+                resolve({ data: config.priorActivity ? [{ id: 'entry-1' }] : [], error: null })
+              } else if (table === 'fiscal_periods' && 'period' in config) {
+                const period = config.period ?? null
+                if (called.includes('single')) resolve({ data: period, error: null })
+                else if (called.includes('maybeSingle')) {
+                  resolve({ data: period ? { opening_balance_entry_id: period.opening_balance_entry_id ?? null } : null, error: null })
+                } else resolve({ data: [], error: null })
+              } else if (table === 'rpc:compute_prior_opening_balances') {
+                resolve({ data: config.carried ?? [], error: null })
+              } else if (table === 'rpc:sie_import_admission_refusal') {
+                resolve({ data: config.admission ?? null, error: null })
               } else {
                 resolve({ data: [], error: null })
               }
             }
           }
-          return (..._args: unknown[]) => {
+          return (...args: unknown[]) => {
             called.push(String(prop))
+            if (prop === 'range') window = [Number(args[0]), Number(args[1])]
             return chain
           }
         },
@@ -78,7 +130,13 @@ function mockSupabase(config: MockConfig = {}) {
     )
     return chain
   }
-  return { from: (table: string) => makeChain(table) }
+  return {
+    from: (table: string) => makeChain(table),
+    rpc: (fn: string, args?: unknown) => {
+      rpcCalls.push([fn, args])
+      return makeChain(`rpc:${fn}`)
+    },
+  }
 }
 
 async function run(args: Record<string, unknown>, config?: MockConfig) {
@@ -93,6 +151,7 @@ async function run(args: Record<string, unknown>, config?: MockConfig) {
 describe('gnubok_sie_preflight', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    rpcCalls.length = 0
   })
 
   it('is a read-only tool that stages nothing', () => {
@@ -117,12 +176,60 @@ describe('gnubok_sie_preflight', () => {
     expect(mappings[0]).toHaveProperty('targetAccount')
   })
 
+  // #3312: an agent passes these mappings straight to gnubok_import_sie, so
+  // they must be the upload's decision, or the job refuses the import.
+  it('maps a class 9 account carrying amounts to 2999, also over a stored 9xxx mapping', async () => {
+    const withObs = VALID_SIE.replace('#KONTO 3001 "Försäljning"', '#KONTO 3001 "Försäljning"\n#KONTO 9999 "OBS-konto"') +
+      `\n#VER A 2 ${YEAR}0120 "Okänd inbetalning"\n{\n#TRANS 1930 {} 500.00\n#TRANS 9999 {} -500.00\n}`
+    for (const storedMappings of [[], [{ source_account: '9999', source_name: 'OBS-konto', target_account: '9999', confidence: 1, match_type: 'exact' }]]) {
+      const result = await run({ file_content: withObs }, { storedMappings })
+      const mappings = result.mappings as Array<Record<string, unknown>>
+      expect(mappings.find((m) => m.sourceAccount === '9999')).toMatchObject({ targetAccount: '2999', targetName: 'OBS-konto' })
+    }
+  })
+
+  // #58 (1000-row cap): the stored mappings were read unpaged, so a remembered
+  // mapping past PostgREST's first 1,000 rows fell back to a suggestion, and
+  // the agent passes these mappings on to gnubok_import_sie.
+  it('keeps a remembered mapping that sits past the first 1,000 stored rows', async () => {
+    const storedMappings = [
+      ...Array.from({ length: 1200 }, (_, i) => ({
+        source_account: String(100000 + i), source_name: null, target_account: '1930', confidence: 1, match_type: 'manual',
+      })),
+      { source_account: '3001', source_name: 'Försäljning', target_account: '3041', confidence: 1, match_type: 'manual' },
+    ]
+    const result = await run({ file_content: VALID_SIE }, { storedMappings })
+    const mappings = result.mappings as Array<Record<string, unknown>>
+    expect(mappings.find((m) => m.sourceAccount === '3001')).toMatchObject({ targetAccount: '3041', isOverride: true })
+  })
+
+  // crm#1684: a remembered mapping still applies, but the scan names every
+  // account the import would book on another number than the file's.
+  it('names an account a remembered mapping books on another number, as an action', async () => {
+    const storedMappings = [{ source_account: '3001', source_name: 'Försäljning', target_account: '3041', confidence: 1, match_type: 'manual' }]
+    const result = await run({ file_content: VALID_SIE }, { storedMappings })
+    expect(result.verdict).toBe('ok_with_warnings')
+    const validation = result.validation as { warnings: string[]; notices: Array<Record<string, unknown>> }
+    expect(validation.warnings.join(' ')).toContain('3001 → 3041')
+    expect(validation.notices).toContainEqual(expect.objectContaining({ code: 'sie_account_remapped', severity: 'action' }))
+  })
+
   it('flags an org-number mismatch as another company\'s bookkeeping', async () => {
     const result = await run({ file_content: VALID_SIE }, { companyOrg: '5599999999' })
 
     expect(result.verdict).toBe('ok_with_warnings')
     expect((result.org_number_match as Record<string, unknown>).match).toBe(false)
     expect(result.instructions).toContain('STOP')
+    expect(result.instructions).toContain('confirm_org_number_mismatch=true')
+  })
+
+  // The digits-only comparison counted the two forms of one number as a
+  // mismatch; the shared key (orgNumberKey) makes them one.
+  it('matches the 12-digit form of the company\'s own number', async () => {
+    const result = await run({ file_content: VALID_SIE.replace('#ORGNR 556000-0001', '#ORGNR 16556000-0001') })
+
+    expect(result.verdict).toBe('ok')
+    expect(result.org_number_match).toMatchObject({ verified: true, match: true })
   })
 
   it('reports unverified instead of ok when the company has no org number', async () => {
@@ -130,6 +237,12 @@ describe('gnubok_sie_preflight', () => {
     const match = result.org_number_match as Record<string, unknown>
     expect(match.verified).toBe(false)
     expect(match.match).toBeNull()
+  })
+
+  it('compares against company_settings when companies has no org number', async () => {
+    const result = await run({ file_content: VALID_SIE }, { companyOrg: null, settingsOrg: '5560000001' })
+
+    expect(result.org_number_match).toMatchObject({ verified: true, match: true, company_org_number: '5560000001' })
   })
 
   it('returns verdict invalid with the balance error for an unbalanced voucher', async () => {
@@ -153,7 +266,7 @@ describe('gnubok_sie_preflight', () => {
 
   it('returns verdict duplicate when the fiscal year overlaps a completed import', async () => {
     const result = await run(
-      { file_content: VALID_SIE },
+      { file_content: WHOLE_YEAR_SIE },
       {
         duplicatePeriod: {
           id: 'imp-2',
@@ -166,6 +279,85 @@ describe('gnubok_sie_preflight', () => {
 
     expect(result.verdict).toBe('duplicate')
     expect((result.duplicate as Record<string, unknown>).kind).toBe('period')
+  })
+
+  it('offers a verifikat-only file over an imported year as an append, never the replacement (crm#1049, #108)', async () => {
+    const result = await run(
+      { file_content: VALID_SIE },
+      {
+        duplicatePeriod: {
+          id: 'imp-2',
+          fiscal_year_start: `${YEAR}-01-01`,
+          fiscal_year_end: `${YEAR}-12-31`,
+          imported_at: '2026-08-01T00:00:00Z',
+        },
+      }
+    )
+
+    expect(result.verdict).toBe('duplicate')
+    expect(result.append).toMatchObject({ base_import_id: 'imp-2', vouchers_only_file: true, refusal: null })
+    expect(result.instructions).toContain("on_existing_year='append'")
+    expect(result.instructions).toContain('never replace or undo the year')
+  })
+
+  it('says why an append would be refused instead of offering it', async () => {
+    appendPlan.refusal = { code: 'SIE_IMPORT_APPEND_CONFLICT', message: '1 av filens verifikationer har samma nummer: A1.' }
+    try {
+      const result = await run(
+        { file_content: WHOLE_YEAR_SIE },
+        { duplicatePeriod: { id: 'imp-2', fiscal_year_start: `${YEAR}-01-01`, fiscal_year_end: `${YEAR}-12-31` } },
+      )
+      expect(result.verdict).toBe('duplicate')
+      expect(result.instructions).toContain('would be refused: 1 av filens verifikationer har samma nummer: A1.')
+      expect(result.instructions).not.toContain("on_existing_year='append'")
+    } finally {
+      appendPlan.refusal = null
+    }
+  })
+
+  // crm#1099: on top of earlier bookkeeping the file's #IB is not booked, so
+  // an agent must relay where the books will open on another amount.
+  const WITH_IB = VALID_SIE.replace(
+    '#KONTO 1930 "Bank"',
+    '#KONTO 1930 "Bank"\n#KONTO 2099 "Årets resultat"\n#IB 0 1930 5000.00\n#IB 0 2099 -5000.00',
+  )
+
+  it('warns when the year will open on another balance than the file states', async () => {
+    const result = await run(
+      { file_content: WITH_IB },
+      {
+        priorActivity: true,
+        carried: [
+          { account_number: '1930', debit: 4000, credit: 0 },
+          { account_number: '2099', debit: 0, credit: 4000 },
+        ],
+      },
+    )
+
+    expect(result.verdict).toBe('ok_with_warnings')
+    const continuity = result.opening_balance_continuity as { carriedForward: boolean; differences: unknown[] }
+    expect(continuity.carriedForward).toBe(true)
+    expect(continuity.differences).toEqual([
+      { account: '1930', file: 5000, books: 4000, difference: -1000 },
+      { account: '2099', file: -5000, books: -4000, difference: 1000 },
+    ])
+    const notices = (result.validation as { notices: Array<{ code: string; severity: string; text: string }> }).notices
+    expect(notices).toContainEqual(expect.objectContaining({ code: 'sie_ib_continuity', severity: 'action', text: expect.stringContaining('1930') }))
+  })
+
+  it('stays ok when the file agrees with the books', async () => {
+    const result = await run(
+      { file_content: WITH_IB },
+      {
+        priorActivity: true,
+        carried: [
+          { account_number: '1930', debit: 5000, credit: 0 },
+          { account_number: '2099', debit: 0, credit: 5000 },
+        ],
+      },
+    )
+    expect(result.verdict).toBe('ok')
+    expect((result.opening_balance_continuity as { differences: unknown[] }).differences).toEqual([])
   })
 
   it('decodes CP437 bytes from file_content_base64 so åäö survive', async () => {
@@ -236,5 +428,80 @@ describe('gnubok_create_sie_upload', () => {
     await expect(
       uploadTool.execute({ filename: 'export.xlsx' }, COMPANY_ID, 'user-1', {} as never)
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+  })
+})
+
+// crm#1272: the preflight answered ok for a year whose ingående balans was
+// booked by hand, and the import was refused after approval. It now reads the
+// import's own admission rule, so it refuses or warns exactly where the
+// import refuses.
+describe('gnubok_sie_preflight: the import\'s admission rule', () => {
+  const OPEN_YEAR = {
+    id: 'fp-year', name: `Räkenskapsår ${YEAR}`, period_start: `${YEAR}-01-01`, period_end: `${YEAR}-12-31`,
+    is_closed: false, locked_at: null, closed_externally: false, closing_entry_id: null,
+    opening_balance_entry_id: 'je-ib',
+  }
+
+  beforeEach(() => {
+    rpcCalls.length = 0
+  })
+
+  it('asks the rule for the year the import would use, with the import\'s default options', async () => {
+    await run({ file_content: VALID_SIE }, { period: OPEN_YEAR })
+    expect(rpcCalls).toContainEqual(['sie_import_admission_refusal', {
+      p_company_id: COMPANY_ID, p_period_id: 'fp-year', p_period_start: `${YEAR}-01-01`, p_period_end: `${YEAR}-12-31`,
+      p_supersedes_import_id: null, p_import_opening_balances: true,
+    }])
+  })
+
+  it('a year with a hand-booked IB: importable without the file\'s IB, and says so', async () => {
+    const result = await run({ file_content: VALID_SIE }, {
+      period: OPEN_YEAR,
+      bookedIbEntry: { id: 'je-ib', voucher_series: 'A', voucher_number: 1, status: 'posted', import_batch_id: null },
+      admission: {
+        reason: 'opening_balance', entry_id: 'je-ib', voucher: 'A1', entry_date: `${YEAR}-01-01`,
+        message: 'Räkenskapsåret har redan en bokförd ingående balans (verifikation A1).',
+      },
+    })
+
+    expect(result.verdict).toBe('ok_with_warnings')
+    expect(result.duplicate).toBeNull()
+    expect(result.import_opening_balances).toBe(false)
+    const notices = (result.validation as { notices: Array<{ code: string; text: string }> }).notices
+    expect(notices.find((n) => n.code === 'sie_period_has_opening_balance')?.text).toContain('verifikation A1')
+    expect(result.instructions).toContain('import_opening_balances=false')
+    expect(result.instructions).toContain('gnubok_correct_opening_balances')
+  })
+
+  it('a year the rule admits as is: ok, and no import_opening_balances hint', async () => {
+    const result = await run({ file_content: VALID_SIE }, { period: { ...OPEN_YEAR, opening_balance_entry_id: null } })
+    expect(result.verdict).toBe('ok')
+    expect(result).not.toHaveProperty('import_opening_balances')
+  })
+
+  it('another import of the company is not finished: blocked, naming it', async () => {
+    const result = await run({ file_content: VALID_SIE }, {
+      period: OPEN_YEAR,
+      admission: { reason: 'unfinished_import', import_id: 'imp-running' },
+    })
+    expect(result.verdict).toBe('blocked')
+    expect(result.instructions).toContain('imp-running')
+    expect(result.instructions).toContain('gnubok_sie_import_status')
+  })
+
+  it('an import the overlap test cannot see (its verifikat in the year): duplicate', async () => {
+    const result = await run({ file_content: WHOLE_YEAR_SIE }, {
+      period: OPEN_YEAR,
+      admission: { reason: 'existing_import', import_id: 'imp-legacy' },
+    })
+    expect(result.verdict).toBe('duplicate')
+    expect(result.duplicate).toEqual({ kind: 'period', import_id: 'imp-legacy' })
+  })
+
+  it('a locked year: blocked with the fiscal-year refusal, and the rule is not read', async () => {
+    const result = await run({ file_content: VALID_SIE }, { period: { ...OPEN_YEAR, locked_at: `${YEAR}-06-30T00:00:00Z` } })
+    expect(result.verdict).toBe('blocked')
+    expect(result.instructions).toContain('låst')
+    expect(rpcCalls.map(([fn]) => fn)).not.toContain('sie_import_admission_refusal')
   })
 })

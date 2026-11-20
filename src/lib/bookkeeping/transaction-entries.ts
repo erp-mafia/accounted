@@ -1,11 +1,21 @@
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { findFiscalPeriod } from './engine'
 import { resolveCashAccountVoucherSeries } from './cash-account-voucher-series'
-import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
-import { coerceDimensionsBag } from './dimension-resolver'
-import { extractNetAmount, extractVatAmount } from './vat-entries'
+import { bankBookingContext } from './bank-booking-context'
+import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
+import { coerceDimensionsBag, mergeDimensionBags } from './dimension-resolver'
 import { roundOre } from '@/lib/money'
-import { InvalidMappingResultError } from '@/lib/bookkeeping/errors'
+import {
+  InvalidMappingResultError,
+  TransactionLinesNotBalancedError,
+  TransactionMissingSekValueError,
+} from '@/lib/bookkeeping/errors'
+import { lineBalance } from './line-balance'
 import { createLogger } from '@/lib/logger'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
+import { categoryForTransactionCategory } from '@/lib/posting/categories'
+import { mappingVersion, type MappingSource } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -13,6 +23,8 @@ import type {
   JournalEntry,
   MappingResult,
   Transaction,
+  TransactionCategory,
+  VatJournalLine,
 } from '@/types'
 
 const log = createLogger('transaction-entries')
@@ -45,11 +57,27 @@ async function findEarliestFiscalPeriod(
 }
 
 /**
+ * What the moms lines take out of the business line: their net on the
+ * business line's own side. Ingående moms on a purchase and utgående moms
+ * taken back on a refund to a customer are debits beside a debited business
+ * line; utgående moms on a sale and ingående moms taken back on a refund from
+ * a supplier are credits beside a credited one. A reverse-charge set has legs
+ * on both sides and nets to zero, so the business line keeps the gross.
+ */
+function vatBesideBusinessLine(vatLines: VatJournalLine[], businessSide: 'debit' | 'credit'): number {
+  return roundOre(vatLines.reduce(
+    (sum, l) => sum + (businessSide === 'debit' ? l.debit_amount - l.credit_amount : l.credit_amount - l.debit_amount),
+    0,
+  ))
+}
+
+/**
  * Build the journal entry lines for a bank transaction from a mapping engine
  * result. Single source of truth for the gross→net split: the expense account
  * gets the amount net of deductible input VAT while the bank line stays gross.
  * Used both by createTransactionJournalEntry (commit) and by the staged
  * categorization preview, so the lines a user approves are the lines posted.
+ * Lines that do not balance are never returned: TransactionLinesNotBalancedError.
  *
  * Standard expense pattern (domestic purchase with 25% VAT):
  *   Debit  5xxx/6xxx Expense account  [net amount]
@@ -73,6 +101,12 @@ async function findEarliestFiscalPeriod(
  * Income pattern:
  *   Debit  1930 Företagskonto          [total]
  *   Credit 3xxx Revenue account        [total]
+ *
+ * Refund patterns (a row against its category's direction, see
+ * isCategoryReversal in category-mapping.ts): the same accounts on the
+ * opposite sides, the bank line still on the side the money moved.
+ *   Refund to a customer:    Debit 3xxx [net], Debit 26x1 [VAT], Credit 1930 [total]
+ *   Refund from a supplier:  Debit 1930 [total], Credit 5xxx/6xxx [net], Credit 2641 [VAT]
  */
 export function buildTransactionEntryLines(
   transaction: Transaction,
@@ -82,10 +116,21 @@ export function buildTransactionEntryLines(
     throw new InvalidMappingResultError(mappingResult.debit_account, mappingResult.credit_account)
   }
 
-  const absAmountSek = Math.abs(resolveSekAmount(
+  // Strict ladder: a foreign row with neither amount_sek nor exchange_rate has
+  // no SEK value, and the lenient resolver would book the foreign number as
+  // kronor (100 CAD as 100 kr). Every categorize preview and commit builds its
+  // lines here, so refusing here refuses them all.
+  const sekAmount = resolveSekAmountOrNull(
     transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
-  ))
-  const absAmount = absAmountSek
+  )
+  if (sekAmount === null) {
+    throw new TransactionMissingSekValueError(transaction.id, transaction.currency, transaction.date)
+  }
+  const absAmount = Math.abs(sekAmount)
+  // Money out. The name is historical: the sign decides only which side the
+  // bank line sits on (credit for money out), and the mapping's other account
+  // takes the opposite side. So the money-out branches below also book a
+  // refund to a customer, and the money-in branches a refund from a supplier.
   const isExpense = transaction.amount < 0
   const isForeign = transaction.currency !== 'SEK'
   const currencyMeta = buildCurrencyMetadata(
@@ -95,10 +140,31 @@ export function buildTransactionEntryLines(
   )
   const lines: CreateJournalEntryLineInput[] = []
   // Dimensions PR7: the bag tags the business (expense/revenue) lines only:
-  // bank/settlement and VAT lines stay untagged. In the multi-line template
-  // path each pattern line carries its own bag instead (LinePatternEntry).
-  // The private path books to a balance account (2013/2893): never tagged.
+  // bank/settlement and VAT lines stay untagged. The private path books to a
+  // balance account (2013/2893): never tagged.
   const businessDimensions = coerceDimensionsBag(mappingResult.dimensions)
+  // Every single-pair branch books its business line through this helper, so
+  // the bag is stamped in one place and no branch can drop it: the VAT-free
+  // income branch once did, and the counterparty template then learned a bag
+  // the verifikat never carried.
+  const businessLine = (
+    line: Omit<CreateJournalEntryLineInput, 'dimensions'>,
+  ): CreateJournalEntryLineInput => ({ ...line, dimensions: businessDimensions })
+  // Multi-line pattern path: every line keeps the pattern's own learned bag,
+  // and the lines the pattern marks as business also take the caller's
+  // explicit bag, which wins per key (on this path mappingResult.dimensions
+  // can only be that explicit bag: buildMultiLineMappingResult never sets
+  // it). VAT, tax and rounding lines are never marked, so they never inherit
+  // it.
+  const patternLine = (line: VatJournalLine): CreateJournalEntryLineInput => ({
+    account_number: line.account_number,
+    debit_amount: line.debit_amount,
+    credit_amount: line.credit_amount,
+    line_description: line.description || transaction.description,
+    dimensions: line.business_line
+      ? mergeDimensionBags(coerceDimensionsBag(line.dimensions), businessDimensions)
+      : coerceDimensionsBag(line.dimensions),
+  })
 
   if (mappingResult.default_private) {
     // Private expense: use entity-specific account from mappingResult
@@ -124,17 +190,10 @@ export function buildTransactionEntryLines(
       : (mappingResult.debit_account || '1930')
 
     if (isExpense) {
-      // All non-settlement lines (business, VAT, tax, rounding). Per-line bags
-      // are authoritative here: the pattern marks business lines only, so no
-      // fallback to the categorize-level bag (it would mis-tag VAT/tax lines).
+      // All non-settlement lines (business, VAT, tax, rounding), tagged per
+      // line by patternLine above.
       for (const line of mappingResult.vat_lines) {
-        lines.push({
-          account_number: line.account_number,
-          debit_amount: line.debit_amount,
-          credit_amount: line.credit_amount,
-          line_description: line.description || transaction.description,
-          dimensions: coerceDimensionsBag(line.dimensions),
-        })
+        lines.push(patternLine(line))
       }
       // Credit bank for full amount
       lines.push({
@@ -153,24 +212,19 @@ export function buildTransactionEntryLines(
         line_description: transaction.description,
         ...(isForeign ? currencyMeta : {}),
       })
-      // All non-settlement lines: per-line bags authoritative (see above).
+      // All non-settlement lines, tagged per line (see patternLine).
       for (const line of mappingResult.vat_lines) {
-        lines.push({
-          account_number: line.account_number,
-          debit_amount: line.debit_amount,
-          credit_amount: line.credit_amount,
-          line_description: line.description || transaction.description,
-          dimensions: coerceDimensionsBag(line.dimensions),
-        })
+        lines.push(patternLine(line))
       }
     }
   } else if (isExpense) {
-    // Business expense (legacy single debit/credit path)
+    // Money out: a business expense, or a refund to a customer (legacy single
+    // debit/credit path)
     const debitAccount = mappingResult.debit_account
     const creditAccount = mappingResult.credit_account || '1930'
 
     if (mappingResult.vat_lines.length > 0) {
-      // Has VAT handling (reverse charge or input VAT)
+      // Has VAT handling (reverse charge, input VAT, or output VAT taken back)
       for (const vatLine of mappingResult.vat_lines) {
         lines.push({
           account_number: vatLine.account_number,
@@ -180,29 +234,28 @@ export function buildTransactionEntryLines(
         })
       }
 
-      // Expense account gets the net amount (total minus VAT if applicable)
-      const vatDebit = mappingResult.vat_lines
-        .filter((l) => l.debit_amount > 0 && l.account_number === '2641')
-        .reduce((sum, l) => sum + l.debit_amount, 0)
+      // The business account gets the net amount (total minus the moms beside
+      // it): ingående moms on 2641 for a purchase, utgående moms taken back on
+      // 26x1 for a refund to a customer. It used to count 2641 alone, which
+      // left a refund's 26x1 debit on top of the gross (crm#1136).
+      const vatDebit = vatBesideBusinessLine(mappingResult.vat_lines, 'debit')
       // Round to 2 decimal places to avoid floating point issues
       const netAmount = Math.round((absAmount - vatDebit) * 100) / 100
 
-      lines.push({
+      lines.push(businessLine({
         account_number: debitAccount,
         debit_amount: netAmount,
         credit_amount: 0,
         line_description: transaction.description,
-        dimensions: businessDimensions,
-      })
+      }))
     } else {
       // No VAT handling - debit full amount to expense account
-      lines.push({
+      lines.push(businessLine({
         account_number: debitAccount,
         debit_amount: absAmount,
         credit_amount: 0,
         line_description: transaction.description,
-        dimensions: businessDimensions,
-      })
+      }))
     }
 
     // Credit bank account
@@ -214,7 +267,8 @@ export function buildTransactionEntryLines(
       ...(isForeign ? currencyMeta : {}),
     })
   } else {
-    // Income (legacy single debit/credit path)
+    // Money in: income, or a refund from a supplier (legacy single
+    // debit/credit path)
     const debitAccount = mappingResult.debit_account || '1930'
     const creditAccount = mappingResult.credit_account
 
@@ -224,9 +278,7 @@ export function buildTransactionEntryLines(
       // pair that nets to zero, so the business line keeps the gross amount.
       // Ordinary output-VAT lines are credit-only (debit_amount 0), so the
       // net equals the old credit-sum for every non-RC path.
-      const vatCredit = roundOre(
-        mappingResult.vat_lines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
-      )
+      const vatCredit = vatBesideBusinessLine(mappingResult.vat_lines, 'credit')
       const netAmount = Math.round((absAmount - vatCredit) * 100) / 100
 
       // Debit bank for gross amount
@@ -238,13 +290,12 @@ export function buildTransactionEntryLines(
         ...(isForeign ? currencyMeta : {}),
       })
       // Credit revenue for net amount
-      lines.push({
+      lines.push(businessLine({
         account_number: creditAccount,
         debit_amount: 0,
         credit_amount: netAmount,
         line_description: transaction.description,
-        dimensions: businessDimensions,
-      })
+      }))
       // Credit output VAT
       for (const vatLine of mappingResult.vat_lines) {
         lines.push({
@@ -255,7 +306,8 @@ export function buildTransactionEntryLines(
         })
       }
     } else {
-      // No VAT - simple two-line entry
+      // No VAT (a company that is not VAT-registered, or VAT-exempt income):
+      // simple two-line entry
       lines.push(
         {
           account_number: debitAccount,
@@ -264,22 +316,115 @@ export function buildTransactionEntryLines(
           line_description: transaction.description,
           ...(isForeign ? currencyMeta : {}),
         },
-        {
+        businessLine({
           account_number: creditAccount,
           debit_amount: 0,
           credit_amount: absAmount,
           line_description: transaction.description,
-        }
+        }),
       )
     }
+  }
+
+  // The lines must balance before anyone previews or posts them. The check is
+  // the engine's own (lineBalance, on the amounts as stored), so nothing that
+  // booked before is refused here: only what the engine would refuse later,
+  // as a failed request. A single pair balances by construction (its business
+  // line is the bank amount net of the moms beside it); a learned line
+  // pattern does not have to, since its lines keep their learned sides beside
+  // the full bank amount. An all-zero entry has no difference and is left to
+  // the engine, which refuses it by its own rule.
+  const balance = lineBalance(lines)
+  if (balance.difference !== 0) {
+    throw new TransactionLinesNotBalancedError(
+      transaction.id,
+      balance.totalDebit,
+      balance.totalCredit,
+      mappingResult.all_lines_complete === true && !mappingResult.default_private,
+    )
   }
 
   return lines
 }
 
 /**
+ * What a door knows about a bank-line booking decision beyond the mapping
+ * result, for the business event the posting port records (POSTING_EVENTS
+ * shadow or strict; nothing is read from it while the port is off).
+ */
+export interface TransactionBusinessEventContext {
+  /** The category the row is stored with (a template's fallback, the category, or 'private'). */
+  category?: TransactionCategory | null
+  /** Where the kontering came from; derived from the mapping result when absent. */
+  source?: MappingSource
+  /** The VAT treatment the booking was made under, when the door knows it. */
+  vatTreatment?: string | null
+  /** The link basis the door stamps on the row (linkBasisColumns): who decided, the rule, the operation. */
+  linkBasis?: LinkBasisColumns | null
+  inboxItemId?: string | null
+  proposalId?: string | null
+  templateId?: string | null
+  counterpartyTemplateId?: string | null
+}
+
+/**
+ * The business event of a bank-line booking (kind bank.categorized). Pure:
+ * reads only the row, the mapping result and what the door passed.
+ */
+export function transactionBusinessEvent(
+  transaction: Transaction,
+  mappingResult: MappingResult,
+  context: TransactionBusinessEventContext = {},
+  rubricVersion?: string,
+): BusinessEventDraft {
+  const sekAmount = resolveSekAmountOrNull(
+    transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
+  )
+  const direction = transaction.amount < 0 ? 'out' : 'in'
+  const source: MappingSource = context.source
+    ?? (mappingResult.rule?.id ? 'mappingRule' : mappingResult.template_id ? 'bookingTemplate' : 'mappingEngine')
+  // The moms beside the business line, on the single-pair path only: there
+  // every vat_line is a moms line. A pattern's vat_lines carry its business
+  // and tax lines too, and a private booking has none.
+  const vat = !mappingResult.default_private && !mappingResult.all_lines_complete && mappingResult.vat_lines.length > 0
+    ? vatBesideBusinessLine(mappingResult.vat_lines, direction === 'out' ? 'debit' : 'credit')
+    : null
+  const linkEvidence = context.linkBasis?.link_evidence ?? null
+  return {
+    kind: 'bank.categorized',
+    category: categoryForTransactionCategory(context.category ?? null),
+    occurredOn: transaction.date,
+    subject: { type: 'transaction', id: transaction.id },
+    currency: transaction.currency ?? 'SEK',
+    amount: Math.abs(transaction.amount),
+    amountSek: sekAmount === null ? null : Math.abs(sekAmount),
+    taxAmounts: vat !== null && vat >= 0 ? [{ tax: 'vat', treatment: context.vatTreatment ?? null, amount_sek: vat }] : [],
+    evidence: {
+      direction,
+      document_id: transaction.document_id ?? undefined,
+      inbox_item_id: context.inboxItemId ?? undefined,
+      proposal_id: context.proposalId ?? undefined,
+      template_id: context.templateId ?? mappingResult.template_id ?? undefined,
+      counterparty_template_id: context.counterpartyTemplateId ?? undefined,
+      rule_id: mappingResult.rule?.id ?? undefined,
+      link_basis: context.linkBasis?.link_basis ?? undefined,
+      link_evidence: linkEvidence ?? undefined,
+    },
+    pendingOperationId: linkEvidence?.pending_operation_id ?? null,
+    mappingVersion: mappingVersion(source, rubricVersion),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
  * Create a journal entry from a bank transaction using mapping engine result.
  * Line patterns are documented on buildTransactionEntryLines above.
+ *
+ * Posting port pilot (step 1): the posting goes through lib/posting, which
+ * hands `input` to the engine unchanged and, while POSTING_EVENTS is shadow
+ * or strict, records the bank.categorized event first and has the engine
+ * link it to the draft before a voucher number is drawn. Off (the default),
+ * the engine is called exactly as before.
  */
 export async function createTransactionJournalEntry(
   supabase: SupabaseClient,
@@ -292,8 +437,12 @@ export async function createTransactionJournalEntry(
   // syfte directly on the journal entry (SKV's representationsregler /
   // ML 8 kap require the verifikation to document who attended and why).
   notes?: string,
+  // rubricVersion: the rules a recorded decision was made under
+  // (suggestion_log.rule_version), stamped on the verifikat by the commit RPC.
+  // businessEvent: the door's side of the business event (posting port).
+  options: { rubricVersion?: string; businessEvent?: TransactionBusinessEventContext } = {},
 ): Promise<JournalEntry | null> {
-  // Build lines first — throws InvalidMappingResultError on a broken mapping
+  // Build lines first - throws InvalidMappingResultError on a broken mapping
   // before any period lookup, preserving the original validation order.
   const lines = buildTransactionEntryLines(transaction, mappingResult)
 
@@ -353,66 +502,19 @@ export async function createTransactionJournalEntry(
     description: composedDescription,
     source_type: 'bank_transaction',
     source_id: transaction.id,
+    bank_booking_context: [bankBookingContext(transaction,
+      transaction.amount < 0 ? mappingResult.credit_account! : mappingResult.debit_account!)],
     lines,
     ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
-}
-
-/**
- * Create a standard domestic expense entry with input VAT deduction
- */
-export function buildDomesticExpenseLines(
-  amount: number,
-  expenseAccount: string,
-  description: string,
-  vatRate: number = 0.25,
-  bankAccount: string = '1930'
-): CreateJournalEntryLineInput[] {
-  const absAmount = Math.abs(amount)
-  const lines: CreateJournalEntryLineInput[] = []
-
-  if (vatRate > 0) {
-    const vatAmount = extractVatAmount(absAmount, vatRate)
-    const netAmount = extractNetAmount(absAmount, vatRate)
-
-    lines.push(
-      {
-        account_number: expenseAccount,
-        debit_amount: netAmount,
-        credit_amount: 0,
-        line_description: description,
-      },
-      {
-        account_number: '2641', // Ingående moms
-        debit_amount: vatAmount,
-        credit_amount: 0,
-        line_description: `Ingående moms ${vatRate * 100}%`,
-      },
-      {
-        account_number: bankAccount,
-        debit_amount: 0,
-        credit_amount: absAmount,
-        line_description: description,
-      }
-    )
-  } else {
-    lines.push(
-      {
-        account_number: expenseAccount,
-        debit_amount: absAmount,
-        credit_amount: 0,
-        line_description: description,
-      },
-      {
-        account_number: bankAccount,
-        debit_amount: 0,
-        credit_amount: absAmount,
-        line_description: description,
-      }
-    )
-  }
-
-  return lines
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    // Built only while the port is on: off, the call is the one main made.
+    event: () => transactionBusinessEvent(transaction, mappingResult, options.businessEvent, options.rubricVersion),
+    input,
+    rubricVersion: options.rubricVersion,
+  })
 }

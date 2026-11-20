@@ -1,16 +1,8 @@
 'use client'
 
-import {
-  monthsBetween,
-  parseDateParts,
-  validatePeriodDuration,
-} from '@/lib/bookkeeping/validate-period-duration'
+import { monthsBetween, validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
+import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
 import type { EntityType } from '@/types'
-
-function endsOnDec31(end: string): boolean {
-  const e = parseDateParts(end)
-  return e.month === 12 && e.day === 31
-}
 
 /**
  * Map validatePeriodDuration's English messages to user-facing Swedish copy.
@@ -20,6 +12,7 @@ function toSwedishError(msg: string): string {
   if (msg.includes('1st of a month')) return 'Startdatum måste vara den första i månaden.'
   if (msg.includes('last day of a month')) return 'Slutdatum måste vara den sista i månaden.'
   if (msg.includes('exceeds maximum 18 months')) return 'Räkenskapsåret får vara högst 18 månader (BFL 3 kap.).'
+  if (msg.includes('31 December')) return 'Enskild firma måste ha slutdatum 31 december (BFL 3 kap.).'
   return msg
 }
 
@@ -52,25 +45,12 @@ export function validateFirstPeriod(
     }
   }
 
-  const baseError = validatePeriodDuration(startDate, endDate, { isFirstPeriod: true })
-  if (baseError) {
-    return {
-      error: toSwedishError(baseError),
-      months: monthsBetween(startDate, endDate),
-      canSummarise: true,
-    }
-  }
-
-  if (entityType === 'enskild_firma' && !endsOnDec31(endDate)) {
-    return {
-      error: 'Enskild firma måste ha slutdatum 31 december (BFL 3 kap.).',
-      months: monthsBetween(startDate, endDate),
-      canSummarise: true,
-    }
-  }
-
+  const baseError = validatePeriodDuration(startDate, endDate, {
+    isFirstPeriod: true,
+    calendarYearOnly: isEntityType(entityType) && fiscalYearLockedToCalendar(entityType),
+  })
   return {
-    error: null,
+    error: baseError ? toSwedishError(baseError) : null,
     months: monthsBetween(startDate, endDate),
     canSummarise: true,
   }

@@ -3,20 +3,19 @@
 import { useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, RowSelectCheckbox } from '@/components/ui/dry-table'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
-import { HUE_DOT_CLASS, accountHue } from '@/lib/bookkeeping/template-group-colors'
-import { AlertCircle, Link2, Loader2, MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon, ExclamationCircleIcon, LinkIcon } from '@/components/icons'
 import type {
   SkattekontoBookingSuggestion,
   SkattekontoMatchSuggestion,
@@ -72,6 +71,7 @@ export default function SkattekontoInboxCard({
   accountLogo?: string | null
 }) {
   const t = useTranslations('tx_skattekonto_card')
+  const { canWrite, lockedTitle } = useViewerLock()
   // See TransactionInboxCard: onCheckedChange has no event, so shift is
   // captured from the preceding click.
   const shiftHeld = useRef(false)
@@ -108,24 +108,20 @@ export default function SkattekontoInboxCard({
       {/* Always-visible selection checkbox (concept .cb) in a real first
           column: the full-bleed panel has no margin for it to hang in. */}
       <td className={cn(TD_CLASS, 'select-none', 'w-7 !pl-0 !pr-2')}>
-        {selectable && (
-          <Checkbox
-            checked={isSelected}
+        {selectable && canWrite && (
+          <RowSelectCheckbox
+            checked={!!isSelected}
             onClick={(e) => {
               shiftHeld.current = e.shiftKey
             }}
             onCheckedChange={() => onToggleSelect?.(row.id, shiftHeld.current)}
             aria-label={t('select_row')}
-            className={cn(
-              'border-foreground duration-150',
-              'block',
-              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-            )}
+            className="block"
           />
         )}
       </td>
       {show('date') && (
-        <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
+        <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap date-figures text-muted-foreground')}>
           {formatDate(row.transaktionsdatum)}
         </td>
       )}
@@ -137,8 +133,8 @@ export default function SkattekontoInboxCard({
         <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{row.transaktionstext}</span>
           {matchSuggestion && (
-            <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px]">
-              <AlertCircle className="h-3 w-3" />
+            <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-xs">
+              <ExclamationCircleIcon className="h-3 w-3" />
               {duplicateLabel}
             </Badge>
           )}
@@ -150,15 +146,13 @@ export default function SkattekontoInboxCard({
           <button
             type="button"
             className={cn(
-              'inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
+              'inline-flex max-w-[16rem] items-center gap-1.5 rounded-md border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
               suggestionLabel ? 'text-foreground hover:bg-secondary/60' : 'text-muted-foreground hover:text-foreground',
             )}
             onClick={() => onBokfor(row)}
-            disabled={processing}
+            disabled={!canWrite || processing}
+            title={lockedTitle}
           >
-            {suggestionLabel && bookingSuggestion && (
-              <span className={cn('h-2 w-2 shrink-0 rounded-full', HUE_DOT_CLASS[accountHue(bookingSuggestion.account)])} aria-hidden />
-            )}
             <span className="truncate">{suggestionLabel ?? t('category_pick')}</span>
           </button>
         </td>
@@ -183,24 +177,20 @@ export default function SkattekontoInboxCard({
           )}
         >
           {isIncome ? '+' : ''}
-          {formatCurrency(amount)}
+          {formatRowAmount(amount)}
         </td>
       )}
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
         <span className="row-collapsible inline-flex items-center justify-end gap-2">
           {/* Likely duplicate: linking beats re-booking, so it leads. */}
           <Button
-            size="sm"
             variant="outline"
-            className="h-7 px-3.5 text-xs"
             onClick={() => (matchSuggestion ? onMatch(row) : onBokfor(row))}
-            disabled={processing}
+            loading={processing}
+            disabled={!canWrite}
+            title={lockedTitle}
           >
-            {processing ? (
-              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-            ) : matchSuggestion ? (
-              <Link2 className="mr-1 h-3 w-3" />
-            ) : null}
+            {!processing && matchSuggestion ? <LinkIcon className="h-3 w-3" /> : null}
             {matchSuggestion ? t('link_to_voucher') : t('book')}
           </Button>
           <DropdownMenu>
@@ -208,12 +198,12 @@ export default function SkattekontoInboxCard({
               <Button
                 variant="ghost"
                 size="icon"
-                className="mr-2 h-7 w-7 text-muted-foreground hover:text-foreground"
+                className="mr-2 text-muted-foreground hover:text-foreground"
                 aria-label={t('more_actions_aria')}
-                title={t('more_actions_aria')}
-                disabled={processing}
+                title={lockedTitle ?? t('more_actions_aria')}
+                disabled={!canWrite || processing}
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <EllipsisHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">

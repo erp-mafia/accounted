@@ -37,6 +37,12 @@ describe('applyVatAmountOverride', () => {
     expect(() => applyVatAmountOverride(expenseResult(), tx, 'standard_25', 400)).toThrow(/exceeds/)
   })
 
+  it('accepts the exact ceiling (25 % of the net) and refuses one öre above it', () => {
+    const tx = makeTransaction({ amount: -1230.97, currency: 'SEK', amount_sek: null, exchange_rate: null })
+    expect(applyVatAmountOverride(expenseResult(), tx, 'standard_25', 246.19).vat_lines[0].debit_amount).toBe(246.19)
+    expect(() => applyVatAmountOverride(expenseResult(), tx, 'standard_25', 246.2)).toThrow(/exceeds/)
+  })
+
   it('refuses when the booking has no VAT line to replace', () => {
     const tx = makeTransaction({ amount: -100, currency: 'SEK', amount_sek: null, exchange_rate: null })
     expect(() => applyVatAmountOverride({ ...expenseResult(), vat_lines: [] }, tx, 'standard_25', 10)).toThrow(/none/)

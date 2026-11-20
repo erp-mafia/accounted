@@ -1,5 +1,7 @@
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import type {
   Currency,
+  DeductionType,
   Invoice,
   InvoiceDocumentType,
   InvoiceItem,
@@ -26,7 +28,7 @@ export interface InvoiceCopyItem {
   vat_rate: number
   article_id: null
   revenue_account: string | null
-  deduction_type: 'rot' | 'rut' | null
+  deduction_type: DeductionType | null
   labor_hours: number | null
   work_type: string | null
   housing_designation: null
@@ -49,15 +51,21 @@ export interface InvoiceCopyInitial {
   default_dimensions: Record<string, string>
   /** The bank account the source asked to be paid to; reusable commercial content. */
   payment_cash_account_id: string | null
+  /**
+   * The source stated omvänd betalningsskyldighet for construction services
+   * (crm#1007): the editor's checkbox starts ticked, and the copy is validated
+   * again against the customer as it is now when it is saved.
+   */
+  domestic_reverse_charge: boolean
   items: InvoiceCopyItem[]
 }
 
 export function canCopyInvoice(
-  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'is_self_billed'>,
+  invoice: Pick<Invoice, 'status' | 'document_type' | 'credited_invoice_id' | 'is_self_billed' | 'total'>,
 ): boolean {
   return (
     invoice.document_type === 'invoice' &&
-    !invoice.credited_invoice_id &&
+    !isCreditNoteDocument(invoice) &&
     !invoice.is_self_billed &&
     COPYABLE_STATUSES.has(invoice.status)
   )
@@ -81,6 +89,7 @@ export function buildInvoiceCopyInitial(source: InvoiceCopySource): InvoiceCopyI
     ore_rounding: source.ore_rounding,
     default_dimensions: source.default_dimensions ?? {},
     payment_cash_account_id: source.payment_cash_account_id ?? null,
+    domestic_reverse_charge: source.vat_treatment_override === 'reverse_charge_domestic',
     items: [...source.items]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((item) => ({

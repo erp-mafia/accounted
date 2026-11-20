@@ -1,14 +1,18 @@
 # Tax Implications and Grant Accounting for Projects
 
-## Table of contents
 
-1. Materiellt samband principle
-2. Tax treatment of pågående arbeten
-3. Löpande räkning tax divergence
-4. Forskningsavdrag (R&D payroll deduction)
-5. Aktivering av utvecklingsutgifter
-6. EU grants and offentliga bidrag
-7. Omvänd skattskyldighet in construction
+<!-- toc -->
+**Contents**
+
+- [1. Materiellt samband principle](#1-materiellt-samband-principle)
+- [2. Tax treatment of pågående arbeten](#2-tax-treatment-of-pågående-arbeten)
+- [3. Löpande räkning tax divergence](#3-löpande-räkning-tax-divergence)
+- [4. Forskningsavdrag (R&D payroll deduction)](#4-forskningsavdrag-rd-payroll-deduction)
+- [5. Aktivering av utvecklingsutgifter](#5-aktivering-av-utvecklingsutgifter)
+- [6. EU grants and offentliga bidrag](#6-eu-grants-and-offentliga-bidrag)
+- [7. Omvänd skattskyldighet in construction](#7-omvänd-skattskyldighet-in-construction)
+
+<!-- /toc -->
 
 ---
 
@@ -33,7 +37,7 @@ The tax authority (Skatteverket) follows the accounting treatment unless specifi
 
 Under the alternativregeln, pågående arbeten (1470) may be valued at:
 - Direct costs (direkt hänförliga utgifter)
-- With the option to apply the 97% rule (17 kap. 4 § IL): value WIP at 97% of anskaffningsvärde, providing a small tax buffer
+- With the option to apply the 97% rule (17 kap. 27 § andra stycket IL): value WIP at no less than 97% of the total anskaffningsvärde, providing a small tax buffer. Only for fixed-price work in byggnads-, anläggnings- och hantverksrörelse (not konsultrörelse); the 17 kap. 4 § 97% rule concerns lager
 
 Anti-avoidance provision (17 kap. 31 § IL): revenue must be recognized when invoicing has been significantly delayed beyond god affärssed. A company cannot indefinitely defer revenue by simply not invoicing a completed project.
 
@@ -55,12 +59,12 @@ This is the most critical tax-accounting divergence in project accounting.
 
 ### The rule
 
-For time-and-materials contracts (löpande räkning), taxation is based on **invoiced amounts**, even when accounting applies successiv vinstavräkning and recognizes upparbetad ej fakturerad intäkt.
+For time-and-materials contracts (löpande räkning), taxation may be based on **invoiced amounts**, even when accounting recognizes upparbetad ej fakturerad intäkt.
 
-Legal basis: HFD rulings (RÅ 2006 ref. 28, HFD 2011 ref. 20) established that:
-- Upparbetad ej fakturerad intäkt (1620) on löpande räkning contracts is NOT taxable
-- Only invoiced amounts create skattemässig intäkt
-- This applies regardless of which accounting method is used
+Legal basis: 17 kap. 26 § IL, which applies to pågående arbeten in byggnads-, anläggnings-, hantverks- eller konsultrörelse (17 kap. 23 §):
+- The value of pågående arbeten på löpande räkning need not be taken up as an asset, so upparbetad ej fakturerad intäkt (1620) need not be taxed
+- Instead, amounts invoiced during the beskattningsår are taken up as income
+- Limit: if the company to a significant extent has not invoiced amounts that could have been invoiced under god redovisningssed, the amounts that could reasonably have been invoiced are taxed (17 kap. 31 §)
 
 ### Practical consequence
 
@@ -144,7 +148,7 @@ The project serves as the cost collector during the development phase:
 2. Accumulate qualifying costs on the project: direct salary, materials, directly attributable overhead
 3. At period end, capitalize accumulated costs: Debet 10xx (immateriell tillgång) / Kredit 38xx (aktiverat arbete)
 4. Transfer equivalent amount to fond för utvecklingsutgifter (restricted equity per ÅRL 4 kap. 2 §)
-5. Begin amortization when the asset is ready for use (max 10 years per K3 18.18, default 5 years per ÅRL 4 kap. 4 §)
+5. Begin amortization when the asset is ready for use, over its nyttjandeperiod (K3 18.19); if the nyttjandeperiod cannot be determined with reasonable certainty it is deemed to be 5 years (ÅRL 4 kap. 4 §)
 
 ### Tax treatment
 

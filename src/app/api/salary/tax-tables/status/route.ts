@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchTaxTableRates, TaxTableUnavailableError } from '@/lib/salary/tax-tables'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Probe Skatteverket's open data API to confirm tax tables are reachable.
@@ -9,7 +10,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  */
 export const GET = withRouteContext('salary.tax_tables.status', async (request) => {
   const { searchParams } = new URL(request.url)
-  const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()))
+  const year = parseInt(searchParams.get('year') || String(stockholmYearMonth().year))
 
   try {
     const { source } = await fetchTaxTableRates(year, 30, 1)

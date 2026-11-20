@@ -10,12 +10,34 @@
  * Companion suite: categorize-account-override.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts) reads
+// the filing record at staging: none here, so the stubbed reads stay the
+// tool's own. The staged row it is asked with is kept: the note reads the
+// posting off that row, so the fields it reads are pinned below.
+const filedVatAsked = vi.hoisted(() => [] as unknown[])
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async (_supabase: unknown, _companyId: unknown, op: unknown) => {
+    filedVatAsked.push(op)
+    return null
+  },
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
 const mockDetectDup = vi.fn()
 vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
+}))
+
+// The booking service's chart pre-validation and period-lock pre-check have
+// their own tests; complete and open here.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
 }))
 
 import { tools } from '../server'
@@ -25,7 +47,7 @@ const bulkBookInbox = tools.find((t) => t.name === 'gnubok_bulk_book_inbox_items
 
 const TX_ID = '00000000-0000-4000-8000-0000000000cc'
 
-/** `transactions` row for categorizeTransactionCore's select('*'). Synthetic. */
+/** `transactions` row for the booking service's read. Synthetic. */
 const coreTxRow = () => ({
   id: TX_ID,
   date: '2026-07-10',
@@ -39,18 +61,6 @@ const coreTxRow = () => ({
   document_id: null,
   journal_entry_id: null,
   is_business: true,
-})
-
-/** The narrower projection the tool re-fetches for the guard + title. */
-const guardTxRow = () => ({
-  description: 'SECOND HAND BUTIK',
-  merchant_name: null,
-  amount: -479,
-  currency: 'SEK',
-  amount_sek: -479,
-  exchange_rate: 1,
-  date: '2026-07-10',
-  cash_account_id: null,
 })
 
 const settingsRow = { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }
@@ -119,11 +129,12 @@ describe('gnubok_categorize_transaction: category presence guard (#1662)', () =>
   it('happy path: a valid category stages with the category intact', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: settingsRow }) // core: company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: guardTxRow() }) // tool: transactions re-fetch
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-1' } }) // pending_operations insert
 
     const result = (await categorize.execute(
@@ -142,6 +153,17 @@ describe('gnubok_categorize_transaction: category presence guard (#1662)', () =>
     expect(insertArgs).toBeDefined()
     const payload = (insertArgs as unknown[])[0] as { params?: { category?: string } }
     expect(payload.params?.category).toBe('expense_other')
+    // What the filed-momsperiod note reads off a staged bank row: the row's
+    // own date and the lines the approval posts, both in the preview.
+    expect(filedVatAsked.at(-1)).toMatchObject({
+      operation_type: 'categorize_transaction',
+      preview_data: {
+        date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: expect.any(String), debit_amount: expect.any(Number), credit_amount: expect.any(Number) }),
+        ]),
+      },
+    })
   })
 })
 

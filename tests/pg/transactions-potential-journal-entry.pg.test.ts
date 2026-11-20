@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { seedCompany, insertTransaction, insertDraftJournalEntry } from '@/tests/pg/fixtures'
+import { seedCompany, insertTransaction, insertPostedJournalEntry } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
@@ -15,15 +15,17 @@ import { getPool } from '@/tests/pg/setup'
  *   - the sweep-summary JSONB columns.
  */
 
-// status: 'posted' routes to insertPostedJournalEntry, which inserts a default
-// balanced 1930/3001 line pair in the same transaction: adding lines afterwards
-// would trip the line-immutability trigger.
+// The suggested expense voucher matches the outgoing bank fixtures. Insert
+// all lines before posting, keeping the accounting guards enabled.
 async function insertPostedEntry(params: {
   userId: string
   companyId: string
   fiscalPeriodId: string
 }): Promise<string> {
-  return insertDraftJournalEntry({ ...params, status: 'posted' })
+  return insertPostedJournalEntry({ ...params, lines: [
+    { accountNumber: '4000', debitAmount: 100, creditAmount: 0 },
+    { accountNumber: '1930', debitAmount: 0, creditAmount: 100 },
+  ] })
 }
 
 async function setSuggestion(txId: string, jeId: string): Promise<void> {

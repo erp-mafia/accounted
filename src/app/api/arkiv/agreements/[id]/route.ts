@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
 import type { FactRow } from '@/lib/arkiv/facts/store'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
@@ -92,13 +92,16 @@ function deadlinePage(sources: Record<string, { page: number | null }>, sourceKe
 }
 
 export const GET = withRouteContext('arkiv.agreement', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const { data, error } = await ctx.supabase
     .from('agreements')
     .select('id, kind, title, status, counterparty_party_id, counterparty_name, starts_on, ends_on, amount, currency, period, source_document_id, sources')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
+    // The archive's agreements are the ones read from its documents; a manual
+    // one lives in Avtal och åtaganden (lib/commitments).
+    .not('source_document_id', 'is', null)
     .maybeSingle()
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
   if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })

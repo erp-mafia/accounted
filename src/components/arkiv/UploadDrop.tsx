@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import type { PipelineView } from '@/app/api/documents/[id]/pipeline/route'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
+import { uploadToArchive } from '@/lib/documents/archive-upload'
+import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { cn } from '@/lib/utils'
 import { ARKIV } from './palette'
 
@@ -25,6 +27,8 @@ interface Tracked {
   failed: string | null
   done: boolean
   leaving: boolean
+  /** The bytes were already in the archive: the row tracks that document, nothing new was stored. */
+  duplicate?: boolean
 }
 
 const POLL_MS = 1500
@@ -83,18 +87,15 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
       for (const file of files) {
         const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
         setRows((rs) => [...rs, { key, fileName: file.name, documentId: null, view: null, failed: null, done: false, leaving: false }])
-        try {
-          const fd = new FormData()
-          fd.append('file', file)
-          fd.append('upload_source', 'file_upload')
-          const res = await fetch('/api/documents', { method: 'POST', body: fd })
-          if (!res.ok) throw new Error(String(res.status))
-          const { data } = (await res.json()) as { data: { id: string } }
-          patch(key, { documentId: data.id })
-          void track(key, data.id)
-        } catch {
+        // Free-floating: the same file dropped again is the document already archived, not a second copy (and a second
+        // receipt in Underlag). Uploads aimed at a verifikat keep their own copy (POST /api/documents).
+        const result = await uploadToArchive(file)
+        if (!result.ok) {
           patch(key, { failed: t('upload_failed') })
+          continue
         }
+        patch(key, { documentId: result.documentId, duplicate: result.deduplicated })
+        void track(key, result.documentId)
       }
     },
     [patch, t, track],
@@ -144,14 +145,17 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
       >
         <span className="text-[13px] font-medium">{t('upload_title')}</span>
         <span className="max-w-md text-xs text-muted-foreground">{t('upload_hint')}</span>
-        <Button size="sm" variant="outline" type="button" onClick={(e) => e.stopPropagation()} asChild>
+        <Button variant="outline" type="button" onClick={(e) => e.stopPropagation()} asChild>
           <label className="cursor-pointer">
             {t('upload_pick')}
             <input
               ref={input}
               type="file"
               multiple
-              accept="application/pdf,image/*,.docx,.xlsx,.txt,.html"
+              // What POST /api/documents takes, minus HEIC so iOS Safari transcodes
+              // photo-library picks to JPEG (lib/documents/upload-types). A HEIC
+              // dropped from a Mac is still taken and decoded server-side.
+              accept={DOCUMENT_UPLOAD_ACCEPT}
               className="sr-only"
               onChange={(e) => void upload(Array.from(e.target.files ?? []))}
             />
@@ -169,7 +173,7 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
               <li
                 key={r.key}
                 className={cn(
-                  'flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-card px-4 py-3 text-[13px] motion-safe:transition-all motion-safe:duration-500',
+                  'flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg px-4 py-3 text-[13px] motion-safe:transition-[transform,opacity] motion-safe:duration-300 bg-control shadow-raised',
                   r.leaving && 'motion-safe:translate-x-6 motion-safe:opacity-0',
                 )}
               >
@@ -177,10 +181,11 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
                   {r.view?.title && r.view.title !== r.fileName ? r.view.title : r.fileName}
                 </span>
                 {type ? <Badge variant="secondary">{type}</Badge> : null}
+                {r.duplicate ? <span className="text-xs text-muted-foreground">{t('upload_already_archived')}</span> : null}
                 {r.failed ? (
                   <span className="text-attn">{r.failed}</span>
                 ) : r.done && r.view?.landed ? (
-                  <Link href={r.view.landed.href} className="underline decoration-border underline-offset-4 hover:text-foreground">
+                  <Link href={r.view.landed.href} className="underline decoration-foreground/25 underline-offset-4 hover:text-foreground">
                     → {line}
                   </Link>
                 ) : (

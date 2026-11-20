@@ -1,8 +1,10 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
+import { formatLineDimensions, loadDimensionNames } from '@/lib/reports/dimension-labels'
 import {
   reportToWorkbook,
   textColumn,
@@ -12,6 +14,7 @@ import {
   parseCellDate,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 interface FlatRow {
   account_number: string
@@ -23,6 +26,8 @@ interface FlatRow {
   debit: number
   credit: number
   balance: number
+  /** The line's tags, "Kostnadsställe KS01, Projekt P100"; '' on IB/UB rows. */
+  dimensions: string
 }
 
 export const GET = withRouteContext('report.general_ledger.xlsx', async (request, { supabase, companyId }) => {
@@ -70,6 +75,17 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
       toDate: range.toDate,
     })
 
+    // The web huvudbok shows each line's tags; the file carries them too, in
+    // a last column so the existing columns keep their positions. Only when
+    // some exported line is tagged: a company without dimensions gets the
+    // same file as before, and no registry read.
+    const tagged = report.accounts.some((acc) =>
+      acc.lines.some((line) => line.dimensions && Object.keys(line.dimensions).length > 0),
+    )
+    const dimensionNames = tagged
+      ? await loadDimensionNames(supabase, companyId)
+      : new Map<string, string>()
+
     // Flatten accounts + their lines into a single sheet. Each account contributes
     // an opening-balance row, its lines (with running balance), and a closing
     // row: matching how huvudbok is read in Fortnox/Visma.
@@ -85,6 +101,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         debit: 0,
         credit: 0,
         balance: acc.opening_balance,
+        dimensions: '',
       })
       for (const line of acc.lines) {
         rows.push({
@@ -93,12 +110,13 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           // Preserve the original ISO string in the cell if parsing fails (avoids
           // NaN dates polluting the workbook).
           date: parseCellDate(line.date) ?? line.date,
-          voucher: `${line.voucher_series}${line.voucher_number}`,
+          voucher: formatVoucher(line),
           description: line.description,
           source_type: line.source_type,
           debit: line.debit,
           credit: line.credit,
           balance: line.balance,
+          dimensions: formatLineDimensions(line.dimensions, dimensionNames),
         })
       }
       rows.push({
@@ -111,12 +129,14 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         debit: acc.total_debit,
         credit: acc.total_credit,
         balance: acc.closing_balance,
+        dimensions: '',
       })
     }
 
-    // Partial-view disclosure: a filtered huvudbok starts balance accounts
-    // at zero IB (opening balances cannot be dimension-scoped): the export
-    // must say so or a project-filtered ledger reads as a full one.
+    // Partial-view disclosure: a filtered huvudbok opens each account at the
+    // object's own IB (its tagged IB lines, issue #3313), not the account's
+    // full IB: the export must say so or a project-filtered ledger reads as a
+    // full one.
     const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
     if (disclosure) {
       rows.unshift({
@@ -124,15 +144,16 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
         account_name: '',
         date: null as unknown as Date,
         voucher: '',
-        description: 'Ingående balanser ingår inte i filtrerad vy',
+        description: 'Ingående balans avser endast objektets egna IB-rader',
         source_type: '',
         debit: null as unknown as number,
         credit: null as unknown as number,
         balance: null as unknown as number,
+        dimensions: '',
       })
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Huvudbok',
         columns: [
@@ -145,6 +166,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           currencyColumn('Debet'),
           currencyColumn('Kredit'),
           currencyColumn('Saldo'),
+          ...(tagged ? [textColumn('Dimensioner')] : []),
         ],
         rows,
         mapRow: (r) => [
@@ -157,17 +179,13 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           r.debit,
           r.credit,
           r.balance,
+          ...(tagged ? [r.dimensions] : []),
         ],
       },
     ])
 
     const filename = xlsxFilename(`huvudbok${dimensionFilterFileSuffix(dimFilter.dimensions)}`, companyRow?.company_name ?? '', report.period.end)
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera huvudbok' },

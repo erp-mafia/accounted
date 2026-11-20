@@ -39,7 +39,9 @@ function makeClient() {
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 }),
-  getNextVoucherNumber: vi.fn(async () => 1),
+  // Posting through commit_journal_entry: consumes the queued result in the
+  // slot the client-side "update to posted" used to take.
+  commitStornoOrCorrectionDraft: vi.fn(),
 }))
 
 // On-demand BAS backfill: never triggered here (accounts resolve on the
@@ -55,8 +57,13 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
   resolvePeriodStatusForDate: (...args: unknown[]) => mockResolve(...args),
 }))
 
+// The storno target check has its own tests (storno-target.test.ts).
+vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
+  assertStornoTarget: vi.fn(async (_s: unknown, _c: string, original: { entry_date: string }, date?: string) => date ?? original.entry_date),
+}))
+
 import { recordateEntry } from '../storno-service'
-import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { validateBalance, commitStornoOrCorrectionDraft } from '@/lib/bookkeeping/engine'
 
 const original = makeJournalEntry({
   id: 'orig-1',
@@ -78,8 +85,10 @@ beforeEach(() => {
   results = []
   inserts = []
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 })
-  let v = 0
-  vi.mocked(getNextVoucherNumber).mockImplementation(async () => ++v)
+  vi.mocked(commitStornoOrCorrectionDraft).mockImplementation(async () => {
+    const result = results[resultIdx++] ?? { data: null, error: null }
+    return { error: (result.error as { message: string } | null | undefined) ?? null }
+  })
 })
 
 describe('recordateEntry', () => {
@@ -161,5 +170,48 @@ describe('recordateEntry', () => {
     expect(je[0]).toMatchObject({ source_type: 'storno', fiscal_period_id: 'fp-2026', entry_date: '2026-07-03' })
     expect(je[1]).toMatchObject({ source_type: 'correction', fiscal_period_id: 'fp-2025', entry_date: '2025-07-03' })
     expect(mockResolve).toHaveBeenCalledWith(expect.anything(), 'company-1', '2025-07-03')
+  })
+
+  it('the moved entry keeps every dimension of the original lines, custom dimensions included', async () => {
+    mockResolve.mockResolvedValue({ status: 'open', period_id: 'fp-2025', lock_date: null })
+    const bag = { '1': 'KS01', '6': 'P001', '20': 'KUND42' }
+    const tagged = {
+      ...original,
+      lines: [
+        makeJournalEntryLine({ account_number: '6230', debit_amount: 1008.75, credit_amount: 0, dimensions: bag, cost_center: 'KS01', project: 'P001', sort_order: 0 }),
+        makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1008.75, sort_order: 1 }),
+      ],
+    }
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
+    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    results = [
+      { data: tagged, error: null },
+      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null },
+      { data: [{ id: 'a1', account_number: '6230' }, { id: 'a2', account_number: '1930' }], error: null },
+      { data: reversalEntry, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: correctedEntry, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'orig-1' }], error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: { ...reversalEntry, lines: [] }, error: null },
+      { data: { ...correctedEntry, lines: [] }, error: null },
+    ]
+
+    await recordateEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', '2025-07-03')
+
+    const lineInserts = inserts
+      .filter((i) => i.table === 'journal_entry_lines')
+      .map((i) => i.payload as Array<{ account_number: string; dimensions: Record<string, string> }>)
+    // [0] is the storno, [1] the entry in its new period: both carry the bag.
+    for (const batch of lineInserts) {
+      expect(batch.find((l) => l.account_number === '6230')?.dimensions).toEqual(bag)
+      expect(batch.find((l) => l.account_number === '1930')?.dimensions).toEqual({})
+    }
+    expect(lineInserts).toHaveLength(2)
   })
 })

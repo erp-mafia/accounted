@@ -71,6 +71,7 @@ function supplierDto(over: { currencyCode?: string; issueDate?: string } = {}): 
       {
         id: '1',
         description: 'Licens',
+        accountNumber: '5420',
         lineExtensionAmount: { value: 1000, currencyCode },
         taxPercent: 25,
         taxAmount: { value: 250, currencyCode },

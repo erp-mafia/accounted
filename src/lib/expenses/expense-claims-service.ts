@@ -8,6 +8,10 @@
  *   Debit  2641 Ingående moms     (VAT, when > 0)
  *   Credit liability              (gross)  2893 owner / 2820 employee / 2018 EF
  *
+ * With reverse_charge (a service bought abroad without VAT) the verifikat
+ * also carries the fiktiv moms 2645 D / 2614 K and the 45xx D / 4598 K basis
+ * pair.
+ *
  * A payout batch reimburses N registered claims for ONE claimant in one bank
  * transfer:
  *
@@ -19,23 +23,52 @@
  * valutan). All rounding through roundOre.
  */
 
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
-import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import {
+  claimInboxItemForEntry,
+  readInboxItemBookingState,
+  releaseInboxItemClaim,
+} from '@/lib/documents/inbox-item-claim'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import type { PayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
+import { withExpenseClaimPayoutState, type ExpenseClaimPayoutState } from '@/lib/salary/expense-claim-payout-state'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 import { roundOre, sumOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { ownerSettlementAccount, parseEntityType } from '@/lib/company/entity-type'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { mergeDimensionBags } from '@/lib/bookkeeping/dimension-resolver'
+import { expenseClaimReverseChargeLines, type ExpenseClaimReverseCharge } from '@/lib/expenses/expense-claim-vat'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import type { LinkBasisColumns } from '@/lib/links/link-basis'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { postingPort } from '@/lib/posting/port'
+import { mappingVersion } from '@/lib/posting/mapping-version'
+import type { BusinessEventDraft } from '@/lib/posting/types'
+import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { expensePayoutBusinessEvent, type PayoutClaimFacts } from '@/lib/bookkeeping/sql-posting-business-events'
+import { chunk } from '@/lib/utils'
+import { refuseWhenPairBooked } from '@/lib/operations/inbox-pair-guard'
 
 const log = createLogger('expenses/claims')
 
-export const EXPENSE_LIABILITY_ACCOUNTS = ['2893', '2820', '2018', '2890'] as const
-export type ExpenseLiabilityAccount = (typeof EXPENSE_LIABILITY_ACCOUNTS)[number]
+/**
+ * Claim ids per PostgREST `.in()` read: ids travel in the GET query string,
+ * and a gateway with the stock 8 KB header buffer answers a long one with 414
+ * (#2395), so a payout's claims are read in slices of this size.
+ */
+const CLAIM_ID_READ_CHUNK = 100
+
+/** Result (P&L) accounts, classes 3-8: the lines a claim-level bag tags. */
+const RESULT_ACCOUNT_RE = /^[3-8]/
 
 export interface ExpenseClaimRow {
   id: string
@@ -76,6 +109,20 @@ export interface RegisterExpenseClaimInput {
   document_id?: string
   inbox_item_id?: string
   /**
+   * Kostnadsställe/projekt ({sie_dim_no: code}) for the claim's cost lines:
+   * the generated expense line, or with `lines` every result-account (class
+   * 3-8) line, where the line's own bag wins per key. VAT, reverse-charge and
+   * liability legs stay untagged, like every other producer.
+   */
+  dimensions?: Record<string, string>
+  /**
+   * Omvänd skattskyldighet on the generated lines (crm#1028): a service under
+   * huvudregeln from a seller abroad that charged no VAT, so vat_amount is 0
+   * and the fiktiv moms and the basis pair are added on the SEK amount
+   * (expense-claim-vat.ts). Custom `lines` carry their own instead.
+   */
+  reverse_charge?: ExpenseClaimReverseCharge
+  /**
    * Custom verifikat lines in claim currency (the advanced booking step:
    * reverse charge, templates, manual rows). When present they replace the
    * generated cost/VAT lines entirely. Must balance, and must contain
@@ -107,17 +154,44 @@ export type RegisterExpenseClaimResult =
         | 'CLAIM_INSERT_FAILED'
         | 'COMPANY_NOT_FOUND'
         | 'LINK_WRITE_FAILED'
+        | 'INBOX_ITEM_NOT_FOUND'
+        | 'INBOX_ITEM_BOOKED'
+        | 'INBOX_ITEM_PAIR_BOOKED'
       detail?: string
     }
 
-export async function registerExpenseClaim(
+export type RegisterExpenseClaimFailure = Extract<RegisterExpenseClaimResult, { ok: false }>
+
+/**
+ * Everything registration decides before it writes: who the claimant is and
+ * which liability account they are owed on, the SEK amounts, the fiscal year
+ * and the verifikat lines. Reads only (the company, the employee, the fiscal
+ * year, an exchange rate), so it is also the dry run of a registration.
+ */
+export interface ExpenseClaimPlan {
+  claimantName: string
+  employeeId: string | null
+  liabilityAccount: string
+  rate: number
+  amountSek: number
+  vatSek: number
+  fiscalPeriodId: string
+  /** The verifikat text, also each generated line's text. */
+  entryDescription: string
+  lines: CreateJournalEntryLineInput[]
+}
+
+export async function planExpenseClaim(
   supabase: SupabaseClient,
   companyId: string,
-  userId: string,
   input: RegisterExpenseClaimInput,
-): Promise<RegisterExpenseClaimResult> {
+  options: { dryRun?: boolean } = {},
+): Promise<{ ok: true; plan: ExpenseClaimPlan } | RegisterExpenseClaimFailure> {
   if (!input.lines && (input.vat_amount < 0 || input.vat_amount >= input.amount)) {
     return { ok: false, code: 'VAT_EXCEEDS_AMOUNT' }
+  }
+  if (input.reverse_charge && (input.lines || input.vat_amount !== 0)) {
+    return { ok: false, code: 'INVALID_LINES', detail: 'reverse_charge books a receipt without VAT on the generated lines' }
   }
 
   // Resolve claimant + liability account. Entity type drives the owner
@@ -167,9 +241,7 @@ export async function registerExpenseClaim(
         return { ok: false, code: 'INVALID_LINES', detail: 'each line needs exactly one side' }
       }
     }
-    const sumDebit = sumOre(lines.map((l) => l.debit_amount || 0))
-    const sumCredit = sumOre(lines.map((l) => l.credit_amount || 0))
-    if (Math.abs(sumDebit - sumCredit) > 0.005) {
+    if (!lineBalance(lines).balanced) {
       return { ok: false, code: 'INVALID_LINES', detail: 'unbalanced' }
     }
     // The payout flow reimburses claim.amount_sek from the liability account,
@@ -188,77 +260,56 @@ export async function registerExpenseClaim(
     if (input.exchange_rate && input.exchange_rate > 0) {
       rate = input.exchange_rate
     } else {
+      // A dry run reads the rate without the client, so the rate cache is
+      // not written either.
       const fetched = await fetchExchangeRate(
         input.currency,
         new Date(input.expense_date),
-        supabase,
+        options.dryRun ? undefined : supabase,
       )
       if (!fetched) return { ok: false, code: 'RATE_UNAVAILABLE' }
       rate = fetched.rate
     }
   }
-  const amountSek = roundOre(input.amount * rate)
+  const amountSek = sekOfForeign(input.amount, rate)
   // With custom lines the claim's displayed VAT is the actually debited
   // 2641 side (reverse-charge 2614/2645 pairs net to zero and stay out).
   const vatSek = input.lines
-    ? roundOre(
-        sumOre(
-          input.lines
-            .filter((l) => l.account_number.startsWith('2641'))
-            .map((l) => (l.debit_amount || 0) * rate),
-        ),
+    ? sumOre(
+        input.lines
+          .filter((l) => l.account_number.startsWith('2641'))
+          .map((l) => sekOfForeign(l.debit_amount || 0, rate)),
       )
-    : roundOre(input.vat_amount * rate)
+    : sekOfForeign(input.vat_amount, rate)
   const netSek = roundOre(amountSek - vatSek)
 
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.expense_date)
   if (!fiscalPeriodId) return { ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' }
 
-  // Claim row first, then the verifikat with source_id pointing back at it;
-  // a failed booking removes the orphan row again.
-  const { data: claim, error: insertError } = await supabase
-    .from('expense_claims')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      employee_id: employeeId,
-      claimant_name: claimantName,
-      description: input.description,
-      expense_date: input.expense_date,
-      amount_sek: amountSek,
-      vat_sek: vatSek,
-      currency: input.currency,
-      amount_in_currency: input.currency === 'SEK' ? null : roundOre(input.amount),
-      exchange_rate: input.currency === 'SEK' ? null : rate,
-      expense_account: input.expense_account,
-      liability_account: liability,
-      document_id: input.document_id ?? null,
-      status: 'registered',
-    })
-    .select('*')
-    .single()
-  if (insertError || !claim) {
-    return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: insertError?.message }
-  }
-
   const desc = `Utlägg: ${input.description} (${claimantName})`
 
-  let customLines: CreateJournalEntryLineInput[] | null = null
   if (input.lines) {
     // Convert each custom line at the claim rate; the per-line öre rounding
     // can leave a residual, which lands on the largest non-liability line so
     // the liability credit stays exactly amount_sek (the payout contract).
+    // Decided before the claim row is written, so a refusal here leaves no
+    // orphan row behind.
     const converted = input.lines.map((l) => ({
       account_number: l.account_number,
-      debit_amount: (l.debit_amount || 0) > 0 ? roundOre(l.debit_amount * rate) : 0,
+      debit_amount: (l.debit_amount || 0) > 0 ? sekOfForeign(l.debit_amount, rate) : 0,
       credit_amount:
         l.account_number === liability
           ? amountSek
           : (l.credit_amount || 0) > 0
-            ? roundOre(l.credit_amount * rate)
+            ? sekOfForeign(l.credit_amount, rate)
             : 0,
       line_description: l.line_description?.trim() || desc,
-      dimensions: l.dimensions,
+      // The claim-level bag defaults the cost lines only; without one the
+      // line's own bag passes through exactly as before.
+      dimensions:
+        input.dimensions && RESULT_ACCOUNT_RE.test(l.account_number)
+          ? mergeDimensionBags(input.dimensions, l.dimensions)
+          : l.dimensions,
     }))
     const residual = roundOre(
       sumOre(converted.map((l) => l.debit_amount)) - sumOre(converted.map((l) => l.credit_amount)),
@@ -274,16 +325,29 @@ export async function registerExpenseClaim(
         return { ok: false, code: 'INVALID_LINES', detail: 'rounding residual exceeds line' }
       }
     }
-    customLines = converted.map((l) => ({
-      account_number: l.account_number,
-      debit_amount: l.debit_amount,
-      credit_amount: l.credit_amount,
-      line_description: l.line_description,
-      ...(l.dimensions ? { dimensions: l.dimensions } : {}),
-      ...(input.currency !== 'SEK' && l.account_number === liability
-        ? { currency: input.currency, amount_in_currency: roundOre(input.amount), exchange_rate: rate }
-        : {}),
-    }))
+    return {
+      ok: true,
+      plan: {
+        claimantName,
+        employeeId,
+        liabilityAccount: liability,
+        rate,
+        amountSek,
+        vatSek,
+        fiscalPeriodId,
+        entryDescription: desc,
+        lines: converted.map((l) => ({
+          account_number: l.account_number,
+          debit_amount: l.debit_amount,
+          credit_amount: l.credit_amount,
+          line_description: l.line_description,
+          ...(l.dimensions ? { dimensions: l.dimensions } : {}),
+          ...(input.currency !== 'SEK' && l.account_number === liability
+            ? { currency: input.currency, amount_in_currency: roundOre(input.amount), exchange_rate: rate }
+            : {}),
+        })),
+      },
+    }
   }
 
   const lines: CreateJournalEntryLineInput[] = [
@@ -292,6 +356,9 @@ export async function registerExpenseClaim(
       debit_amount: netSek,
       credit_amount: 0,
       line_description: desc,
+      ...(input.dimensions && Object.keys(input.dimensions).length > 0
+        ? { dimensions: input.dimensions }
+        : {}),
       ...(input.currency !== 'SEK'
         ? {
             currency: input.currency,
@@ -309,6 +376,26 @@ export async function registerExpenseClaim(
       line_description: `Ingående moms, ${desc}`,
     })
   }
+  if (input.reverse_charge) {
+    // The cost account's chart row decides whether it reports ruta 20-24
+    // itself, read as the declaration reads it.
+    const { data: costRow, error: costRowError } = await supabase
+      .from('chart_of_accounts')
+      .select('default_vat_treatment, default_vat_rate')
+      .eq('company_id', companyId)
+      .eq('account_number', input.expense_account)
+      .maybeSingle()
+    if (costRowError) throw new Error(`Failed to read account ${input.expense_account}: ${costRowError.message}`)
+    const reverseChargeLines = expenseClaimReverseChargeLines(amountSek, input.reverse_charge, input.expense_account, costRow)
+    if (!reverseChargeLines) {
+      return {
+        ok: false,
+        code: 'INVALID_LINES',
+        detail: `expense_account ${input.expense_account} reports its own VAT box, which does not match reverse_charge ${input.reverse_charge}: use an ordinary cost account`,
+      }
+    }
+    lines.push(...reverseChargeLines)
+  }
   lines.push({
     account_number: liability,
     debit_amount: 0,
@@ -316,18 +403,176 @@ export async function registerExpenseClaim(
     line_description: desc,
   })
 
+  return {
+    ok: true,
+    plan: {
+      claimantName,
+      employeeId,
+      liabilityAccount: liability,
+      rate,
+      amountSek,
+      vatSek,
+      fiscalPeriodId,
+      entryDescription: desc,
+      lines,
+    },
+  }
+}
+
+/**
+ * The business event of a registered claim (kind expense.claimed), for the
+ * posting port: recorded while POSTING_EVENTS is shadow or strict, never
+ * built while it is off. Pure. The claimant is a party only as an employee
+ * (type and id); an owner's claim names nobody, the claim row carries the
+ * name.
+ */
+export function expenseClaimBusinessEvent(
+  claimId: string,
+  input: RegisterExpenseClaimInput,
+  plan: ExpenseClaimPlan,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  return {
+    kind: 'expense.claimed',
+    category: null,
+    occurredOn: input.expense_date,
+    subject: { type: 'expense_claim', id: claimId },
+    party: plan.employeeId ? { type: 'employee', id: plan.employeeId } : null,
+    currency: input.currency,
+    amount: Math.abs(input.amount),
+    amountSek: Math.abs(plan.amountSek),
+    taxAmounts: plan.vatSek > 0 ? [{ tax: 'vat', treatment: null, amount_sek: plan.vatSek }] : [],
+    evidence: {
+      document_id: input.document_id,
+      inbox_item_id: input.inbox_item_id,
+      link_basis: linkBasis.link_basis,
+      link_evidence: linkBasis.link_evidence ?? undefined,
+    },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    // The generated lines are this module's rules; a person's own lines are no automatic kontering.
+    mappingVersion: input.lines ? null : mappingVersion('expenseClaim'),
+    jurisdiction: 'SE',
+  }
+}
+
+/**
+ * The business event of a claim's removal: the storno of its verifikat
+ * (kind ledger.storno, linked with role reversal). Pure.
+ */
+export function expenseClaimRemovalBusinessEvent(
+  claimId: string,
+  occurredOn: string,
+  linkBasis: LinkBasisColumns,
+): BusinessEventDraft {
+  return {
+    kind: 'ledger.storno',
+    occurredOn,
+    subject: { type: 'expense_claim', id: claimId },
+    evidence: { link_basis: linkBasis.link_basis, link_evidence: linkBasis.link_evidence ?? undefined },
+    pendingOperationId: linkBasis.link_evidence?.pending_operation_id ?? null,
+    jurisdiction: 'SE',
+  }
+}
+
+/**
+ * The receipt a claim's verifikat carries. A claim that settles an inbox item
+ * carries that item's own document, as every door that books an inbox item
+ * links it (book-direct, the voucher, the supplier invoice); document_id is
+ * the receipt of a claim without one, or of an item that holds no document.
+ * Pure: the dry run and the registration answer the same receipt.
+ */
+export function claimReceiptDocumentId(
+  input: Pick<RegisterExpenseClaimInput, 'document_id'>,
+  inboxItemDocumentId: string | null | undefined,
+): string | undefined {
+  return inboxItemDocumentId ?? input.document_id
+}
+
+export async function registerExpenseClaim(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  registration: RegisterExpenseClaimInput,
+): Promise<RegisterExpenseClaimResult> {
+  const planned = await planExpenseClaim(supabase, companyId, registration)
+  if (!planned.ok) return planned
+  const { plan } = planned
+
+  // The inbox item this claim settles must not be booked already: the stamp
+  // below used to overwrite any pointer, so registering the same underlag
+  // twice left two posted verifikat (accounted#14). A pointer at a reversed
+  // verifikat (a booking this claim replaces) is stale and is replaced.
+  let replacesEntryId: string | null = null
+  let inboxDocumentId: string | null = null
+  if (registration.inbox_item_id) {
+    const booking = await readInboxItemBookingState(supabase, companyId, registration.inbox_item_id)
+    if (booking.state === 'error') return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: booking.error.message }
+    if (booking.state === 'missing') return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
+    if (booking.state === 'booked') return { ok: false, code: 'INBOX_ITEM_BOOKED' }
+    replacesEntryId = booking.replaces
+    inboxDocumentId = booking.document_id ?? null
+    // The other half of this purchase is booked already (one purchase was booked twice, as
+    // utlägg, from the invoice and from the receipt of the same mail): refused before anything is written.
+    const pairBooked = await refuseWhenPairBooked(supabase, companyId, registration.inbox_item_id)
+    if (pairBooked) return { ok: false, code: 'INBOX_ITEM_PAIR_BOOKED', detail: pairBooked.messageSv }
+  }
+  // The item's document is the receipt, so a caller that sends only
+  // inbox_item_id still gets the underlag onto the verifikat (crm#2018).
+  const input: RegisterExpenseClaimInput = {
+    ...registration,
+    document_id: claimReceiptDocumentId(registration, inboxDocumentId),
+  }
+
+  // Claim row first, then the verifikat with source_id pointing back at it;
+  // a failed booking removes the orphan row again.
+  const { data: claim, error: insertError } = await supabase
+    .from('expense_claims')
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      employee_id: plan.employeeId,
+      claimant_name: plan.claimantName,
+      description: input.description,
+      expense_date: input.expense_date,
+      amount_sek: plan.amountSek,
+      vat_sek: plan.vatSek,
+      currency: input.currency,
+      amount_in_currency: input.currency === 'SEK' ? null : roundOre(input.amount),
+      exchange_rate: input.currency === 'SEK' ? null : plan.rate,
+      expense_account: input.expense_account,
+      liability_account: plan.liabilityAccount,
+      document_id: input.document_id ?? null,
+      metadata: { inbox_item_id: input.inbox_item_id ?? null },
+      status: 'registered',
+    })
+    .select('*')
+    .single()
+  if (insertError || !claim) {
+    return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: insertError?.message }
+  }
+
   const entryInput: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
+    fiscal_period_id: plan.fiscalPeriodId,
     entry_date: input.expense_date,
-    description: desc,
+    description: plan.entryDescription,
     source_type: 'expense_claim',
     source_id: claim.id,
-    lines: customLines ?? lines,
+    lines: plan.lines,
   }
 
   let journalEntryId: string
   try {
-    const entry = await createJournalEntry(supabase, companyId, userId, entryInput)
+    // Posting port (step 2): the engine gets entryInput unchanged; while
+    // POSTING_EVENTS is shadow or strict the expense.claimed event is
+    // recorded first and linked to the draft before a number is drawn.
+    const entry = await postingPort.postJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      // Built only while the port is on: off, the call is the one it was.
+      event: () => expenseClaimBusinessEvent(claim.id as string, input, plan, linkBasisColumns('user_created')),
+      input: entryInput,
+    })
     journalEntryId = entry.id
   } catch (err) {
     await supabase.from('expense_claims').delete().eq('id', claim.id).eq('company_id', companyId)
@@ -349,8 +594,46 @@ export async function registerExpenseClaim(
     }
   }
 
-  // Attach the receipt to the verifikat and settle the inbox item, both
-  // best-effort: the booking above is the legally significant part.
+  // Settle the inbox item with a compare-and-set on the value read above.
+  // Two registrations that both passed that read each posted a verifikat;
+  // the loser takes its claim back out (storno of its verifikat, the row
+  // removed) before it attaches anything, so the receipt stays on the
+  // winner's verifikat. "Processed" is derived from created_journal_entry_id;
+  // the status column only tracks the extraction pipeline.
+  if (input.inbox_item_id) {
+    const itemClaim = await claimInboxItemForEntry(supabase, companyId, input.inbox_item_id, journalEntryId, {
+      expected: replacesEntryId,
+    })
+    if (itemClaim.status !== 'claimed') {
+      if (itemClaim.status === 'failed') {
+        await releaseInboxItemClaim(supabase, companyId, input.inbox_item_id, journalEntryId, replacesEntryId)
+      }
+      const undone: DeleteExpenseClaimResult = await deleteExpenseClaim(
+        supabase,
+        companyId,
+        userId,
+        claim.id as string,
+      ).catch((err: unknown) => ({
+        ok: false as const,
+        code: 'DELETE_FAILED' as const,
+        detail: err instanceof Error ? err.message : String(err),
+      }))
+      if (!undone.ok) {
+        log.error('expense claim lost its inbox item but could not be removed (manual storno needed)', new Error(undone.code), {
+          claim_id: claim.id,
+          journal_entry_id: journalEntryId,
+          inbox_item_id: input.inbox_item_id,
+          detail: undone.detail,
+        })
+      }
+      return itemClaim.status === 'taken'
+        ? { ok: false, code: 'INBOX_ITEM_BOOKED' }
+        : { ok: false, code: 'CLAIM_INSERT_FAILED', detail: itemClaim.error.message }
+    }
+  }
+
+  // Attach the receipt to the verifikat, best-effort: the booking above is
+  // the legally significant part.
   if (input.document_id) {
     try {
       const { data: doc } = await supabase
@@ -361,7 +644,8 @@ export async function registerExpenseClaim(
         .maybeSingle()
       const anchoredTo = (doc?.journal_entry_id as string | null) ?? null
       if (doc && anchoredTo === null) {
-        await linkToJournalEntry(supabase, companyId, input.document_id, journalEntryId)
+        // The claim's verifikat was booked from this receipt.
+        await linkToJournalEntry(supabase, companyId, input.document_id, journalEntryId, linkBasisColumns('user_created'))
       } else if (doc && anchoredTo !== journalEntryId) {
         // Anchored to another verifikat (typically a stornoed booking that
         // this claim replaces). BFL 5 kap 6 § forbids re-pointing an anchored
@@ -380,6 +664,7 @@ export async function registerExpenseClaim(
             uploaded_by: doc.uploaded_by,
             upload_source: doc.upload_source,
             journal_entry_id: journalEntryId,
+            ...linkBasisColumns('user_created'),
           })
           .select('id')
           .single()
@@ -401,15 +686,6 @@ export async function registerExpenseClaim(
       })
     }
   }
-  if (input.inbox_item_id) {
-    // "Processed" is derived from created_journal_entry_id; the status column
-    // only tracks the extraction pipeline (received/processing/error).
-    await supabase
-      .from('invoice_inbox_items')
-      .update({ created_journal_entry_id: journalEntryId })
-      .eq('id', input.inbox_item_id)
-      .eq('company_id', companyId)
-  }
 
   return {
     ok: true,
@@ -421,21 +697,35 @@ export interface ListExpenseClaimsOptions {
   status?: 'registered' | 'paid'
 }
 
+/** A claim as the register lists it: the row and whether it still waits for a payout. */
+export type ListedExpenseClaim = ExpenseClaimRow & ExpenseClaimPayoutState
+
+/**
+ * The register, newest expense first. Each claim says whether it waits for a
+ * payout and, when it is on a payslip instead, which salary run repays it
+ * (lib/salary/expense-claim-payout-state.ts), so no reader of the list
+ * decides that from the status alone.
+ */
 export async function listExpenseClaims(
   supabase: SupabaseClient,
   companyId: string,
   options: ListExpenseClaimsOptions = {},
-): Promise<ExpenseClaimRow[]> {
-  let query = supabase
-    .from('expense_claims')
-    .select('*, document:document_attachments(id, file_name), batch:expense_payout_batches(id, payout_date, journal_entry_id)')
-    .eq('company_id', companyId)
-    .order('expense_date', { ascending: false })
-    .order('created_at', { ascending: false })
-  if (options.status) query = query.eq('status', options.status)
-  const { data, error } = await query
-  if (error) throw new Error(`Failed to list expense claims: ${error.message}`)
-  return (data ?? []) as ExpenseClaimRow[]
+): Promise<ListedExpenseClaim[]> {
+  // Paged, id as the unique tiebreaker: the register used to end at 1,000.
+  const claims = await fetchAllRows<ExpenseClaimRow>(({ from, to }) => {
+    let query = supabase
+      .from('expense_claims')
+      .select('*, document:document_attachments(id, file_name), batch:expense_payout_batches(id, payout_date, journal_entry_id)')
+      .eq('company_id', companyId)
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
+    if (options.status) query = query.eq('status', options.status)
+    return query.range(from, to)
+  }).catch((error: Error) => {
+    throw new Error(`Failed to list expense claims: ${error.message}`)
+  })
+  return withExpenseClaimPayoutState(supabase, companyId, claims)
 }
 
 export type DeleteExpenseClaimResult =
@@ -506,6 +796,8 @@ export async function deleteExpenseClaim(
     }
   }
   if (payslip) {
+    const invalidated = await invalidateRunCalculation(supabase, companyId, { salaryRunId: payslip.salary_run_id })
+    if (invalidated) return { ok: false, code: 'DELETE_FAILED', detail: invalidated.details.message }
     const { error: lineError } = await supabase
       .from('salary_line_items')
       .delete()
@@ -541,7 +833,7 @@ export async function deleteExpenseClaim(
       return { ok: true, reversal_entry_id: null }
     }
     // The client is untyped, so say what the guard above already proved:
-    // without this the variable stays `string | null` for reverseEntry below.
+    // without this the variable stays `string | null` for the storno below.
     entryId = sourced.id as string
   }
   // Retry safety: if a previous attempt posted the storno but failed to
@@ -559,7 +851,14 @@ export async function deleteExpenseClaim(
   if (entry?.status === 'reversed') {
     reversalEntryId = entry.reversed_by_id ?? null
   } else {
-    const reversal = await reverseEntry(supabase, companyId, userId, entryId)
+    const reversal = await postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      event: () => expenseClaimRemovalBusinessEvent(claimId, todayIsoStockholm(), linkBasisColumns('user_created')),
+      role: 'reversal',
+    })
     reversalEntryId = reversal.id
   }
 
@@ -617,7 +916,13 @@ export type CreatePayoutBatchResult =
       total_sek: number
       claim_count: number
     }
-  | { ok: false; code: CreatePayoutBatchFailureCode; detail?: string }
+  | {
+      ok: false
+      code: CreatePayoutBatchFailureCode
+      detail?: string
+      /** The RPC's own error (a period-lock trigger, say), for the structured error mapping. */
+      error?: unknown
+    }
 
 const PAYOUT_RPC_CODES: ReadonlySet<string> = new Set<CreatePayoutBatchFailureCode>([
   'NO_CLAIMS',
@@ -652,13 +957,21 @@ interface PayoutRpcRow {
  * Reimburse N registered claims for one claimant in one bank transfer.
  *
  * Everything happens inside the create_expense_payout_batch RPC (migration
- * 20260904171000): the claims are locked FOR UPDATE, the liability -> cash
+ * 20260904171000), called through the engine door commitExpensePayoutBatch
+ * (reached through the posting port's commitSqlPosting), which also emits
+ * journal_entry.committed for the verifikat. The RPC locks
+ * the claims FOR UPDATE, and the liability -> cash
  * verifikat is posted through commit_journal_entry, the batch is linked and
  * the claims are marked paid, all in one transaction. A concurrent or
  * retried request for the same claims queues on the lock and is refused
  * with ALREADY_PAID, so a double click can never book a second transfer.
  * The claimant/liability/status rules are enforced by the RPC and echoed
  * here as result codes.
+ *
+ * Through the posting port's SQL step: one expense.paid_out event per claim
+ * is recorded first and the RPC links them to its draft before the number
+ * is drawn (migration 20261018210500). Off: nothing is read or built and the
+ * RPC is called as before.
  */
 export async function createPayoutBatch(
   supabase: SupabaseClient,
@@ -669,17 +982,34 @@ export async function createPayoutBatch(
   const claimIds = [...new Set(input.claim_ids)]
   if (claimIds.length === 0) return { ok: false, code: 'NO_CLAIMS' }
 
-  const { data, error } = await supabase.rpc('create_expense_payout_batch', {
-    p_company_id: companyId,
-    p_claim_ids: claimIds,
-    p_payout_date: input.payout_date,
-    p_cash_account: input.cash_account,
-    p_notes: input.notes ?? null,
-    // Honored only for service-role callers (API-key / MCP paths run on the
-    // cookieless service client where auth.uid() is NULL); an authenticated
-    // caller is pinned to its own auth.uid() by the RPC.
-    p_user_id: userId,
-    p_transaction_id: input.transaction_id ?? null,
+  let businessEvents: SqlBusinessEventLink | undefined
+  try {
+    businessEvents = await postingPort.recordEventsForSql({
+      supabase,
+      companyId,
+      events: () => payoutEvents(supabase, companyId, claimIds, input),
+    })
+  } catch (err) {
+    // strict: an event that could not be recorded stops the payout before any number.
+    log.error('create_expense_payout_batch business events not recorded (strict)', err, { companyId })
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: err instanceof Error ? err.message : String(err), error: err }
+  }
+
+  const { data, error } = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId,
+    fn: 'create_expense_payout_batch',
+    args: [
+      {
+        claimIds,
+        payoutDate: input.payout_date,
+        cashAccount: input.cash_account,
+        notes: input.notes ?? null,
+        transactionId: input.transaction_id ?? null,
+        ...(businessEvents ? { businessEvents } : {}),
+      },
+    ],
   })
   if (error) {
     // Period-lock and lock-date triggers surface here as Postgres errors;
@@ -690,7 +1020,7 @@ export async function createPayoutBatch(
       code: (error as { code?: string }).code,
       message: error.message,
     })
-    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: error.message }
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: error.message, error }
   }
 
   const row = (data ?? null) as PayoutRpcRow | null
@@ -717,6 +1047,35 @@ export async function createPayoutBatch(
     total_sek: roundOre(Number(row.total_sek ?? 0)),
     claim_count: row.claim_count ?? claimIds.length,
   }
+}
+
+/**
+ * The events of a payout, one expense.paid_out per claim in the order of
+ * claimIds. None when a claim is not there (the RPC then refuses as
+ * before). A read error throws: the port logs it under shadow and stops the
+ * payout under strict.
+ */
+async function payoutEvents(
+  supabase: SupabaseClient,
+  companyId: string,
+  claimIds: string[],
+  input: CreatePayoutBatchInput,
+): Promise<BusinessEventDraft[]> {
+  // In slices: a long id list in one .in() overruns the gateway's URL limit.
+  const byId = new Map<string, PayoutClaimFacts>()
+  for (const part of chunk(claimIds, CLAIM_ID_READ_CHUNK)) {
+    const { data, error } = await supabase
+      .from('expense_claims')
+      .select('id, employee_id, amount_sek, document_id')
+      .in('id', part)
+      .eq('company_id', companyId)
+    if (error) throw error
+    for (const claim of (data ?? []) as PayoutClaimFacts[]) byId.set(claim.id, claim)
+  }
+  if (claimIds.some((id) => !byId.has(id))) return []
+  const linkBasis = linkBasisColumns('user_created')
+  const payout = { payoutDate: input.payout_date, bankLine: !!input.transaction_id }
+  return claimIds.map((id) => expensePayoutBusinessEvent(byId.get(id)!, payout, linkBasis))
 }
 
 export async function listPayoutBatches(

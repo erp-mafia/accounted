@@ -1,25 +1,29 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { useTranslations, useLocale } from 'next-intl'
+import { useSuppliers } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { CreateDrawer } from '@/components/ui/create-drawer'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
+import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
+import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Lock, Truck } from 'lucide-react'
+import { LockClosedIcon, PlusIcon, TruckIcon } from '@/components/icons'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { formatOrgNumberDisplay, stripOrgNumberFormatting } from '@/lib/invariants/org-number'
-import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
+import { dominantPartyType, partyTypeSuffix } from '@/lib/parties/list-type-suffix'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 const SupplierForm = dynamic(
   () => import('@/components/suppliers/SupplierForm'),
@@ -39,7 +43,9 @@ const SUPPLIER_TYPE_KEYS: Record<SupplierType, string> = {
   eu_business: 'type_eu_business',
   non_eu_business: 'type_non_eu_business',
 }
-const INITIAL_VISIBLE_ROWS = 100
+
+/** Tie order for the list's normal type: Swedish first. */
+const SUPPLIER_TYPE_ORDER: readonly SupplierType[] = ['swedish_business', 'eu_business', 'non_eu_business']
 
 // "Betalsätt" cell (concept scene 26): the supplier's primary payment route,
 // e.g. "BG 5050-1055". First match wins, mirroring the detail page's order.
@@ -52,48 +58,23 @@ function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label
 }
 
 export default function SuppliersPage() {
-  const { company } = useCompany()
   const { canWrite } = useCanWrite()
   const t = useTranslations('suppliers')
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
+  // The roster from the session cache (lib/reference-data), the list every
+  // supplier picker reads: a create here refreshes them all.
+  const { suppliers, isLoading, error: suppliersError, refresh: refreshSuppliers } = useSuppliers()
+  // A failed first load says so in place of the rows; a failed refresh keeps
+  // the rows on screen and says so in one line above them.
+  const loadFailed = Boolean(suppliersError) && suppliers.length === 0
+  const refreshFailed = Boolean(suppliersError) && suppliers.length > 0
   const [searchTerm, setSearchTerm] = useState('')
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
-  const supabase = createClient()
-  const tCommon = useTranslations('common')
   const router = useRouter()
-
-  async function fetchSuppliers() {
-    if (!company) return
-    setIsLoading(true)
-    // Archived suppliers (v1 API soft-delete) are kept for retention but are
-    // not part of the roster: same filter as /api/suppliers and the v1 list.
-    const { data, error } = await supabase
-      .from('suppliers')
-      .select('*')
-      .eq('company_id', company.id)
-      .is('archived_at', null)
-      .order('name', { ascending: true })
-
-    if (error) {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-    } else {
-      setSuppliers(data || [])
-    }
-    setIsLoading(false)
-  }
-
-  useEffect(() => {
-    fetchSuppliers()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   async function handleCreateSupplier(data: CreateSupplierInput) {
     setIsCreating(true)
@@ -110,7 +91,7 @@ export default function SuppliersPage() {
       const fieldErrors = result.errors?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`).join(', ')
       toast({
         title: t('create_failed_title'),
-        description: fieldErrors || result.error || t('create_failed_retry'),
+        description: fieldErrors || getErrorMessage(result, { locale: errorLocale, fallback: t('create_failed_retry') }),
         variant: 'destructive',
       })
     } else {
@@ -118,7 +99,7 @@ export default function SuppliersPage() {
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
       })
-      setSuppliers([...suppliers, result.data])
+      await invalidateReferenceData('ref:suppliers')
       setIsDialogOpen(false)
     }
 
@@ -136,75 +117,96 @@ export default function SuppliersPage() {
       : false)
   )
   const visibleSuppliers = filteredSuppliers.slice(0, visibleCount)
+  // The Typ column said "Svenskt företag eller organisation" on nearly every
+  // row: the whole register's most common type goes unsaid, and a row of
+  // another type carries it after the name.
+  const dominantType = useMemo(
+    () => dominantPartyType(suppliers.map((s) => s.supplier_type), SUPPLIER_TYPE_ORDER),
+    [suppliers],
+  )
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 26): title + export + Ny leverantör */}
+      {/* Page header (concept scene 26): title + import/export menu + Ny leverantör */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <div className="flex items-center gap-2">
-          <ReportExportMenu
-            size="default"
-            items={[
-              { format: 'xlsx', href: '/api/export/suppliers' },
-              { format: 'csv', href: '/api/export/suppliers?format=csv' },
-            ]}
-          />
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                disabled={!canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
-                ) : (
-                  <Lock className="mr-2 h-4 w-4" />
-                )}
-                {t('new_supplier')}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t('add_supplier')}</DialogTitle>
-              </DialogHeader>
-              <SupplierForm
-                onSubmit={handleCreateSupplier}
-                isLoading={isCreating}
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
+        <h1 className="page-header-title">{t('title')}</h1>
+        <PageHeaderActions className="flex flex-wrap items-center justify-end gap-2">
+          <RegisterActionsMenu entity="suppliers" />
+          <Button
+            size="toolbar"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            onClick={() => setIsDialogOpen(true)}
+          >
+            {canWrite ? (
+              <PlusIcon className="h-4 w-4" />
+            ) : (
+              <LockClosedIcon className="h-4 w-4" />
+            )}
+            {t('new_supplier')}
+          </Button>
+          {/* A small record is created in a drawer over its list (V7 creation
+              forms): the list stays in place behind it. */}
+          <CreateDrawer
+            open={isDialogOpen}
+            onOpenChange={setIsDialogOpen}
+            title={t('new_supplier')}
+            formId="create-supplier-form"
+            submitLabel={t('create_submit')}
+            submitting={isCreating}
+          >
+            <SupplierForm
+              onSubmit={handleCreateSupplier}
+              isLoading={isCreating}
+              formId="create-supplier-form"
+            />
+          </CreateDrawer>
+        </PageHeaderActions>
       </div>
 
-      {/* Toolbar: search (concept) */}
+      {/* Toolbar: search at the right end (V7 list toolbars) */}
       <div className="flex flex-wrap items-center gap-2">
         <ToolbarSearch
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
           placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
+            setVisibleCount(SHOW_MORE_STEP)
           }}
         />
       </div>
 
+      {refreshFailed && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void refreshSuppliers() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto hidden h-3.5 w-28 sm:block" />
+              <Skeleton className="hidden h-3.5 w-40 md:block" />
+              <Skeleton className="hidden h-3.5 w-24 lg:block" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed ? (
+        <LoadError title={t('load_failed_title')} onRetry={() => void refreshSuppliers()} />
       ) : filteredSuppliers.length === 0 ? (
         searchTerm ? (
-          <EmptyState
-            icon={Truck}
-            title={t('no_search_results_title')}
-            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
-          />
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>
+            <Button variant="link" onClick={() => setSearchTerm('')}>
+              {tCommon('clear_search')}
+            </Button>
+          </div>
         ) : (
           <EmptyState
-            icon={Truck}
+            icon={TruckIcon}
             title={t('empty_title')}
             description={t('empty_description')}
             actionLabel={canWrite ? t('new_supplier') : undefined}
@@ -213,12 +215,11 @@ export default function SuppliersPage() {
         )
       ) : (
         <>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-full')}>{t('th_name')}</th>
-                  <th className={TH_CLASS}>{t('th_type')}</th>
                   <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_payment')}</th>
                   <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('th_email')}</th>
                   <th className={cn(TH_CLASS, 'hidden lg:table-cell')}>{t('th_org_number')}</th>
@@ -227,6 +228,7 @@ export default function SuppliersPage() {
               <tbody className="stagger-enter">
                 {visibleSuppliers.map((supplier) => {
                   const payment = getPaymentInfo(supplier, t)
+                  const typeSuffix = partyTypeSuffix(supplier.supplier_type, dominantType)
                   return (
                     <tr
                       key={supplier.id}
@@ -234,21 +236,26 @@ export default function SuppliersPage() {
                       onClick={() => router.push(`/suppliers/${supplier.id}`)}
                     >
                       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-                        <Link
-                          href={`/suppliers/${supplier.id}`}
-                          className="block truncate hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {supplier.name}
-                        </Link>
-                      </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                        {t(SUPPLIER_TYPE_KEYS[supplier.supplier_type])}
+                        <span className="flex min-w-0 items-baseline gap-2">
+                          <Link
+                            href={`/suppliers/${supplier.id}`}
+                            className="min-w-0 truncate hover:underline"
+                            title={supplier.name}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {supplier.name}
+                          </Link>
+                          {typeSuffix && SUPPLIER_TYPE_KEYS[typeSuffix] && (
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {t(SUPPLIER_TYPE_KEYS[typeSuffix])}
+                            </span>
+                          )}
+                        </span>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground sm:table-cell')}>
                         {payment ? `${payment.label} ${payment.value}` : ''}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')} title={supplier.email || undefined}>
                         {supplier.email || ''}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
@@ -266,17 +273,11 @@ export default function SuppliersPage() {
             {t('count_summary', { count: suppliers.length })}
           </p>
 
-          {visibleCount < filteredSuppliers.length && (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
-              >
-                {tCommon('load_more')}
-              </Button>
-            </div>
-          )}
+          <ShowMoreFooter
+            shown={visibleCount}
+            total={filteredSuppliers.length}
+            onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+          />
         </>
       )}
     </div>

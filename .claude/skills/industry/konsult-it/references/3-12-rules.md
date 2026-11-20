@@ -1,3 +1,7 @@
+---
+areas: [bokslut]
+---
+
 # 3:12-reglerna (IL 57 kap): full reference
 
 ## IBB-tabell (inkomstbasbelopp)

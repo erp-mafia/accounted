@@ -3,6 +3,8 @@
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -19,7 +21,8 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { formatDateLong } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Globe } from 'lucide-react'
+import { GlobeAltIcon, PlusIcon, TrashIcon } from '@/components/icons'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 interface OAuthClient {
   id: string
@@ -29,10 +32,11 @@ interface OAuthClient {
   revoked_at: string | null
 }
 
-export function OAuthClientsPanel() {
+export function OAuthClientsPanel({ className }: { className?: string } = {}) {
   const t = useTranslations('settings_oauth_clients')
   const locale = useLocale()
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
 
   const [clients, setClients] = useState<OAuthClient[]>([])
@@ -74,7 +78,7 @@ export function OAuthClientsPanel() {
       const json = await res.json()
 
       if (!res.ok) {
-        toast({ title: json.error ?? t('toast_register_failed'), variant: 'destructive' })
+        toast({ title: getErrorMessage(json, { locale: locale as ErrorLocale, fallback: t('toast_register_failed') }), variant: 'destructive' })
         return
       }
 
@@ -102,7 +106,7 @@ export function OAuthClientsPanel() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         toast({
-          title: body?.error || t('toast_revoke_failed'),
+          title: getErrorMessage(body, { locale: locale as ErrorLocale, fallback: t('toast_revoke_failed') }),
           variant: 'destructive',
         })
         return
@@ -116,28 +120,30 @@ export function OAuthClientsPanel() {
 
   return (
     <>
-      <SettingsGroup>
+      <SettingsGroup className={className}>
         {/* Group eyebrow with the group's primary action on the right. Styling
             mirrors SettingsGroup's label line; the "?" holds the old panel
             description. */}
         <div className="flex items-center justify-between gap-4 px-1">
-          <p className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <span>{t('title')}</span>
             <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
           </p>
-          <Button size="sm" onClick={() => setShowCreateDialog(true)}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
+          <Button onClick={() => setShowCreateDialog(true)} disabled={!canWrite} title={lockedTitle}>
+            <PlusIcon className="h-3.5 w-3.5" />
             {t('register_uri')}
           </Button>
         </div>
 
         {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div aria-busy className="space-y-3 py-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
           </div>
         ) : clients.length === 0 ? (
           <EmptyState
-            icon={Globe}
+            icon={GlobeAltIcon}
             title={t('empty_title')}
             description={t('empty_help')}
           />
@@ -145,7 +151,7 @@ export function OAuthClientsPanel() {
           clients.map((c) => (
             <div
               key={c.id}
-              className="flex items-center gap-3 border-b border-border px-1 py-3"
+              className="flex items-center gap-3 border-b-hairline px-1 py-3"
             >
               <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className="truncate text-sm">{c.client_name}</span>
@@ -159,11 +165,13 @@ export function OAuthClientsPanel() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                className="shrink-0 text-muted-foreground hover:text-destructive"
+                disabled={!canWrite}
+                title={lockedTitle}
                 onClick={() => handleRevoke(c.id, c.client_name)}
                 aria-label={t('revoke_aria', { name: c.client_name })}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <TrashIcon className="h-3.5 w-3.5" />
               </Button>
             </div>
           ))
@@ -177,7 +185,7 @@ export function OAuthClientsPanel() {
             <DialogDescription>
               {t.rich('register_dialog_description', {
                 bold: (chunks) => <span className="font-medium">{chunks}</span>,
-                code: (chunks) => <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px]">{chunks}</code>,
+                code: (chunks) => <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs">{chunks}</code>,
               })}
             </DialogDescription>
           </DialogHeader>
@@ -207,8 +215,7 @@ export function OAuthClientsPanel() {
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
               {t('cancel')}
             </Button>
-            <Button onClick={handleCreate} disabled={isCreating || !redirectUri.trim()}>
-              {isCreating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            <Button onClick={handleCreate} disabled={!redirectUri.trim()} loading={isCreating}>
               {t('register')}
             </Button>
           </DialogFooter>

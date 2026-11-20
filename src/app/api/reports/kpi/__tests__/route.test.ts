@@ -19,7 +19,10 @@ vi.mock('@/lib/company/context', () => ({
 // call them, the dimension path must still route through them. The pure
 // builders (buildIncomeStatementFromRows, assembleMonthlyBreakdown) stay real
 // so the happy path asserts the full KPI JSON end to end.
-vi.mock('@/lib/reports/trial-balance', () => ({
+// Partial: the KPI rows and the year-end exclusion use the module's real
+// helpers (buildTrialBalanceRows).
+vi.mock('@/lib/reports/trial-balance', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/trial-balance')>()),
   generateTrialBalance: vi.fn(),
 }))
 vi.mock('@/lib/reports/ar-ledger', () => ({
@@ -34,16 +37,35 @@ vi.mock('@/lib/reports/monthly-breakdown', async (importOriginal) => {
   return { ...actual, generateMonthlyBreakdown: vi.fn() }
 })
 
+// The data status reads its own tables; it is covered in
+// lib/reports/__tests__/data-status.test.ts. Mocked here so its reads do not
+// draw from the queued client the report consumes in order.
+vi.mock('@/lib/reports/data-status', () => ({ buildReportDataStatus: vi.fn() }))
+
 import { GET } from '../route'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
+import { buildReportDataStatus, type ReportDataStatus } from '@/lib/reports/data-status'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
 const mockARLedger = vi.mocked(generateARLedger)
 const mockIncomeStatement = vi.mocked(generateIncomeStatement)
 const mockMonthlyBreakdown = vi.mocked(generateMonthlyBreakdown)
+const mockDataStatus = vi.mocked(buildReportDataStatus)
+
+const DATA_STATUS: ReportDataStatus = {
+  computed_at: '2026-03-15T09:00:00.000Z',
+  range: { from: '2026-01-01', to: '2026-03-31' },
+  period: { period_id: 'period-1', name: '2026', status: 'open', lock_date: null },
+  accounting_method: 'accrual',
+  unbooked_transactions: 7,
+  draft_entries: 0,
+  bank: { feed_status: 'active', last_sync_at: '2026-02-20T06:00:00Z', stale: true, reconciled_through: null },
+  preliminary: true,
+  caveats: [],
+}
 
 const noParams = { params: Promise.resolve({}) }
 
@@ -100,11 +122,10 @@ const CHART = [
   { account_number: '5010', account_name: 'Lokalhyra', account_class: 5 },
 ]
 
-const PAID_INVOICES = Array.from({ length: 5 }, () => ({
-  invoice_date: '2026-01-01',
-  paid_at: '2026-01-11',
-}))
+/** get_paid_invoice_days: five invoices paid ten days after their date. */
+const PAID_INVOICE_DAYS = { invoice_count: 5, total_days: 50 }
 
+/** A row of get_kpi_supplier_invoices: the invoice with its supplier's name. */
 function supplierRow(
   overrides: Partial<{
     supplier_id: string
@@ -115,15 +136,15 @@ function supplierRow(
     supplier: { id: string; name: string }
   }> = {}
 ) {
-  const supplierId = overrides.supplier_id ?? 'sup-1'
+  const { supplier, ...fields } = overrides
   return {
-    supplier_id: supplierId,
+    supplier_id: overrides.supplier_id ?? 'sup-1',
+    supplier_name: supplier?.name ?? 'Leverantören AB',
     total: 100,
     total_sek: null,
     currency: 'SEK',
     exchange_rate: null,
-    supplier: { id: supplierId, name: 'Leverantören AB' },
-    ...overrides,
+    ...fields,
   }
 }
 
@@ -158,8 +179,8 @@ function enqueueHotPath(supplierRows: unknown[]) {
   enqueue({ data: [] }) // rpc compute_prior_opening_balances
   enqueue({ data: CHART }) // chart_of_accounts
   enqueue({ data: null }) // extension_data prefs
-  enqueue({ data: [] }) // invoices
-  enqueue({ data: supplierRows }) // supplier_invoices
+  enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+  enqueue({ data: supplierRows }) // rpc get_kpi_supplier_invoices
 }
 
 function kpiRequest(searchParams: Record<string, string> = { period_id: 'period-1' }) {
@@ -171,6 +192,7 @@ beforeEach(() => {
   reset()
   authed()
   mockARLedger.mockResolvedValue({ total_outstanding: 1500, total_overdue: 500 } as never)
+  mockDataStatus.mockResolvedValue(DATA_STATUS)
 })
 
 describe('GET /api/reports/kpi', () => {
@@ -179,17 +201,21 @@ describe('GET /api/reports/kpi', () => {
     const res = await GET(kpiRequest(), noParams)
     expect(res.status).toBe(401)
     expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(mockDataStatus).not.toHaveBeenCalled()
   })
 
   it('returns 400 when period_id is missing', async () => {
     const res = await GET(kpiRequest({}), noParams)
     expect(res.status).toBe(400)
+    expect(mockDataStatus).not.toHaveBeenCalled()
   })
 
   it('returns 404 for an unknown fiscal period', async () => {
     enqueue({ data: null, error: { message: 'not found' } })
     const res = await GET(kpiRequest(), noParams)
-    expect(res.status).toBe(404)
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+    expect(status).toBe(404)
+    expect(body).not.toHaveProperty('data_status')
   })
 
   it('returns 400 for a half-provided dimension pair', async () => {
@@ -204,8 +230,8 @@ describe('GET /api/reports/kpi', () => {
     enqueue({ data: [{ account_number: '1930', debit: 5000, credit: 0 }] }) // rpc compute_prior_opening_balances
     enqueue({ data: CHART }) // chart_of_accounts
     enqueue({ data: null }) // extension_data prefs (no row)
-    enqueue({ data: PAID_INVOICES }) // invoices
-    enqueue({ data: SUPPLIER_ROWS }) // supplier_invoices
+    enqueue({ data: PAID_INVOICE_DAYS }) // rpc get_paid_invoice_days
+    enqueue({ data: SUPPLIER_ROWS }) // rpc get_kpi_supplier_invoices
 
     const res = await GET(kpiRequest(), noParams)
     const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
@@ -255,6 +281,67 @@ describe('GET /api/reports/kpi', () => {
     expect(mockMonthlyBreakdown).not.toHaveBeenCalled()
   })
 
+  it('returns the data status beside the report: unbooked bank rows and the feed\'s last sync over the period', async () => {
+    enqueue({ data: makePeriod() })
+    enqueueHotPath(SUPPLIER_ROWS)
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport; data_status: ReportDataStatus }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.netResult).toBe(7000)
+    expect(body.data_status).toEqual(DATA_STATUS)
+    // The fiscal period decides the range, same call as the MCP tool makes.
+    expect(mockDataStatus).toHaveBeenCalledWith(supabase, 'company-1', { periodId: 'period-1' })
+  })
+
+  it('stays company-wide under a dimension filter: the status gets the period, never the dimension', async () => {
+    enqueue({ data: makePeriod() })
+    mockTrialBalance.mockResolvedValue({ rows: [] } as never)
+    mockIncomeStatement.mockResolvedValue({ net_result: 0, total_revenue: 0, total_expenses: 0 } as never)
+    mockMonthlyBreakdown.mockResolvedValue({ months: [] } as never)
+    enqueue({ data: null }) // extension_data prefs
+    enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
+
+    await GET(kpiRequest({ period_id: 'period-1', dim_no: '6', dim_code: 'P001' }), noParams)
+
+    expect(mockDataStatus).toHaveBeenCalledTimes(1)
+    expect(mockDataStatus).toHaveBeenCalledWith(supabase, 'company-1', { periodId: 'period-1' })
+  })
+
+  it('still answers with the report when the data status could not be read', async () => {
+    mockDataStatus.mockResolvedValue({ unavailable: true, reason: 'bank connection read failed' })
+    enqueue({ data: makePeriod() })
+    enqueueHotPath(SUPPLIER_ROWS)
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport; data_status: unknown }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.netResult).toBe(7000)
+    expect(body.data_status).toEqual({ unavailable: true, reason: 'bank connection read failed' })
+  })
+
+  it('reads the same account overrides, as-of receivables and period payments as the MCP tool', async () => {
+    enqueue({ data: makePeriod() }) // fiscal_periods
+    enqueue({ data: aggPayload() }) // rpc get_kpi_report_aggregates
+    enqueue({ data: [] }) // rpc compute_prior_opening_balances
+    enqueue({ data: CHART }) // chart_of_accounts
+    enqueue({ data: { value: { accountOverrides: { cashPosition: ['1940'] } } } }) // prefs
+    enqueue({ data: PAID_INVOICE_DAYS }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
+
+    expect(status).toBe(200)
+    // Override points at 1940, which carries no balance: 1930's 12500 is excluded.
+    expect(body.data.cashPosition).toBe(0)
+    // The period (2026-01-01..03-31) has ended: receivables as they stood then.
+    expect(mockARLedger).toHaveBeenCalledWith(supabase, 'company-1', '2026-03-31')
+  })
+
   it('skips the prior-balance RPC when the period has an opening balance entry', async () => {
     enqueue({ data: makePeriod({ opening_balance_entry_id: 'ob-1' }) }) // fiscal_periods
     enqueue({
@@ -268,15 +355,15 @@ describe('GET /api/reports/kpi', () => {
     }) // rpc get_kpi_report_aggregates (no prior RPC follows)
     enqueue({ data: CHART }) // chart_of_accounts
     enqueue({ data: null }) // extension_data prefs
-    enqueue({ data: [] }) // invoices
-    enqueue({ data: [] }) // supplier_invoices
+    enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
 
     const res = await GET(kpiRequest(), noParams)
     const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
 
     expect(status).toBe(200)
     expect(body.data.cashPosition).toBe(17500) // OB 5000 + period 12500 on 1930
-    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('compute_prior_opening_balances', expect.anything())
     expect(supabase.rpc).toHaveBeenCalledWith('get_kpi_report_aggregates', {
       p_company_id: 'company-1',
       p_fiscal_period_id: 'period-1',
@@ -284,11 +371,11 @@ describe('GET /api/reports/kpi', () => {
     })
   })
 
-  it('dimension-filtered path still uses the legacy generators and never the RPC', async () => {
+  it('dimension-filtered path still uses the legacy generators and never the aggregates RPC', async () => {
     enqueue({ data: makePeriod() }) // fiscal_periods
     enqueue({ data: null }) // extension_data prefs
-    enqueue({ data: [] }) // invoices
-    enqueue({ data: [] }) // supplier_invoices
+    enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
 
     mockIncomeStatement.mockResolvedValue({
       revenue_sections: [],
@@ -331,7 +418,7 @@ describe('GET /api/reports/kpi', () => {
       closingEntry: 'include',
       dimensions,
     })
-    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalledWith('get_kpi_report_aggregates', expect.anything())
   })
 
   it('populates Största leverantörer for a SEK-only company whose total_sek is NULL', async () => {

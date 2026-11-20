@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Electronic services classification (moms)
 
 ## Definition: three cumulative criteria

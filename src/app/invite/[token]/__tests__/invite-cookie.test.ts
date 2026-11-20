@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getInviteExpiry } from '@/lib/auth/invite-tokens'
+import { INVITE_TTL_HOURS, INVITE_TTL_SECONDS } from '@/lib/auth/invite-ttl'
 import {
   consumeInviteCookie,
   isDefinitiveInviteDisposition,
@@ -13,24 +14,25 @@ import {
  * the invitee off to /register or /login. That hop has to survive an email
  * round-trip: the invitee registers at 17:00 and confirms the mail the next
  * morning. The page used to write `max-age=3600` at three separate call sites
- * against a 7-day invitation, so the cookie was gone long before the invitee
- * came back and acceptance became impossible with no recovery path.
+ * against a much longer-lived invitation, so the cookie was gone long before
+ * the invitee came back and acceptance became impossible with no recovery
+ * path.
  *
  * The page is a client component, and this repo deliberately has no component
  * test harness (CLAUDE.md: scope is lib/ + app/api/). These tests therefore
  * assert on the page source, the same pattern already used by
  * components/transactions/__tests__/invoice-match-dialog-fx.test.ts. The
  * expected value is not restated here: it is read back out of
- * `getInviteExpiry()`, the server-side source of the invite TTL, so changing
- * INVITE_TTL_DAYS without moving the cookie fails this file.
+ * `getInviteExpiry()`, the server-side source of the invitation lifetime, so
+ * a cookie that stops following INVITE_TTL_HOURS (lib/auth/invite-ttl.ts)
+ * fails this file.
  */
 const PAGE_PATH = path.resolve(__dirname, '../page.tsx')
 const SRC = fs.readFileSync(PAGE_PATH, 'utf8')
 
 /**
- * The real invite TTL in seconds, derived from the code that stamps
- * `company_invitations.expires_at`. Pinned to a date well clear of any DST
- * transition, because `getInviteExpiry()` walks the local calendar.
+ * The real invitation lifetime in seconds, derived from the code that stamps
+ * `expires_at` on company and team invitations.
  */
 function inviteTtlSeconds(): number {
   vi.useFakeTimers()
@@ -55,10 +57,9 @@ function cookieWriteLines(): string[] {
 }
 
 /**
- * Resolve the max-age used by a cookie write. Handles both a bare literal
- * (`max-age=3600`) and an interpolated constant (`max-age=${NAME}`) whose
- * declaration is a plain number or a product of numbers, so the assertion
- * survives either spelling instead of only testing today's one.
+ * Resolve the max-age used by a cookie write. Handles a bare literal
+ * (`max-age=3600`) and an interpolated constant (`max-age=${NAME}`), so the
+ * assertion survives either spelling instead of only testing today's one.
  */
 function resolveMaxAge(writeLine: string): number {
   const raw = writeLine.match(/max-age=([^;`]+)/)?.[1]?.trim()
@@ -67,20 +68,41 @@ function resolveMaxAge(writeLine: string): number {
   const interpolated = raw.match(/^\$\{(\w+)\}$/)?.[1]
   if (!interpolated) return Number(raw)
 
-  const decl = SRC.match(new RegExp(`const ${interpolated} = (.+)`))?.[1]
-  if (!decl) throw new Error(`${interpolated} is interpolated but never declared`)
+  return resolveConstant(interpolated)
+}
+
+/**
+ * The value of a constant the page uses: the shared invitation lifetime it
+ * imports, or a local declaration that is a number, a product of numbers, or
+ * another such constant.
+ */
+function resolveConstant(name: string): number {
+  if (name === 'INVITE_TTL_SECONDS') {
+    // Only the real constant counts: a local const of the same name would
+    // be a restated number again.
+    expect(SRC).toMatch(
+      /import \{[^}]*\bINVITE_TTL_SECONDS\b[^}]*\} from '@\/lib\/auth\/invite-ttl'/,
+    )
+    expect(SRC).not.toMatch(/const INVITE_TTL_SECONDS\b/)
+    return INVITE_TTL_SECONDS
+  }
+
+  const decl = SRC.match(new RegExp(`const ${name} = (.+)`))?.[1]
+  if (!decl) throw new Error(`${name} is used but never declared`)
 
   return decl
     .split('*')
-    .map((part) => Number(part.trim()))
+    .map((part) => part.trim())
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : resolveConstant(part)))
     .reduce((product, n) => product * n, 1)
 }
 
 describe('invite cookie lifetime', () => {
-  // The finding. Against HEAD this reports 3600 against 604800.
+  // The original finding: the page wrote 3600 against a far longer invitation.
   it('lives exactly as long as the invitation it carries', () => {
     const ttl = inviteTtlSeconds()
-    expect(ttl).toBe(7 * 24 * 60 * 60) // sanity: getInviteExpiry() really is 7 days
+    // sanity: getInviteExpiry() really stamps the shared lifetime
+    expect(ttl).toBe(INVITE_TTL_HOURS * 60 * 60)
 
     const writes = cookieWriteLines()
     expect(writes.length).toBeGreaterThan(0)
@@ -111,6 +133,12 @@ describe('invite cookie construction', () => {
   // Three separate literals is how the max-age drifts in the first place.
   it('is built in exactly one place', () => {
     expect(cookieWriteLines()).toHaveLength(1)
+  })
+
+  // A number restated on the page is how the cookie and the invitation
+  // drifted apart before: the lifetime comes from the one constant.
+  it('takes its lifetime from the shared invitation lifetime, not a number of its own', () => {
+    expect(SRC).toMatch(/const INVITE_COOKIE_MAX_AGE_SECONDS = INVITE_TTL_SECONDS\b/)
   })
 
   it('is still written on all three hops off the invite page', () => {
@@ -153,13 +181,13 @@ describe('invite cookie flags', () => {
 })
 
 /**
- * The consume side (lib/auth/consume-invite-cookie.ts) now retains the cookie
- * on transient failures, which compounds with a longer max-age. Re-assert here
- * that a longer-lived cookie is still destroyed the moment the outcome is
- * definitive, so the two changes do not add up to a token that lingers after
- * it is spent.
+ * The consume side (lib/auth/consume-invite-cookie.ts) retains the cookie on
+ * transient failures, which compounds with a max-age as long as the
+ * invitation. Re-assert here that the cookie is still destroyed the moment
+ * the outcome is definitive, so the two do not add up to a token that lingers
+ * after it is spent.
  */
-describe('a longer-lived cookie is still cleared on a definitive outcome', () => {
+describe('the cookie is still cleared on a definitive outcome', () => {
   const TOKEN = 'gnubok_inv_Zm9vYmFyLXRva2Vu'
 
   function installCookieJar(initial: Record<string, string> = {}) {
@@ -203,7 +231,7 @@ describe('a longer-lived cookie is still cleared on a definitive outcome', () =>
     vi.restoreAllMocks()
   })
 
-  it('clears a 7-day cookie once the invite is accepted', async () => {
+  it('clears the cookie once the invite is accepted', async () => {
     const jar = installCookieJar({ [INVITE_COOKIE_NAME]: TOKEN })
     fetchMock.mockResolvedValue({ status: 200, ok: true })
 
@@ -213,7 +241,7 @@ describe('a longer-lived cookie is still cleared on a definitive outcome', () =>
     expect(jar.has(INVITE_COOKIE_NAME)).toBe(false)
   })
 
-  it('clears a 7-day cookie once the invitation itself has expired (410)', async () => {
+  it('clears the cookie once the invitation itself has expired (410)', async () => {
     const jar = installCookieJar({ [INVITE_COOKIE_NAME]: TOKEN })
     fetchMock.mockResolvedValue({ status: 410, ok: false })
 

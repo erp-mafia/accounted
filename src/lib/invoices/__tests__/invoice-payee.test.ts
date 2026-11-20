@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { CashAccount } from '@/types'
-import { resolveInvoicePayeeChoice, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '../invoice-payee'
+import { resolveInvoicePayeeChoice, resolveInvoicePaymentAccount, resolveInvoiceSettlementAccount, snapshotInvoicePayee } from '../invoice-payee'
 
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
@@ -115,6 +115,15 @@ describe('snapshotInvoicePayee', () => {
     expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
   })
 
+  it('skips a credit note imported without a link: its total says what it is', async () => {
+    const result = await snapshotInvoicePayee(supabase as never, 'company-1', {
+      id: 'kr-2', currency: 'SEK', payment_cash_account_id: CA_1, credited_invoice_id: null, total: -500,
+      payment_details: null,
+    })
+    expect(result).toEqual({ ok: true, payee: null })
+    expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
+  })
+
   it('refreshes and persists the payee from the account as it is at issue', async () => {
     enqueue({ data: account({ plusgiro: '123456-7' }) })
     enqueue({ data: null }) // update
@@ -154,21 +163,124 @@ describe('snapshotInvoicePayee', () => {
 })
 
 describe('resolveInvoiceSettlementAccount', () => {
-  it('defaults to 1930 without a chosen account and never queries', async () => {
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).toBe('1930')
-    expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
+  // The first primary read: the is_primary row. A usable one ends it; without
+  // one the second read lists the enabled SEK bank accounts.
+  const primaryOn1931 = { data: { id: 'ca-primary', ledger_account: '1931', enabled: true, currency: 'SEK' } }
+
+  it('books on the primary bank account without a chosen account', async () => {
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).toBe('1931')
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['is_primary', true],
+    ])
   })
 
-  it('debits the chosen account\'s ledger account, and falls back to 1930 when the row is gone, disabled, or not a bank account', async () => {
-    enqueue({ data: { ledger_account: '1931', enabled: true } })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
-    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['company_id', 'company-1'])
+  it('books on the only enabled SEK bank account when no primary is usable', async () => {
     enqueue({ data: null })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
-    enqueue({ data: { ledger_account: '1931', enabled: false } })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
+    enqueue({ data: [{ id: 'ca-only', ledger_account: '1940' }] })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).toBe('1940')
+  })
+
+  it('debits the chosen account\'s ledger account', async () => {
+    enqueue({ data: { ledger_account: '1940', enabled: true } })
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1940')
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['id', CA_1],
+    ])
+  })
+
+  it('falls back to the primary when the chosen row is gone, disabled, or not a bank account', async () => {
+    enqueue({ data: null })
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
+    enqueue({ data: { ledger_account: '1940', enabled: false } })
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
     // Stripe clearing (1686) is cleared by the payout, never by a bank transfer.
     enqueue({ data: { ledger_account: '1686', enabled: true } })
-    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1930')
+    enqueue(primaryOn1931)
+    expect(await resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).toBe('1931')
+  })
+
+  it('a failed read throws: a retry is cheap, a verifikat on the wrong account is a storno', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 })).rejects.toMatchObject({
+      name: 'BookkeepingDatabaseError',
+    })
+    enqueue({ error: { message: 'boom' } })
+    await expect(resolveInvoiceSettlementAccount(supabase as never, 'company-1', { payment_cash_account_id: null })).rejects.toMatchObject({
+      name: 'BookkeepingDatabaseError',
+    })
+  })
+})
+
+// crm#1823: a company with one account for customer receipts and another for
+// expenses names the account a manual payment landed on.
+describe('resolveInvoicePaymentAccount', () => {
+  const ACCOUNTS = {
+    data: [
+      { ledger_account: '1930', enabled: true },
+      { ledger_account: '1931', enabled: true },
+      { ledger_account: '1935', enabled: true },
+      { ledger_account: '1940', enabled: false },
+      { ledger_account: '1686', enabled: true },
+    ],
+  }
+
+  it('without a named account answers exactly what resolveInvoiceSettlementAccount answers', async () => {
+    enqueue({ data: { id: 'ca-primary', ledger_account: '1935', enabled: true, currency: 'SEK' } })
+    expect(await resolveInvoicePaymentAccount(supabase as never, 'company-1', { payment_cash_account_id: null }, undefined))
+      .toEqual({ ok: true, account: '1935' })
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['is_primary', true],
+    ])
+    reset()
+    enqueue({ data: { ledger_account: '1940', enabled: true } })
+    expect(await resolveInvoicePaymentAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 }, null))
+      .toEqual({ ok: true, account: '1940' })
+  })
+
+  it('a named enabled cash account wins over the invoice payee and the primary', async () => {
+    enqueue(ACCOUNTS)
+    expect(await resolveInvoicePaymentAccount(supabase as never, 'company-1', { payment_cash_account_id: CA_1 }, '1931'))
+      .toEqual({ ok: true, account: '1931' })
+    // One read, scoped to the company: neither the payee row nor the primary is asked.
+    expect(findCalls('cash_accounts', 'eq')).toEqual([['company_id', 'company-1']])
+  })
+
+  it('refuses an account the company holds no cash account for, and lists the ones it can name', async () => {
+    enqueue(ACCOUNTS)
+    expect(await resolveInvoicePaymentAccount(supabase as never, 'company-1', {}, '1932')).toEqual({
+      ok: false,
+      code: 'INVOICE_PAID_PAYMENT_ACCOUNT_INVALID',
+      details: { payment_account: '1932', reason: 'not_found', available_payment_accounts: ['1930', '1931', '1935'] },
+    })
+  })
+
+  it('refuses a disabled account', async () => {
+    enqueue(ACCOUNTS)
+    expect(await resolveInvoicePaymentAccount(supabase as never, 'company-1', {}, '1940')).toMatchObject({
+      ok: false,
+      code: 'INVOICE_PAID_PAYMENT_ACCOUNT_INVALID',
+      details: { reason: 'disabled' },
+    })
+  })
+
+  it('refuses a PSP clearing account even when the company has one enabled', async () => {
+    enqueue(ACCOUNTS)
+    expect(await resolveInvoicePaymentAccount(supabase as never, 'company-1', {}, '1686')).toMatchObject({
+      ok: false,
+      details: { reason: 'not_cash_ledger', available_payment_accounts: ['1930', '1931', '1935'] },
+    })
+  })
+
+  it('a failed read throws instead of booking on a guess', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(resolveInvoicePaymentAccount(supabase as never, 'company-1', {}, '1931')).rejects.toMatchObject({
+      name: 'BookkeepingDatabaseError',
+    })
   })
 })

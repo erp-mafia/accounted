@@ -16,11 +16,26 @@
  * returns undefined: the same no-attribution default as a server call
  * outside a runWithActor() scope.
  */
+import { globalSingleton } from '@/lib/global-singleton'
+
 export interface CommitActor {
-  /** Matches the journal_entries.committed_actor_type CHECK constraint. */
-  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
+  /**
+   * Matches the journal_entries.committed_actor_type CHECK constraint.
+   * 'service_account': a key of a service account (lib/service-accounts),
+   * whose label is the account's name; the row's user_id is its sponsor, the
+   * person the account acts for.
+   */
+  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat' | 'service_account'
   /** Human-readable credential label, e.g. the API key name. */
   label?: string
+  /**
+   * The person the credential acts for: the signed-in user, the key's owner,
+   * a service account's sponsor, the approver of a pending operation. Absent
+   * for a cron run. The database records it as the actor of every write the
+   * scope makes through a service-role client (lib/supabase/actor-header.ts),
+   * where the transaction has no session to read the person from.
+   */
+  userId?: string
   /**
    * SEK ceiling on what this credential may commit WITHOUT human approval,
    * or null/undefined for no limit. Read from api_keys by
@@ -28,24 +43,61 @@ export interface CommitActor {
    * verifies which credential is acting, so the value is bound to a verified
    * key rather than asserted by the caller.
    *
-   * Only ever set for `type: 'api_key'`. Human approvals, cron and the
-   * cookie-session routes cannot reach the check that reads it.
+   * Only ever set for a key credential: `type: 'api_key'`, `'mcp_oauth'`,
+   * whose OAuth access token is itself a minted key, or `'service_account'`,
+   * a service account's key. Human approvals, cron
+   * and the cookie-session routes cannot reach the check that reads it.
    */
   unattendedCommitLimit?: number | null
+  /**
+   * The person booked without seeing the booking's review: a row's one
+   * click, the Inkorg's one click, a bulk booking. Such a commit is never
+   * stamped as reviewed, so a booking a booking review rule matches is
+   * refused (lib/bookkeeping/booking-review-commit.ts, accounted#130).
+   */
+  withoutReview?: true
 }
 
 export interface ActorStore {
   getStore(): CommitActor | undefined
 }
 
-let store: ActorStore | null = null
+// Per process, not per module copy (lib/global-singleton.ts): engine.ts may
+// run in a copy of this module whose graph never imported ./actor-context-node
+// (extension code, which lib/init loads from instrumentation.ts), and must
+// still see the storage a route bound.
+const binding = globalSingleton('commitActorStore', (): { store: ActorStore | null } => ({ store: null }))
 
 /** Bind the server-side AsyncLocalStorage. Called by ./actor-context-node. */
 export function bindActorStore(s: ActorStore): void {
-  store = s
+  binding.store = s
 }
 
 /** The actor for the current async execution scope, if any. */
 export function getActor(): CommitActor | undefined {
-  return store?.getStore()
+  return binding.store?.getStore()
+}
+
+/**
+ * The commit_method a commit records when its caller names none, read off
+ * WHO is committing. Derived at the commit doors, so a new booking path
+ * cannot leave HOW blank by forgetting to pass it. cron and system stay NULL:
+ * no journal_entries_commit_method_check value describes them, and
+ * committed_actor_type already says what they are.
+ */
+export function defaultCommitMethod(
+  actor: CommitActor | undefined
+): 'user_accept' | 'api_key' | 'agent' | null {
+  switch (actor?.type) {
+    case 'user':
+      return 'user_accept'
+    case 'api_key':
+    case 'mcp_oauth':
+    case 'service_account':
+      return 'api_key'
+    case 'agent_chat':
+      return 'agent'
+    default:
+      return null
+  }
 }

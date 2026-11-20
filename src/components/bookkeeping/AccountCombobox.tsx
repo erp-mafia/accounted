@@ -1,10 +1,16 @@
 'use client'
 
-import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
+import {
+  POPOVER_ENTER_CLASS,
+  POPOVER_ENTER_UP_CLASS,
+  POPOVER_SURFACE_CLASS,
+} from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
   buildAccountIndex,
@@ -12,18 +18,8 @@ import {
   type SearchableAccount,
   type AccountSearchItem,
 } from '@/lib/bookkeeping/account-search'
-import {
-  computeDropdownPosition,
-  isSameDropdownPosition,
-  type DropdownPosition,
-} from '@/components/bookkeeping/account-combobox-position'
+import { useAnchoredDropdown } from '@/components/bookkeeping/use-anchored-dropdown'
 import type { BASAccount } from '@/types'
-
-// Shared by every portaled panel instance: only stops propagation so the
-// browser's default scrolling still runs on the panel itself.
-function stopScrollPropagation(e: Event) {
-  e.stopPropagation()
-}
 
 interface AccountComboboxProps {
   value: string
@@ -63,19 +59,28 @@ interface AccountComboboxProps {
   // The dropdown also narrows to the row's width so it cannot overflow a
   // dialog. Default (false) keeps the boxed Input every existing caller uses.
   flat?: boolean
+  // Text shown while the field is empty. Hosts where empty means "use the
+  // default" show that default here instead of the search prompt.
+  placeholder?: string
+  // id of the <input>, for a host <Label htmlFor>.
+  id?: string
 }
 
-export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false, placeholder = 'Sök konto…', id }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const internalInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
-  // The portaled (non-flat) dropdown panel. It is not a DOM descendant of
-  // containerRef, so outside-click detection must check it separately.
-  const portalPanelRef = useRef<HTMLDivElement | null>(null)
-  const [dropdownPos, setDropdownPos] = useState<DropdownPosition | null>(null)
+  // The portaled (non-flat) dropdown panel, glued to the trigger. It is not a
+  // DOM descendant of containerRef, so outside-click detection must check it
+  // separately.
+  const {
+    pos: dropdownPos,
+    style: portalPanelStyle,
+    panelRef: portalPanelRef,
+    attachPanel: attachPortalPanel,
+  } = useAnchoredDropdown(containerRef, isOpen && !flat)
   const selectedNameId = useId()
   // Whether the user has typed or arrow-navigated since the field was focused.
   // Enter only selects the highlighted item after an actual interaction: a
@@ -131,98 +136,10 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   // Flat list for keyboard navigation
   const flatList = useMemo(() => filteredAccounts, [filteredAccounts])
 
-  // Reset highlight when filtered results change
-  useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filteredAccounts])
-
-  // Scroll highlighted item into view
-  useEffect(() => {
-    if (!isOpen || !listRef.current) return
-    const highlighted = listRef.current.querySelector('[data-highlighted="true"]')
-    if (highlighted) {
-      highlighted.scrollIntoView({ block: 'nearest' })
-    }
-  }, [highlightedIndex, isOpen])
-
-  // Keep the portaled (non-flat) dropdown glued to the trigger: measure off
-  // containerRef when it opens, and re-measure while anything scrolls or the
-  // window resizes underneath it. The capture-phase scroll listener also
-  // catches scrolling ancestors such as DialogContent's overflow-y-auto body.
-  const updateDropdownPosition = useCallback(() => {
-    if (flat || !containerRef.current) return
-    const rect = containerRef.current.getBoundingClientRect()
-    const next = computeDropdownPosition(
-      { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
-      { width: window.innerWidth, height: window.innerHeight },
-    )
-    // Bail out when nothing moved (e.g. scroll ticks that did not shift the
-    // anchor): returning the previous reference lets React skip the re-render.
-    setDropdownPos((prev) => (isSameDropdownPosition(prev, next) ? prev : next))
-  }, [flat])
-
-  useLayoutEffect(() => {
-    if (!isOpen || flat) return
-    updateDropdownPosition()
-    const handleScroll = (e: Event) => {
-      // Scrolling the portaled panel's own list never moves the anchor (the
-      // panel is position: fixed): repositioning on it would just churn state
-      // while the user scrolls the account list.
-      if (e.target instanceof Node && portalPanelRef.current?.contains(e.target)) return
-      updateDropdownPosition()
-    }
-    window.addEventListener('scroll', handleScroll, true)
-    window.addEventListener('resize', updateDropdownPosition)
-    return () => {
-      window.removeEventListener('scroll', handleScroll, true)
-      window.removeEventListener('resize', updateDropdownPosition)
-    }
-  }, [isOpen, flat, updateDropdownPosition])
-
-  // react-remove-scroll (active inside every modal dialog) preventDefaults
-  // wheel/touchmove events that reach document from outside the dialog's DOM
-  // tree, and the portaled panel lives outside that tree. Stopping the events
-  // at the panel lets the browser scroll it natively; overscroll-contain on
-  // the panel stops chained page scrolling at the list's edges.
-  const attachPortalPanel = useCallback((el: HTMLDivElement | null) => {
-    const prev = portalPanelRef.current
-    if (prev) {
-      prev.removeEventListener('wheel', stopScrollPropagation)
-      prev.removeEventListener('touchmove', stopScrollPropagation)
-    }
-    portalPanelRef.current = el
-    if (el) {
-      el.addEventListener('wheel', stopScrollPropagation)
-      el.addEventListener('touchmove', stopScrollPropagation)
-    }
-  }, [])
-
   const attachPortalListPanel = useCallback((el: HTMLDivElement | null) => {
     listRef.current = el
     attachPortalPanel(el)
   }, [attachPortalPanel])
-
-  // Close dropdown when clicking/tapping outside
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      const target = e.target as Node
-      // The non-flat dropdown is portaled to document.body, so it is not a
-      // DOM descendant of containerRef: check the portaled panel too.
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(target) &&
-        !(portalPanelRef.current && portalPanelRef.current.contains(target))
-      ) {
-        setIsOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
 
   const selectAccount = useCallback(
     (accountNumber: string) => {
@@ -234,52 +151,57 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     [onChange, onCommit]
   )
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        hasInteractedRef.current = true
-        setIsOpen(true)
-        e.preventDefault()
-      } else if (e.key === 'Enter' && /^\d{4}$/.test(search)) {
-        // Dropdown closed but a full account number sits in the field: treat
-        // Enter as a re-commit so focus advances to the amount field.
-        e.preventDefault()
-        onCommit?.(search)
+  const close = useCallback(() => setIsOpen(false), [])
+  // The non-flat dropdown is portaled to document.body, so it is not a DOM
+  // descendant of containerRef: a press inside the panel is inside too.
+  const insideRefs = useMemo(() => [containerRef, portalPanelRef], [])
+  const navigation = useComboboxNavigation({
+    count: flatList.length,
+    isOpen,
+    open: () => {
+      hasInteractedRef.current = true
+      setIsOpen(true)
+    },
+    close,
+    activate: (index) => {
+      if (hasInteractedRef.current && flatList[index]) {
+        selectAccount(flatList[index].account_number)
+        return
       }
+      if (/^\d{4}$/.test(search)) {
+        // Committed number, no new interaction: advance without re-selecting.
+        setIsOpen(false)
+        onCommit?.(search)
+        return
+      }
+      // Nothing actively chosen: close the list and let the event bubble so
+      // the host form decides (the verifikat form opens the review from an
+      // empty row's empty account field).
+      setIsOpen(false)
+      return false
+    },
+    onNavigate: () => {
+      hasInteractedRef.current = true
+    },
+    listRef,
+    insideRefs,
+  })
+  const { highlightedIndex, setHighlightedIndex } = navigation
+
+  // Reset highlight when filtered results change
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [filteredAccounts, setHighlightedIndex])
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isOpen && e.key === 'Enter' && /^\d{4}$/.test(search)) {
+      // Dropdown closed but a full account number sits in the field: treat
+      // Enter as a re-commit so focus advances to the amount field.
+      e.preventDefault()
+      onCommit?.(search)
       return
     }
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.min(prev + 1, flatList.length - 1))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0))
-        break
-      case 'Enter':
-        if (hasInteractedRef.current && flatList[highlightedIndex]) {
-          e.preventDefault()
-          selectAccount(flatList[highlightedIndex].account_number)
-        } else if (/^\d{4}$/.test(search)) {
-          // Committed number, no new interaction: advance without re-selecting.
-          e.preventDefault()
-          setIsOpen(false)
-          onCommit?.(search)
-        } else {
-          // Nothing actively chosen: close the list and let the event bubble
-          // so the form-level Enter (open review when balanced) can take over.
-          setIsOpen(false)
-        }
-        break
-      case 'Escape':
-        e.preventDefault()
-        setIsOpen(false)
-        break
-    }
+    navigation.handleKeyDown(e)
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -349,16 +271,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   // TooltipContent, extended to this dropdown).
   const flatListWidthClass = 'w-full min-w-0'
 
-  const portalPanelStyle: React.CSSProperties | undefined = dropdownPos
-    ? {
-        left: dropdownPos.left,
-        width: dropdownPos.width,
-        maxHeight: dropdownPos.maxHeight,
-        ...(dropdownPos.top !== undefined
-          ? { top: dropdownPos.top }
-          : { bottom: dropdownPos.bottom }),
-      }
-    : undefined
+  // A portal panel flips above the input when there is no room below.
+  const portalEnterClass =
+    dropdownPos?.top !== undefined ? POPOVER_ENTER_CLASS : POPOVER_ENTER_UP_CLASS
 
   // data-dialog-companion: DialogContent/SheetContent treat a pointerdown
   // inside a node carrying this attribute as an inside interaction, so
@@ -377,7 +292,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
             type="button"
             data-highlighted={isHighlighted}
             className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-baseline gap-2 ${
-              isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+              isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
             }`}
             onMouseDown={(e) => {
               e.preventDefault()
@@ -390,7 +305,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
             </span>
             <span className="flex-1 min-w-0 break-words">{item.account_name}</span>
             {!item.isActive && (
-              <span className="shrink-0 self-center text-[11px] text-muted-foreground whitespace-nowrap">
+              <span className="shrink-0 self-center text-xs text-muted-foreground whitespace-nowrap">
                 {notActivatedLabel}
               </span>
             )}
@@ -417,14 +332,14 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       {onCreateAccount && (
         <button
           type="button"
-          className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+          className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-secondary/60"
           onMouseDown={(e) => {
             e.preventDefault()
             setIsOpen(false)
             onCreateAccount(search.trim())
           }}
         >
-          <Plus className="h-3.5 w-3.5 shrink-0" />
+          <PlusIcon className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">Skapa konto &quot;{search.trim()}&quot;</span>
         </button>
       )}
@@ -432,13 +347,14 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   )
 
   const triggerProps = {
+    id,
     ref: setInputRef,
     value: search,
     onChange: handleInputChange,
     onFocus: handleFocus,
     onBlur: handleBlur,
     onKeyDown: handleKeyDown,
-    placeholder: 'Sök konto…',
+    placeholder,
     autoComplete: 'off',
     disabled,
     'aria-describedby': showSelectedName ? selectedNameId : undefined,
@@ -468,7 +384,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
         <div
           ref={listRef}
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md',
+            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto',
+            POPOVER_SURFACE_CLASS,
+            POPOVER_ENTER_CLASS,
             flatListWidthClass,
           )}
         >
@@ -480,7 +398,11 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           <div
             ref={attachPortalListPanel}
             data-dialog-companion=""
-            className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card shadow-md"
+            className={cn(
+              'fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto',
+              POPOVER_SURFACE_CLASS,
+              portalEnterClass,
+            )}
             style={portalPanelStyle}
           >
             {listPanelContent}
@@ -493,7 +415,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       {isOpen && !disabled && search.trim() && flatList.length === 0 && (flat ? (
         <div
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 rounded-lg border border-input bg-card shadow-md p-3',
+            'absolute z-50 top-full left-0 mt-1 p-3',
+            POPOVER_SURFACE_CLASS,
+            POPOVER_ENTER_CLASS,
             flatListWidthClass,
           )}
         >
@@ -505,7 +429,11 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           <div
             ref={attachPortalPanel}
             data-dialog-companion=""
-            className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card p-3 shadow-md"
+            className={cn(
+              'fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto p-3',
+              POPOVER_SURFACE_CLASS,
+              portalEnterClass,
+            )}
             style={portalPanelStyle}
           >
             {emptyPanelContent}

@@ -88,7 +88,8 @@ const apLines = (amount: number): PostedJournalEntryLine[] => [
   { accountNumber: '1930', debitAmount: 0, creditAmount: amount },
 ]
 
-function seedVoucher(company: Seeded, lines: PostedJournalEntryLine[], sourceType = 'bank_transaction') {
+// These existing vouchers have no source bank transaction in the fixture.
+function seedVoucher(company: Seeded, lines: PostedJournalEntryLine[], sourceType = 'manual') {
   return insertPostedJournalEntry({
     userId: company.userId,
     companyId: company.companyId,
@@ -106,6 +107,8 @@ interface RpcAnswer {
   code?: string
   payment_amount?: number
   settlement_side?: string
+  voucher_remaining?: number
+  details?: Record<string, unknown>
 }
 
 /**
@@ -167,6 +170,75 @@ async function askAllThree(
   return { ...rpc, offered: wasOffered }
 }
 
+/**
+ * The same three, for a verifikat that pays several debts (GitHub issue 3490):
+ * the matcher is asked the way the dialog and the MCP tool ask it
+ * (includeShared), and the share it names (`link_amount`) is what the
+ * validator stages and the RPC commits. `amount` overrides that share, to ask
+ * all three about one the matcher would not name.
+ */
+async function askAllThreeForAShare(
+  company: Seeded,
+  invoiceId: string,
+  voucherId: string,
+  amount?: number,
+): Promise<RpcAnswer & { offered: boolean; linkAmount: number | undefined }> {
+  const { data: invoice, error } = await client
+    .from('supplier_invoices')
+    .select(CALLER_PROJECTION)
+    .eq('id', invoiceId)
+    .eq('company_id', company.companyId)
+    .single()
+  expect(error).toBeNull()
+  const asCallerSeesIt = invoice as unknown as SupplierInvoice & { supplier?: Supplier }
+
+  const offered = await findMatchingVouchersForSupplierInvoice(client, company.companyId, asCallerSeesIt, {
+    includeShared: true,
+  })
+  const candidate = offered.find((c) => c.journal_entry_id === voucherId)
+  const share = amount ?? candidate?.link_amount
+  expect(share, 'no share to state: pass one, or the matcher must name it').toBeDefined()
+
+  const validation = await validateVoucherForSupplierInvoiceLink(
+    client,
+    company.companyId,
+    asCallerSeesIt,
+    voucherId,
+    share,
+  )
+
+  // The six-argument call, by name, through PostgREST.
+  const { data, error: rpcError } = await client.rpc('link_supplier_invoice_to_voucher', {
+    p_supplier_invoice_id: invoiceId,
+    p_journal_entry_id: voucherId,
+    p_user_id: company.userId,
+    p_company_id: company.companyId,
+    p_notes: null,
+    p_amount: share,
+  })
+  expect(rpcError).toBeNull()
+  const rpc = data as RpcAnswer
+
+  // Staged == committed.
+  expect(validation.ok).toBe(rpc.ok)
+  if (validation.ok) {
+    expect(validation.paymentAmount).toBe(rpc.payment_amount)
+    expect(validation.settlementSide).toBe(rpc.settlement_side)
+    expect(validation.voucherRemainingAfter).toBe(rpc.voucher_remaining)
+  } else {
+    expect(validation.code).toBe(rpc.code)
+    expect(validation.details).toEqual(rpc.details)
+  }
+
+  // Offered with a share => that share commits.
+  if (candidate?.link_amount !== undefined && amount === undefined) {
+    expect(rpc.ok).toBe(true)
+    expect(rpc.payment_amount).toBe(candidate.link_amount)
+  }
+
+  return { ...rpc, offered: candidate !== undefined, linkAmount: candidate?.link_amount }
+}
+
 describe('supplier voucher link: matcher, validator and RPC give one answer', () => {
   it('kontantmetoden, bank-first verifikat: offered, staged and committed on the 19xx credit', async () => {
     const company = await seedCompanyWithMethod('cash')
@@ -188,13 +260,15 @@ describe('supplier voucher link: matcher, validator and RPC give one answer', ()
     expect(answer).toMatchObject({ ok: false, code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED', offered: false })
   })
 
-  it('kontantmetoden: a payout larger than the remainder, and a verifikat with no 19xx credit', async () => {
+  it('kontantmetoden: a payout larger than the remainder, and a verifikat with no payment credit', async () => {
     const company = await seedCompanyWithMethod('cash')
     const invoiceId = await seedInvoice(company, 1250)
     const tooLarge = await seedVoucher(company, cashLines(5000))
+    // A credit on 2440 is no payment under kontantmetoden. (A purchase the
+    // owner paid privately, credit 2018 or 2893, links since crm#1817.)
     const noBank = await seedVoucher(company, [
       { accountNumber: '4010', debitAmount: 1250, creditAmount: 0 },
-      { accountNumber: '2893', debitAmount: 0, creditAmount: 1250 },
+      { accountNumber: '2440', debitAmount: 0, creditAmount: 1250 },
     ])
 
     expect((await askAllThree(company, invoiceId, tooLarge)).code).toBe('LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING')
@@ -218,6 +292,81 @@ describe('supplier voucher link: matcher, validator and RPC give one answer', ()
     expect((await askAllThree(company, invoiceId, costAgain)).code).toBe('LINK_SI_VOUCHER_NO_AP_DEBIT')
     const answer = await askAllThree(company, invoiceId, payment)
     expect(answer).toMatchObject({ ok: true, settlement_side: 'ap_debit', offered: true })
+  })
+
+  it('faktureringsmetoden: one verifikat that pays an old debt and a new invoice', async () => {
+    const company = await seedCompanyWithMethod('accrual')
+    const invoiceId = await seedInvoice(company, 1250)
+    // 5 250 kr left the bank: 4 000 kr of it for a debt with no invoice here.
+    const payment = await seedVoucher(company, apLines(5250))
+
+    // Without a stated share: not offered where nobody picks, and refused by
+    // the validator and the RPC alike (the five-argument call, by name).
+    const withoutShare = await askAllThree(company, invoiceId, payment)
+    expect(withoutShare).toMatchObject({
+      ok: false, code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING', offered: false,
+    })
+
+    // Where a person picks it is offered with the share to state, and that
+    // share is what stages and commits.
+    const answer = await askAllThreeForAShare(company, invoiceId, payment)
+    expect(answer).toMatchObject({
+      ok: true,
+      settlement_side: 'ap_debit',
+      payment_amount: 1250,
+      voucher_remaining: 4000,
+      offered: true,
+      linkAmount: 1250,
+    })
+
+    // The old invoice is registered afterwards: what the verifikat has left is
+    // exactly it, so it is an ordinary amount match with no share to state.
+    const old = await seedInvoice(company, 4000)
+    const rest = await askAllThree(company, old, payment)
+    expect(rest).toMatchObject({ ok: true, settlement_side: 'ap_debit', payment_amount: 4000, offered: true })
+
+    // And now the verifikat is spent, for all three.
+    const third = await seedInvoice(company, 1250)
+    expect(await askAllThree(company, third, payment)).toMatchObject({
+      ok: false, code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED', offered: false,
+    })
+  })
+
+  it('a share the verifikat or the invoice cannot carry is refused alike, with the same details', async () => {
+    const company = await seedCompanyWithMethod('accrual')
+    const first = await seedInvoice(company, 4500)
+    const invoiceId = await seedInvoice(company, 1250)
+    const payment = await seedVoucher(company, apLines(5250))
+    expect((await askAllThreeForAShare(company, first, payment, 4500)).ok).toBe(true)
+
+    expect(await askAllThreeForAShare(company, invoiceId, payment, 1250)).toMatchObject({
+      ok: false,
+      code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
+      details: { amount: 1250, available: 750, ap_debit: 5250, already_linked: 4500 },
+    })
+    expect(await askAllThreeForAShare(company, invoiceId, payment, 1300)).toMatchObject({
+      ok: false,
+      code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+      details: { amount: 1300, remaining: 1250 },
+    })
+    // What is left fits: a part payment of the invoice.
+    expect(await askAllThreeForAShare(company, invoiceId, payment, 750)).toMatchObject({
+      ok: true, payment_amount: 750, voucher_remaining: 0,
+    })
+  })
+
+  it('kontantmetoden: a share of one payout is staged and committed on the 19xx credit', async () => {
+    const company = await seedCompanyWithMethod('cash')
+    const invoiceId = await seedInvoice(company, 1250)
+    const payout = await seedVoucher(company, cashLines(5250))
+
+    // The 19xx search is banded around the invoice amount (every payout
+    // credits 19xx), so the matcher does not offer the larger payout; the
+    // share is stated by the caller, and validator and RPC agree on it.
+    const answer = await askAllThreeForAShare(company, invoiceId, payout, 1250)
+    expect(answer).toMatchObject({
+      ok: true, settlement_side: 'bank_credit', payment_amount: 1250, voucher_remaining: 4000, offered: false,
+    })
   })
 
   it('faktureringsmetoden: unchanged, Dr cost / Cr 1930 is refused and Dr 2440 / Cr 1930 links', async () => {

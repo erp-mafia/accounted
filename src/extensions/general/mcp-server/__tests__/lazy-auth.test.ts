@@ -34,6 +34,7 @@ vi.mock('../skills', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../skills')>()
   return {
     ...actual,
+    findSkill: vi.fn().mockResolvedValue({ slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Private', summary: 'Company instructions', body: 'Private workflow', tier: 'own', tags: ['own'] }),
     loadAllSkills: vi.fn().mockResolvedValue([
       {
         slug: 'month-end-close',
@@ -49,6 +50,9 @@ vi.mock('../skills', async (importOriginal) => {
 })
 
 import { handleMcpRequest } from '../server'
+import { findSkill } from '../skills'
+import { CONNECT_TRIGGER_TOOL } from '../server-instructions'
+import { isPublicTool } from '../public-tools'
 
 const ENDPOINT = 'http://localhost:3000/api/extensions/ext/mcp-server/mcp'
 
@@ -89,6 +93,33 @@ describe('MCP lazy authentication', () => {
     expect(body.result.instructions).toContain('NOT CONNECTED YET')
     expect(body.result.instructions).toContain('gnubok_search_tools')
     expect(mocks.validateApiKey).not.toHaveBeenCalled()
+  })
+
+  it('assigns a session id at initialize, a new one per connection, and keeps a client\'s own', async () => {
+    const first = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
+    const second = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
+    const a = first.headers.get('Mcp-Session-Id')
+    const b = second.headers.get('Mcp-Session-Id')
+    expect(a).toMatch(/^[A-Za-z0-9_-]{1,128}$/)
+    expect(b).toMatch(/^[A-Za-z0-9_-]{1,128}$/)
+    expect(a).not.toBe(b)
+
+    const own = await handleMcpRequest(new Request(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'clients-own-session' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'initialize', params: { protocolVersion: '2025-06-18' } }),
+    }))
+    expect(own.status).toBe(200)
+    expect(own.headers.get('Mcp-Session-Id')).toBeNull()
+  })
+
+  it('never refuses a session id it does not know: the server keeps no sessions', async () => {
+    const response = await handleMcpRequest(new Request(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'from-a-server-instance-that-is-gone' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list' }),
+    }))
+    expect(response.status).toBe(200)
   })
 
   it('the discovery instructions explain every callable_via value, and no longer say the bridge refuses writes', async () => {
@@ -166,6 +197,56 @@ describe('MCP lazy authentication', () => {
     expect(response.headers.get('WWW-Authenticate')).toMatch(
       /^Bearer resource_metadata="http:\/\/localhost:3000\/\.well-known\/oauth-protected-resource"$/
     )
+  })
+
+  // The anonymous initialize tells an agent to make this call to start sign-in
+  // for an existing account; it only works while the call is challenged.
+  it.each([CONNECT_TRIGGER_TOOL, CONNECT_TRIGGER_TOOL.replace(/^gnubok_/, 'accounted_')])(
+    'challenges %s, the call the anonymous instructions name to connect an existing account',
+    async (name) => {
+      const init = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
+      expect((await init.json()).result.instructions).toContain(`call ${CONNECT_TRIGGER_TOOL} with no arguments`)
+      expect(isPublicTool(CONNECT_TRIGGER_TOOL)).toBe(false)
+      const response = await handleMcpRequest(rpc('tools/call', { name, arguments: {} }))
+      expect(response.status).toBe(401)
+      expect(response.headers.get('WWW-Authenticate')).toContain('resource_metadata')
+    }
+  )
+
+  it.each([
+    ['gnubok_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    ['accounted_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    // A literal \u escape is decoded before the tool runs, so it is checked decoded.
+    ['gnubok_load_skill', { slug: '\\u006fwn/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    ['gnubok_get_task', { kind: 'bookkeep' }],
+    ['accounted_get_task', { kind: 'bookkeep' }],
+  ])('requires a tenant before calling %s', async (name, args) => {
+    const response = await handleMcpRequest(rpc('tools/call', { name, arguments: args }))
+    expect(response.status).toBe(401)
+    expect(response.headers.get('WWW-Authenticate')).toContain('resource_metadata')
+  })
+
+  it.each([
+    ['gnubok_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', _keyScopes: ['agent:read'] }],
+    ['gnubok_load_skill', { slug: '\\u006fwn/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    ['gnubok_load_skill', { slug: ' \\u006F\\u0077n/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    ['gnubok_get_task', { kind: 'bookkeep' }],
+  ])('requires agent:read for %s even from a valid key', async (name, args) => {
+    const response = await handleMcpRequest(rpc('tools/call', { name, arguments: args }, { token: 'test-token' }))
+    const result = (await response.json()).result
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('agent:read')
+    expect(findSkill).not.toHaveBeenCalled()
+  })
+
+  it('loads private instructions through an authorized tenant key', async () => {
+    mocks.validateApiKey.mockResolvedValue({ userId: 'user-1', companyId: '11111111-1111-4111-8111-111111111111', scopes: ['agent:read'], apiKeyId: 'key-1', apiKeyName: 'Test key', mode: 'live' })
+    const slug = 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const response = await handleMcpRequest(rpc('tools/call', { name: 'accounted_load_skill', arguments: { slug } }, { token: 'test-token' }))
+    const result = (await response.json()).result
+    expect(result.isError).not.toBe(true)
+    expect(result.content[0].text).toContain('Private workflow')
+    expect(findSkill).toHaveBeenCalledWith(slug, expect.anything(), '11111111-1111-4111-8111-111111111111')
   })
 
   it('names the metadata document on the host the client called', async () => {
@@ -255,5 +336,73 @@ describe('MCP lazy authentication', () => {
     mocks.validateApiKey.mockResolvedValueOnce({ error: 'Invalid API key', status: 401 })
     const response = await handleMcpRequest(rpc('tools/list', undefined, { token: 'gnubok_sk_bad' }))
     expect(response.status).toBe(401)
+  })
+
+  it.each(['tools/list', 'initialize'])(
+    'answers %s with a revoked key by the re-auth challenge, never the anonymous catalog (crm#1043)',
+    async (method) => {
+      // A revoked grant (reuse detection, disconnect) must make the client
+      // reconnect. Serving the anonymous catalog instead would look like a
+      // working connection whose tools all fail; the 401 naming the resource
+      // metadata, with RFC 6750 invalid_token, is what clients turn into a
+      // reconnect prompt.
+      mocks.validateApiKey.mockResolvedValueOnce({ error: 'Invalid API key', status: 401 })
+      const response = await handleMcpRequest(
+        rpc(method, method === 'initialize' ? { protocolVersion: '2025-06-18' } : undefined, {
+          token: 'gnubok_sk_revoked',
+        })
+      )
+      expect(response.status).toBe(401)
+      expect(response.headers.get('WWW-Authenticate')).toBe(
+        'Bearer resource_metadata="http://localhost:3000/.well-known/oauth-protected-resource", ' +
+          'error="invalid_token", error_description="The access token is revoked, expired or unknown"'
+      )
+      expect(mocks.checkRateLimit).not.toHaveBeenCalled()
+    }
+  )
+
+  it('keeps the tokenless challenge free of an error code (RFC 6750 3.1)', async () => {
+    const response = await handleMcpRequest(
+      rpc('tools/call', { name: 'gnubok_list_companies', arguments: {} })
+    )
+    expect(response.status).toBe(401)
+    expect(response.headers.get('WWW-Authenticate')).not.toContain('error=')
+  })
+
+  it("answers a suspended service account's key with the structured 403 v1 gives, not the 401 challenge", async () => {
+    mocks.validateApiKey.mockResolvedValueOnce({
+      error: 'Service account suspended: its sponsor is no longer an owner or admin of the company',
+      status: 403,
+      code: 'SERVICE_ACCOUNT_SUSPENDED',
+    })
+    const response = await handleMcpRequest(
+      rpc('tools/call', { name: 'gnubok_list_companies', arguments: {} }, { token: 'gnubok_sk_suspended' })
+    )
+    expect(response.status).toBe(403)
+    // No sign-in challenge: signing in again cannot lift a suspension.
+    expect(response.headers.get('WWW-Authenticate')).toBeNull()
+    const body = await response.json()
+    expect(body.error).toMatchObject({ code: 'SERVICE_ACCOUNT_SUSPENDED', message: expect.any(String), message_en: expect.any(String) })
+    expect(body.error.message_en).toContain('suspended')
+  })
+
+  it("answers a paused agent's key with the structured 403 AGENT_PAUSED, not the 401 challenge", async () => {
+    mocks.validateApiKey.mockResolvedValueOnce({
+      error: 'Agent paused: the person responsible for it can resume it under Settings in Accounted',
+      status: 403,
+      code: 'AGENT_PAUSED',
+    })
+    const response = await handleMcpRequest(
+      rpc('tools/call', { name: 'gnubok_list_companies', arguments: {} }, { token: 'gnubok_sk_paused' })
+    )
+    expect(response.status).toBe(403)
+    // No sign-in challenge: a reconnect lands on the same paused agent.
+    expect(response.headers.get('WWW-Authenticate')).toBeNull()
+    const body = await response.json()
+    expect(body.error).toMatchObject({
+      code: 'AGENT_PAUSED',
+      message: 'Den här agenten är pausad i Accounted. Den som ansvarar för den kan återuppta den under Inställningar.',
+      message_en: expect.stringContaining('paused'),
+    })
   })
 })

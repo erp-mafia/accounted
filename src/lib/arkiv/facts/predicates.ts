@@ -1,6 +1,5 @@
 /**
- * The controlled vocabulary of company facts (dev_docs/arkiv_plan.md,
- * phase 5). A predicate names one thing that is true about the company, an
+ * The controlled vocabulary of company facts. A predicate names one thing that is true about the company, an
  * agreement or a party; free-text predicates never exist. FIELD_PREDICATES
  * says which settled field of which extraction schema feeds which predicate,
  * and which field dates the start of its validity.

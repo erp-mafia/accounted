@@ -13,6 +13,8 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { ArsredovisningPDF } from '../arsredovisning-pdf'
 import { ArsredovisningK3PDF } from '../arsredovisning-k3-pdf'
 import type { ArsredovisningData } from '../types'
+import { draftPateckningNote, eSigningPateckningNote } from '../signatures-pdf'
+import { revisorspateckningLagrum } from '@/lib/company/entity-type'
 import { pdfTextStrings } from '@/tests/pdf-text'
 
 const RENDER_TIMEOUT = 30_000
@@ -26,7 +28,7 @@ function makeLossYearData(framework: 'k2' | 'k3'): ArsredovisningData {
       name: 'Testbolaget AB',
       org_number: '556677-8899',
       entity_type: 'aktiebolag',
-      city: 'Stockholm',
+      registered_office: 'Stockholm',
     },
     fiscal_period: {
       id: 'fp1',
@@ -59,6 +61,7 @@ function makeLossYearData(framework: 'k2' | 'k3'): ArsredovisningData {
         carried_forward: -4684,
       },
       agm_date: '2026-06-15',
+      member_disclosures: null,
       agm_disposition_outcome: 'proposal_approved',
       agm_disposition_decision: null,
     },
@@ -117,6 +120,10 @@ function makeLossYearData(framework: 'k2' | 'k3'): ArsredovisningData {
       parent_company_org_number: null,
       parent_company_city: null,
       medelantal_anstallda_override: null,
+      member_count_change: null,
+      insatser_repayable_next_year: null,
+      forlagsinsatser_dividend_right: null,
+      forlagsinsatser_redeemable_two_years: null,
       omit_kassaflodesanalys: false,
       kassaflodesanalys_omission_confirmed: false,
       confirmations: {
@@ -152,3 +159,116 @@ describe('årsredovisning PDF keeps the sign of a loss (issue #1982)', () => {
     expectSignedLoss(pdfTextStrings(buffer))
   }, RENDER_TIMEOUT)
 })
+
+/**
+ * crm#1887: the amounts kept their sign, but a text someone typed did not. An
+ * agent wrote the loss in the resultatdisposition with U+2212, the way sv-SE
+ * formats it, and the PDF printed the amount unsigned next to a table that
+ * showed it negative.
+ */
+describe('årsredovisning PDF keeps a minus sign typed into its texts (crm#1887)', () => {
+  const MINUS = String.fromCharCode(0x2212)
+  // The sv-SE thousands separator; pdfTextStrings gives it back as a space.
+  const NBSP = String.fromCharCode(0x00a0)
+  const typed = (thousands: number, rest: string) => `${MINUS}${thousands}${NBSP}${rest}`
+
+  // Short texts, so no line wraps inside what the assertions read.
+  function typedWithUnicodeMinus(framework: 'k2' | 'k3'): ArsredovisningData {
+    const data = makeLossYearData(framework)
+    return {
+      ...data,
+      forvaltningsberattelse: {
+        ...data.forvaltningsberattelse,
+        description: `Resultatet blev ${typed(7, '301')} kr.`,
+        important_events: `Kursförlust ${typed(7, '302')} kr.`,
+        resultatdisposition: `Förlusten ${typed(7, '303')} kr balanseras.`,
+      },
+      noter: [{ number: 1, title: 'Resultat', body: `Årets resultat ${typed(7, '304')} kr.` }],
+    }
+  }
+
+  it.each(['k2', 'k3'] as const)('%s: förvaltningsberättelse, resultatdisposition and notes print the sign', async (framework) => {
+    const render = framework === 'k2' ? ArsredovisningPDF : ArsredovisningK3PDF
+    const text = pdfTextStrings(await renderToBuffer(render({ data: typedWithUnicodeMinus(framework), mode: 'signing' }))).join('\n')
+    expect(text).toContain('-7 301')
+    expect(text).toContain('-7 302')
+    // Twice: the proposal, and the stämma's decision quoting it in the intyg.
+    expect(text.split('-7 303').length - 1).toBe(2)
+    expect(text).toContain('-7 304')
+    expect(text).not.toContain(UNMAPPED)
+  }, RENDER_TIMEOUT)
+
+  it('the same texts lose the sign without the fix: the unmapped byte is what U+2212 becomes', async () => {
+    // Guards the test itself: Helvetica really has no glyph for U+2212, so
+    // the assertions above cannot pass by accident.
+    const { Document, Page, Text } = await import('@react-pdf/renderer')
+    const { createElement } = await import('react')
+    const doc = createElement(Document, null, createElement(Page, { size: 'A4' }, createElement(Text, null, typed(7, '305'))))
+    const text = pdfTextStrings(await renderToBuffer(doc)).join('\n')
+    expect(text).toContain(UNMAPPED)
+    expect(text).not.toContain('-7 305')
+  }, RENDER_TIMEOUT)
+})
+
+/**
+ * The revisorspåteckning (ABL 9 kap. 28 §): the revisor's slot prints below
+ * the board's signatures as the hänvisning to the revisionsberättelse, never
+ * as one of the board's signatures.
+ */
+describe('the revisorspåteckning on the Underskrifter page', () => {
+  function audited(framework: 'k2' | 'k3'): ArsredovisningData {
+    return {
+      ...makeLossYearData(framework),
+      signatures: [
+        { role: 'Styrelseledamot', name: 'Karl Karlsson', signed_at: '2026-02-20T10:00:00Z' },
+        { role: 'Huvudansvarig revisor', name: 'Rita Revisor', signed_at: '2026-02-24T10:00:00Z' },
+      ],
+      auditor_pateckning: { required: true, firm_name: 'Revisionsbyran AB', opinion: 'avstyrkt_br' },
+    }
+  }
+
+  it.each(['k2', 'k3'] as const)('%s: prints the dated påteckning, the sentence and the firm on the signing copy', async (framework) => {
+    const render = framework === 'k2' ? ArsredovisningPDF : ArsredovisningK3PDF
+    const text = pdfTextStrings(await renderToBuffer(render({ data: audited(framework), mode: 'signing' }))).join('\n')
+    expect(text).toContain('Vår revisionsber')
+    expect(text).toContain('2026-02-24')
+    expect(text).toContain('avstyrkt att balansr')
+    expect(text).toContain('Revisionsbyran AB')
+    expect(text).toContain('Huvudansvarig revisor')
+    // The board's datering is the board's signature, not the revisor's.
+    expect(text).toContain('2026-02-20')
+  }, RENDER_TIMEOUT)
+
+  // The påteckning's provision is the form's own: ABL for an aktiebolag,
+  // lagen om ekonomiska föreningar for a förening, none where no statute has
+  // the revisor make one.
+  it.each([
+    ['aktiebolag', 'ABL 9 kap. 28 §'],
+    ['ekonomisk_forening', '8 kap. 32 § lagen om ekonomiska föreningar'],
+  ] as const)('cites the påteckning provision of the form (%s)', (form, lagrum) => {
+    expect(revisorspateckningLagrum(form)).toBe(lagrum)
+    expect(draftPateckningNote(revisorspateckningLagrum(form))).toContain(`(${lagrum})`)
+    expect(eSigningPateckningNote(revisorspateckningLagrum(form))).toContain(`(${lagrum})`)
+  })
+
+  it.each(['enskild_firma', 'ideell_forening'] as const)('cites no provision for a form without one (%s)', (form) => {
+    expect(revisorspateckningLagrum(form)).toBeNull()
+    expect(draftPateckningNote(null)).not.toContain('§')
+    expect(eSigningPateckningNote(null)).not.toContain('§')
+  })
+
+  it('prints the förening\'s own provision on its draft, never ABL', async () => {
+    const data = audited('k2')
+    data.company = { ...data.company, name: 'Testföreningen ek. för.', entity_type: 'ekonomisk_forening' }
+    const text = pdfTextStrings(await renderToBuffer(ArsredovisningPDF({ data, mode: 'draft' }))).join('\n')
+    expect(text).toContain('8 kap. 32')
+    expect(text).toContain('ekonomiska f')
+    expect(text).not.toContain('ABL')
+  }, RENDER_TIMEOUT)
+
+  it('prints nothing for a company without revisor', async () => {
+    const text = pdfTextStrings(await renderToBuffer(ArsredovisningPDF({ data: makeLossYearData('k2'), mode: 'signing' }))).join('\n')
+    expect(text).not.toContain('Revisorsp')
+  }, RENDER_TIMEOUT)
+})
+

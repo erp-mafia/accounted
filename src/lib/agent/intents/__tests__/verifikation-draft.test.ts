@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { verifikationDraft } from '../verifikation-draft'
+import { svMenuPath } from '../../ask/__tests__/ui-fixture'
 
 // verifikation.draft is the assistant entry point on the manual bookkeeping
 // surfaces (Bokföring → "Skapa med assistent", the Ny verifikat-dialog handoff,
@@ -254,6 +255,10 @@ describe('verifikation.draft period lock gate', () => {
 
     expect(captured.period_status?.status).toBe('locked')
     expect(prompt).toContain('PERIODEN ÄR LÅST')
+    // Where to unlock, by the settings rail's real paths: the prompt used to
+    // say "Bokföring → Räkenskapsår", a path no menu has.
+    expect(prompt).toContain(svMenuPath('/settings/fiscal-years'))
+    expect(prompt).toContain(svMenuPath('/settings/bookkeeping'))
   })
 
   it('refuses a date behind the company-wide lock date', async () => {
@@ -276,6 +281,11 @@ describe('verifikation.draft period lock gate', () => {
     // A closed period cannot be unlocked (period-service rejects it), so the
     // agent must not send the user to Räkenskapsår to try.
     expect(prompt).not.toContain('låsa upp perioden')
+    // Both lawful ways on (crm#1290): the owner reopens a year whose
+    // årsredovisning has no legal weight, otherwise a rättelse in the open year.
+    expect(prompt).toContain('årsredovisningen för året är undertecknad, fastställd eller inskickad')
+    expect(prompt).toContain(`företagets ägare kan öppna året igen under ${svMenuPath('/settings/fiscal-years')}`)
+    expect(prompt).toContain('rättelse i det öppna räkenskapsåret')
   })
 
   it('fails closed when the lock lookup errors', async () => {

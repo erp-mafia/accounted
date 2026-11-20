@@ -47,6 +47,7 @@ describe('gnubok_get_employee', () => {
     last_name: 'Andersson',
     personnummer: SAMPLE_PERSONNUMMER,
     employment_type: 'employee',
+    personnel_category: 'arbetare',
     employment_start: '2024-01-15',
     employment_end: null,
     employment_degree: 100,
@@ -87,10 +88,22 @@ describe('gnubok_get_employee', () => {
     expect(result.personnummer_masked).toBe('19000101-XXXX')
     expect((result.tax as Record<string, unknown>).jamkning_percentage).toBe(15)
     expect((result.vacation as Record<string, unknown>).vacation_days_saved).toBe(3)
+    expect((result.employment as Record<string, unknown>).personnel_category).toBe('arbetare')
     // Raw personnummer never leaks anywhere in the payload, and there is no
     // bare `id` key (qualified ids only).
     expect(JSON.stringify(result)).not.toContain(SAMPLE_PERSONNUMMER)
     expect(result.id).toBeUndefined()
+  })
+
+  it('returns the requested extra tax in the tax group', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EMPLOYEE_ROW, extra_tax_amount: null, extra_tax_percentage: 45 } })
+
+    const result = (await getEmployee.execute(
+      { employee_id: EMPLOYEE_ROW.id }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { tax: Record<string, unknown> }
+
+    expect(result.tax).toMatchObject({ extra_tax_amount: null, extra_tax_percentage: 45 })
   })
 
   it('throws for an unknown employee', async () => {
@@ -208,6 +221,48 @@ describe('gnubok_get_salary_run: personnummer contract', () => {
   })
 })
 
+describe('gnubok_get_salary_run: effective figures', () => {
+  it('adds per-employee `effective` and run `effective_totals` with the overrides applied', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // Stored totals predate the override.
+    enqueue({ data: { id: 'run-1', status: 'review', total_tax: 7000, total_net: 23000, total_avgifter: 9426 } })
+    enqueue({
+      data: [
+        {
+          id: 'sre-1',
+          salary_run_id: 'run-1',
+          employee_id: 'emp-1',
+          gross_salary: 30000,
+          tax_withheld: 7000,
+          tax_withheld_override: 0,
+          net_salary: 23000,
+          avgifter_amount: 9426,
+          avgifter_amount_override: 0,
+          vacation_accrual: 0,
+          vacation_accrual_avgifter: 0,
+          employee: { first_name: 'Anna', last_name: 'Andersson', personnummer: SAMPLE_PERSONNUMMER, f_skatt_status: 'a_skatt' },
+        },
+      ],
+    })
+
+    const result = (await getSalaryRun.execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as {
+      total_tax: number
+      effective_totals: Record<string, number>
+      employees: Array<{ tax_withheld: number; effective: Record<string, number> }>
+    }
+
+    expect(result.total_tax).toBe(7000) // stored column untouched
+    expect(result.employees[0].tax_withheld).toBe(7000) // raw column untouched
+    expect(result.employees[0].effective.tax_withheld).toBe(0)
+    expect(result.employees[0].effective.net_salary).toBe(30000)
+    expect(result.effective_totals.total_tax).toBe(0)
+    expect(result.effective_totals.total_net).toBe(30000)
+    expect(result.effective_totals.total_avgifter).toBe(0)
+  })
+})
+
 describe('gnubok_get_payslip', () => {
   const SRE_ROW = {
     id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
@@ -281,6 +336,69 @@ describe('gnubok_get_payslip', () => {
     expect(JSON.stringify(result)).not.toContain(SAMPLE_PERSONNUMMER)
   })
 
+  it('reports the requested extra tax in amounts and effective, and drops it from effective under an override', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...SRE_ROW, tax_withheld: 11200, extra_tax_withheld: 3000, net_salary: 23800 } })
+    const result = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { amounts: Record<string, number>; effective: Record<string, number> }
+    expect(result.amounts).toMatchObject({ tax_withheld: 11200, extra_tax_withheld: 3000 })
+    expect(result.effective).toMatchObject({ tax_withheld: 11200, extra_tax_withheld: 3000 })
+
+    const overridden = createQueuedMockSupabase()
+    overridden.enqueue({
+      data: { ...SRE_ROW, tax_withheld: 11200, extra_tax_withheld: 3000, net_salary: 23800, tax_withheld_override: 9000 },
+    })
+    const withOverride = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', overridden.supabase as never, { type: 'api_key' },
+    )) as { amounts: Record<string, number>; effective: Record<string, number> }
+    expect(withOverride.amounts.extra_tax_withheld).toBe(3000)
+    expect(withOverride.effective).toMatchObject({ tax_withheld: 9000, extra_tax_withheld: 0 })
+  })
+
+  it('reads a payslip calculated before the column existed as no extra', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: SRE_ROW })
+    const result = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { amounts: Record<string, number> }
+    expect(result.amounts.extra_tax_withheld).toBe(0)
+  })
+
+  it('reports the effective tax and net when a tax override is set (agent feedback seq 911374)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ...SRE_ROW,
+        tax_withheld_override: 12000,
+        avgifter_amount_override: 0,
+        override_reason: 'Frivilligt extra skatteavdrag',
+        employee: { ...SRE_ROW.employee, f_skatt_status: 'a_skatt' },
+      },
+    })
+
+    const result = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as {
+      amounts: Record<string, number>
+      effective: Record<string, number | boolean>
+    }
+
+    // Raw calculated values stay under `amounts` for compatibility.
+    expect(result.amounts.tax_withheld).toBe(8200)
+    expect(result.amounts.net_salary).toBe(26800)
+    // `effective` is what the booking, AGI and bank file use.
+    expect(result.effective.tax_withheld).toBe(12000)
+    expect(result.effective.net_salary).toBe(23000)
+    expect(result.effective.avgifter_amount).toBe(0)
+    expect(result.effective.employer_cost).toBe(40519.64)
+    expect(result.effective.tax_overridden).toBe(true)
+  })
+
   it('throws when the employee is not in the run', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null })
@@ -317,8 +435,8 @@ describe('gnubok_get_vacation_balance', () => {
 
   it('returns the open balance with qualified id, remaining days and the SEK estimate', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: BALANCE_ROW })
     enqueue({ data: EMPLOYEE_ROW })
+    enqueue({ data: BALANCE_ROW })
 
     const result = (await getVacationBalance.execute(
       { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
@@ -332,12 +450,28 @@ describe('gnubok_get_vacation_balance', () => {
     // the year-close use, so the description's promise is a real field.
     expect(result.estimated_liability_sek).toBe(40320)
     expect(getVacationBalance.outputSchema?.properties).toHaveProperty('estimated_liability_sek')
+    expect(result.remaining_days_off).toBe(15)
+  })
+
+  it('shows the days still to take off on a four-day week (Semesterlagen 12 a §)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EMPLOYEE_ROW, workdays_per_week: 4 } })
+    enqueue({ data: BALANCE_ROW })
+
+    const result = (await getVacationBalance.execute(
+      { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as Record<string, unknown>
+
+    // 15 paid days left are 12 days off at 1.25 paid days per day off; a
+    // missing schedule (the other cases) takes them one for one.
+    expect(result.remaining_days).toBe(15)
+    expect(result.remaining_days_off).toBe(12)
   })
 
   it('floors the SEK estimate at zero when the balance is overdrawn', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { ...BALANCE_ROW, entitled_days: 5, taken_days: 12, saved_days: {} } })
     enqueue({ data: EMPLOYEE_ROW })
+    enqueue({ data: { ...BALANCE_ROW, entitled_days: 5, taken_days: 12, saved_days: {} } })
 
     const result = (await getVacationBalance.execute(
       { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
@@ -347,25 +481,26 @@ describe('gnubok_get_vacation_balance', () => {
     expect(result.estimated_liability_sek).toBe(0)
   })
 
-  it('throws when the employee row is missing for the company', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: BALANCE_ROW })
+  it('throws EMPLOYEE_NOT_FOUND before reading the ledger when the employee is not the company\'s', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: null })
     await expect(
       getVacationBalance.execute(
         { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
       ),
-    ).rejects.toThrow(/Employee emp-1 not found/)
+    ).rejects.toMatchObject({ code: 'EMPLOYEE_NOT_FOUND', message: expect.stringMatching(/emp-1/) })
+    expect(findCalls('employee_vacation_balances', 'select')).toHaveLength(0)
   })
 
-  it('throws before the ledger has seeded', async () => {
+  it('throws VACATION_BALANCE_NOT_FOUND before the ledger has seeded', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: EMPLOYEE_ROW })
     enqueue({ data: null })
     await expect(
       getVacationBalance.execute(
         { employee_id: 'emp-x' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
       ),
-    ).rejects.toThrow(/No vacation balance/)
+    ).rejects.toMatchObject({ code: 'VACATION_BALANCE_NOT_FOUND', message: expect.stringMatching(/No vacation balance/) })
   })
 })
 
@@ -409,5 +544,61 @@ describe('gnubok_list_absence', () => {
         'company-1', 'user-1', supabase as never, { type: 'api_key' },
       ),
     ).rejects.toThrow(/not found/i)
+  })
+})
+
+describe('gnubok_get_salary_run: period selector', () => {
+  it('resolves the live run for period_year + period_month', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-6', status: 'review', period_year: 2026, period_month: 6 } })
+    enqueue({ data: [] })
+
+    const result = (await getSalaryRun.execute(
+      { period_year: 2026, period_month: 6 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { id: string; employees: unknown[] }
+
+    expect(result.id).toBe('run-6')
+    expect(result.employees).toEqual([])
+    // A corrected original coexists with its correction in the same period:
+    // the lookup must exclude it or maybeSingle() would see two rows.
+    expect(findCalls('salary_runs', 'neq')).toEqual([['status', 'corrected']])
+    expect(findCalls('salary_runs', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['period_year', 2026],
+      ['period_month', 6],
+    ])
+  })
+
+  it('names the period when no run exists for it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    await expect(
+      getSalaryRun.execute({ period_year: 2026, period_month: 2 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow('No salary run for 2026-02')
+  })
+
+  it('requires exactly one selector', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      getSalaryRun.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow(/either salary_run_id or period_year/)
+    await expect(
+      getSalaryRun.execute(
+        { salary_run_id: 'run-1', period_year: 2026, period_month: 6 },
+        'company-1', 'user-1', supabase as never, { type: 'api_key' },
+      ),
+    ).rejects.toThrow(/either salary_run_id or period_year/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('rejects a month outside 1-12 and a half-given period', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      getSalaryRun.execute({ period_year: 2026, period_month: 13 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow(/period_month: must be an integer month 1-12/)
+    await expect(
+      getSalaryRun.execute({ period_year: 2026 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow(/period_month: must be an integer month 1-12/)
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 })
