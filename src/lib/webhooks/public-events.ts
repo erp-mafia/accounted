@@ -46,8 +46,15 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
     title: 'Invoicing',
     events: [
       { type: 'invoice.created', description: 'draft invoice created' },
-      { type: 'invoice.sent', description: 'invoice marked sent (email delivered or external)' },
-      { type: 'invoice.paid', description: 'invoice fully paid' },
+      {
+        type: 'invoice.sent',
+        description:
+          'invoice marked sent (email delivered or external). `invoice` carries `payment_reference`, the reference its PDF asks the payer to quote, and `payment_reference_type` (`ocr`: the digits of the invoice number and a Luhn check digit; `invoice_number`: the number as it is), as `GET /invoices/{id}` answers them; both `null` on a document that asks for no payment under a reference',
+      },
+      {
+        type: 'invoice.paid',
+        description: 'invoice fully paid, whichever way it was settled (mark-paid, bank match, voucher link); never on a partial payment',
+      },
       { type: 'credit_note.created', description: 'credit note issued' },
     ],
   },
@@ -57,7 +64,10 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
       { type: 'supplier.created' },
       { type: 'supplier_invoice.registered' },
       { type: 'supplier_invoice.approved' },
-      { type: 'supplier_invoice.paid' },
+      {
+        type: 'supplier_invoice.paid',
+        description: 'supplier invoice fully paid, whichever way it was settled; never on a partial payment',
+      },
       { type: 'supplier_invoice.credited' },
       { type: 'supplier_invoice.uncredited', description: 'credit reversal' },
     ],
@@ -65,6 +75,23 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
   {
     title: 'Customers',
     events: [{ type: 'customer.created' }],
+  },
+  {
+    title: 'Dimensions',
+    note: 'projects, cost centres and other dimension values (SIE #OBJEKT); every door fires them: the app, the API, MCP and imports. Deleting a value no line uses is not announced',
+    events: [
+      {
+        type: 'dimension_value.created',
+        description:
+          'a value was created under a dimension (sie_dim_no 6 is Projekt, 1 Kostnadsställe). Carries `dimensionValue` (`id`, `dimension_id`, `sie_dim_no`, `dimension_name`, `code`, `name`, `is_active`, `start_date`, `end_date`; `is_active` false means archived, as for a code registered from history)',
+      },
+      {
+        type: 'dimension_value.renamed',
+        description: 'a value got a new name; `previousName` holds the old one. The code never changes',
+      },
+      { type: 'dimension_value.archived', description: 'a value was archived (`is_active` false): kept on history, refused on new lines' },
+      { type: 'dimension_value.unarchived', description: 'an archived value was made active again' },
+    ],
   },
   {
     title: 'Bookkeeping',
@@ -99,6 +126,11 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
       { type: 'period.locked', description: 'fiscal period closed for writes' },
       { type: 'period.unlocked', description: 'fiscal period reopened' },
       { type: 'period.year_closed', description: 'full year-end procedure complete' },
+      {
+        type: 'period.lock_date_changed',
+        description:
+          'the company-wide lock date ("Bokföring låst t.o.m.", nothing on or before it can be booked or changed) was set, moved or removed. Carries `previousLockDate` and `lockDate` (YYYY-MM-DD, `null` when there is none), `direction` (`forward` or `backward`; removing the lock is `backward`), `via` (`app`, `api`, `approval` of a staged change, or `auto_lock` when the nightly automatic lock of `auto_lock_period_days` moved it forward) and `reopenedFiledVatPeriods` (the filed momsdeklaration periods a backward move reopened, each with `tax_period`, `period_start`, `period_end`, `filed_on`; empty otherwise). Fires only when the stored date changes',
+      },
     ],
   },
   {
@@ -115,6 +147,17 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
     title: 'Documents',
     events: [{ type: 'document.uploaded' }],
   },
+  {
+    title: 'Signing',
+    events: [
+      { type: 'signing.signer_signed', description: 'one signer signed a signing request with BankID' },
+      { type: 'signing.declined', description: 'a signer declined; the request is closed' },
+      {
+        type: 'signing.completed',
+        description: 'everyone signed; signed_document_id and evidence_document_id are the signed PDF and the evidence package in the archive (null if the seal is still running: read the request)',
+      },
+    ],
+  },
 ] as const satisfies ReadonlyArray<PublicWebhookEventGroup>
 
 /** Union of every deliverable event type, narrowed from the catalogue. */
@@ -127,3 +170,15 @@ export type PublicWebhookEventType = (typeof PUBLIC_WEBHOOK_EVENT_GROUPS)[number
 export const PUBLIC_WEBHOOK_EVENTS: ReadonlyArray<PublicWebhookEventType> = PUBLIC_WEBHOOK_EVENT_GROUPS.flatMap(
   (group) => group.events.map((event) => event.type),
 )
+
+/**
+ * Payroll-grade events: salary_run.* and agi.* describe lönesummor and
+ * skatteavdrag, so reading them from outside needs `payroll:read` on top of
+ * the surface's own scope, whether pushed (webhook create) or polled
+ * (GET /api/events).
+ */
+export const PAYROLL_EVENT_PREFIXES = ['salary_run.', 'agi.'] as const
+
+export function isPayrollEvent(eventType: string): boolean {
+  return PAYROLL_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))
+}

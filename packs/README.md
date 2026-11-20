@@ -41,7 +41,7 @@ lines:
 ## The three line types
 
 The user types one total amount. The type decides how each line's amount is
-derived from it (`applyTemplate()` in `lib/bookkeeping/template-library.ts`):
+derived from it (`applyTemplate()` in `src/lib/bookkeeping/template-library.ts`):
 
 | Type | Amount | Carries |
 |---|---|---|
@@ -76,8 +76,7 @@ rejects it, but quote it anyway so the file reads correctly.
 ## Swedish stays Swedish
 
 `name`, `description` and `legal_note` are user-facing Swedish and are not
-translated, in either locale. They are statutory content, per
-`.claude/rules/i18n.md`.
+translated, in either locale. They are statutory content.
 
 ## Known-broken templates
 
@@ -93,5 +92,5 @@ rather than a code change, which is why they were not fixed during the port.
 1. Copy the closest existing file, rename it to your slug.
 2. Set `meta.order` to one past the current highest.
 3. Run `npm run validate:packs`.
-4. New user-facing strings go in the YAML, not in `messages/*.json`: a pack
+4. New user-facing strings go in the YAML, not in `src/messages/*.json`: a pack
    carries its own Swedish.

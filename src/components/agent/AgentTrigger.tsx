@@ -1,22 +1,26 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useAgentSheet } from './AgentSheetProvider'
 import { usePathname, useRouter } from 'next/navigation'
-import { Loader2, X } from 'lucide-react'
+import { SpinnerIcon, XMarkIcon } from '@/components/icons'
 import AgentAvatar from './AgentAvatar'
 import { collapsedStatusLabel } from './agent-status'
+import { AGENT_FAB_PROPS } from '@/components/ui/fab-clearance'
 import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { billingHref } from '@/lib/entitlements/upgrade-reason'
+import { useFabHidden } from './use-fab-hidden'
 
 // Floating trigger sits above the page bottom-right, opens the AgentSheet when
 // clicked. Hidden when the sheet is already open so the icon doesn't double up.
 //
-// Desktop-only for a FRESH open (founder call 2026-08-06). On mobile the pill
+// Desktop-only for a FRESH open (product call 2026-08-06). On mobile the pill
 // landed on top of the bottom nav and covered page content, and the bottom nav
-// already carries an "Assistent" tab to /chat behind the very same
-// identity.isVerified gate used here, so the pill was pure redundancy. A
+// already carries an "Assistent" tab to /chat, so the pill was pure
+// redundancy. A
 // COLLAPSED session keeps its handle on every viewport and on every page except
 // /chat: see the page-suppression block and the visibility class below.
 //
@@ -30,17 +34,16 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 // the button reads "Fråga Anna" (with Anna's face) rather than the generic
 // "Fråga min assistent".
 //
-// Page-specific triggers (e.g. "Granska med assistent" on a supplier invoice)
-// still call useAgentSheet() directly from their own buttons because they
-// know exactly which entity to pass. (Per-transaction help has its own
-// row-level "Fråga [namn]" button in TransactionInboxCard, and the matching
-// "Fråga assistenten" in Dokumentinkorgen: both passing a transaction_id the
-// pathname-only FAB can't know.)
-// Session-scoped dismissal flag for the non-payer upsell pill. sessionStorage
-// on purpose: "close" means gone for THIS browser session, and the pill comes
-// back full-size next session. Anything permanent (localStorage or
-// user_preferences) would let a non-payer silence the conversion surface
-// forever with one click (founder call 2026-08-09).
+// Page-specific triggers call useAgentSheet() directly from their own buttons
+// because they know exactly which entity to pass: "Skapa med assistent" on
+// Bokföring (verifikation.draft) and the "Fråga assistenten" buttons in
+// Underlag (transaction.categorization with a transaction_id, inbox.bulk-book
+// with the marked items), which the pathname-only FAB can't know.
+// Session-scoped dismissal flag for the pill shown without the ai capability.
+// sessionStorage on purpose: "close" means gone for THIS browser session, and
+// the pill comes back full-size next session. A permanent dismissal
+// (localStorage or user_preferences) would hide the pill for good with one
+// click.
 const UPSELL_DISMISSED_KEY = 'agent-upsell-dismissed'
 
 export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
@@ -92,17 +95,26 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
     }
   }, [isOpen, hasAi])
 
-  // User opt-out (Inställningar → Assistenten): the sidebar entry stays, the
-  // floating button goes. A collapsed session keeps its reopen handle even
-  // when hidden: it's the only way back to a minimized conversation, and its
-  // existence implies the user is actively using the assistant right now.
-  if (hidden && !collapsed) return null
+  const t = useTranslations('settings_assistant')
+  // The pill's own X writes the same user_preferences opt-out as the settings
+  // switch (use-fab-hidden.tsx).
+  const { effectiveHidden, hideFab } = useFabHidden(hidden, {
+    title: t('fab_hidden_title'),
+    description: t('fab_hidden_description'),
+  })
 
-  // Dismissed upsell (non-payer clicked the pill's X, or closed the paywalled
-  // sheet): render nothing at all for the rest of the browser session. A
-  // collapsed session still shows its handle even then: it is the only way
-  // back to the minimized conversation, and its label is a resume action
-  // ("Fortsätt med ..."), not the upsell.
+  // User opt-out (the pill's X, or Inställningar → Assistenten): the sidebar
+  // entry stays, the floating button goes. A collapsed session keeps its
+  // reopen handle even when hidden: it's the only way back to a minimized
+  // conversation, and its existence implies the user is actively using the
+  // assistant right now.
+  if (effectiveHidden && !collapsed) return null
+
+  // Dismissed pill (no ai capability; the user clicked the pill's X, or closed
+  // the paywalled sheet): render nothing at all for the rest of the browser
+  // session. A collapsed session still shows its handle even then: it is the
+  // only way back to the minimized conversation, and its label is a resume
+  // action ("Fortsätt med ..."), not the billing prompt.
   if (!hasAi && upsellDismissed && !collapsed) return null
 
   // Sheet open AND visible → hide the FAB so the icon doesn't double up. When
@@ -143,7 +155,8 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   }
   // Pre-onboarding: no agent_profile.verified_at yet. The FAB would lead
   // into a generic chat with no specialization. Better to hide it until
-  // the user has finished /onboarding/agent. (A collapsed session implies the
+  // the user has finished /onboarding/agent, which the always-visible
+  // Assistent nav entry leads to meanwhile. (A collapsed session implies the
   // agent is already in use, so this only gates fresh opens in practice.)
   if (!identity.isVerified) return null
 
@@ -154,7 +167,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   const dispatch = routeToIntent(pathname, { assistantAvailable })
   // AI assistant runs on a paid cloud service. Without the capability, opening
   // the sheet would land the user in a chat whose send is dead. Keep the FAB
-  // visible (it's the conversion surface) but route it to billing instead.
+  // visible but route it to billing instead.
   // A minimized session used to be silent: the agent could be three tool calls
   // into a booking, or finished ten minutes ago, and the pill said "Fortsätt
   // med Anna" either way. While hidden, the status channel does the talking.
@@ -179,7 +192,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       return
     }
     if (!hasAi) {
-      router.push('/settings/billing')
+      router.push(billingHref('assistant'))
       return
     }
     openAgentSheet({
@@ -208,10 +221,11 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   // no resize listener, no layout shift on first paint.
   const visibilityClass = collapsed ? 'flex' : 'hidden md:flex'
 
-  // The upsell pill (fresh state, no capability) carries its own dismiss so a
-  // non-payer is never stuck with an undismissable ad in the corner. Payer and
-  // collapsed states are unchanged: no X there, the pill is functional UI.
-  const dismissible = !hasAi && !collapsed
+  // Every fresh pill carries an X; a collapsed handle never does (it is the way
+  // back to a live session). Without the ai capability the X dismisses the
+  // pill for this browser session, so it is never stuck undismissable in the
+  // corner. With it, the X sets the persistent opt-out above, with an undo.
+  const dismissible = !collapsed
 
   return (
     // Wrapper div carries the pill shell; the two segments inside are separate
@@ -223,9 +237,11 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // the tab row plus the iOS home indicator). Still needed after the FAB
       // went desktop-only: the collapsed handle above renders on mobile too.
       // Desktop: standard 20px lift, no mobile nav to worry about, except when
-      // the page declares a bottom action bar (body[data-page-bottom-bar],
-      // set by e.g. the standalone invoice editor): lift above it so the FAB
-      // never covers the bar's primary button.
+      // the page shows a bottom action bar (an element carrying
+      // data-page-bottom-bar, see ui/fab-clearance.ts): lift above it so the FAB
+      // never covers the bar's primary button. The marker is read with :has(),
+      // so a bar only has to render the attribute. It used to be expected on
+      // <body>, which nothing set, so the lift never happened (crm#1841).
       // z-[45]: above the DialogVeil (z-40) so the assistant can be OPENED
       // while a non-modal dialog (booking, invoice) holds the page inert, but
       // below dialog content (z-50). Under a true modal dialog Radix sets
@@ -234,11 +250,12 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // data-agent-ui: opening the assistant must not dismiss an open
       // non-modal dialog (DialogContent treats this as inside).
       data-agent-ui=""
-      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
+      {...AGENT_FAB_PROPS}
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-pop bg-foreground text-background shadow-float bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body:has([data-page-bottom-bar])_&]:bottom-20`}
     >
       <button
         onClick={handleClick}
-        className={`flex min-w-0 items-center gap-2 pl-2 ${dismissible ? 'rounded-l-full pr-2' : 'rounded-full pr-4'} hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
+        className={`flex min-w-0 items-center gap-2 pl-2 ${dismissible ? 'rounded-l-pop pr-2' : 'rounded-pop pr-4'} hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
         aria-label={labelText}
         // The label changes on its own while the panel is hidden, so it has to be
         // announced rather than only redrawn. Polite: it never interrupts.
@@ -258,17 +275,18 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
           )}
         </span>
         {working && collapsed && (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
+          <SpinnerIcon className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
         )}
         <span className="text-sm font-medium truncate">{labelText}</span>
       </button>
       {dismissible && (
         <button
-          onClick={dismissUpsellForSession}
-          aria-label="Dölj tills nästa besök"
-          className="flex items-center rounded-r-full pl-1 pr-3 text-background/70 hover:text-background hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          onClick={hasAi ? () => void hideFab() : dismissUpsellForSession}
+          aria-label={hasAi ? t('fab_hide') : 'Dölj tills nästa besök'}
+          title={hasAi ? t('fab_hide') : undefined}
+          className="flex items-center rounded-r-pop pl-1 pr-3 text-background/70 hover:text-background hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
-          <X className="h-4 w-4" />
+          <XMarkIcon className="h-4 w-4" />
         </button>
       )}
     </div>

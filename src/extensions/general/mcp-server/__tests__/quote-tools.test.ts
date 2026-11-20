@@ -65,6 +65,7 @@ describe('gnubok_create_invoice: quotes', () => {
   it('stages a quote with due_date mirroring valid_until and no F-series preview', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: CUSTOMER, error: null }) // customers fetch
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
     enqueue({ data: { id: 'op-quote' }, error: null }) // pending_operations insert
@@ -140,6 +141,37 @@ describe('gnubok_set_quote_status', () => {
       valid_until: '2099-12-31',
     })
     expect(findCall('invoices', 'update')?.[0]).toMatchObject({ quote_status: 'accepted' })
+    // Sent before the decision: no note.
+    expect(result.note).toBeUndefined()
+  })
+
+  // crm#1202: a yes recorded on a quote the customer was never sent.
+  it('notes when the accepted quote was never sent to the customer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'q-1', document_type: 'quote', status: 'draft', quote_status: 'open', quote_decided_at: null }, error: null })
+    enqueue({ data: null, error: null }) // converted_from_id lookup: nothing yet
+    enqueue({
+      data: {
+        id: 'q-1',
+        invoice_number: 'OF-001',
+        document_type: 'quote',
+        status: 'draft',
+        quote_status: 'accepted',
+        quote_decided_at: '2026-10-14T15:10:44.000Z',
+        valid_until: '2099-12-31',
+      },
+      error: null,
+    })
+
+    const result = (await setQuoteStatus.execute(
+      { invoice_id: 'q-1', status: 'accepted' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as Record<string, unknown>
+
+    expect(result.quote_status).toBe('accepted')
+    expect(String(result.note)).toContain('not been sent')
   })
 
   it('reports expired for an open quote past valid_until', async () => {
@@ -206,13 +238,13 @@ describe('gnubok_convert_invoice: quotes', () => {
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
-  it('fails on an already-invoiced quote with INVOICE_QUOTE_ALREADY_INVOICED', async () => {
+  it('fails on a fully invoiced quote with INVOICE_QUOTE_ALREADY_INVOICED', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
-      data: { id: 'q-1', invoice_number: 'OF-003', document_type: 'quote', status: 'sent', quote_status: 'accepted', total: 2500, currency: 'SEK', customer: { name: 'Testbrand AB' } },
+      data: { id: 'q-1', invoice_number: 'OF-003', document_type: 'quote', status: 'sent', quote_status: 'accepted', subtotal: 2000, total: 2500, currency: 'SEK', customer: { name: 'Testbrand AB' } },
       error: null,
     })
-    enqueue({ data: { id: 'inv-9' }, error: null })
+    enqueue({ data: [{ id: 'inv-9', status: 'sent', subtotal: 2000 }], error: null })
 
     await expect(
       convertInvoice.execute({ invoice_id: 'q-1' }, 'company-1', 'user-1', supabase as never),
@@ -256,6 +288,33 @@ describe('gnubok_convert_invoice: quotes', () => {
     expect(result.preview.source_document_type).toBe('quote')
     expect(result.preview.target).toBe('invoice')
     expect(String(result.preview.will)).toContain('accepted')
+    // Sent to the customer: nothing to warn about.
+    expect(result.preview.quote_sent).toBeUndefined()
+    expect(result.preview.note).toBeUndefined()
+  })
+
+  // crm#1202: the web page confirms this before converting; the staged
+  // preview tells the approver the same.
+  it('says so in the preview when the quote was never sent to the customer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'q-1', invoice_number: 'OF-001', document_type: 'quote', status: 'draft', quote_status: 'open', total: 2500, currency: 'SEK', customer: { name: 'Testbrand AB' } },
+      error: null,
+    })
+    enqueue({ data: null, count: 0, error: null }) // live sales_orders count (target order)
+    enqueue({ data: null, error: null }) // converted_from_id lookup
+    enqueue({ data: { id: 'op-convert' }, error: null }) // pending_operations insert
+
+    const result = (await convertInvoice.execute(
+      { invoice_id: 'q-1', target: 'order' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.quote_sent).toBe(false)
+    expect(String(result.preview.note)).toContain('gnubok_send_invoice')
   })
 
   it('fails on a quote that already has a live kundorder with INVOICE_QUOTE_ALREADY_ORDERED', async () => {
@@ -271,6 +330,81 @@ describe('gnubok_convert_invoice: quotes', () => {
       convertInvoice.execute({ invoice_id: 'q-1' }, 'company-1', 'user-1', supabase as never),
     ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_ALREADY_ORDERED' })
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
+describe('gnubok_convert_invoice: a quote in parts (crm#1196)', () => {
+  const acceptedQuote = { id: 'q-1', invoice_number: 'OF-012', document_type: 'quote', status: 'sent', quote_status: 'accepted', subtotal: 25000, total: 31250, currency: 'SEK', customer: { name: 'Testbrand AB' } }
+
+  it('declares percent and amount on the input schema', () => {
+    const props = convertInvoice.inputSchema.properties as Record<string, { type?: string }>
+    expect(props.percent.type).toBe('number')
+    expect(props.amount.type).toBe('number')
+  })
+
+  it('stages 50 % of an accepted quote with the part in params and preview', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: acceptedQuote, error: null })
+    enqueue({ data: [], error: null }) // no invoice from the quote yet
+    enqueue({ data: null, count: 0, error: null }) // no live sales order
+    enqueue({ data: { id: 'op-convert' }, error: null })
+
+    const result = (await convertInvoice.execute(
+      { invoice_id: 'q-1', percent: 50 },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const row = findCall('pending_operations', 'insert')![0] as { title: string; params: Record<string, unknown> }
+    expect(row.params).toEqual({ invoice_id: 'q-1', percent: 50 })
+    expect(row.title).toContain('del: 12500 SEK exkl. moms')
+    expect(result.preview.quote_part).toEqual({ net_amount: 12500, quote_net: 25000, invoiced_before: 0, remaining_after: 12500 })
+  })
+
+  it('stages the rest after a part when no part is given', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: acceptedQuote, error: null })
+    enqueue({ data: [{ id: 'inv-1', status: 'sent', subtotal: 12500 }], error: null })
+    enqueue({ data: null, count: 0, error: null })
+    enqueue({ data: { id: 'op-convert' }, error: null })
+
+    const result = (await convertInvoice.execute({ invoice_id: 'q-1' }, 'company-1', 'user-1', supabase as never)) as {
+      preview: Record<string, unknown>
+    }
+    expect(result.preview.quote_part).toEqual({ net_amount: 12500, quote_net: 25000, invoiced_before: 12500, remaining_after: 0 })
+  })
+
+  it('refuses a part above what remains with INVOICE_QUOTE_PART_OUT_OF_RANGE naming the remainder', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: acceptedQuote, error: null })
+    enqueue({ data: [{ id: 'inv-1', status: 'sent', subtotal: 12500 }], error: null })
+
+    await expect(
+      convertInvoice.execute({ invoice_id: 'q-1', amount: 20000 }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_PART_OUT_OF_RANGE', message: expect.stringContaining('remaining 12500') })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('refuses a part on a proforma, a part with target order, and a malformed part', async () => {
+    const proforma = createQueuedMockSupabase()
+    proforma.enqueue({ data: { ...acceptedQuote, id: 'p-1', document_type: 'proforma', quote_status: null }, error: null })
+    await expect(
+      convertInvoice.execute({ invoice_id: 'p-1', percent: 50 }, 'company-1', 'user-1', proforma.supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_CONVERT_PART_QUOTE_ONLY' })
+
+    for (const args of [
+      { invoice_id: 'q-1', percent: 50, target: 'order' },
+      { invoice_id: 'q-1', percent: 0 },
+      { invoice_id: 'q-1', percent: 50, amount: 100 },
+    ]) {
+      const { supabase, findCall } = createQueuedMockSupabase()
+      await expect(convertInvoice.execute(args, 'company-1', 'user-1', supabase as never)).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      })
+      expect(findCall('invoices', 'select')).toBeUndefined()
+    }
   })
 })
 
@@ -357,11 +491,11 @@ describe('gnubok_convert_invoice: target order (offert -> kundorder -> faktura)'
     ).rejects.toMatchObject({ code: 'SALES_ORDER_SOURCE_ALREADY_CONVERTED' })
   })
 
-  it('refuses a quote that already has a live invoice with INVOICE_QUOTE_ALREADY_INVOICED', async () => {
+  it('refuses a quote that already has a live invoice, even a part, with INVOICE_QUOTE_ALREADY_INVOICED', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ...openQuote, quote_status: 'accepted' }, error: null })
     enqueue({ data: null, count: 0, error: null })
-    enqueue({ data: { id: 'inv-9' }, error: null })
+    enqueue({ data: [{ id: 'inv-9', status: 'sent', subtotal: 1000 }], error: null })
 
     await expect(
       convertInvoice.execute({ invoice_id: 'q-1', target: 'order' }, 'company-1', 'user-1', supabase as never),

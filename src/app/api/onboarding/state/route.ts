@@ -5,6 +5,8 @@ import { UpdateInitialSetupStateSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { companyAdminRequiredResponse } from '@/lib/auth/require-write'
+import { writeCompanySettings } from '@/lib/company/settings-writer'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 const INITIAL_SETUP_SELECT =
   'initial_setup_path, initial_setup_completed_at, initial_setup_dismissed_at' as const
@@ -45,7 +47,7 @@ export const GET = withRouteContext(
 
 export const PATCH = withRouteContext(
   'onboarding-state.update',
-  async (request, { supabase, companyId, log, requestId }) => {
+  async (request, { supabase, companyId, user, log, requestId }) => {
     const validation = await validateBody(request, UpdateInitialSetupStateSchema, {
       log,
       operation: 'onboarding-state.update',
@@ -101,31 +103,18 @@ export const PATCH = withRouteContext(
       update.initial_setup_dismissed_at = body.dismissed ? now : null
     }
 
-    const { data, error } = await supabase
-      .from('company_settings')
-      .update(update)
-      .eq('company_id', companyId)
-      .select(INITIAL_SETUP_SELECT)
-      .maybeSingle()
-
-    if (error) {
-      log.error('initial setup state update failed', error)
-      return errorResponseFromCode('INTERNAL_ERROR', log, {
-        requestId,
-        details: { reason: getErrorMessage(error) },
-      })
-    }
-    // The row was read a moment ago, so an UPDATE that matches nothing was
-    // refused by row-level security (company_settings_update is owner/admin
-    // only): a refusal, not a server fault. `.single()` used to turn it into
-    // PGRST116 and a 500. requireAdmin below asks the same predicate first, so
-    // this is the backstop for a policy the gate does not know about.
-    if (!data) {
+    const saved = await writeCompanySettings({ supabase, companyId, userId: user.id, log }, update)
+    // The row was read a moment ago, so a write that matched nothing was
+    // refused by row-level security: a refusal, not a missing row. requireAdmin
+    // below asks the same predicate first, so this is the backstop for a policy
+    // the gate does not know about.
+    if (!saved.ok && saved.code === 'NOT_FOUND') {
       log.warn('initial setup state update matched no row: refused by row-level security')
       return companyAdminRequiredResponse(log, requestId)
     }
+    if (!saved.ok) return sessionFailureResponse(saved, log, requestId)
 
-    return NextResponse.json({ data: toResponse(data) })
+    return NextResponse.json({ data: toResponse(saved.data as Parameters<typeof toResponse>[0]) })
   },
   // company_settings is writable by owner/admin only (RLS,
   // user_is_company_admin). requireWrite would let a `member` through and

@@ -1,18 +1,28 @@
 'use client'
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { closableFiscalPeriods } from '@/lib/reference-data/fiscal-scope'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Card, CardContent } from '@/components/ui/card'
-import { EmptyState } from '@/components/ui/empty-state'
+import { useTranslations } from 'next-intl'
+import { Button } from '@/components/ui/button'
+import { PageHeaderActions } from '@/components/ui/page-header-actions'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { Skeleton } from '@/components/ui/skeleton'
-import { CalendarPlus, Check, Lock } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { CalendarIcon, EllipsisHorizontalIcon, LockClosedIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { FiscalPeriod, YearEndPreview, YearEndResult } from '@/types'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
@@ -22,6 +32,13 @@ import { AccrualsStep } from '@/components/bookkeeping/year-end/AccrualsStep'
 import { PreviewStep } from '@/components/bookkeeping/year-end/PreviewStep'
 import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
 import { ResultStep } from '@/components/bookkeeping/year-end/ResultStep'
+import { StepRail } from '@/components/bokslut/StepRail'
+import {
+  filesIncomeReturn,
+  isEntityType,
+  simplifiedYearEndRegelverk,
+  supportsCorporateTaxDispositions,
+} from '@/lib/company/entity-type'
 
 type Step = 'preflight' | 'accruals' | 'dispositions' | 'preview' | 'execute' | 'result'
 
@@ -50,24 +67,29 @@ interface PeriodOption {
 
 export default function YearEndPage() {
   const router = useRouter()
+  // The top bar says what the menu row says.
+  const tNav = useTranslations('nav')
   const searchParams = useSearchParams()
   const { toast } = useToast()
 
   // ---- Period selection ----
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
-  // Whether the company has ANY fiscal periods (eligible or not) — separates
+  // Whether the company has ANY fiscal periods (eligible or not) - separates
   // "inget att stänga ännu" from "inget räkenskapsår har skapats".
   const [hasAnyPeriods, setHasAnyPeriods] = useState(true)
-  const [periodsError, setPeriodsError] = useState<string | null>(null)
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(
     searchParams.get('period') ?? null,
   )
+
+  const { canWrite } = useViewerLock()
 
   // ---- Wizard state ----
   const [step, setStep] = useState<Step>('preflight')
   const [report, setReport] = useState<BokslutReadinessReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
+  // Bumped by "Försök igen" to run the readiness fetch again for the same period.
+  const [reportAttempt, setReportAttempt] = useState(0)
   const [preview, setPreview] = useState<YearEndPreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -79,20 +101,17 @@ export default function YearEndPage() {
   // ---- Eligible periods, from the session-cached list (lib/reference-data) ----
   // Recomputed whenever the cached list changes: the close actions below
   // invalidate it, which is what drops a just-closed year out of the picker.
-  const { periods: allPeriods, isLoading: periodsLoading, error: periodsFetchError } = useFiscalPeriods()
+  const {
+    periods: allPeriods,
+    isLoading: periodsLoading,
+    error: periodsFetchError,
+    refresh: refreshPeriods,
+  } = useFiscalPeriods()
+  const periodsFailed = Boolean(periodsFetchError)
   useEffect(() => {
-    if (periodsLoading) return
-    if (periodsFetchError) {
-      setPeriodsError('Kunde inte hämta perioder')
-      return
-    }
+    if (periodsLoading || periodsFailed) return
     const all: FiscalPeriod[] = allPeriods
-    const today = new Date().toISOString().split('T')[0]
-    const eligible: PeriodOption[] = all
-      .filter((p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today)
-      .map((p) => ({ ...p, eligible: true }))
-    // Oldest first: accountants close in order.
-    eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
+    const eligible: PeriodOption[] = closableFiscalPeriods(all).map((p) => ({ ...p, eligible: true }))
     setHasAnyPeriods(all.length > 0)
 
     // The URL ?period= param may point anywhere: at an ineligible period
@@ -116,7 +135,7 @@ export default function YearEndPage() {
       setSelectedPeriodId(eligible[0].id)
     }
     setPeriods(options)
-  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFetchError])
+  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFailed])
 
   // ---- Sync selected period to URL so users can bookmark / share ----
   useEffect(() => {
@@ -153,7 +172,7 @@ export default function YearEndPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, reportAttempt])
 
   // ---- Step navigation ----
   const goToPreview = useCallback(async () => {
@@ -218,8 +237,17 @@ export default function YearEndPage() {
   // Imported historical years (SIE) land here as "pending bokslut" even though
   // the bokslut was done in the old software. The confirm dialog POSTs
   // close-external, which closes + locks the period without a closing entry.
+  // The ochre question is asked only for a year that holds imported history
+  // (readiness report); every eligible year keeps the action in the ⋯ menu.
   const [confirmExternalOpen, setConfirmExternalOpen] = useState(false)
   const selectedOption = periods?.find((p) => p.id === selectedPeriodId) ?? null
+  const canMarkClosedExternally =
+    showWizard && step === 'preflight' && Boolean(selectedOption?.eligible) && !navigationBlocked
+  const askMarkClosedExternally =
+    canMarkClosedExternally &&
+    report !== null &&
+    report.period.id === selectedPeriodId &&
+    report.holdsImportedHistory
 
   const markClosedExternally = useCallback(async () => {
     if (!selectedPeriodId) return
@@ -260,8 +288,27 @@ export default function YearEndPage() {
   return (
     <div className="space-y-8">
       <div className="page-header flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
         <div className="flex items-center gap-2">
+          <h1 className="page-header-title">{tNav('v2_closing')}</h1>
+          <HelpPopover>
+            <StepHelp step={step} entityType={report?.entityType ?? null} />
+          </HelpPopover>
+        </div>
+        <PageHeaderActions className="flex items-center gap-2">
+          {canMarkClosedExternally && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-toolbar" aria-label="Fler åtgärder">
+                  <EllipsisHorizontalIcon className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setConfirmExternalOpen(true)}>
+                  Klarmarkera perioden…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {showWizard && periods && periods.length > 0 && step !== 'result' && (
             <ContextPicker
               items={periods.map((p) => ({
@@ -284,10 +331,10 @@ export default function YearEndPage() {
               ariaLabel="Period"
             />
           )}
-        </div>
+        </PageHeaderActions>
       </div>
 
-      {showWizard && step === 'preflight' && selectedOption?.eligible && !navigationBlocked && (
+      {canWrite && askMarkClosedExternally && selectedOption && (
         <AttnLine
           action={{ label: 'Klarmarkera perioden', onClick: () => setConfirmExternalOpen(true) }}
         >
@@ -313,31 +360,25 @@ export default function YearEndPage() {
         onConfirm={markClosedExternally}
       />
 
-      {periods === null && !periodsError && (
-        <Card>
-          <CardContent className="p-6 space-y-2">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-4 w-full" />
-          </CardContent>
-        </Card>
+      {periods === null && !periodsFailed && (
+        <LateReveal className="space-y-2">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-4 w-full" />
+        </LateReveal>
       )}
 
-      {periodsError && (
-        <Card>
-          <CardContent className="p-6 text-destructive">{periodsError}</CardContent>
-        </Card>
-      )}
+      {periodsFailed && <LoadError title="Kunde inte hämta perioder" onRetry={() => void refreshPeriods()} />}
 
       {periods !== null && periods.length === 0 && (
         hasAnyPeriods ? (
           <EmptyState
-            icon={Lock}
+            icon={LockClosedIcon}
             title="Inga perioder att stänga"
             description="Det finns ingen öppen räkenskapsperiod vars slutdatum redan har passerat. Bokslut görs efter att periodens slutdatum är passerat."
           />
         ) : (
           <EmptyState
-            icon={CalendarPlus}
+            icon={CalendarIcon}
             title="Inget räkenskapsår ännu"
             description="Bokslut görs per räkenskapsår. Skapa företagets räkenskapsår i bokföringsinställningarna för att komma igång."
             actionLabel="Öppna bokföringsinställningar"
@@ -346,59 +387,21 @@ export default function YearEndPage() {
         )
       )}
 
-      {/* Stegen (concept scene 34): dots walk check -> filled -> number.
-          Steps behind the current one are clickable for going back; forward
-          navigation stays with each step's own continue action. */}
+      {/* Stegen (concept scene 34): steps behind the current one are
+          clickable for going back; forward navigation stays with each
+          step's own continue action. */}
       {showWizard && step !== 'result' && (
-        <div
-          className="mx-auto flex w-full max-w-4xl items-center gap-3 overflow-x-auto px-1"
-          role="tablist"
-          aria-label="Bokslutets steg"
-        >
-          {STEP_ORDER.map((s, i) => (
-            <React.Fragment key={s}>
-              {i > 0 && <span className="h-px min-w-4 flex-1 bg-border" aria-hidden="true" />}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={s === step}
-                disabled={navigationBlocked || i >= currentStepIndex}
-                onClick={() => {
-                  if (!navigationBlocked && i < currentStepIndex) setStep(s)
-                }}
-                className={cn(
-                  'group flex shrink-0 items-center gap-2 text-left',
-                  (navigationBlocked || i >= currentStepIndex) && 'cursor-default',
-                )}
-              >
-                <span
-                  className={cn(
-                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums transition-colors duration-150',
-                    i < currentStepIndex
-                      ? 'border-success/40 text-success'
-                      : s === step
-                        ? 'border-foreground bg-foreground text-background'
-                        : 'border-border text-muted-foreground',
-                  )}
-                >
-                  {i < currentStepIndex ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : i + 1}
-                </span>
-                <span
-                  className={cn(
-                    'text-[12.5px] transition-colors duration-150',
-                    s === step
-                      ? 'font-medium'
-                      : i < currentStepIndex
-                        ? 'text-muted-foreground group-hover:text-foreground'
-                        : 'text-muted-foreground',
-                  )}
-                >
-                  {STEP_LABELS[s]}
-                </span>
-              </button>
-            </React.Fragment>
-          ))}
-        </div>
+        <StepRail
+          className="mx-auto max-w-4xl"
+          ariaLabel="Bokslutets steg"
+          steps={STEP_ORDER.map((s, i) => ({
+            key: s,
+            label: STEP_LABELS[s],
+            state: i < currentStepIndex ? 'done' : s === step ? 'current' : 'upcoming',
+          }))}
+          canSelect={(_s, i) => !navigationBlocked && i < currentStepIndex}
+          onSelect={(key) => setStep(key as Step)}
+        />
       )}
 
       {showWizard && step === 'preflight' && (
@@ -406,6 +409,7 @@ export default function YearEndPage() {
           report={report}
           isLoading={reportLoading}
           error={reportError}
+          onRetry={() => setReportAttempt((n) => n + 1)}
           onContinue={() => setStep('accruals')}
         /></div>
       )}
@@ -432,6 +436,7 @@ export default function YearEndPage() {
           preview={preview}
           isLoading={previewLoading}
           error={previewError}
+          onRetry={() => void goToPreview()}
           onBack={() => setStep('dispositions')}
           onContinue={() => setStep('execute')}
         /></div>
@@ -450,6 +455,72 @@ export default function YearEndPage() {
 
       {step === 'result' && result && (
         <div className="mx-auto w-full max-w-3xl"><ResultStep result={result} /></div>
+      )}
+    </div>
+  )
+}
+
+type ReportEntityType = BokslutReadinessReport['entityType']
+
+/**
+ * The wizard's "?" (UI-migration convention 7): what the current step does
+ * and the rules that apply to it. The guidance that used to sit in
+ * instruction-only step cards and in the Kontroll step's always-on reminders
+ * lives here, so the flow carries only the year's own figures and findings.
+ */
+function StepHelp({ step, entityType }: { step: Step; entityType: ReportEntityType | null }) {
+  const form = entityType && isEntityType(entityType) ? entityType : null
+  const filesNe = form !== null && filesIncomeReturn(form) === 'NE'
+  const corporate = form !== null && supportsCorporateTaxDispositions(form)
+  // The 5 000 kr relief belongs to förenklat årsbokslut (K1), by capability.
+  const k1 = form !== null && simplifiedYearEndRegelverk(form) === 'K1'
+
+  return (
+    <div className="space-y-2">
+      <p>
+        Bokslutet görs per räkenskapsår efter att periodens slutdatum har passerat.
+        Periodiseringar och dispositioner bokförs när du går vidare från sina steg;
+        bokslutsverifikatet bokförs först när du verkställer, och då stängs och låses perioden.
+      </p>
+      {step === 'preflight' && (
+        <p>
+          Är bokslutet för året redan gjort i ett tidigare bokföringsprogram klarmarkerar du
+          perioden från menyn (⋯) bredvid periodväljaren i stället.
+        </p>
+      )}
+      {step === 'accruals' && (
+        <>
+          <p>
+            Periodiseringar (förutbetalda kostnader 17xx, upplupna kostnader 29xx) bokas
+            manuellt. Posteringarna ska vändas på första dagen av nästa räkenskapsår: datumet
+            visas per verifikation. Automatisk omvändning är planerad till en kommande version.
+          </p>
+          {k1 && (
+            <p>
+              Med förenklat årsbokslut (K1) behöver poster under 5 000 kr normalt inte
+              periodiseras.
+            </p>
+          )}
+        </>
+      )}
+      {step === 'dispositions' && (
+        <>
+          {corporate && (
+            <>
+              <p>Justera beloppen och bocka av de dispositioner du vill boka.</p>
+              <p>
+                Skattemässiga justeringar (återläggningar) påverkar skatten och INK2, men skapar
+                ingen egen verifikation och ändrar inte en redan bokförd periodiseringsfond.
+              </p>
+            </>
+          )}
+          {filesNe && (
+            <p>
+              Egenavgifter, räntefördelning, periodiseringsfond och expansionsfond beräknas i
+              NE-bilagan, inte bokförs. Skatten betalas privat av ägaren.
+            </p>
+          )}
+        </>
       )}
     </div>
   )

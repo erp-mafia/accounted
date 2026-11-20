@@ -17,6 +17,11 @@ export function zettleStoreDisplayName(organizationName: string | null | undefin
   return trimmed.length > 0 ? trimmed : ZETTLE_DEFAULT_ORGANIZATION_NAME
 }
 
+/** A name as it is stored: trimmed, inner whitespace collapsed to one space. */
+export function normalizeZettleOrganizationName(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ')
+}
+
 /**
  * Trim and validate a rename payload. Empty after trim is rejected (clearing
  * would fall the Orders "Butik" column back to the organization UUID).
@@ -27,7 +32,7 @@ export function parseZettleOrganizationName(
   if (typeof raw !== 'string') {
     return { ok: false, error: 'organization_name (string) krävs.' }
   }
-  const name = raw.trim().replace(/\s+/g, ' ')
+  const name = normalizeZettleOrganizationName(raw)
   if (name.length === 0) {
     return { ok: false, error: 'Ange ett butiksnamn.' }
   }

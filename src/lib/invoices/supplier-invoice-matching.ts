@@ -27,6 +27,10 @@
  */
 
 import type { Transaction, SupplierInvoice } from '@/types'
+import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
+import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
+import { descriptionMentionsReference, normalizeOcrReference } from '@/lib/invariants/reference-number'
 
 export interface SupplierInvoiceMatch {
   supplierInvoice: SupplierInvoice
@@ -42,13 +46,6 @@ export interface SupplierInvoiceMatch {
 }
 
 /**
- * Normalize payment reference for comparison (strip whitespace and non-digits).
- */
-function normalizeReference(ref: string): string {
-  return ref.replace(/\D/g, '')
-}
-
-/**
  * Currency codes compare case-insensitively, and a missing code means SEK:
  * `transactions.currency` is nullable (DEFAULT 'SEK') while
  * `supplier_invoices.currency` is NOT NULL DEFAULT 'SEK', so a legacy bank row
@@ -56,27 +53,6 @@ function normalizeReference(ref: string): string {
  */
 function normalizeCurrency(code: string | null | undefined): string {
   return (code || 'SEK').toUpperCase()
-}
-
-/**
- * SEK value of an amount, or null when it cannot be established.
- *
- * This is `lib/bookkeeping/currency-utils.ts#resolveSekAmount` minus its final
- * "no conversion info → return the amount as-is" branch. That branch is safe
- * for booking legacy rows but fatal here: it would hand the matcher a raw EUR
- * total dressed up as kronor, which is the exact false match this guard exists
- * to stop. A missing rate must mean "not comparable", never "assume SEK".
- */
-function sekValue(
-  amount: number,
-  currency: string,
-  amountSek: number | null | undefined,
-  exchangeRate: number | null | undefined
-): number | null {
-  if (currency === 'SEK') return amount
-  if (amountSek != null) return Math.round(amountSek * 100) / 100
-  if (exchangeRate != null && exchangeRate > 0) return Math.round(amount * exchangeRate * 100) / 100
-  return null
 }
 
 /**
@@ -118,20 +94,10 @@ function comparableAmounts(
   }
 
   // Different currencies → compare in SEK, but only from stored conversions.
-  const txSek = sekValue(
-    transaction.amount,
-    txCurrency,
-    transaction.amount_sek,
-    transaction.exchange_rate
-  )
+  const txSek = resolveSekAmountOrNull(transaction.amount, transaction.amount_sek, txCurrency, transaction.exchange_rate)
   if (txSek === null) return null
 
-  const invoiceSek = sekValue(
-    remaining,
-    invoiceCurrency,
-    remainingTotalSek(invoice, remaining),
-    invoice.exchange_rate
-  )
+  const invoiceSek = resolveSekAmountOrNull(remaining, remainingTotalSek(invoice, remaining), invoiceCurrency, invoice.exchange_rate)
   if (invoiceSek === null) return null
 
   return { txValue: Math.abs(txSek), invoiceValue: Math.abs(invoiceSek) }
@@ -158,17 +124,18 @@ export function findSupplierInvoiceMatch(
   // makes a Pass-3 (amount_date) winner ambiguous: the date can't pick between
   // same-amount invoices, so the caller must not auto-link it.
   let amountDateMatchCount = 0
+  const txGiros = counterpartyGiroDigits(transaction)
 
   for (const invoice of unpaidInvoices) {
-    // Only match against registered/approved invoices with remaining amount
-    if (!['registered', 'approved'].includes(invoice.status)) continue
+    // Only match against invoices that can take a payment, with a remainder
+    if (!isMatchableSupplierInvoiceStatus(invoice.status)) continue
     const remaining = invoice.remaining_amount ?? invoice.total
     if (remaining <= 0) continue
 
     // Pass 1: Payment reference/OCR exact match → 0.98
     if (transaction.reference && invoice.payment_reference) {
-      const txRef = normalizeReference(transaction.reference)
-      const invRef = normalizeReference(invoice.payment_reference)
+      const txRef = normalizeOcrReference(transaction.reference)
+      const invRef = normalizeOcrReference(invoice.payment_reference)
       if (txRef && invRef && txRef === invRef) {
         return {
           supplierInvoice: invoice,
@@ -189,13 +156,19 @@ export function findSupplierInvoiceMatch(
     // Pass 2: Exact amount + bankgiro/plusgiro match → 0.92
     const amountMatch = Math.abs(txValue - invoiceValue) < 0.005
     if (amountMatch) {
-      const txDesc = (transaction.description || '').toLowerCase()
       const supplierBg = invoice.supplier?.bankgiro
       const supplierPg = invoice.supplier?.plusgiro
-      const bgMatch = supplierBg && txDesc.includes(normalizeReference(supplierBg))
-      const pgMatch = supplierPg && txDesc.includes(normalizeReference(supplierPg))
+      const bgMatch = descriptionMentionsReference(transaction.description, normalizeOcrReference(supplierBg))
+      const pgMatch = descriptionMentionsReference(transaction.description, normalizeOcrReference(supplierPg))
+      // The row's counterparty giro as the shared reading sees it: the bank's
+      // counterparty account or a formatted or padded BG/PG number, which the
+      // digit substring above misses ("BG 123-4567"), against the card's and
+      // the invoice's stated giro. Never Bankgirot's own-giro settlement.
+      const giroMatch = [supplierBg, supplierPg, invoice.payee_bankgiro, invoice.payee_plusgiro]
+        .map(giroKey)
+        .some((giro) => giro !== '' && txGiros.includes(giro))
 
-      if (bgMatch || pgMatch) {
+      if (bgMatch || pgMatch || giroMatch) {
         return {
           supplierInvoice: invoice,
           confidence: 0.92,

@@ -286,8 +286,19 @@ describe('rcBasisGapAdvisoryFinding', () => {
   it('uses singular and plural Swedish wording and keeps the worklist pointer', () => {
     expect(rcBasisGapAdvisoryFinding(1).message).toContain('1 verifikation i perioden')
     expect(rcBasisGapAdvisoryFinding(3).message).toContain('3 verifikationer i perioden')
-    expect(rcBasisGapAdvisoryFinding(1).message).toContain('listan nedan')
+    expect(rcBasisGapAdvisoryFinding(1).message).toContain('verifikationerna i listan')
     expect(rcBasisGapAdvisoryFinding(1).message).toContain('per momssats')
+  })
+
+  it('says where the basis is, how to accept it and why Korrigera is wrong here (crm#1171)', () => {
+    const { message } = rcBasisGapAdvisoryFinding(13)
+    // The flagged verifikat may be the originals (their basis added by a
+    // collective rättelse) or moms-only corrections: the message names neither.
+    expect(message).toContain('basbeloppet finns i ett annat verifikat i perioden')
+    expect(message).toContain('markera varningen som granskad')
+    expect(message).toContain('Korrigera inte verifikationerna i listan')
+    expect(message).toContain('räknas basbeloppet två gånger')
+    expect(message).not.toMatch(/[\u2013\u2014]/)
     expect(rcBasisGapAdvisoryFinding(1).status).toBe('WARNING')
     expect(rcBasisGapAdvisoryFinding(1).code).toBe('RC_BASIS_MISSING')
   })
@@ -342,6 +353,52 @@ describe('rcBasisGapFinding', () => {
     expect(rcBasisGapFinding(5).message).toContain('5 verifikationer i perioden')
     expect(rcBasisGapFinding(1).message).toContain('Korrigera verifikationen')
     expect(rcBasisGapFinding(5).message).toContain('Korrigera verifikationerna')
+  })
+
+})
+
+// crm#1096: an account whose momskod reports ruta 20-24 at a momssats other
+// than 25, 12 or 6 % puts its basis in the box (rutorFromTotals) but in no
+// rate group (rcBasisTotalsByRate). With a basis pair beside it the period
+// shows RC_OUTPUT_MISSING, without one the verifikat shows RC_BASIS_MISSING,
+// and Korrigera refuses it: both findings say where the fix is.
+describe('withRcBasisGapFindings, basis bucketed at no momssats', () => {
+  const pointer = /Obs: en del av ruta 20-24 .*ingen Standard moms på 25, 12 eller 6 %.*under Standard moms .*kontoplanen/
+
+  it('points the per-verifikat finding at the kontoplan', () => {
+    const evidence = makeEvidence({ ruta20: 1000, ruta30: 250, ruta48: 250 }, {})
+    const [finding] = withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 }, evidence)
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(pointer)
+  })
+
+  it('points RC_OUTPUT_MISSING there too, the state a basis pair beside such an account leaves', () => {
+    // 1 000 kr in ruta 20 from the account at 0 %, 1 000 kr in ruta 21 from
+    // the 4535 pair, which alone is bucketed at 25 %.
+    const evidence = makeEvidence({ ruta20: 1000, ruta21: 1000, ruta30: 250 }, { r25: 1000 })
+    const result = withRcBasisGapFindings(
+      [aggregateRcOutputMissing, warningOnly],
+      { status: 'scanned', gapCount: 0 },
+      evidence,
+    )
+    expect(result.map((c) => c.code)).toEqual(['RC_OUTPUT_MISSING', 'RC_INPUT_VAT_MISMATCH'])
+    expect(result[0].message).toMatch(new RegExp(`^aggregate surplus finding ${pointer.source}`))
+    expect(result[1]).toBe(warningOnly)
+  })
+
+  it('says nothing of it when every basis in ruta 20-24 is bucketed, or the evidence is not numeric', () => {
+    const bucketed = makeEvidence({ ruta21: 398500, ruta30: 100000 }, { r25: 398500 })
+    const notNumeric = makeEvidence({ ruta20: Number.NaN, ruta30: 250 }, {})
+    const stringFigure = makeEvidence(
+      { ruta20: 1000, ruta30: 250 },
+      { r25: '5' as unknown as number },
+    )
+    for (const evidence of [bucketed, notNumeric, stringFigure]) {
+      const [finding] = withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 }, evidence)
+      expect(finding.status).toBe('ERROR')
+      expect(finding.message).not.toMatch(/Obs:/)
+    }
+    expect(withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 })[0].message).not.toMatch(/Obs:/)
   })
 })
 

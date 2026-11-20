@@ -14,6 +14,10 @@ import { seedCompany, insertDraftJournalEntry } from './fixtures'
  *      accept status/refund-summary updates.
  *   4. journal_entries.source_type accepts 'webshop_order'.
  *   5. webshop_store_settings RLS + upsert key.
+ *   6. webshop_store_settings.country_account_rules
+ *      (20261023065754_webshop_store_settings_country_account_rules): an
+ *      empty array by default, members can set it, and only an array is
+ *      accepted.
  */
 
 // Rows persist across pg-real runs; unique external ids per run.
@@ -154,11 +158,12 @@ describe('webshop_orders financial freeze', () => {
       ),
     ).rejects.toThrow(/financial fields are frozen/i)
 
-    // Non-financial fields keep syncing on frozen rows.
+    // Non-financial fields keep syncing on frozen rows, the destination
+    // country included (filled in on booked rows by a resync, crm#1032).
     const ok = await getPool().query(
       `UPDATE public.webshop_orders
          SET status = 'refunded', refunded_total = 500.00,
-             remote_changed_after_freeze = true
+             remote_changed_after_freeze = true, customer_country = 'DK'
        WHERE id = $1`,
       [rowId],
     )
@@ -243,6 +248,54 @@ describe('webshop_orders financial freeze', () => {
       [rowId],
     )
     expect(thawed.rowCount).toBe(1)
+  })
+
+  it('lets many rows share one verifikat, each frozen once posted (day booking, crm#1032)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const draftId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'webshop_order',
+    })
+    const first = await insertOrderRow({ companyId, userId })
+    const second = await insertOrderRow({ companyId, userId })
+
+    // The day booking's claim: every row of the day onto the one draft.
+    const claimed = await getPool().query(
+      `UPDATE public.webshop_orders SET journal_entry_id = $1
+        WHERE id = ANY($2::uuid[]) AND journal_entry_id IS NULL`,
+      [draftId, [first, second]],
+    )
+    expect(claimed.rowCount).toBe(2)
+
+    // A lost race releases every claim in one statement while still a draft.
+    const released = await getPool().query(
+      `UPDATE public.webshop_orders SET journal_entry_id = NULL WHERE journal_entry_id = $1`,
+      [draftId],
+    )
+    expect(released.rowCount).toBe(2)
+
+    const postedId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'webshop_order',
+      status: 'posted',
+      voucherNumber: 4712,
+    })
+    await getPool().query(
+      `UPDATE public.webshop_orders SET journal_entry_id = $1 WHERE id = ANY($2::uuid[])`,
+      [postedId, [first, second]],
+    )
+    for (const rowId of [first, second]) {
+      await expect(
+        getPool().query(`UPDATE public.webshop_orders SET total = 600.00 WHERE id = $1`, [rowId]),
+      ).rejects.toThrow(/financial fields are frozen/i)
+      await expect(
+        getPool().query(`UPDATE public.webshop_orders SET journal_entry_id = NULL WHERE id = $1`, [rowId]),
+      ).rejects.toThrow(/journal link is immutable/i)
+    }
   })
 
   it('rejects clearing the journal link once the entry is posted', async () => {
@@ -500,5 +553,37 @@ describe('webshop_orders invoice link release (crm#56)', () => {
       ]),
     ).rejects.toThrow(/the link is immutable/)
     expect(await orderInvoiceId(orderId)).toBe(first)
+  })
+
+  it('country_account_rules defaults to an empty array and only takes an array', async () => {
+    const { userId, companyId } = await seedCompany()
+    const storeScope = `butik-${randomUUID()}.myshopify.com`
+
+    const { rows } = await getPool().query(
+      `INSERT INTO public.webshop_store_settings (company_id, user_id, platform, store_scope)
+       VALUES ($1, $2, 'shopify', $3)
+       RETURNING country_account_rules`,
+      [companyId, userId, storeScope],
+    )
+    expect(rows[0].country_account_rules).toEqual([])
+
+    await withUserContext(userId, async (client) => {
+      const updated = await client.query(
+        `UPDATE public.webshop_store_settings
+           SET country_account_rules = '[{"country":"EU","vat_rate":null,"mode":"accounts","revenue_account":"3106","vat_account":"2670"}]'::jsonb
+         WHERE company_id = $1 AND store_scope = $2`,
+        [companyId, storeScope],
+      )
+      expect(updated.rowCount).toBe(1)
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.webshop_store_settings
+           SET country_account_rules = '{"EU":"3106"}'::jsonb
+         WHERE company_id = $1 AND store_scope = $2`,
+        [companyId, storeScope],
+      ),
+    ).rejects.toMatchObject({ code: '23514' })
   })
 })

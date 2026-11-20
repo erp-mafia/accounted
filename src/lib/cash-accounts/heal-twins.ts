@@ -142,3 +142,42 @@ export async function verifyTwinRepair(
   }
   return data as TwinRepairVerification
 }
+
+export interface HistoricalTwinRecoveryReport {
+  companyId: string
+  startedEventId: string
+  startedAt: string
+  observedAt: string
+  classification: 'consistent-with-completion' | 'partial' | 'contradictory' | 'insufficient-evidence'
+  completionRecords: Array<{ eventId: string; recordedAt: string }>
+  limitations: string[]
+  issues: Array<{ kind: string; id?: string }>
+  keeper?: { id: string; expectedLedger: string; currentLedger: string | null; isPrimary: boolean }
+  route: { connectionId?: string; status?: string | null; expectedLedger?: string; currentLedger?: string | null; keeperOwnsUid?: boolean | null }
+  retired: Array<{
+    id: string; expectedLedger: string; plannedOutcome: TwinRowReport['outcome']; plannedMovable: number; plannedStaying: number
+    exists: boolean; currentLedger: string | null; currentMovable: number; currentStaying: number
+    hasProviderClaim: boolean; isPrimary: boolean | null; dependencies: string[]
+  }>
+}
+
+/** Inspect historical intent at one database snapshot, independent of twins.
+ * No recovery event or business mutation is written by this report. */
+export async function reportHistoricalTwinRepairs(
+  supabase: SupabaseClient, companyId: string | null = null, startedEventId: string | null = null,
+): Promise<HistoricalTwinRecoveryReport[]> {
+  if (startedEventId && !companyId) throw new Error('Historical twin inspection requires a company for a specific event')
+  const { data, error } = await supabase.rpc('report_historical_cash_twin_repairs', {
+    p_company_id: companyId, p_started_event_id: startedEventId,
+  })
+  if (error) throw Object.assign(new Error(`historical cash twin inspection failed: ${error.message}`), { code: error.code })
+  if (!Array.isArray(data) || (startedEventId && data.length !== 1) || data.some(row =>
+    typeof row?.companyId !== 'string' || typeof row.startedEventId !== 'string'
+    || (companyId && row.companyId !== companyId) || (startedEventId && row.startedEventId !== startedEventId)
+    || !['consistent-with-completion','partial','contradictory','insufficient-evidence'].includes(row.classification)
+    || typeof row.startedAt !== 'string' || typeof row.observedAt !== 'string'
+    || !Array.isArray(row.completionRecords) || !Array.isArray(row.limitations) || !Array.isArray(row.issues)
+    || !Array.isArray(row.retired) || !row.route || typeof row.route !== 'object'
+  )) throw new Error('historical cash twin inspection failed: missing or invalid report')
+  return data as HistoricalTwinRecoveryReport[]
+}

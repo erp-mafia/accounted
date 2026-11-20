@@ -12,7 +12,9 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 }))
 
 const mockCreateSchedules = vi.fn()
-vi.mock('@/lib/bookkeeping/accruals/from-invoices', () => ({
+vi.mock('@/lib/bookkeeping/accruals/from-invoices', async (importOriginal) => ({
+  ACCRUAL_RELEASE_FAILED_WARNING: (await importOriginal<typeof import('@/lib/bookkeeping/accruals/from-invoices')>())
+    .ACCRUAL_RELEASE_FAILED_WARNING,
   createSchedulesForCustomerInvoice: (...args: unknown[]) => mockCreateSchedules(...args),
 }))
 
@@ -91,12 +93,14 @@ describe('bookInvoiceDeferred', () => {
       expect.objectContaining({ id: 'inv-1' }),
       'aktiebolag',
       'Kunden AB',
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     expect(mockLinkToJournalEntry).toHaveBeenCalledWith(
       mockSupabase,
       'company-1',
       'document-1',
       'je-1',
+      { link_basis: 'system_derived', link_evidence: null },
     )
     expect(mockCreateSchedules).toHaveBeenCalled()
   })
@@ -161,6 +165,23 @@ describe('bookInvoiceDeferred', () => {
     if (result.ok) {
       expect(result.warnings).toEqual([
         expect.objectContaining({ code: 'ACCRUAL_SCHEDULE_FAILED' }),
+      ])
+    }
+  })
+
+  it('warns when an upplupen intäkt month could not post right after the booking (#62)', async () => {
+    const invoice = makeSentInvoice()
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null })
+    enqueue({ data: null, error: null }) // no delivered PDF found
+    mockCreateSchedules.mockResolvedValue({ created: 1, failed: 0, releasesFailed: 1 })
+
+    const result = await book(invoice)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.warnings).toEqual([
+        expect.objectContaining({ code: 'ACCRUAL_RELEASE_FAILED', message: expect.stringMatching(/Bokför förfallna/) }),
       ])
     }
   })

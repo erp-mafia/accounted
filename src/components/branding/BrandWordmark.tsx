@@ -22,7 +22,7 @@ interface BrandWordmarkProps {
 /**
  * Wordmark used in place of the legacy logo image on auth / onboarding /
  * sandbox / invite surfaces. On a branded host with an uploaded logo it
- * renders the logo image ALONE (founder call 2026-08-05: byrå logos usually
+ * renders the logo image ALONE (product call 2026-08-05: byrå logos usually
  * carry their own name, so logo + text read as a duplicate); otherwise it
  * renders exactly the text-only wordmark: the active brand's `appName` in
  * Hedvig Letters Serif at weight 700 (the display font is single-weight on
@@ -47,7 +47,9 @@ export function BrandWordmark({
           alt={name}
           width={size === 'hero' ? 214 : 88}
           height={size === 'hero' ? 64 : 22}
-          className={cn('w-auto', size === 'hero' ? 'h-16' : 'h-[22px]')}
+          // max-w-full + object-contain: a logo wider than the column scales
+          // down instead of being squeezed sideways.
+          className={cn('w-auto max-w-full object-contain', size === 'hero' ? 'h-16' : 'h-[22px]')}
           priority={size === 'hero'}
           // Bypass the image optimizer: its remote-host allowlist is fixed at
           // build time, which the runtime-configured Docker image cannot

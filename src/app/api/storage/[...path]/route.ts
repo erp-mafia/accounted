@@ -9,6 +9,8 @@ import {
   inlineSafeMimeType,
   readBodyWithCap,
   resolveUpstreamStorageUrl,
+  storageTokenFromAuthorization,
+  type StorageProxyResolution,
 } from '@/lib/core/documents/storage-proxy'
 
 /**
@@ -32,14 +34,23 @@ import {
  * images), in which case that type is served.
  *
  * Auth: deliberately NOT withRouteContext. The caller is a sandbox with no
- * session, and the signed token in the query string is the credential:
- * Storage validates it against the exact object path on every request, the
- * same way it would on the public Storage host. The proxy only forwards
- * signed object paths on the documents bucket, only to our own Storage
- * origin, with a token present; it never mints, reads or relays any key.
+ * session, and the signed Storage token is the credential: Storage validates
+ * it against the exact object path on every request, the same way it would
+ * on the public Storage host. The proxy only forwards signed object paths on
+ * the documents bucket, only to our own Storage origin, with a token
+ * present; it never mints, reads or relays any key.
  *
- *   GET/HEAD  /api/storage/sign/documents/<key>?token=...        download
- *   PUT       /api/storage/upload/sign/documents/<key>?token=... upload
+ * The token arrives in the Authorization header, never in the URL (CASA
+ * 2.1.1: no credential in a URL this application serves, where it would
+ * reach access logs, browser history and Referer headers). A request with
+ * `token` in its query string is refused before anything is forwarded. The
+ * proxy's own request to Storage carries the token in the query because
+ * that is the only place Storage reads it; that hop is server to server and
+ * the URL is never logged or returned.
+ *
+ *   GET/HEAD  /api/storage/sign/documents/<key>[?download[=name]]  download
+ *   PUT       /api/storage/upload/sign/documents/<key>             upload
+ *   each with  Authorization: Bearer <signed token>
  */
 
 export const dynamic = 'force-dynamic'
@@ -66,27 +77,45 @@ const REQUEST_HEADERS_FORWARDED = [
 ] as const
 
 // Deliberately without content-type and content-disposition: both are
-// uploader-declared object metadata (see the module comment).
+// uploader-declared object metadata (see the module comment). And without
+// cache-control: see BASE_HEADERS.
 const RESPONSE_HEADERS_FORWARDED = [
   'content-length',
   'content-range',
   'accept-ranges',
-  'cache-control',
   'etag',
   'last-modified',
 ] as const
 
 // The sandbox fetch is not a browser, but a browser-based MCP client would
 // need these and they cost nothing: the token still gates every request.
+// Any origin, and never with credentials: the Authorization header a script
+// sets itself is the credential, a cookie is not, so no
+// Access-Control-Allow-Credentials. Authorization is not a safelisted
+// request header and must be named here for the preflight to pass.
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, PUT, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Cache-Control, x-upsert, Range',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Cache-Control, x-upsert, Range',
   'Access-Control-Max-Age': '600',
 }
 
-function withCors(response: Response): Response {
-  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+// On every answer, refusals included. nosniff: a served document is never
+// sniffed into something executable. no-referrer: nothing that opens from a
+// served document learns the address it was served from. no-store, never
+// Storage's own Cache-Control: the URL no longer holds the token, so a cache
+// keyed on the URL that kept a document would hand it to a request that
+// carries no token at all.
+const BASE_HEADERS: Record<string, string> = {
+  ...CORS_HEADERS,
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Cache-Control': 'private, no-store',
+  Vary: 'Authorization',
+}
+
+function withBaseHeaders(response: Response): Response {
+  for (const [key, value] of Object.entries(BASE_HEADERS)) {
     response.headers.set(key, value)
   }
   return response
@@ -177,20 +206,36 @@ async function servedContentHeaders(
   }
 }
 
-function rejected(reason: 'unsupported_path' | 'missing_token' | 'storage_unconfigured') {
-  const code =
-    reason === 'unsupported_path'
-      ? 'STORAGE_PROXY_UNSUPPORTED_PATH'
-      : reason === 'missing_token'
-        ? 'STORAGE_PROXY_TOKEN_REQUIRED'
-        : 'STORAGE_PROXY_UNCONFIGURED'
-  return withCors(errorResponseFromCode(code, log))
+/**
+ * The upstream failure as it may be logged. An error from fetch can quote
+ * the URL it was asked for, and that URL holds the token: the copy carries
+ * the name and the message with the token cut out, and neither the original
+ * stack nor its cause.
+ */
+function withoutToken(error: unknown, token: string | null): Error {
+  const source = error instanceof Error ? error : new Error(String(error))
+  const safe = new Error(token ? source.message.split(token).join('[token]') : source.message)
+  safe.name = source.name
+  return safe
+}
+
+const REJECTION_CODES: Record<Extract<StorageProxyResolution, { ok: false }>['reason'], string> = {
+  unsupported_path: 'STORAGE_PROXY_UNSUPPORTED_PATH',
+  missing_token: 'STORAGE_PROXY_TOKEN_REQUIRED',
+  token_in_url: 'STORAGE_PROXY_TOKEN_IN_URL',
+  api_key_as_token: 'STORAGE_PROXY_API_KEY_REFUSED',
+  storage_unconfigured: 'STORAGE_PROXY_UNCONFIGURED',
+}
+
+function rejected(reason: keyof typeof REJECTION_CODES) {
+  return withBaseHeaders(errorResponseFromCode(REJECTION_CODES[reason], log))
 }
 
 async function proxy(request: Request, method: 'GET' | 'HEAD' | 'PUT'): Promise<Response> {
   const url = new URL(request.url)
   const objectPath = objectPathOf(request)
-  const resolved = resolveUpstreamStorageUrl(objectPath, url.searchParams)
+  const token = storageTokenFromAuthorization(request.headers.get('authorization'))
+  const resolved = resolveUpstreamStorageUrl(objectPath, url.searchParams, token)
   if (!resolved.ok) return rejected(resolved.reason)
 
   const headers = new Headers()
@@ -203,14 +248,14 @@ async function proxy(request: Request, method: 'GET' | 'HEAD' | 'PUT'): Promise<
   if (method === 'PUT') {
     const declared = Number(request.headers.get('content-length') ?? '0')
     if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
-      return withCors(errorResponseFromCode('STORAGE_PROXY_BODY_TOO_LARGE', log))
+      return withBaseHeaders(errorResponseFromCode('STORAGE_PROXY_BODY_TOO_LARGE', log))
     }
     // Stream with a cap: the declared length is advisory (absent or wrong),
     // and the token is only validated upstream, so never buffer an unbounded
     // body before measuring it.
     const read = await readBodyWithCap(request.body, MAX_UPLOAD_BYTES)
     if (read === null) {
-      return withCors(errorResponseFromCode('STORAGE_PROXY_BODY_TOO_LARGE', log))
+      return withBaseHeaders(errorResponseFromCode('STORAGE_PROXY_BODY_TOO_LARGE', log))
     }
     body = read
     if (!headers.has('content-type')) headers.set('content-type', 'application/octet-stream')
@@ -226,17 +271,15 @@ async function proxy(request: Request, method: 'GET' | 'HEAD' | 'PUT'): Promise<
       cache: 'no-store',
     })
   } catch (error) {
-    log.error('storage proxy upstream request failed', error as Error, { method })
-    return withCors(errorResponseFromCode('STORAGE_PROXY_UPSTREAM_UNAVAILABLE', log))
+    log.error('storage proxy upstream request failed', withoutToken(error, token), { method })
+    return withBaseHeaders(errorResponseFromCode('STORAGE_PROXY_UPSTREAM_UNAVAILABLE', log))
   }
 
-  const responseHeaders = new Headers(CORS_HEADERS)
+  const responseHeaders = new Headers(BASE_HEADERS)
   for (const name of RESPONSE_HEADERS_FORWARDED) {
     const value = upstream.headers.get(name)
     if (value) responseHeaders.set(name, value)
   }
-  // Never let a served document be sniffed into something executable.
-  responseHeaders.set('X-Content-Type-Options', 'nosniff')
 
   if (method === 'PUT') {
     // Storage answers an upload with its own small JSON envelope ({ Key }),

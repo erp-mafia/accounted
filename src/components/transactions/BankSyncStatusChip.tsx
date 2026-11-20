@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { createClient } from '@/lib/supabase/client'
 import { onBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -13,6 +13,8 @@ import {
   getChipState,
   type ConnectionRow,
 } from '@/lib/transactions/bank-sync-chip-state'
+import { chooseAccountsHref } from '@/lib/bank-feed/connection-links'
+import { isSyncedAccount, type MirrorCardCandidate } from '@/lib/bank-sync/mirror-card-account'
 
 export function useAgeFormatter() {
   const t = useTranslations('transactions')
@@ -44,13 +46,17 @@ export default function BankSyncStatusChip() {
     const load = () => {
       supabase
         .from('bank_connections')
-        .select('id, status, last_synced_at, consent_expires')
+        .select('id, status, last_synced_at, consent_expires, aggregator, accounts_data')
         .eq('company_id', companyId)
         .then(({ data, error }) => {
           if (cancelled) return
           // On error keep the chip hidden (empty rows) rather than rendering a
           // false "healthy" state from stale data.
-          setRows(error ? [] : (data ?? []))
+          setRows(error ? [] : (data ?? []).map(({ accounts_data, ...row }) => ({
+            ...row,
+            // The crons skip a connection with nothing to fetch: it never syncs, so it is never "stale".
+            fetchesAccounts: ((accounts_data ?? []) as MirrorCardCandidate[]).some(isSyncedAccount),
+          })))
         })
     }
 
@@ -72,15 +78,16 @@ export default function BankSyncStatusChip() {
   if (state.kind === 'none') return null
 
   if (state.kind === 'paused') {
-    // Same remedy split as BankSyncNowButton: hosted points at billing,
-    // self-host at the connector key (never the Stripe page).
+    // Hosted points at billing, self-host at the connector key (never the
+    // Stripe page). This chip is the transactions page's upgrade path for a
+    // company with a bank connection but no bank_sync plan.
     const selfHosted = isSelfHosted()
     return (
       <Link
         href={selfHosted ? '/settings/banking' : '/settings/billing'}
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {selfHosted
             ? t('bank_sync_paused_connector_key')
@@ -94,9 +101,9 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
+        className="bg-destructive/8 inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {state.count === 1
             ? t('bank_sync_attention_one')
@@ -108,15 +115,16 @@ export default function BankSyncStatusChip() {
 
   if (state.kind === 'selection') {
     // The bank is authorized but no accounts were chosen, so nothing syncs.
-    // Links straight into the account picker for that connection: the
-    // settings panel opens it from ?select_accounts=, the same parameter the
-    // bank callback lands on. Same neutral shape + ochre text as 'expiring'.
+    // Links straight into the account choice for that connection: Koppla
+    // banken for an Open Payments row, the Enable Banking panel's picker for
+    // the rest (lib/bank-feed/connection-links.ts). Same neutral shape +
+    // ochre text as 'expiring'.
     return (
       <Link
-        href={`/settings/banking?select_accounts=${encodeURIComponent(state.connectionId)}`}
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        href={chooseAccountsHref({ id: state.connectionId, aggregator: state.aggregator })}
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {state.count === 1
             ? t('bank_sync_selection_one')
@@ -132,9 +140,9 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {state.count === 1
             ? t('bank_sync_expiring_one', { days: state.daysLeft })
@@ -150,12 +158,12 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {t('bank_sync_stale_warning')}
-          <span className="ml-1 tabular-nums opacity-70">({formatAge(state.mostRecent)})</span>
+          <span className="ml-1 tabular-nums opacity-70">({formatAge(state.lastSynced)})</span>
         </span>
       </Link>
     )

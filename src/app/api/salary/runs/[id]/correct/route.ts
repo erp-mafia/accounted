@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { correctSalaryRun } from '@/lib/salary/correct-run'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 const NOT_BOOKED_MESSAGE = 'Kan bara korrigera bokförda lönekörningar'
 const PERIOD_CONFLICT_MESSAGE = 'Det finns redan en aktiv lönekörning för denna period. Ta bort den först.'

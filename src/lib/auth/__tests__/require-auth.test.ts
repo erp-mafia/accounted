@@ -4,8 +4,15 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
+// The request headers the route sees: what the proxy forwarded.
+const requestHeaders = vi.hoisted(() => ({ value: new Map<string, string>() }))
+vi.mock('next/headers', () => ({
+  headers: vi.fn(async () => ({ get: (name: string) => requestHeaders.value.get(name) ?? null })),
+}))
+
 import { requireAuth } from '../require-auth'
 import { createClient } from '@/lib/supabase/server'
+import { MFA_ASSURANCE_HEADER, signNoVerifiedFactor } from '../mfa-assurance'
 
 const CLAIMS = {
   iss: 'https://test.supabase.co/auth/v1',
@@ -49,6 +56,16 @@ function factorList(...factors: Array<typeof VERIFIED_TOTP>) {
 
 type MockAuth = Record<string, unknown>
 
+/**
+ * The auth server's answer for a user without a verified factor. Every AAL1
+ * session is asked this now that the step-up no longer hangs on
+ * NEXT_PUBLIC_REQUIRE_MFA, so tests about the claims and getUser paths give
+ * their mock one.
+ */
+function noFactors() {
+  return { listFactors: vi.fn().mockResolvedValue(factorList()) }
+}
+
 function useSupabase(auth: MockAuth) {
   const supabase = { auth }
   vi.mocked(createClient).mockResolvedValue(supabase as never)
@@ -63,6 +80,8 @@ function enableMfa() {
 describe('requireAuth', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    requestHeaders.value = new Map()
+    vi.stubEnv('SESSION_TIMEOUT_SECRET', 'require-auth-test-secret')
     // Deterministic baseline: MFA off unless a test stubs it on.
     vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'false')
     // Matches CLAIMS.iss so the fast path passes the issuer pinning.
@@ -76,7 +95,7 @@ describe('requireAuth', () => {
   it('uses locally verified claims without calling getUser (fast path)', async () => {
     const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
     const getUser = vi.fn()
-    useSupabase({ getClaims, getUser })
+    useSupabase({ getClaims, getUser, mfa: noFactors() })
 
     const result = await requireAuth()
 
@@ -89,7 +108,7 @@ describe('requireAuth', () => {
 
   it('falls back to getUser when the client has no getClaims (legacy mocks)', async () => {
     const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
-    useSupabase({ getUser })
+    useSupabase({ getUser, mfa: noFactors() })
 
     const result = await requireAuth()
 
@@ -101,7 +120,7 @@ describe('requireAuth', () => {
   it('returns 401 when neither claims nor getUser yield a user', async () => {
     const getClaims = vi.fn().mockResolvedValue({ data: null, error: null })
     const getUser = vi.fn().mockResolvedValue({ data: { user: null }, error: null })
-    useSupabase({ getClaims, getUser })
+    useSupabase({ getClaims, getUser, mfa: noFactors() })
 
     const result = await requireAuth()
 
@@ -115,7 +134,7 @@ describe('requireAuth', () => {
   it('falls back to getUser when getClaims throws (JWKS outage)', async () => {
     const getClaims = vi.fn().mockRejectedValue(new Error('jwks fetch failed'))
     const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
-    useSupabase({ getClaims, getUser })
+    useSupabase({ getClaims, getUser, mfa: noFactors() })
 
     const result = await requireAuth()
 
@@ -128,7 +147,7 @@ describe('requireAuth', () => {
     const claims = { ...CLAIMS, iss: 'https://evil.example.com/auth/v1' }
     const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
     const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
-    useSupabase({ getClaims, getUser })
+    useSupabase({ getClaims, getUser, mfa: noFactors() })
 
     const result = await requireAuth()
 
@@ -141,7 +160,7 @@ describe('requireAuth', () => {
     const claims = { ...CLAIMS, aud: 'something-else' }
     const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
     const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
-    useSupabase({ getClaims, getUser })
+    useSupabase({ getClaims, getUser, mfa: noFactors() })
 
     const result = await requireAuth()
 
@@ -154,7 +173,7 @@ describe('requireAuth', () => {
     const claims = { ...CLAIMS, aud: ['authenticated', 'other'] }
     const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
     const getUser = vi.fn()
-    useSupabase({ getClaims, getUser })
+    useSupabase({ getClaims, getUser, mfa: noFactors() })
 
     const result = await requireAuth()
 
@@ -335,6 +354,125 @@ describe('requireAuth', () => {
 
       expect(result.error).toBeNull()
       expect(result.user?.id).toBe('user-1')
+      expect(listFactors).not.toHaveBeenCalled()
+    })
+  })
+
+  // The step-up protects everyone who enrolled a factor, whatever the flag
+  // says; the flag only decides forced enrolment, which requireAuth never
+  // does. Production carried the flag as "true\n", which reads as off.
+  describe('step-up without NEXT_PUBLIC_REQUIRE_MFA', () => {
+    it('refuses an AAL1 session of a user with a verified factor while MFA is not required', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.user).toBeNull()
+      expect(result.error?.status).toBe(403)
+    })
+
+    it('still steps up under the unreadable production value "true\\n"', async () => {
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true\n')
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+    })
+
+    it('lets an AAL1 session of a user without a factor through', async () => {
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      useSupabase({ getClaims, mfa: noFactors() })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(result.user?.id).toBe('user-1')
+    })
+
+    it('passes an AAL2 session without asking the auth server', async () => {
+      const claims = { ...CLAIMS, aal: 'aal2' }
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+      const listFactors = vi.fn()
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(listFactors).not.toHaveBeenCalled()
+    })
+
+    it('never gates a self-hosted deployment', async () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(listFactors).not.toHaveBeenCalled()
+    })
+
+    it("takes the proxy's signed verdict for this session instead of asking the auth server", async () => {
+      requestHeaders.value.set(MFA_ASSURANCE_HEADER, (await signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1' }))!)
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(result.user?.id).toBe('user-1')
+      expect(listFactors).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['another session', () => signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-2' })],
+      ['another user', () => signNoVerifiedFactor({ userId: 'user-2', sessionId: 'sess-1' })],
+      ['an expired verdict', () => signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1', now: Date.now() - 60_000 })],
+      ['a forged verdict', async () => `${Date.now() + 10_000}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`],
+      ['another secret', () => signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1' }, { SESSION_TIMEOUT_SECRET: 'other' })],
+    ])('asks the auth server when the verdict is for %s', async (_case, verdict) => {
+      requestHeaders.value.set(MFA_ASSURANCE_HEADER, (await verdict())!)
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+      expect(listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('asks the auth server on the getUser fallback path, verdict or not', async () => {
+      requestHeaders.value.set(MFA_ASSURANCE_HEADER, (await signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1' }))!)
+      const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getUser, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+      expect(listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('skips a user under a live time-boxed exemption', async () => {
+      const claims = {
+        ...CLAIMS,
+        app_metadata: { provider: 'email', mfa_exempt_until: new Date(Date.now() + 86_400_000).toISOString() },
+      }
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
       expect(listFactors).not.toHaveBeenCalled()
     })
   })

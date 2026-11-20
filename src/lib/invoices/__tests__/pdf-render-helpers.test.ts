@@ -11,13 +11,12 @@
  * mock `fetch` and exercise the real sharp pipeline.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import QRCode from 'qrcode'
-import { prepareInvoicePdfRender, buildPaymentLinkQrDataUrl, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
-import { makeCompanySettings, makeInvoice } from '@/tests/helpers'
+import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { makeCompanySettings } from '@/tests/helpers'
 
 const fontDownloadMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/supabase/server', () => ({
@@ -426,82 +425,5 @@ describe('prepareInvoicePdfRender: invoice fonts', () => {
 
     expect(fontDownloadMock).not.toHaveBeenCalled()
     expect(branding.fontFamily).toBe('Helvetica')
-  })
-})
-
-describe('buildPaymentLinkQrDataUrl', () => {
-  it('encodes the payment link as a PNG QR data URL for a real invoice', async () => {
-    const invoice = makeInvoice({ payment_link_url: 'https://buy.stripe.com/test_abc123' })
-    const qr = await buildPaymentLinkQrDataUrl(invoice)
-    expect(qr).toMatch(new RegExp(`^${PNG_DATA_URL_PREFIX}`))
-  })
-
-  it('returns null when the invoice has no payment link', async () => {
-    expect(await buildPaymentLinkQrDataUrl(makeInvoice())).toBeNull()
-    expect(await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: '   ' }))).toBeNull()
-  })
-
-  it('returns null for non-payable documents (proforma, delivery note, credit note)', async () => {
-    const url = 'https://buy.stripe.com/test_abc123'
-    expect(
-      await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: url, document_type: 'proforma' })),
-    ).toBeNull()
-    expect(
-      await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: url, document_type: 'delivery_note' })),
-    ).toBeNull()
-    expect(
-      await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: url, credited_invoice_id: 'inv-orig' })),
-    ).toBeNull()
-  })
-})
-
-describe('buildSwishQrDataUrl', () => {
-  // Spy without replacing the implementation: the payload string is the unit
-  // under test (the PNG pixels are qrcode's concern), and the passthrough
-  // keeps the returned data URL real. The Swish payload locks the amount
-  // (editmask 0), so an amount above "Att betala" makes the customer overpay
-  // with no way to correct it in the app.
-  let toDataURL: MockInstance
-
-  beforeEach(() => {
-    toDataURL = vi.spyOn(QRCode, 'toDataURL')
-  })
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  const company = () => makeCompanySettings({ swish: '1234567890' })
-
-  it('encodes "Att betala" (total minus ROT/RUT deduction), not the invoice total', async () => {
-    const invoice = makeInvoice({ total: 1250, deduction_total: 625 })
-    const qr = await buildSwishQrDataUrl(company(), invoice)
-    expect(qr).toMatch(new RegExp(`^${PNG_DATA_URL_PREFIX}`))
-    expect(toDataURL).toHaveBeenCalledWith('C1234567890;625.00;F-2024001;0', expect.anything())
-  })
-
-  it('applies öresavrundning before the deduction, same order as the PDF totals block', async () => {
-    const invoice = makeInvoice({ total: 1250.49, ore_rounding: true, deduction_total: 625 })
-    await buildSwishQrDataUrl(company(), invoice)
-    expect(toDataURL).toHaveBeenCalledWith('C1234567890;625.00;F-2024001;0', expect.anything())
-  })
-
-  it('renders no QR when the deduction covers the whole invoice (nothing to pay)', async () => {
-    const invoice = makeInvoice({ total: 1250, deduction_total: 1250 })
-    expect(await buildSwishQrDataUrl(company(), invoice)).toBeNull()
-    expect(toDataURL).not.toHaveBeenCalled()
-  })
-
-  it('renders no QR for non-payable documents (credit note, proforma, delivery note)', async () => {
-    const creditNote = makeInvoice({ total: 1250, deduction_total: 625, credited_invoice_id: 'inv-orig' })
-    expect(await buildSwishQrDataUrl(company(), creditNote)).toBeNull()
-    expect(await buildSwishQrDataUrl(company(), makeInvoice({ document_type: 'proforma' }))).toBeNull()
-    expect(await buildSwishQrDataUrl(company(), makeInvoice({ document_type: 'delivery_note' }))).toBeNull()
-    expect(toDataURL).not.toHaveBeenCalled()
-  })
-
-  it('keeps the plain total for invoices without a deduction', async () => {
-    const invoice = makeInvoice()
-    await buildSwishQrDataUrl(company(), invoice)
-    expect(toDataURL).toHaveBeenCalledWith('C1234567890;12500.00;F-2024001;0', expect.anything())
   })
 })

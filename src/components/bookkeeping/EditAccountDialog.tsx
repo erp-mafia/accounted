@@ -23,7 +23,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Loader2, Plus, X } from 'lucide-react'
+import { PlusIcon, XMarkIcon } from '@/components/icons'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import {
   type AccountDimensionRuleDto,
@@ -59,9 +59,9 @@ const RULE_TYPE_LABELS: Record<DimensionRuleType, string> = {
 }
 
 const RULE_TYPE_HELP: Record<DimensionRuleType, string> = {
-  required: 'Krävs — verifikat på kontot kan inte bokföras utan värde',
-  default: 'Förval — värdet föreslås men kan ändras',
-  fixed: 'Låst — värdet sätts alltid automatiskt',
+  required: 'Krävs: verifikat på kontot kan inte bokföras utan värde',
+  default: 'Förval: värdet föreslås men kan ändras',
+  fixed: 'Låst: värdet sätts alltid automatiskt',
 }
 
 export function EditAccountDialog({ open, onOpenChange, account, onSaved }: EditAccountDialogProps) {
@@ -83,7 +83,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
   const [isActive, setIsActive] = useState(account.is_active)
   const [isSaving, setIsSaving] = useState(false)
 
-  // Dimension rules ("Dimensionsregler") — visible only when the company has
+  // Dimension rules ("Dimensionsregler") - visible only when the company has
   // dimensions enabled (same /api/settings gate as JournalEntryForm). Rule
   // mutations apply immediately via their own fetches + toasts; they are
   // deliberately independent of the account PUT below.
@@ -195,7 +195,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
 
   async function handleToggleRule(rule: AccountDimensionRuleDto, checked: boolean) {
     const ruleId = rule.account_dimension_rule_id
-    // Optimistic — the switch flips immediately and reverts on failure.
+    // Optimistic - the switch flips immediately and reverts on failure.
     setRules((prev) =>
       prev.map((r) =>
         r.account_dimension_rule_id === ruleId ? { ...r, is_active: checked } : r,
@@ -291,7 +291,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>
             Redigera konto <span data-ph-mask="">{account.account_number}</span>
@@ -378,10 +378,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                       </p>
                       <Button
                         variant="ghost"
-                        size="sm"
                         onClick={() => setAddRuleOpen(true)}
                       >
-                        <Plus className="mr-1 h-3.5 w-3.5" />
+                        <PlusIcon className="h-3.5 w-3.5" />
                         Lägg till regel
                       </Button>
                     </div>
@@ -390,7 +389,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                   {rules.map((rule) => (
                     <div
                       key={rule.account_dimension_rule_id}
-                      className="flex items-center gap-3 rounded-lg border p-3"
+                      className="flex items-center gap-3 rounded-lg p-3 bg-control shadow-raised"
                     >
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium truncate">
@@ -420,7 +419,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                         aria-label={`Ta bort regel för ${rule.dimension_name}`}
                         onClick={() => handleDeleteRule(rule)}
                       >
-                        <X className="h-4 w-4" />
+                        <XMarkIcon className="h-4 w-4" />
                       </Button>
                     </div>
                   ))}
@@ -491,24 +490,19 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                       <div className="flex justify-end gap-2">
                         <Button
                           variant="ghost"
-                          size="sm"
                           disabled={isAddingRule}
                           onClick={resetAddRuleForm}
                         >
                           Avbryt
                         </Button>
                         <Button
-                          size="sm"
                           disabled={
-                            isAddingRule ||
                             !newRuleDim ||
                             (newRuleNeedsValue && !newRuleValueCode)
                           }
+                          loading={isAddingRule}
                           onClick={handleAddRule}
                         >
-                          {isAddingRule && (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          )}
                           Lägg till
                         </Button>
                       </div>
@@ -517,10 +511,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                     rules.length > 0 && (
                       <Button
                         variant="ghost"
-                        size="sm"
                         onClick={() => setAddRuleOpen(true)}
                       >
-                        <Plus className="mr-1 h-3.5 w-3.5" />
+                        <PlusIcon className="h-3.5 w-3.5" />
                         Lägg till regel
                       </Button>
                     )
@@ -530,7 +523,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
             </div>
           )}
 
-          <div className="flex items-center justify-between rounded-lg border p-3">
+          <div className="flex items-center justify-between rounded-lg p-3 bg-control shadow-raised">
             <div>
               <p className="text-sm font-medium">Aktivt konto</p>
               <p className="text-xs text-muted-foreground">
@@ -551,8 +544,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Avbryt
           </Button>
-          <Button onClick={handleSave} disabled={isSaving || !accountName.trim()}>
-            {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button onClick={handleSave} disabled={!accountName.trim()} loading={isSaving}>
             Spara
           </Button>
         </DialogFooter>

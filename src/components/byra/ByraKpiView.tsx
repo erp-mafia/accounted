@@ -4,11 +4,11 @@ import { useMemo, useState, useTransition } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { ArrowDown, ArrowUp, Loader2 } from 'lucide-react'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { ArrowDownIcon, ArrowUpIcon, SpinnerIcon } from '@/components/icons'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -21,10 +21,17 @@ import {
 import type { ByraKpiClientRow } from '@/lib/byra/kpi-overview'
 
 // Recharts is heavy: defer the chart so the tiles and table render first
-// (same pattern as components/reports/views/index.tsx).
+// (same pattern as components/reports/lazy-views/IncomeStatementView.tsx).
 const IncomeExpenseChart = dynamic(
   () => import('@/components/reports/IncomeExpenseChart').then((m) => m.IncomeExpenseChart),
-  { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
+  {
+    ssr: false,
+    loading: () => (
+      <LateReveal>
+        <Skeleton className="h-64 w-full" />
+      </LateReveal>
+    ),
+  },
 )
 
 interface ByraKpiViewProps {
@@ -181,7 +188,7 @@ export default function ByraKpiView({
     { key: 'unbookedCount', label: tClients('col_unbooked'), numeric: true },
   ]
 
-  const SortIcon = sort.desc ? ArrowDown : ArrowUp
+  const SortIcon = sort.desc ? ArrowDownIcon : ArrowUpIcon
 
   return (
     <div className={cn('space-y-8 transition-opacity duration-150', isPending && 'opacity-60')}>
@@ -191,7 +198,7 @@ export default function ByraKpiView({
           onClick={handleAllCompanies}
           aria-pressed={!hasExplicitFilter}
           className={cn(
-            'rounded-full border px-3 py-[5px] text-[13px] transition-colors duration-150',
+            'rounded-md border px-3 py-[5px] text-[13px] transition-colors duration-150',
             !hasExplicitFilter
               ? 'border-foreground/20 bg-secondary text-foreground'
               : 'border-border text-muted-foreground hover:bg-secondary/60',
@@ -208,7 +215,7 @@ export default function ByraKpiView({
               onClick={() => handleToggleCompany(client.companyId)}
               aria-pressed={active}
               className={cn(
-                'rounded-full border px-3 py-[5px] text-[13px] transition-colors duration-150',
+                'rounded-md border px-3 py-[5px] text-[13px] transition-colors duration-150',
                 active
                   ? 'border-foreground/20 bg-secondary text-foreground'
                   : 'border-border text-muted-foreground hover:bg-secondary/60',
@@ -233,25 +240,26 @@ export default function ByraKpiView({
         <AttnLine>{t('kpi_failed_notice', { count: failedCount })}</AttnLine>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* A flat band of headline numbers between hairlines, straight on the panel: no cards inside it. */}
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-4 border-t-hairline border-b-hairline py-4 lg:grid-cols-4">
         {tiles.map((tile) => (
-          <div key={tile.label} className="rounded-lg border border-border p-4">
-            <div className="text-xs text-muted-foreground">{tile.label}</div>
-            <div
+          <div key={tile.label} className="min-w-0">
+            <dt className="text-xs font-medium text-muted-foreground">{tile.label}</dt>
+            <dd
               className={cn(
-                'mt-1 font-sans text-xl tabular-nums',
+                'mt-1 truncate font-display text-2xl tabular-nums text-strong',
                 tile.negative && 'text-destructive',
               )}
             >
               {tile.value}
-            </div>
+            </dd>
           </div>
         ))}
-      </div>
+      </dl>
 
       <IncomeExpenseChart months={months} />
 
-      <div className="overflow-x-auto">
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -284,7 +292,7 @@ export default function ByraKpiView({
                 )}
               >
                 <td className={TD_CLASS}>
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-2 whitespace-nowrap">
                     <span className="font-medium text-foreground">{row.name}</span>
                     {row.orgNumber && (
                       <span className="text-xs text-muted-foreground tabular-nums">
@@ -292,7 +300,7 @@ export default function ByraKpiView({
                       </span>
                     )}
                     {pendingId === row.companyId && (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      <SpinnerIcon className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                     )}
                   </span>
                 </td>
@@ -303,7 +311,7 @@ export default function ByraKpiView({
                 ) : (
                   <>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                      {formatCurrency(row.revenue)}
+                      {formatRowAmount(row.revenue)}
                     </td>
                     <td
                       className={cn(
@@ -312,7 +320,7 @@ export default function ByraKpiView({
                         row.result < 0 && 'text-destructive',
                       )}
                     >
-                      {formatCurrency(row.result)}
+                      {formatRowAmount(row.result)}
                     </td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums text-muted-foreground')}>
                       {formatMargin(row.margin)}
@@ -324,10 +332,10 @@ export default function ByraKpiView({
                         row.cash < 0 && 'text-destructive',
                       )}
                     >
-                      {formatCurrency(row.cash)}
+                      {formatRowAmount(row.cash)}
                     </td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums text-muted-foreground')}>
-                      {formatCurrency(row.vatLiability)}
+                      {formatRowAmount(row.vatLiability)}
                     </td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
                       {row.unbookedCount > 0 ? (
@@ -355,7 +363,7 @@ export default function ByraKpiView({
                       >
                         {row.nextDeadline.title}
                       </span>
-                      <span className="text-muted-foreground tabular-nums">
+                      <span className="whitespace-nowrap text-muted-foreground tabular-nums">
                         {formatDate(row.nextDeadline.dueDate)}
                       </span>
                     </span>

@@ -13,14 +13,26 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { CalendarPlus, Lock, Plus } from 'lucide-react'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { CalendarIcon, EllipsisHorizontalIcon, LockClosedIcon, PlusIcon } from '@/components/icons'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCustomers } from '@/lib/reference-data/hooks'
 import { formatCurrency } from '@/lib/utils'
 import type { Deadline } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
+import { summarizeOverdueInvoices, type OverdueSummaryRow } from '@/lib/worklist/overdue-summary'
 
 const supabase = createClient()
 
@@ -45,15 +57,47 @@ export default function DeadlinesPage() {
   const { company } = useCompany()
   const companyId = company?.id
   const t = useTranslations('deadlines')
+  const tCommon = useTranslations('common')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const { canWrite } = useCanWrite()
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
-  const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
   const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number; unconverted: number }>({ count: 0, total: 0, unconverted: 0 })
   const [isLoading, setIsLoading] = useState(true)
+  // The last load failed: said in the page, never a toast (Stil v3 states).
+  const [loadFailed, setLoadFailed] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editingDeadline, setEditingDeadline] = useState<Deadline | null>(null)
+  // The shared customer cache; a deadline pointing at an archived customer
+  // keeps that one in the list so the edit form does not show it blank.
+  const { customers } = useCustomers({ keepId: editingDeadline?.customer_id })
   const { toast } = useToast()
+
+  // Helårsmoms is due earlier with EU trade. The yearly row below follows the
+  // books as well as the "Handel med andra EU-länder" setting
+  // (lib/tax/fiscal-year-eu-trade.ts); when the books show EU trade (the
+  // declaration's EU rutor, /api/settings/eu-trade-signal) and the setting is
+  // off, ask for the setting so it matches (crm#1171).
+  const { settings } = useCompanySettings()
+  const euTradeCheckApplies =
+    !!settings?.vat_registered && settings.moms_period === 'yearly' && !settings.vat_has_eu_trade
+  const [euTradeOff, setEuTradeOff] = useState(false)
+  useEffect(() => {
+    if (!euTradeCheckApplies) return
+    let cancelled = false
+    fetch('/api/settings/eu-trade-signal')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && (json?.data?.has_eu_purchases || json?.data?.has_eu_sales)) setEuTradeOff(true)
+      })
+      .catch(() => {
+        // Best-effort signal: a failed fetch just hides the warning.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [euTradeCheckApplies, companyId])
 
   // Returns whether the list on screen was actually refreshed. Handlers that
   // confirm an outcome to the user need that: claiming a row moved while the
@@ -63,13 +107,13 @@ export default function DeadlinesPage() {
     setIsLoading(true)
 
     try {
-      const today = new Date().toISOString().split('T')[0]
+      const today = todayIsoStockholm()
 
       // fetchAllRows: PostgREST silently caps plain selects at 1000 rows,
       // which would truncate the deadline list and undercount overdue
       // invoices for large companies. The secondary .order('id') gives the
       // stable total order paging requires.
-      const [deadlineRows, customerRows, overdueRows] = await Promise.all([
+      const [deadlineRows, overdueRows] = await Promise.all([
         fetchAllRows<Deadline>(({ from, to }) =>
           supabase
             .from('deadlines')
@@ -80,67 +124,43 @@ export default function DeadlinesPage() {
             .order('id', { ascending: true })
             .range(from, to),
         ),
-        fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
-          supabase
-            .from('customers')
-            .select('id, name')
-            .eq('company_id', companyId)
-            .is('archived_at', null)
-            .order('name', { ascending: true })
-            .order('id', { ascending: true })
-            .range(from, to),
-        ),
-        fetchAllRows<{ total_sek: number | null; total: number | null; currency: string | null }>(({ from, to }) =>
-          supabase
-            .from('invoices')
-            .select('total_sek, total, currency')
-            .eq('company_id', companyId)
-            // The open statuses, and only those the CHECK actually allows
-            // (draft, sent, paid, partially_paid, overdue, cancelled,
-            // credited): draft is not owed yet, paid/cancelled/credited are
-            // settled. There is no 'unpaid' status; this filter used to name
-            // one, so every invoice the reminder run had already flipped to
-            // 'overdue' fell out of the total silently. partially_paid is
-            // deliberately absent: the sum below is the invoice total, not
-            // remaining_amount, so counting one would report money already
-            // received as still owed, and the action link lands on the
-            // invoices tab that lists exactly sent + overdue.
-            .in('status', ['sent', 'overdue'])
-            // Only fakturor are owed: proformas, delivery notes and quotes
-            // carry a date but no receivable.
-            .eq('document_type', 'invoice')
-            .lt('due_date', today)
+        // The one overdue rule (lib/invoices/overdue.ts), never a copy of it:
+        // a hand-written query here missed the credit-note and open-remainder
+        // filters, so a credited kreditfaktura counted as an overdue invoice
+        // with its negative total (crm#1435).
+        fetchAllRows<OverdueSummaryRow>(({ from, to }) =>
+          filterOverdueInvoices(
+            supabase
+              .from('invoices')
+              .select('due_date, total, total_sek, remaining_amount, currency')
+              .eq('company_id', companyId),
+            today,
+          )
             .order('id', { ascending: true })
             .range(from, to),
         ),
       ])
 
-      // Non-SEK invoices without a stored SEK conversion (rate fetch failed at
-      // creation) are excluded from the SEK sum rather than mixed in raw, and
-      // surfaced as a count in the attn line instead.
-      let overdueTotal = 0
-      let unconvertedCount = 0
-      for (const inv of overdueRows) {
-        if (inv.total_sek != null) overdueTotal += inv.total_sek
-        else if (!inv.currency || inv.currency === 'SEK') overdueTotal += inv.total || 0
-        else unconvertedCount++
-      }
+      // What is still owed, in SEK, the same figure as the Att göra row: a
+      // partly paid invoice adds its remainder, and a foreign-currency one
+      // with no stored SEK amount is counted in the attn line instead.
+      const overdue = summarizeOverdueInvoices(overdueRows, today)
 
       setDeadlines(deadlineRows)
-      setCustomers(customerRows)
-      setOverdueInvoices({ count: overdueRows.length, total: overdueTotal, unconverted: unconvertedCount })
+      setOverdueInvoices({
+        count: overdue?.count ?? 0,
+        total: overdue?.remaining_sek ?? 0,
+        unconverted: overdue?.unconverted_count ?? 0,
+      })
+      setLoadFailed(false)
       return true
     } catch {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
+      setLoadFailed(true)
       return false
     } finally {
       setIsLoading(false)
     }
-  }, [companyId, toast, t])
+  }, [companyId])
 
   useEffect(() => {
     fetchData()
@@ -281,8 +301,8 @@ export default function DeadlinesPage() {
       }
 
       // Confirm only once the row is provably back. When the reload failed,
-      // fetchData has already said so and TOAST_LIMIT is 1, so a success
-      // sentence here would evict that warning and render alone.
+      // the page already says so, and a success sentence here would
+      // describe a list the user is not looking at.
       if (!(await fetchData())) return
 
       toast({ title: t('marked_not_done', { title: deadline.title }) })
@@ -423,7 +443,7 @@ export default function DeadlinesPage() {
 
   const pageHeader = (
     <PageHeader
-      title={t('title')}
+      title={tNav('v3_deadlines')}
       help={
         <HelpPopover>
           <p>{t('help_text')}</p>
@@ -435,23 +455,31 @@ export default function DeadlinesPage() {
         </HelpPopover>
       }
       action={
-        // Stacks full-width on mobile: PageHeader's [&>*]:w-full lands on
-        // this wrapper, so the buttons themselves must go w-full below sm
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center [&>*]:w-full sm:[&>*]:w-auto">
+        // The calendar subscription behind the ⋯, then the primary last.
+        <div className="flex items-center gap-2">
           {ENABLED_EXTENSION_IDS.has('calendar') && (
-            <Button variant="outline" asChild>
-              <Link href="/settings/account">
-                <CalendarPlus className="mr-2 h-4 w-4" />
-                {t('subscribe_calendar')}
-              </Link>
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-toolbar" aria-label={tCommon('more_options')}>
+                  <EllipsisHorizontalIcon className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem asChild>
+                  <Link href="/settings/account">
+                    <CalendarIcon className="h-4 w-4" />
+                    {t('subscribe_calendar')}
+                  </Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
-          <Button
+          <Button size="toolbar"
             onClick={() => setShowForm(true)}
             disabled={!canWrite}
             title={!canWrite ? t('read_only_tooltip') : undefined}
           >
-            {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+            {canWrite ? <PlusIcon className="h-4 w-4" /> : <LockClosedIcon className="h-4 w-4" />}
             {t('new_deadline')}
           </Button>
         </div>
@@ -463,23 +491,20 @@ export default function DeadlinesPage() {
     return (
       <div className="space-y-8">
         {pageHeader}
-        <div className="space-y-3">
+        <LateReveal className="space-y-3">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="flex items-center gap-3 py-3">
               <Skeleton className="h-7 w-7 rounded-full" />
-              <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="h-3 w-24" />
-              </div>
+              <Skeleton className="h-4 w-48" />
             </div>
           ))}
-        </div>
+        </LateReveal>
       </div>
     )
   }
 
   // Statutory deadlines (moms, arbetsgivardeklaration, F-skatt) are generated
-  // from the company's tax settings — none present usually means those
+  // from the company's tax settings - none present usually means those
   // settings were never filled in, so point there instead of letting the page
   // read as an empty manual todo list. One attn line per page: this setup
   // nudge outranks the overdue-invoices note because it unlocks the page.
@@ -489,20 +514,32 @@ export default function DeadlinesPage() {
     <div className="space-y-8">
       {pageHeader}
 
-      {!hasSystemDeadlines ? (
+      {loadFailed ? (
+        // A failed refresh keeps the rows and takes the page's one line;
+        // a failed first load says so in place of the list below.
+        deadlines.length > 0 ? (
+          <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchData() }}>
+            {tCommon('refresh_failed')}
+          </AttnLine>
+        ) : null
+      ) : !hasSystemDeadlines ? (
         <AttnLine
-          action={{
+          action={canWrite ? {
             label: isGenerating ? t('generating') : t('generate_action'),
             onClick: () => {
               if (!isGenerating) void handleGenerateSystemDeadlines()
             },
-          }}
+          } : undefined}
         >
-          {t('no_system_deadlines_title')} {t('no_system_deadlines_description')}
+          {t('no_system_deadlines')}
+        </AttnLine>
+      ) : euTradeCheckApplies && euTradeOff ? (
+        <AttnLine action={{ label: t('eu_trade_off_action'), href: '/settings/tax' }}>
+          {t('eu_trade_off')}
         </AttnLine>
       ) : overdueInvoices.count > 0 ? (
         <AttnLine
-          action={{ label: t('overdue_invoices_action'), href: '/invoices?status=unpaid' }}
+          action={{ label: t('overdue_invoices_action'), href: '/invoices?status=overdue' }}
         >
           {t('overdue_invoices', { count: overdueInvoices.count })} ·{' '}
           {formatCurrency(overdueInvoices.total)}
@@ -512,11 +549,19 @@ export default function DeadlinesPage() {
         </AttnLine>
       ) : null}
 
-      <DeadlineList
-        deadlines={deadlines}
-        onDeadlineToggle={handleDeadlineToggle}
-        onDeadlineEdit={openEdit}
-      />
+      {loadFailed && deadlines.length === 0 ? (
+        <LoadError
+          title={t('load_failed_title')}
+          description={t('load_failed_description')}
+          onRetry={() => void fetchData()}
+        />
+      ) : (
+        <DeadlineList
+          deadlines={deadlines}
+          onDeadlineToggle={handleDeadlineToggle}
+          onDeadlineEdit={openEdit}
+        />
+      )}
 
       <DeadlineForm
         open={showForm}
@@ -527,7 +572,7 @@ export default function DeadlinesPage() {
           }
         }}
         onSubmit={handleFormSubmit}
-        onDelete={(deadline) => {
+        onDelete={!canWrite ? undefined : (deadline) => {
           if (deadline.id) {
             const full = deadlines.find((d) => d.id === deadline.id)
             if (full) void handleDeadlineDelete(full)

@@ -87,6 +87,49 @@ describe('computeAutoStates', () => {
   })
 })
 
+describe('K3 steps', () => {
+  const k3Only = ['depreciation_review', 'component_review', 'deferred_tax']
+
+  it('rules the K3-only steps out of a K2 year and leaves them open in a K3 year', () => {
+    const k2 = computeAutoStates(null, null, '2026-12-31', 'k2')
+    for (const key of k3Only) expect(k2.get(key), key).toBe('not_applicable')
+    expect(k2.has('impairment_indications')).toBe(false)
+    const k3 = computeAutoStates(null, null, '2026-12-31', 'k3')
+    for (const key of k3Only) expect(k3.has(key), key).toBe(false)
+
+    const list = assembleChecklist(PERIOD, k2, [])
+    const byKey = Object.fromEntries(list.items.map((i) => [i.key, i]))
+    expect(byKey.deferred_tax).toMatchObject({ auto_state: 'not_applicable', effective_state: 'not_applicable' })
+    expect(byKey.impairment_indications).toMatchObject({ auto_state: null, effective_state: 'open' })
+  })
+
+  it('reads the year\'s framework when it builds the checklist', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD })
+    enqueue({ data: [] })
+    // fiscal_period_frameworks: the year's own row.
+    enqueue({ data: { fiscal_period_id: 'fy-2026', framework: 'k3', source: 'election' } })
+    listAccountsMock.mockResolvedValue([])
+    const list = await buildBokslutChecklist(supabase as never, COMPANY, USER, 'fy-2026', { readiness: null })
+    const byKey = Object.fromEntries(list!.items.map((i) => [i.key, i]))
+    expect(byKey.component_review.effective_state).toBe('open')
+  })
+
+  // B1: the company column holds the LATEST year's framework. A K2 year
+  // still open while the next year is elected K3 keeps its K2 checklist.
+  it('keeps the K3 steps out of a K2 year whose next year is K3', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: PERIOD })
+    enqueue({ data: [] })
+    enqueue({ data: { fiscal_period_id: 'fy-2026', framework: 'k2', source: 'company_default' } })
+    listAccountsMock.mockResolvedValue([])
+    const list = await buildBokslutChecklist(supabase as never, COMPANY, USER, 'fy-2026', { readiness: null })
+    const byKey = Object.fromEntries(list!.items.map((i) => [i.key, i]))
+    expect(byKey.component_review.effective_state).toBe('not_applicable')
+    expect(byKey.deferred_tax.effective_state).toBe('not_applicable')
+  })
+})
+
 describe('assembleChecklist', () => {
   it('lets a stored row override the computed state and counts the summary', () => {
     const rows: ChecklistRow[] = [
@@ -120,6 +163,22 @@ describe('buildBokslutChecklist', () => {
     expect(byKey.bank_signed).toMatchObject({ auto_state: null, effective_state: 'open' })
     expect(listAccountsMock).toHaveBeenCalledWith(supabase, COMPANY, { today: '2026-12-31', windowFrom: '2026-01-01', windowTo: '2026-12-31' })
     expect(readinessMock).toHaveBeenCalledWith(supabase, COMPANY, USER, 'fy-2026')
+  })
+
+  it('links the inventory step to the stock count page only where the stock count is on', async () => {
+    const build = async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: PERIOD })
+      enqueue({ data: [] })
+      listAccountsMock.mockResolvedValue([])
+      const list = await buildBokslutChecklist(supabase as never, COMPANY, USER, 'fy-2026', { readiness: null })
+      return list!.items.find((i) => i.key === 'inventory_valued')!
+    }
+    vi.stubEnv('BOLAGET_COMPANY_IDS', '')
+    expect((await build()).href).toBeUndefined()
+    vi.stubEnv('BOLAGET_COMPANY_IDS', COMPANY)
+    expect((await build()).href).toBe('/bookkeeping/year-end/inventering')
+    vi.unstubAllEnvs()
   })
 
   it('skips the readiness computation when told to, and returns null for a foreign period', async () => {

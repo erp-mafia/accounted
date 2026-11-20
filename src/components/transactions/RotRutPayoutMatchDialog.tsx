@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,11 +13,17 @@ import {
 } from '@/components/ui/dialog'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
+import { createClient } from '@/lib/supabase/client'
+import { useCompany } from '@/contexts/CompanyContext'
+import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
+import { getPayoutRecognition, type PayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
 import {
   expectedRotRutPayoutAmount,
   getRotRutPayoutMatchTargetState,
 } from '@/lib/invoices/rot-rut-payout-matching'
-import { CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
+import type { DeductionType } from '@/types'
+import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/bookkeeping/rot-rut-rules'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface RotRutPayoutMatchDialogProps {
@@ -39,6 +46,12 @@ interface RotRutPayoutMatchDialogProps {
  * needs to approve is on screen. A bundle (several begäran paid in one
  * transfer) is booked at exactly the decided sums: partial and over
  * variants exist only for a single begäran.
+ *
+ * The reads: the öre a fully paid begäran's invoices carry on 1513 beyond
+ * the whole-kronor request, shown as the 3740 line the settle books, and
+ * under kontantmetoden the deduction share the payout books as försäljning
+ * and moms instead of 1513 (getPayoutRecognition). The settle recomputes both
+ * at booking, so this is preview only.
  */
 export default function RotRutPayoutMatchDialog({
   open,
@@ -48,6 +61,7 @@ export default function RotRutPayoutMatchDialog({
   onConfirm,
 }: RotRutPayoutMatchDialogProps) {
   const t = useTranslations('tx_rot_rut_match')
+  const tInvoices = useTranslations('invoices')
   const requests = transaction?.potential_rot_rut_payout?.requests ?? []
   const isSet = requests.length > 1
   const single = requests.length === 1 ? requests[0] : null
@@ -82,11 +96,65 @@ export default function RotRutPayoutMatchDialog({
   const currencyBlocked = (transaction?.currency || 'SEK').toUpperCase() !== 'SEK'
   const currency = transaction?.currency || 'SEK'
 
-  const typeLabel = (deductionType: 'rot' | 'rut') => (deductionType === 'rut' ? 'RUT' : 'ROT')
+  // Paid amount per leg: a single begäran books the row, a bundle the decided sums.
+  const legAmount = (request: (typeof requests)[number]) =>
+    single ? txAmount : expectedRotRutPayoutAmount(request)
+  const { company } = useCompany()
+  const companyId = company?.id ?? null
+  const [oreRoundings, setOreRoundings] = useState<Record<string, number>>({})
+  const [recognitions, setRecognitions] = useState<Record<string, PayoutRecognition>>({})
+  const paymentDate = transaction?.date ?? ''
+  const legsKey = requests.map((request) => `${request.id}:${legAmount(request)}`).join(',')
+  useEffect(() => {
+    setOreRoundings({})
+    setRecognitions({})
+    if (!open || !companyId || targetBlocked || requests.length === 0) return
+    let cancelled = false
+    const supabase = createClient()
+    void Promise.all(
+      requests.map(async (request) => {
+        const amount = legAmount(request)
+        const rounding =
+          amount >= Number(request.requested_total)
+            ? (await getPayoutOreRounding(supabase, companyId, request, amount)).rounding
+            : 0
+        const recognised = paymentDate
+          ? await getPayoutRecognition(supabase, companyId, request, amount, paymentDate)
+          : null
+        return [request.id, rounding, recognised?.ok ? recognised.recognition : null] as const
+      }),
+    )
+      .then((entries) => {
+        if (cancelled) return
+        setOreRoundings(Object.fromEntries(entries.map(([id, rounding]) => [id, rounding])))
+        setRecognitions(
+          Object.fromEntries(
+            entries.flatMap(([id, , recognition]) => (recognition ? [[id, recognition] as const] : [])),
+          ),
+        )
+      })
+      .catch(() => {
+        // Preview only: the settle recomputes the rounding at booking.
+      })
+    return () => {
+      cancelled = true
+    }
+    // legsKey captures the requests and amounts the lookup depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, companyId, targetBlocked, legsKey, paymentDate])
+  const oreRoundingTotal = roundOre(
+    Object.values(oreRoundings).reduce((sum, rounding) => sum + rounding, 0),
+  )
+  const receivableCredit = (request: (typeof requests)[number]) =>
+    roundOre(legAmount(request) - (recognitions[request.id]?.amount ?? 0) + (oreRoundings[request.id] ?? 0))
+  const recognitionLines = requests.flatMap((request) => recognitions[request.id]?.lines ?? [])
+
+  const typeLabel = (deductionType: DeductionType) =>
+    tInvoices(DEDUCTION_TYPE_LABEL_KEYS[deductionType] ?? 'rot_rut_type_rot')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
@@ -96,7 +164,7 @@ export default function RotRutPayoutMatchDialog({
 
         {transaction && requests.length > 0 && (
           <div className="space-y-4">
-            <div className="rounded-lg border p-4 space-y-2">
+            <div className="rounded-lg p-4 space-y-2 bg-control shadow-raised">
               <p className="text-sm font-medium text-muted-foreground">{t('transaction_label')}</p>
               <p className="font-medium">{transaction.description}</p>
               <div className="flex justify-between text-sm">
@@ -107,7 +175,7 @@ export default function RotRutPayoutMatchDialog({
               </div>
             </div>
 
-            <div className="rounded-lg border p-4 space-y-3">
+            <div className="rounded-lg p-4 space-y-3 bg-control shadow-raised">
               <p className="text-sm font-medium text-muted-foreground">
                 {isSet ? t('requests_label', { count: requests.length }) : t('request_label')}
               </p>
@@ -157,7 +225,7 @@ export default function RotRutPayoutMatchDialog({
 
             {targetBlocked ? (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                 <div className="text-sm">
                   <p className="font-medium">
                     {t(blockedState === 'settled' ? 'target_settled_title' : 'target_not_open_title')}
@@ -173,14 +241,14 @@ export default function RotRutPayoutMatchDialog({
               </div>
             ) : amountsMatch ? (
               <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 text-success">
-                <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
                 <p className="text-sm font-medium">
                   {isSet ? t('amounts_match_set') : t('amounts_match')}
                 </p>
               </div>
             ) : (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                 <div className="text-sm">
                   <p className="font-medium">{isSet ? t('amounts_differ_set') : t('amounts_differ')}</p>
                   <p>{t('amount_diff', { amount: formatCurrency(diff, currency) })}</p>
@@ -195,7 +263,7 @@ export default function RotRutPayoutMatchDialog({
             )}
 
             {!targetBlocked && (
-              <div className="rounded-lg border p-4 space-y-2">
+              <div className="rounded-lg p-4 space-y-2 bg-control shadow-raised">
                 <p className="text-sm font-medium">{t('booking_title')}</p>
                 <div className="text-sm space-y-1">
                   <div className="flex justify-between">
@@ -205,28 +273,54 @@ export default function RotRutPayoutMatchDialog({
                     </span>
                     <span className="tabular-nums">{formatCurrency(txAmount, currency)}</span>
                   </div>
+                  {oreRoundingTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span>
+                        <span className="text-muted-foreground">{t('booking_debit')}</span>{' '}
+                        {t('booking_rounding_line')}
+                      </span>
+                      <span className="tabular-nums">{formatCurrency(oreRoundingTotal, currency)}</span>
+                    </div>
+                  )}
                   {isSet ? (
-                    requests.map((request) => (
+                    requests.filter((request) => receivableCredit(request) > 0).map((request) => (
                       <div key={request.id} className="flex justify-between">
                         <span>
                           <span className="text-muted-foreground">{t('booking_credit')}</span>{' '}
                           {t('booking_receivable_line_named', { name: request.name })}
                         </span>
                         <span className="tabular-nums">
-                          {formatCurrency(expectedRotRutPayoutAmount(request), currency)}
+                          {formatCurrency(receivableCredit(request), currency)}
                         </span>
                       </div>
                     ))
-                  ) : (
+                  ) : (single ? receivableCredit(single) : txAmount) > 0 ? (
                     <div className="flex justify-between">
                       <span>
                         <span className="text-muted-foreground">{t('booking_credit')}</span>{' '}
                         {t('booking_receivable_line')}
                       </span>
-                      <span className="tabular-nums">{formatCurrency(txAmount, currency)}</span>
+                      <span className="tabular-nums">
+                        {formatCurrency(single ? receivableCredit(single) : txAmount, currency)}
+                      </span>
                     </div>
-                  )}
+                  ) : null}
+                  {recognitionLines.map((line, i) => (
+                    <div key={`${line.account_number}-${i}`} className="flex justify-between">
+                      <span>
+                        <span className="text-muted-foreground">{t('booking_credit')}</span>{' '}
+                        {line.account_number} {line.line_description}
+                      </span>
+                      <span className="tabular-nums">{formatCurrency(line.credit_amount, currency)}</span>
+                    </div>
+                  ))}
                 </div>
+                {oreRoundingTotal > 0 && (
+                  <p className="text-xs text-muted-foreground">{t('booking_rounding_note')}</p>
+                )}
+                {recognitionLines.length > 0 && (
+                  <p className="text-xs text-muted-foreground">{t('booking_recognition_note')}</p>
+                )}
               </div>
             )}
 

@@ -1,58 +1,63 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Scale } from 'lucide-react'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { EmptyState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Skeleton } from '@/components/ui/skeleton'
-import { FyPicker } from '@/components/common/FyPicker'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
-import type { FiscalPeriod } from '@/types'
-import { ReconciliationTable } from './ReconciliationTable'
 import { AccountOverview, type ReconciliationWindow } from './AccountOverview'
 import { ManualMatchMode } from './ManualMatchMode'
 
 /**
- * /reconciliation: one page for every account with an outside truth
- * (concept P.recon + reconflow). The landing is a table of the accounts
- * (bank accounts, the skattekonto) with their status and a Stäm av button
- * each; an account opens its flow alone, full width, with the way back in
- * the top bar. The open account lives in the URL (?account=) so a link
- * lands on the right account and a reload keeps it.
+ * /reconciliation?account=: one account's reconciliation flow (concept
+ * P.recon + reconflow), full width, with the way back to Konton in the top
+ * bar. The account list itself is Konton (product decision 2026-10-18 merged
+ * the two lists); the bare address redirects there in next.config.ts, and an
+ * account the list does not know goes back there too. The open account lives
+ * in the URL so a link lands on the right account and a reload keeps it.
  *
- * The period (räkenskapsår + range within it) scopes the bank bridge and the
- * item windows and sets the default sign-off date. It keeps its own preset
- * memory, separate from the reports: reconciling is a monthly ritual, so it
- * opens on this month rather than on whatever range a report left behind.
+ * The period (the app-wide räkenskapsår + a range within it) scopes the bank
+ * bridge and the item windows and sets the default sign-off date. The range
+ * keeps its own preset memory, separate from the reports: reconciling is a
+ * monthly ritual, so it opens on this month rather than on whatever range a
+ * report left behind.
  */
 
-const FY_STORAGE_KEY_PREFIX = 'Accounted:recon-fy:'
 const RANGE_STORAGE_KEY_PREFIX = 'Accounted:recon-page-range-preset:'
+const ACCOUNTS_HREF = '/accounts'
 
-interface ReconciliationWorkspaceProps {
-  initialPeriods: FiscalPeriod[]
-  initialCompanyId: string | null
-}
-
-export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: ReconciliationWorkspaceProps) {
+export function ReconciliationWorkspace() {
   const t = useTranslations('reconciliation')
-  const tParm = useTranslations('bokslutsbilagor')
+  const tCommon = useTranslations('common')
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [accounts, setAccounts] = useState<ReconciliationAccount[] | null>(null)
   const [loadError, setLoadError] = useState(false)
-  const [periodId, setPeriodId] = useState<string | null>(null)
-  const [periodBounds, setPeriodBounds] = useState<{ start: string; end: string } | null>(null)
+  // The year is app-wide context (the sidebar); reconciling needs one started year.
+  const { periodId, period } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const periodBounds = useMemo(
+    () => (period ? { start: period.period_start, end: period.period_end } : null),
+    [period],
+  )
   const [dateRange, setDateRange] = useState<DateRangeValue>({})
+  // Another year starts on its own default range (adjusting state during render).
+  const [shownPeriodId, setShownPeriodId] = useState(periodId)
+  if (periodId !== shownPeriodId) {
+    setShownPeriodId(periodId)
+    setDateRange({})
+  }
+  const [signoffSlot, setSignoffSlot] = useState<HTMLSpanElement | null>(null)
+  const [primarySlot, setPrimarySlot] = useState<HTMLSpanElement | null>(null)
 
   // The effective window: the range within the period, defaulting to the
   // period bounds. Null until the period picker has resolved.
@@ -96,20 +101,20 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
     },
     [pathname, router, searchParams],
   )
-  const select = useCallback(
-    (accountKey: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.set('account', accountKey)
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false })
-    },
-    [pathname, router, searchParams],
-  )
-  // The table is the landing; an account is in its flow only when the URL names it.
   const flowAccount = accounts?.find((a) => a.account_key === requestedKey) ?? null
-  const closeFlow = useCallback(() => router.replace(pathname, { scroll: false }), [pathname, router])
+  const closeFlow = useCallback(() => router.push(ACCOUNTS_HREF), [router])
+
+  // An account the list does not hold (none named, a stale link, a balance
+  // account without a balance) has no flow here: back to the list, as the
+  // table that used to stand here did.
+  const unknownAccount = accounts !== null && flowAccount === null
+  useEffect(() => {
+    if (unknownAccount) router.replace(ACCOUNTS_HREF)
+  }, [unknownAccount, router])
 
   const header = (
     <PageHeader
+      parent={flowAccount ? { label: tNav('v3_accounts_balance'), href: ACCOUNTS_HREF } : undefined}
       title={
         flowAccount ? (
           <span className="flex items-baseline gap-2">
@@ -118,6 +123,8 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
               {flowAccount.signed_off_through
                 ? t('v2_last_signed', { date: formatDate(flowAccount.signed_off_through) })
                 : t('v2_never_signed')}
+              {/* AccountOverview renders the sign-off's details and Öppna igen here. */}
+              <span ref={setSignoffSlot} />
             </span>
           </span>
         ) : (
@@ -131,28 +138,9 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
       }
       action={
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {flowAccount && (
-            <button type="button" onClick={closeFlow} className={cn(QUIET_LINK_CLASS, 'mr-1')}>
-              {t('v2_close')}
-            </button>
-          )}
-          {/* On a phone the bar holds one picker: the month is the one a
-              person changes while reconciling; the year waits for a wider screen. */}
-          <div className={cn(flowAccount && 'hidden sm:block')}>
-            <FyPicker
-              value={periodId}
-              onChange={(id, period) => {
-                setPeriodId(id)
-                setPeriodBounds(period ? { start: period.period_start, end: period.period_end } : null)
-                setDateRange({})
-              }}
-              includeAllOption={false}
-              hideFuturePeriods
-              initialPeriods={initialPeriods}
-              initialCompanyId={initialCompanyId}
-              storageKeyPrefix={FY_STORAGE_KEY_PREFIX}
-            />
-          </div>
+          <button type="button" onClick={closeFlow} className={cn(QUIET_LINK_CLASS, 'mr-1')}>
+            {t('v2_close')}
+          </button>
           {periodBounds && (
             <ReportDateRange
               periodStart={periodBounds.start}
@@ -163,81 +151,65 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
               storageKeyPrefix={RANGE_STORAGE_KEY_PREFIX}
             />
           )}
+          {/* AccountOverview renders the page's primary (Markera som avstämd) here. */}
+          <span ref={setPrimarySlot} className="contents" />
         </div>
       }
     />
   )
 
-  if (loadError) {
+  // Nothing on screen yet: the load failure says so in place of the account.
+  if (loadError && !accounts) {
     return (
       <div className="space-y-6">
         {header}
-        <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>{t('load_failed')}</AttnLine>
+        <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
       </div>
     )
   }
 
-  if (accounts === null || !window) {
+  if (!flowAccount || !window) {
     return (
       <div className="space-y-6" aria-busy>
         {header}
-        <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-          <div className="space-y-2">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-          </div>
-          <Skeleton className="h-48 w-full" />
-        </div>
+        {/* Shaped like the account's strip of figures it resolves into. */}
+        <LateReveal className="grid grid-cols-2 gap-6 border-b-hairline pb-4 md:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-6 w-28" />
+            </div>
+          ))}
+        </LateReveal>
       </div>
     )
   }
-
-  if (accounts.length === 0) {
-    return (
-      <div className="space-y-6">
-        {header}
-        <EmptyState
-          icon={Scale}
-          title={t('empty_title')}
-          description={t('empty_body')}
-          actionLabel={t('empty_connect_bank')}
-          actionHref="/settings/banking"
-          secondaryActionLabel={t('empty_connect_skv')}
-          secondaryActionHref="/settings/tax"
-        />
-      </div>
-    )
-  }
-
-  const railFooter = (
-    <Link href="/reports/bokslutsbilagor" className={cn(QUIET_LINK_CLASS, 'block px-3 pt-4 text-[12.5px]')}>
-      {tParm('open_parm')}
-    </Link>
-  )
 
   return (
     <div className="space-y-6">
       {header}
-      {flowAccount ? (
-        mode === 'match' ? (
-          <div className="min-w-0 space-y-4">
-            <button type="button" onClick={() => setMode('overview')} className={QUIET_LINK_CLASS}>
-              {t('v2_back_overview')}
-            </button>
-            <ManualMatchMode key={flowAccount.account_key} account={flowAccount} window={window} onChanged={() => void load()} />
-          </div>
-        ) : (
-          <AccountOverview
-            key={flowAccount.account_key}
-            account={flowAccount}
-            otherBankAccounts={accounts.filter((a) => a.kind === 'bank' && a.account_key !== flowAccount.account_key && !a.superseded_by)}
-            window={window}
-            onChanged={() => void load()}
-            onMatchManually={flowAccount.kind === 'manual' ? undefined : () => setMode('match')}
-          />
-        )
+      {/* A failed refresh keeps the account on screen under one line. */}
+      {loadError && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void load() }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
+      {mode === 'match' ? (
+        <div className="min-w-0 space-y-4">
+          <button type="button" onClick={() => setMode('overview')} className={QUIET_LINK_CLASS}>
+            {t('v2_back_overview')}
+          </button>
+          <ManualMatchMode key={flowAccount.account_key} account={flowAccount} window={window} onChanged={() => void load()} />
+        </div>
       ) : (
-        <ReconciliationTable accounts={accounts} onSelect={select} footer={railFooter} />
+        <AccountOverview
+          key={flowAccount.account_key}
+          account={flowAccount}
+          otherBankAccounts={(accounts ?? []).filter((a) => a.kind === 'bank' && a.account_key !== flowAccount.account_key && !a.superseded_by)}
+          window={window}
+          onChanged={() => void load()}
+          onMatchManually={flowAccount.kind === 'manual' ? undefined : () => setMode('match')}
+          headerSlot={signoffSlot}
+          primarySlot={primarySlot}
+        />
       )}
     </div>
   )

@@ -16,7 +16,7 @@ import {
   SettingsSelect,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { ChevronDown, Loader2, Lock } from 'lucide-react'
+import { ChevronDownIcon, LockClosedIcon } from '@/components/icons'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { createClient } from '@/lib/supabase/client'
@@ -25,12 +25,16 @@ import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import type { CreateArticleInput } from '@/types'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import {
+  GRON_TEKNIK_WORK_TYPES,
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
+  gronTeknikWorkType,
   normalizeHouseworkType,
-} from '@/lib/invoices/rot-rut-rules'
-import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
-import UnitDatalist from '@/components/invoices/UnitDatalist'
+} from '@/lib/bookkeeping/rot-rut-rules'
+import { UNIT_MAX_LENGTH } from '@/lib/invoices/units'
+import UnitPicker from '@/components/invoices/UnitPicker'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
+import { roundOre } from '@/lib/money'
 
 // A row from the currencies reference table (lib migration
 // 20260630110000_currencies_reference_table.sql).
@@ -44,9 +48,6 @@ interface CurrencyOption {
 const VAT_RATES = [25, 12, 6, 0] as const
 
 /** Money is rounded to öre with arithmetic, never toFixed (CLAUDE.md rule 6). */
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}
 
 // SettingsInput is a bare input, so it does not carry the wheel guard that
 // components/ui/input.tsx applies to type="number". Without it, scrolling the
@@ -61,6 +62,8 @@ interface ArticleFormProps {
   initialData?: Partial<CreateArticleInput>
   /** Closes the host dialog. When omitted the cancel button is not rendered. */
   onCancel?: () => void
+  /** Set by a host that owns the primary (a drawer's fixed footer): the form takes this id and renders no submit row of its own; the host's button submits it through the `form` attribute. */
+  formId?: string
 }
 
 export default function ArticleForm({
@@ -68,6 +71,7 @@ export default function ArticleForm({
   isLoading,
   initialData,
   onCancel,
+  formId,
 }: ArticleFormProps) {
   const { canWrite } = useCanWrite()
   const supabase = createClient()
@@ -211,8 +215,8 @@ export default function ArticleForm({
   // impossible to miss here.
   const price = Number.isFinite(watchedPrice) ? Number(watchedPrice) : 0
   const effectiveVat = vatRegistered ? Number(watchedVat) || 0 : 0
-  const vatAmount = round2((price * effectiveVat) / 100)
-  const totalInclVat = round2(price + vatAmount)
+  const vatAmount = computeLineVat(price, effectiveVat)
+  const totalInclVat = roundOre(price + vatAmount)
   const currency = watchedCurrency || 'SEK'
 
   // Keep the article's own currency selectable even before the fetch resolves
@@ -235,7 +239,15 @@ export default function ArticleForm({
       revenue_account: data.revenue_account || null,
       cost_price: data.cost_price ?? null,
       ean: data.ean || null,
-      housework_type: type === 'tjanst' ? data.housework_type || null : null,
+      // A service keeps any skattereduktion code; goods keep only a grön
+      // teknik installation type (grön teknik is given on arbete och
+      // material, ROT/RUT on labor only).
+      housework_type:
+        type === 'tjanst'
+          ? data.housework_type || null
+          : gronTeknikWorkType(data.housework_type)
+            ? data.housework_type || null
+            : null,
       notes: data.notes || null,
     })
   }
@@ -244,7 +256,7 @@ export default function ArticleForm({
     message ? <p className="basis-full text-xs text-destructive">{message}</p> : null
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)}>
+    <form id={formId} onSubmit={handleSubmit(onFormSubmit)}>
       <SettingsGroup label={t('group_article')}>
         <SettingsRow label={t('type_label')}>
           <Controller
@@ -314,17 +326,30 @@ export default function ArticleForm({
           align="baseline"
           borderless={!vatRegistered}
         >
-          {/* Free text with suggestions, not a closed list: the API stores any
-              unit up to 32 characters, so a fuel seller types "l" and an
-              article imported with a unit we do not suggest still shows it. */}
-          <SettingsInput
-            id="article-unit"
-            list={UNIT_DATALIST_ID}
-            maxLength={UNIT_MAX_LENGTH}
-            className="w-28 flex-none"
-            {...register('unit')}
+          {/* Every suggested unit plus free text under "Annan enhet": the API
+              stores any unit up to 32 characters, so an article imported with
+              a unit we do not suggest still shows it and keeps it. */}
+          <Controller
+            name="unit"
+            control={control}
+            render={({ field }) => (
+              <UnitPicker
+                ref={field.ref}
+                id="article-unit"
+                // Names the button with its value ("Enhet: st"); the row's
+                // label alone would hide the current unit from a screen reader.
+                aria-label={t('unit_label')}
+                name={field.name}
+                value={field.value}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                variant="field"
+                invalid={Boolean(errors.unit)}
+                // The boxed settings-field look (SettingsInput), at its width.
+                className="h-9 w-28 flex-none border-border bg-background px-3 text-[13px] focus-visible:border-foreground/40"
+              />
+            )}
           />
-          <UnitDatalist />
           {fieldError(errors.unit?.message)}
         </SettingsRow>
 
@@ -428,29 +453,33 @@ export default function ArticleForm({
             />
           </SettingsRow>
 
-          {type === 'tjanst' && (
-            <SettingsRow
-              label={t('housework_label')}
-              htmlFor="article-housework"
-              help={t('housework_hint')}
-            >
-              <Controller
-                name="housework_type"
-                control={control}
-                render={({ field }) => (
-                  <SettingsSelect
-                    id="article-housework"
-                    value={field.value || ''}
-                    onChange={(e) => field.onChange(e.target.value)}
-                  >
-                    <option value="">{t('housework_none')}</option>
-                    {legacyHouseworkKind && (
-                      <option value={legacyHouseworkKind}>
-                        {legacyHouseworkKind === 'ROT'
-                          ? t('housework_legacy_rot')
-                          : t('housework_legacy_rut')}
-                      </option>
-                    )}
+          {/* Skattereduktion: a service may carry ROT, RUT or grön teknik;
+              goods only grön teknik (its base is arbete och material). */}
+          <SettingsRow
+            label={t('housework_label')}
+            htmlFor="article-housework"
+            help={type === 'tjanst' ? t('housework_hint') : t('housework_hint_goods')}
+          >
+            <Controller
+              name="housework_type"
+              control={control}
+              render={({ field }) => (
+                <SettingsSelect
+                  id="article-housework"
+                  // Goods cannot keep a ROT/RUT code: show it as "Ingen"
+                  // (it is dropped on save) instead of a value the list lacks.
+                  value={type === 'tjanst' || gronTeknikWorkType(field.value) ? field.value || '' : ''}
+                  onChange={(e) => field.onChange(e.target.value)}
+                >
+                  <option value="">{t('housework_none')}</option>
+                  {type === 'tjanst' && legacyHouseworkKind && (
+                    <option value={legacyHouseworkKind}>
+                      {legacyHouseworkKind === 'ROT'
+                        ? t('housework_legacy_rot')
+                        : t('housework_legacy_rut')}
+                    </option>
+                  )}
+                  {type === 'tjanst' && (
                     <optgroup label={t('housework_rot')}>
                       {ROT_WORK_TYPES.map((w) => (
                         <option key={w.code} value={w.code}>
@@ -458,6 +487,8 @@ export default function ArticleForm({
                         </option>
                       ))}
                     </optgroup>
+                  )}
+                  {type === 'tjanst' && (
                     <optgroup label={t('housework_rut')}>
                       {RUT_WORK_TYPES.map((w) => (
                         <option key={w.code} value={w.code}>
@@ -465,11 +496,18 @@ export default function ArticleForm({
                         </option>
                       ))}
                     </optgroup>
-                  </SettingsSelect>
-                )}
-              />
-            </SettingsRow>
-          )}
+                  )}
+                  <optgroup label={t('housework_gron_teknik')}>
+                    {GRON_TEKNIK_WORK_TYPES.map((w) => (
+                      <option key={w.code} value={w.code}>
+                        {w.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                </SettingsSelect>
+              )}
+            />
+          </SettingsRow>
 
           <SettingsRow label={t('notes_label')} htmlFor="article-notes" align="baseline" borderless>
             <SettingsTextarea
@@ -486,11 +524,11 @@ export default function ArticleForm({
         <button
           type="button"
           onClick={() => setMoreOpen((open) => !open)}
-          className="inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground"
           aria-expanded={moreOpen}
         >
-          <ChevronDown
-            className={cn('h-3.5 w-3.5 transition-transform duration-200', moreOpen && 'rotate-180')}
+          <ChevronDownIcon
+            className={cn('h-3.5 w-3.5 transition-transform duration-150', moreOpen && 'rotate-180')}
             aria-hidden="true"
           />
           {t('more_fields')}
@@ -498,8 +536,8 @@ export default function ArticleForm({
       </div>
 
       {/* The line this article becomes. Full-bleed against the dialog's p-6. */}
-      <div className="-mx-6 mt-6 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border bg-muted/60 px-6 py-3 text-xs text-muted-foreground">
-        <span className="max-w-[46%] break-words font-display text-[15px] leading-snug text-foreground">
+      <div className="-mx-6 mt-6 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t-hairline bg-muted/60 px-6 py-3 text-xs text-muted-foreground">
+        <span className="max-w-[46%] break-words text-[15px] font-medium leading-snug text-strong">
           {watchedName || t('summary_unnamed')}
         </span>
         <span aria-hidden="true" className="opacity-50">·</span>
@@ -520,7 +558,7 @@ export default function ArticleForm({
             </span>
           </>
         ) : null}
-        <span className="ml-auto font-display text-[17px] tabular-nums text-foreground">
+        <span className="ml-auto font-display text-lg tabular-nums text-foreground">
           {formatCurrency(totalInclVat, currency)}
         </span>
       </div>
@@ -531,32 +569,33 @@ export default function ArticleForm({
             {t('number_hint')}
           </p>
         )}
-        <div className="ml-auto flex items-center gap-2">
-          {onCancel && (
-            <Button type="button" variant="ghost" onClick={onCancel}>
-              {tCommon('cancel')}
-            </Button>
-          )}
-          <Button
-            type="submit"
-            disabled={isLoading || !canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('submit_saving')}
-              </>
-            ) : !canWrite ? (
-              <>
-                <Lock className="mr-2 h-4 w-4" />
-                {t('submit_save')}
-              </>
-            ) : (
-              t('submit_save')
+        {/* The host's footer carries Avbryt and the primary when the form has an id. */}
+        {!formId && (
+          <div className="ml-auto flex items-center gap-2">
+            {onCancel && (
+              <Button type="button" variant="ghost" onClick={onCancel}>
+                {tCommon('cancel')}
+              </Button>
             )}
-          </Button>
-        </div>
+            <Button
+              type="submit"
+              disabled={!canWrite}
+              loading={isLoading}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isLoading ? (
+                t('submit_saving')
+              ) : !canWrite ? (
+                <>
+                  <LockClosedIcon className="h-4 w-4" />
+                  {t('submit_save')}
+                </>
+              ) : (
+                t('submit_save')
+              )}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Inline custom-account creation (renders in a portal, outside the form).

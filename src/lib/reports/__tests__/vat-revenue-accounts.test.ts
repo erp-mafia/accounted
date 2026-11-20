@@ -247,6 +247,80 @@ describe('fetchDynamicVatAccounts (shared helper regression)', () => {
   })
 })
 
+describe('fetchDynamicVatAccounts (unconfigured revenue accounts, #3387)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('records exactly the class 3 accounts with neither momskod nor momssats', async () => {
+    fetchAllRowsMock.mockResolvedValue([
+      // No treatment, no rate, nothing to infer from: unconfigured.
+      row('3543', 'Faktureringsavgift'),
+      row('3540', 'Faktureringsavgifter'),
+      // A static BAS account without configuration is listed too; the ruta
+      // map that sums it lives in vat-declaration.ts, which drops it there.
+      row('3001', 'Försäljning inom Sverige'),
+      // Rate inferred from number + name: classified.
+      row('3011', 'Försäljning tjänster inom Sverige, 25 % moms'),
+      // Explicit momssats, taxable or not: classified.
+      row('3544', 'Avgift', { default_vat_rate: 0.25 }),
+      row('3545', 'Avgift momsfri', { default_vat_rate: 0 }),
+      // Treatment, including OSS which maps to no ruta on purpose: classified.
+      row('3546', 'Avgift', { default_vat_treatment: 'exempt' }),
+      row('3547', 'OSS-försäljning', { default_vat_treatment: 'oss' }),
+      // Not revenue.
+      row('4010', 'Inköp varor'),
+    ])
+
+    const result = await fetchDynamicVatAccounts(supabase, 'company-1')
+
+    expect([...result.unconfiguredRevenueAccounts]).toEqual([
+      ['3543', 'Faktureringsavgift'],
+      ['3540', 'Faktureringsavgifter'],
+      ['3001', 'Försäljning inom Sverige'],
+    ])
+    for (const account of result.unconfiguredRevenueAccounts.keys()) {
+      expect(result.mappingByAccount.has(account)).toBe(false)
+      expect(result.accounts).not.toContain(account)
+    }
+  })
+})
+
+describe('fetchDynamicVatAccounts (moms accounts without a momsruta)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('lists the 2610-2649 accounts without an override, and nothing outside that range', async () => {
+    fetchAllRowsMock.mockResolvedValue([
+      // Numbers from charts before BAS 2026 that no fixed ruta reads.
+      row('2617', 'Utgående moms omvänd skattskyldighet varor och tjänster i Sverige, 25 %'),
+      row('2644', 'Ingående moms omvänd skattskyldighet'),
+      // A BAS 2026 account is listed too; vatAccountsWithoutRuta drops it.
+      row('2611', 'Utgående moms på försäljning inom Sverige, 25 %'),
+      // An override routes it to a ruta: not listed.
+      row('2637', 'Utgående moms omvänd skattskyldighet, 6 %', { vat_box: '32' }),
+      // Redovisningskonto, punktskatt and OSS: no ruta reads them by law.
+      row('2650', 'Redovisningskonto för moms'),
+      row('2651', 'Redovisningskonto för moms (OSS)'),
+      row('2660', 'Särskilda punktskatter'),
+      row('2670', 'Utgående moms på försäljning inom EU, OSS'),
+      // Not a moms account.
+      row('2440', 'Leverantörsskulder'),
+    ])
+
+    const result = await fetchDynamicVatAccounts(supabase, 'company-1')
+
+    expect([...result.unconfiguredVatAccounts]).toEqual([
+      ['2617', 'Utgående moms omvänd skattskyldighet varor och tjänster i Sverige, 25 %'],
+      ['2644', 'Ingående moms omvänd skattskyldighet'],
+      ['2611', 'Utgående moms på försäljning inom Sverige, 25 %'],
+    ])
+    expect(result.mappingByAccount.get('2637')).toEqual({ box: 'ruta32', side: 'credit' })
+    expect(result.accounts).toEqual(['2637'])
+  })
+})
+
 describe('fetchDynamicVatAccounts (26xx momsruta override)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

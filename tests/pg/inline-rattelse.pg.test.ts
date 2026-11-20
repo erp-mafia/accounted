@@ -10,7 +10,7 @@ import {
   insertTransaction,
 } from '@/tests/pg/fixtures'
 
-// Migration 20260723210000_verifikat_inline_rattelse.sql: the founder-approved
+// Migration 20260723210000_verifikat_inline_rattelse.sql: the approved
 // inline rättelse of posted verifikat (BFL 5 kap 5 § / 9 §).
 //
 // The mandatory suite:
@@ -559,8 +559,8 @@ describe('inline rättelse: lines (correct_entry_lines_inline)', () => {
   })
 
   // 20260819092408_inline_rattelse_bank_anchor.sql: the bank-side guard is
-  // anchored to the linked bank amount, not to the pre-state. The Discord
-  // case (Sebastian, 2026-08-19): a +10 874,81 deposit booked as 1930 D /
+  // anchored to the linked bank amount, not to the pre-state. The reported
+  // case: a +10 874,81 deposit booked as 1930 D /
   // 1930 K (the credit should have been 2970), so the 1930 net was 0 and the
   // only rättelse that makes the entry match the feed was refused.
   it('allows a bank-side strike that makes the 19xx net equal the linked bank amount', async () => {

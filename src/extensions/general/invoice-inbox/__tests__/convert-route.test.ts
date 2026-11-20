@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import {
   createQueuedMockSupabase,
@@ -7,8 +14,25 @@ import {
   makeInvoiceInboxItem,
   makeSupplier,
   makeCompanySettings,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+
+// suggestion_log records each inbox decision; its reads and writes are
+// covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
+  snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({
+    companyId,
+    inboxItemId: item.id,
+    documentId: item.document_id ?? null,
+    extraction: null,
+    model: null,
+  })),
+  loadEntryLines: vi.fn(async () => []),
+  recordInboxDecision: vi.fn(async () => undefined),
+}))
 
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierInvoiceRegistrationEntry: vi.fn().mockResolvedValue({ id: 'je-1' }),
@@ -26,7 +50,7 @@ vi.mock('@/lib/currency/riksbanken', async () => {
 // ── Helpers ──────────────────────────────────────────────────
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path
   )!
 }
@@ -39,7 +63,6 @@ function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}):
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
     ...overrides,
@@ -62,17 +85,6 @@ const VALID_CONVERT_BODY = {
 
 describe('POST /items/:id/convert', () => {
   const route = findRoute('POST', '/items/:id/convert')
-
-  it('returns 401 when no context', async () => {
-    const request = createMockRequest('/items/item-1/convert', {
-      method: 'POST',
-      body: VALID_CONVERT_BODY,
-      searchParams: { _id: 'item-1' },
-    })
-    const res = await route.handler(request, undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
 
   it('returns 404 when item not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -107,6 +119,72 @@ describe('POST /items/:id/convert', () => {
     const res = await route.handler(request, ctx)
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(409)
+  })
+
+  it('refuses to register an invoice whose receipt is booked already, naming that verifikat, before anything is written', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: 'item-1', sibling_item_id: 'item-receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'The receipt from the same purchase is booked already on voucher A66. Add this document there instead, so the purchase is not booked twice.',
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    const request = createMockRequest('/items/item-1/convert', { method: 'POST', body: VALID_CONVERT_BODY, searchParams: { _id: 'item-1' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INBOX_ITEM_PAIR_ALREADY_BOOKED')
+    expect(body.error.message).toContain('A66')
+    expect(findCalls('supplier_invoices', 'insert')).toEqual([])
+  })
+
+  it('refuses a credit note with 409 INBOX_ITEM_IS_CREDIT_NOTE and the invoice it credits (issue #2980)', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        status: 'received',
+        matched_supplier_id: SUPPLIER_UUID,
+        extracted_data: {
+          documentKind: 'credit_note',
+          supplier: { name: 'Konsult AB' },
+          invoice: { invoiceNumber: 'K-1', invoiceDate: '2024-06-20', currency: 'SEK', creditedInvoiceNumber: 'F-2024-001' },
+          totals: { subtotal: -10000, vatAmount: -2500, total: -12500 },
+          lineItems: [],
+        },
+      }),
+    })
+    // The credit target pool: the supplier's invoices.
+    enqueue({
+      data: [
+        {
+          id: 'si-1',
+          supplier_id: SUPPLIER_UUID,
+          supplier_invoice_number: 'F-2024-001',
+          arrival_number: 3,
+          invoice_date: '2024-06-15',
+          status: 'approved',
+          currency: 'SEK',
+          total: 12500,
+          supplier: { name: 'Konsult AB' },
+        },
+      ],
+    })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: VALID_CONVERT_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { credit_target: { status: string; invoice: { supplier_invoice_id: string } } } }
+    }>(res)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INBOX_ITEM_IS_CREDIT_NOTE')
+    expect(body.error.details.credit_target).toMatchObject({ status: 'matched', invoice: { supplier_invoice_id: 'si-1' } })
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
   })
 
   it('returns 400 when required fields missing', async () => {
@@ -144,6 +222,7 @@ describe('POST /items/:id/convert', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual' }) })
     enqueue({ data: 42 })
     // Insert collides with idx_supplier_invoices_company_supplier_number.
     enqueue({
@@ -196,10 +275,10 @@ describe('POST /items/:id/convert', () => {
 
     enqueue({ data: inboxItem })
     enqueue({ data: supplier })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: 42 })
     enqueue({ data: createdInvoice })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: null, error: null })
 
     const ctx = buildCtx(supabase)
@@ -214,6 +293,21 @@ describe('POST /items/:id/convert', () => {
     expect(status).toBe(200)
     expect(body.data.id).toBe('invoice-1')
     expect(body.data.inbox_item_id).toBe('item-1')
+    // The model's reading is taken before the invoice is written, and the
+    // registration is recorded against it afterwards.
+    expect(vi.mocked(snapshotInboxExtraction).mock.invocationCallOrder[0]).toBeLessThan(
+      supabase.rpc.mock.invocationCallOrder[0],
+    )
+    expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ inboxItemId: inboxItem.id, documentId: 'doc-1' }),
+      expect.objectContaining({
+        supplier_invoice_id: 'invoice-1',
+        fields: expect.objectContaining({ invoice_number: 'F-2024-001', invoice_date: VALID_CONVERT_BODY.invoice_date }),
+      }),
+      'user-1',
+      [{ id: 'already_booked', result: 'pass', detail: null }, { id: 'payee_alert', result: 'pass', detail: null }],
+    )
   })
 
   it('defaults the supplier invoice notes to the rendered WhatsApp channel context', async () => {
@@ -227,10 +321,10 @@ describe('POST /items/:id/convert', () => {
       }),
     })
     enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-1', status: 'registered' } })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: null, error: null })
 
     const ctx = buildCtx(supabase)
@@ -259,10 +353,10 @@ describe('POST /items/:id/convert', () => {
       }),
     })
     enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-1', status: 'registered' } })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: null, error: null })
 
     const ctx = buildCtx(supabase)
@@ -291,10 +385,10 @@ describe('POST /items/:id/convert', () => {
       }),
     })
     enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-1', status: 'registered' } })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: null, error: null })
 
     const ctx = buildCtx(supabase)
@@ -321,10 +415,10 @@ describe('POST /items/:id/convert', () => {
       }),
     })
     enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-1', status: 'registered' } })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: null, error: null })
 
     const ctx = buildCtx(supabase)
@@ -345,10 +439,10 @@ describe('POST /items/:id/convert', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-1', status: 'registered' } })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: null, error: null })
 
     const ctx = buildCtx(supabase)
@@ -371,10 +465,10 @@ describe('POST /items/:id/convert', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual' }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-1', status: 'registered' } })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual' }) })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
@@ -390,6 +484,70 @@ describe('POST /items/:id/convert', () => {
     expect(status).toBe(200)
     expect(body.data.registration_journal_entry_id).toBe('je-1')
     expect(createSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
+  })
+
+  // The "Skapa leverantörsfaktura" form (and a converted Peppol e-invoice)
+  // posts default_dimensions and per-line bags: they used to be parsed,
+  // answered with a 200 and dropped, leaving the verifikat and the later
+  // payment untagged.
+  it('carries default_dimensions onto the invoice and each line\'s bag onto its item and the registration verifikat', async () => {
+    const { createSupplierInvoiceRegistrationEntry } = await import('@/lib/bookkeeping/supplier-invoice-entries')
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual' }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-1', status: 'registered', default_dimensions: { '1': 'KS01', '6': 'P001' } } })
+    enqueue({ data: null, error: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: {
+        ...VALID_CONVERT_BODY,
+        default_dimensions: { '1': 'KS01', '6': 'P001' },
+        items: [
+          { description: 'Konsulttjänster', amount: 8000, account_number: '6200', vat_rate: 0.25, dimensions: { '6': 'P002', '20': 'KUND42' } },
+          { description: 'Material', amount: 2000, account_number: '4010', vat_rate: 0.25 },
+        ],
+      },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(findCall('supplier_invoices', 'insert')?.[0]).toMatchObject({
+      default_dimensions: { '1': 'KS01', '6': 'P001' },
+    })
+    const itemRows = findCall('supplier_invoice_items', 'insert')?.[0] as Array<{
+      account_number: string
+      dimensions: Record<string, string>
+    }>
+    expect(itemRows.map((row) => [row.account_number, row.dimensions])).toEqual([
+      ['6200', { '6': 'P002', '20': 'KUND42' }],
+      ['4010', {}],
+    ])
+    const registered = vi.mocked(createSupplierInvoiceRegistrationEntry).mock.calls.at(-1)!
+    const bookedItems = registered[4] as Array<{ account_number: string; dimensions: Record<string, string> }>
+    expect(bookedItems.map((row) => row.dimensions)).toEqual([{ '6': 'P002', '20': 'KUND42' }, {}])
+  })
+
+  it('refuses a malformed dimensions bag with 400 before anything is written', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: { ...VALID_CONVERT_BODY, default_dimensions: { projekt: 'P001' } },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(400)
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
   })
 })
 
@@ -431,8 +589,8 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
 
   /**
    * Queued mock with insert capture, wired for the convert happy path:
-   * inbox item → supplier → arrival number → invoice insert → items insert →
-   * company_settings → inbox-item update.
+   * inbox item → supplier → company_settings → arrival number → invoice
+   * insert → items insert → inbox-item update.
    */
   function setup() {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -447,10 +605,10 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
   function enqueueHappyPath(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-fx', status: 'registered' } })
     enqueue({ data: [], error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     enqueue({ data: null, error: null })
   }
 
@@ -531,6 +689,8 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
     const { supabase, enqueue, captured } = setup()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    // The settings row is read (and must be readable, #58) before the rate.
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     mockFetchExchangeRate.mockResolvedValue(null)
 
     const res = await route.handler(request({ currency: 'USD' }), buildCtx(supabase))
@@ -552,16 +712,6 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
 
 describe('DELETE /items/:id', () => {
   const route = findRoute('DELETE', '/items/:id')
-
-  it('returns 401 when no context', async () => {
-    const request = createMockRequest('/items/item-1', {
-      method: 'DELETE',
-      searchParams: { _id: 'item-1' },
-    })
-    const res = await route.handler(request, undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
 
   it('returns 404 when item not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -618,10 +768,10 @@ describe('POST /items/:id/convert honours defer_invoice_booking (#967)', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual', defer_invoice_booking: true }) })
     enqueue({ data: 42 })
     enqueue({ data: { id: 'invoice-1', status: 'registered' } })
     enqueue({ data: null, error: null })
-    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual', defer_invoice_booking: true }) })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
@@ -637,5 +787,167 @@ describe('POST /items/:id/convert honours defer_invoice_booking (#967)', () => {
     expect(status).toBe(200)
     expect(body.data.registration_journal_entry_id).toBeNull()
     expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+})
+
+// ── GET /items/:id/credit-target ─────────────────────────────
+
+describe('GET /items/:id/credit-target', () => {
+  const route = findRoute('GET', '/items/:id/credit-target')
+
+  it('returns 404 for an unknown item', async () => {
+    const request = createMockRequest('/items/item-1/credit-target', { searchParams: { _id: 'item-1' } })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    expect((await route.handler(request, buildCtx(supabase))).status).toBe(404)
+  })
+
+  it('answers is_credit_note false for a supplier invoice, without looking for a target', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'item-1',
+        kind_hint: null,
+        matched_supplier_id: null,
+        document_id: null,
+        extracted_data: { documentKind: 'supplier_invoice', totals: { total: 100, subtotal: 80, vatAmount: 20 } },
+      },
+    })
+    const request = createMockRequest('/items/item-1/credit-target', { searchParams: { _id: 'item-1' } })
+    const { status, body } = await parseJsonResponse<{ data: { is_credit_note: boolean; credit_target: null } }>(
+      await route.handler(request, buildCtx(supabase)),
+    )
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ is_credit_note: false, credit_target: null })
+    expect(findCall('supplier_invoices', 'select')).toBeUndefined()
+  })
+
+  it('names the invoice a credit note credits, and flags a partial one', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'item-1',
+        kind_hint: null,
+        matched_supplier_id: SUPPLIER_UUID,
+        document_id: null,
+        extracted_data: {
+          documentKind: 'credit_note',
+          invoice: { currency: 'SEK', creditedInvoiceNumber: 'F-2024-001' },
+          totals: { total: -2500 },
+        },
+      },
+    })
+    enqueue({
+      data: [
+        {
+          id: 'si-1',
+          supplier_id: SUPPLIER_UUID,
+          supplier_invoice_number: 'F-2024-001',
+          arrival_number: 3,
+          invoice_date: '2024-06-15',
+          status: 'approved',
+          currency: 'SEK',
+          total: 12500,
+          supplier: { name: 'Konsult AB' },
+        },
+      ],
+    })
+    const request = createMockRequest('/items/item-1/credit-target', { searchParams: { _id: 'item-1' } })
+    const { status, body } = await parseJsonResponse<{
+      data: { is_credit_note: boolean; credit_target: { status: string; credit_total: number } }
+    }>(await route.handler(request, buildCtx(supabase)))
+    expect(status).toBe(200)
+    expect(body.data.is_credit_note).toBe(true)
+    expect(body.data.credit_target).toMatchObject({ status: 'partial', credit_total: 2500 })
+  })
+})
+
+// ── Non-VAT-registered company (feedback seq 708521) ─────────
+
+describe('POST /items/:id/convert for a non-VAT-registered company (feedback 708521)', () => {
+  const route = findRoute('POST', '/items/:id/convert')
+
+  // A supplier invoice as a caller that does not fold it sends it: 2000
+  // excluding VAT at 25 %.
+  const netAt25 = {
+    ...VALID_CONVERT_BODY,
+    items: [{ description: 'Båtplats', amount: 2000, account_number: '5010', vat_rate: 0.25 }],
+  }
+
+  async function convertAs(vatRegistered: boolean, body: Record<string, unknown> = netAt25) {
+    const entries = await import('@/lib/bookkeeping/supplier-invoice-entries')
+    vi.mocked(entries.createSupplierInvoiceRegistrationEntry).mockClear()
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual', vat_registered: vatRegistered }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-1', status: 'registered' } })
+    enqueue({ data: null, error: null }) // items insert
+    enqueue({ data: null, error: null }) // registration JE id on the invoice
+    enqueue({ data: null, error: null }) // inbox item update
+
+    const request = createMockRequest('/items/item-1/convert', { method: 'POST', body, searchParams: { _id: 'item-1' } })
+    const { status } = await parseJsonResponse(await route.handler(request, buildCtx(supabase)))
+    const [invoiceRow] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    const [itemRows] = findCall('supplier_invoice_items', 'insert') as [Array<Record<string, unknown>>]
+
+    // The verifikat the real generator builds from the rows handed to it.
+    const [, , , invoice, items, supplierType] = vi.mocked(entries.createSupplierInvoiceRegistrationEntry).mock.calls[0]
+    const { buildSupplierInvoiceRegistrationEntryInput } = await vi.importActual<
+      typeof import('@/lib/bookkeeping/supplier-invoice-entries')
+    >('@/lib/bookkeeping/supplier-invoice-entries')
+    const periodChain: unknown = new Proxy(
+      {},
+      {
+        get: (_t, prop) =>
+          prop === 'then'
+            ? (resolve: (v: unknown) => void) => resolve({ data: [{ id: 'period-1' }], error: null })
+            : () => periodChain,
+      },
+    )
+    const entry = await buildSupplierInvoiceRegistrationEntryInput(
+      { from: () => periodChain } as never,
+      'company-1',
+      { ...invoice, ...invoiceRow },
+      items,
+      supplierType,
+    )
+    return { status, invoiceRow, itemRows, lines: entry!.lines }
+  }
+
+  it('books the seller VAT as cost: one row of 2500 at 0 %, a 2500 payable, no 2641', async () => {
+    const { status, invoiceRow, itemRows, lines } = await convertAs(false)
+
+    expect(status).toBe(200)
+    expect(invoiceRow).toMatchObject({ subtotal: 2500, vat_amount: 0, total: 2500, remaining_amount: 2500, total_sek: 2500 })
+    expect(itemRows).toHaveLength(1)
+    expect(itemRows[0]).toMatchObject({ account_number: '5010', quantity: 1, unit_price: 2500, line_total: 2500, vat_rate: 0, vat_amount: 0 })
+    expect(lines.find((l) => l.account_number === '2641')).toBeUndefined()
+    expect(lines.find((l) => l.account_number === '5010')?.debit_amount).toBe(2500)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2500)
+  })
+
+  it('leaves the editor\'s already folded request as it is', async () => {
+    const folded = {
+      ...VALID_CONVERT_BODY,
+      vat_treatment: 'exempt',
+      items: [{ description: 'Båtplats', amount: 2500, account_number: '5010', vat_rate: 0 }],
+    }
+    const { invoiceRow, itemRows, lines } = await convertAs(false, folded)
+
+    expect(invoiceRow).toMatchObject({ subtotal: 2500, vat_amount: 0, total: 2500 })
+    expect(itemRows[0]).toMatchObject({ line_total: 2500, vat_rate: 0, vat_amount: 0 })
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2500)
+  })
+
+  it('leaves a VAT-registered company unchanged: 2000 cost, 500 on 2641, 2500 payable', async () => {
+    const { status, invoiceRow, itemRows, lines } = await convertAs(true)
+
+    expect(status).toBe(200)
+    expect(invoiceRow).toMatchObject({ subtotal: 2000, vat_amount: 500, total: 2500, remaining_amount: 2500 })
+    expect(itemRows[0]).toMatchObject({ unit_price: 2000, line_total: 2000, vat_rate: 0.25, vat_amount: 500 })
+    expect(lines.find((l) => l.account_number === '2641')?.debit_amount).toBe(500)
+    expect(lines.find((l) => l.account_number === '2440')?.credit_amount).toBe(2500)
   })
 })

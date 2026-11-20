@@ -83,7 +83,7 @@ function buildMockSupabase({
   })
 
   return {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user } }) },
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     from: mockFrom,
   }
 }
@@ -95,7 +95,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/chain', () => {
 
   it('returns 401 when not authenticated', async () => {
     mockCreateClient.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/chain')
@@ -166,5 +166,36 @@ describe('GET /api/bookkeeping/journal-entries/[id]/chain', () => {
     expect(status).toBe(200)
     expect(body.data.entry).toEqual(original)
     expect(body.data.chain).toHaveLength(2)
+  })
+  // PH 212, crm#1438: "Radera verifikat" is offered on the last verifikat of a
+  // series, but the database never deletes an SIE-imported one. The page
+  // reads delete_block and offers no delete then.
+  it('flags an SIE-imported verifikat that is last in its series', async () => {
+    const entry = Object.assign(makeJournalEntry({ id: 'entry-1', status: 'posted' }), { import_batch_id: 'imp-1' })
+    mockCreateClient.mockResolvedValue(buildMockSupabase({ singleResult: entry }))
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/chain')
+    const response = await GET(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{
+      data: { is_last_in_series: boolean; delete_block: string | null }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.is_last_in_series).toBe(true)
+    expect(body.data.delete_block).toBe('sie_batch_entry')
+  })
+
+  it('leaves delete_block empty for an ordinary last verifikat', async () => {
+    const entry = makeJournalEntry({ id: 'entry-1', status: 'posted' })
+    mockCreateClient.mockResolvedValue(buildMockSupabase({ singleResult: entry }))
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/chain')
+    const response = await GET(request, createMockRouteParams({ id: 'entry-1' }))
+    const { body } = await parseJsonResponse<{
+      data: { is_last_in_series: boolean; delete_block: string | null }
+    }>(response)
+
+    expect(body.data.is_last_in_series).toBe(true)
+    expect(body.data.delete_block).toBeNull()
   })
 })

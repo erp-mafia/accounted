@@ -1,0 +1,163 @@
+/**
+ * How the settings surface is split across the settings operations
+ * (src/lib/operations/company-settings.ts). The split is what keeps a plain
+ * settings.update from regenerating tax deadlines and keeps the lock date
+ * behind a high-risk door.
+ */
+import { describe, expect, it } from 'vitest'
+import { z } from 'zod'
+import { UpdateSettingsSchema } from '@/lib/api/schemas'
+import { TAX_RELEVANT_FIELDS } from '@/lib/tax/deadline-generator'
+import {
+  BOOKKEEPING_LOCK_FIELDS,
+  GENERAL_SETTINGS_FIELDS,
+  TAX_PROFILE_FIELDS,
+  settingsUpdate,
+  settingsUpdateBookkeepingLock,
+  settingsUpdateTaxProfile,
+  toSettingsResource,
+} from '../company-settings'
+
+const keys = (schema: unknown) => Object.keys((schema as z.ZodObject<z.ZodRawShape>).shape)
+
+/** Dashboard fields no settings operation writes, and why. */
+const NOT_ON_THE_API: Record<string, string> = {
+  entity_type: 'legal identity, fixed at company creation',
+  org_number: 'legal identity, fixed once onboarding is complete',
+  default_our_reference: 'exposed as contact_person',
+  ai_flow_enabled: 'column dropped in 20260504120000_remove_ai_subsystem',
+  fx_revaluation_monthly: 'monthly currency revaluation (#523): dashboard first, behind NEXT_PUBLIC_FX_MONTHLY_REVALUATION_ENABLED',
+  preferred_payment_format: 'payroll: PATCH /salary/settings',
+  salary_pay_day: 'payroll: PATCH /salary/settings',
+  salary_default_bank: 'payroll: PATCH /salary/settings',
+  salary_net_rounding: 'payroll: PATCH /salary/settings',
+  salary_payslip_show_employer_cost: 'payroll: PATCH /salary/settings',
+  salary_payslip_show_breakdown: 'payroll: PATCH /salary/settings',
+  salary_calculation_policy: 'payroll: PATCH /salary/settings (merged, not replaced)',
+  salary_deviation_period: 'payroll: PATCH /salary/settings',
+  salary_regional_support: 'payroll: dashboard switch only so far (PH 208); the PATCH /salary/settings door is a follow-up',
+  finance_lease_capitalisation: 'K3 kapitel 20 opt-in: dashboard first, behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED',
+  direct_booking_enabled: "the company's say over one click (accounted#130): owner or admin in the dashboard, so a key cannot switch its own review off",
+}
+
+/** Dashboard fields that are not columns but a parameter of one door's save. */
+const DOOR_PARAMETERS: Record<string, () => string[]> = {
+  accounting_method_correction_reason: () => keys(settingsUpdateTaxProfile.input),
+}
+
+describe('settings operations: field split', () => {
+  it('lets the API and MCP read and write the bank-app payment QR switch next to the Swish one (crm#249)', () => {
+    expect(keys(settingsUpdate.input)).toContain('invoice_show_payment_qr')
+    expect(keys(settingsUpdate.input)).toContain('invoice_show_swish')
+    const resource = toSettingsResource('c1', { invoice_show_payment_qr: true } as never)
+    expect(resource.invoice_show_payment_qr).toBe(true)
+    expect(toSettingsResource('c1', {} as never).invoice_show_payment_qr).toBeNull()
+  })
+
+  it('tells an MCP or API caller that invoice_show_payment_qr is superseded by invoice_qr_mode', () => {
+    // Still accepted for compatibility, but it no longer changes the PDF: the
+    // tool's input schema must say so instead of offering a silent no-op.
+    const field = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape.invoice_show_payment_qr as z.ZodType
+    expect(field.safeParse(true).success).toBe(true)
+    expect(field.description).toMatch(/superseded by invoice_qr_mode/i)
+  })
+
+  it('tells an MCP or API caller that the company-name switch and placement are superseded by the fixed layout', () => {
+    // Accepted for compatibility (no UI writes them any more): the tool's
+    // input schema says so instead of offering a placement that does nothing.
+    const shape = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape
+    const show = shape.invoice_show_company_name as z.ZodType
+    const position = shape.invoice_company_name_position as z.ZodType
+    expect(show.safeParse(false).success).toBe(true)
+    expect(position.safeParse('footer').success).toBe(true)
+    expect(show.description).toMatch(/superseded by the fixed invoice layout/i)
+    expect(position.description).toMatch(/superseded by the fixed invoice layout/i)
+    expect(position.description).toMatch(/no longer changes the PDF/i)
+  })
+
+  it('lets the API and MCP read and write the invoice QR mode, and refuses a value that is not a mode', () => {
+    expect(keys(settingsUpdate.input)).toContain('invoice_qr_mode')
+    expect(toSettingsResource('c1', { invoice_qr_mode: 'bank_app' } as never).invoice_qr_mode).toBe('bank_app')
+    expect(toSettingsResource('c1', {} as never).invoice_qr_mode).toBeNull()
+    const field = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape.invoice_qr_mode as z.ZodType
+    expect(field.safeParse('none').success).toBe(true)
+    expect(field.safeParse('all').success).toBe(false)
+  })
+
+  it('lets the API and MCP read and write the Swedbank payment-file ids, in Swedbank format only (crm#1117)', () => {
+    const shape = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape
+    for (const [field, valid, invalid] of [
+      ['swedbank_signer_id', '123456789ORI0001', '5566778899'],
+      ['swedbank_corporate_pay_id', '123456789CPO0001', '123456789ORI0001'],
+    ] as const) {
+      expect(keys(settingsUpdate.input), field).toContain(field)
+      const schema = shape[field] as z.ZodType
+      expect(schema.safeParse(valid).success, field).toBe(true)
+      expect(schema.safeParse(invalid).success, field).toBe(false)
+      // Swedbank's ISO 1.0 agreement number is refused by name (agent feedback seq 2321961).
+      expect(schema.safeParse('065566778899B001').error?.issues[0].message, field).toContain('ISO 20022 1.0')
+      expect(schema.description, field).toMatch(/assigned by Swedbank/)
+      expect(toSettingsResource('c1', { [field]: valid } as never)[field]).toBe(valid)
+      expect(toSettingsResource('c1', {} as never)[field]).toBeNull()
+    }
+  })
+
+  it('lets the API and MCP read and write the Nordea Signer ID, letters and digits only (crm#1530)', () => {
+    const schema = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape.nordea_signer_id as z.ZodType
+    expect(keys(settingsUpdate.input)).toContain('nordea_signer_id')
+    expect(schema.safeParse('nb 10000 123456').data).toBe('NB10000123456')
+    expect(schema.safeParse('NB1000/0123').success).toBe(false)
+    expect(schema.description).toMatch(/assigned by Nordea/)
+    expect(toSettingsResource('c1', { nordea_signer_id: 'NB10000123456' } as never).nordea_signer_id).toBe('NB10000123456')
+    expect(toSettingsResource('c1', {} as never).nordea_signer_id).toBeNull()
+  })
+
+  it('puts every tax-relevant field the API writes in the tax profile, never in settings.update', () => {
+    const general = keys(settingsUpdate.input)
+    for (const field of TAX_RELEVANT_FIELDS) {
+      expect(general, field).not.toContain(field)
+      if (field !== 'entity_type') expect(TAX_PROFILE_FIELDS as readonly string[], field).toContain(field)
+    }
+  })
+
+  it('keeps the lock fields out of every door but the lock', () => {
+    for (const field of BOOKKEEPING_LOCK_FIELDS) {
+      expect(keys(settingsUpdate.input), field).not.toContain(field)
+      expect(keys(settingsUpdateTaxProfile.input), field).not.toContain(field)
+      expect(keys(settingsUpdateBookkeepingLock.input), field).toContain(field)
+    }
+  })
+
+  it('accounts for every dashboard field: one door each, or a stated reason for none', () => {
+    const doors = [...GENERAL_SETTINGS_FIELDS, ...TAX_PROFILE_FIELDS, ...BOOKKEEPING_LOCK_FIELDS] as string[]
+    expect(new Set(doors).size).toBe(doors.length)
+    for (const field of Object.keys(UpdateSettingsSchema.shape)) {
+      expect(doors.includes(field) || field in NOT_ON_THE_API || !!DOOR_PARAMETERS[field]?.().includes(field), field).toBe(true)
+    }
+  })
+})
+
+describe('settings resource: the org number of an enskild firma', () => {
+  it('masks the last four digits when the org number is a personnummer', () => {
+    const resource = toSettingsResource('c1', { entity_type: 'enskild_firma', org_number: '198501011234' } as never)
+    expect(resource.org_number).toBe('19850101-XXXX')
+  })
+
+  it('treats an unknown legal form as a person', () => {
+    const resource = toSettingsResource('c1', { entity_type: null, org_number: '8501011234' } as never)
+    expect(resource.org_number).toBe('850101-XXXX')
+  })
+
+  it("returns a legal person's org number as it is: it is public", () => {
+    const resource = toSettingsResource('c1', { entity_type: 'aktiebolag', org_number: '5566778899' } as never)
+    expect(resource.org_number).toBe('5566778899')
+  })
+})
+
+describe('settings resource: parameters are not settings', () => {
+  it('never answers the correction reason as a setting', () => {
+    const resource = toSettingsResource('c1', { accounting_method: 'cash', accounting_method_correction_reason: 'x' } as never)
+    expect(resource).not.toHaveProperty('accounting_method_correction_reason')
+    expect(keys(settingsUpdate.input)).not.toContain('accounting_method_correction_reason')
+  })
+})

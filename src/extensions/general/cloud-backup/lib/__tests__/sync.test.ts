@@ -61,6 +61,7 @@ import {
   arkivFileName,
 } from '../sync'
 import { GoogleTokenRefreshError, refreshAccessToken } from '../google-oauth'
+import { CloudScopeMissingError } from '../cloud-provider'
 import {
   DriveFileGoneError,
   ensureFolder,
@@ -111,6 +112,8 @@ interface MockData {
     created_at: string | null
   }[]
   auditAt?: string
+  rattelser?: { journal_entry_id: string; created_at: string }[]
+  retags?: { journal_entry_id: string; created_at: string }[]
 }
 
 /**
@@ -151,6 +154,12 @@ function makeSupabase(data: MockData) {
         }
         if (table === 'document_attachments') {
           return resolve({ data: data.docs ?? [], error: null })
+        }
+        if (table === 'journal_entry_rattelse_log') {
+          return resolve({ data: data.rattelser ?? [], error: null })
+        }
+        if (table === 'dimension_retag_log') {
+          return resolve({ data: data.retags ?? [], error: null })
         }
         if (table === 'audit_log') {
           return resolve({
@@ -317,6 +326,157 @@ describe('performSync needs_reauth handling', () => {
   })
 })
 
+describe('performSync with a grant that lacks the Drive scope (B12)', () => {
+  const scopeError = () =>
+    new CloudScopeMissingError(
+      'Google Drive',
+      'Drive API 403: Request had insufficient authentication scopes.'
+    )
+
+  it('flags needs_reauth (missing_scope) when the first Drive call is refused', async () => {
+    // The production shape: connected, never got a folder, refused every night.
+    const { supabase, upsert } = makeSupabase({
+      connection: makeConnection({ root_folder_id: null, company_folder_id: null }),
+    })
+    mockEnsureFolder.mockRejectedValueOnce(scopeError())
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'needs_reauth',
+      reauthReason: 'missing_scope',
+    })
+    expect(upsert).toHaveBeenCalledTimes(1)
+    const [payload] = upsert.mock.calls[0]
+    expect(payload.key).toBe(CONNECTION_KEY)
+    expect(payload.value).toMatchObject({
+      status: 'needs_reauth',
+      needs_reauth_reason: 'missing_scope',
+      needs_reauth_at: expect.any(String),
+      account_email: 'user@example.com',
+    })
+    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
+  })
+
+  it('flags it when an upload is refused for the scope', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+    mockUploadFile.mockRejectedValueOnce(scopeError())
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result).toMatchObject({ ok: false, reason: 'needs_reauth', reauthReason: 'missing_scope' })
+    const connectionSave = upsert.mock.calls.find(([p]) => p.key === CONNECTION_KEY)
+    expect(connectionSave![0].value.needs_reauth_reason).toBe('missing_scope')
+  })
+
+  it('keeps the original needs_reauth_at of an incident already flagged', async () => {
+    const { supabase, upsert } = makeSupabase({
+      connection: makeConnection({
+        status: 'needs_reauth',
+        needs_reauth_at: '2026-07-01T03:00:00.000Z',
+        needs_reauth_reason: 'missing_scope',
+      }),
+    })
+    mockGetFileMeta.mockRejectedValueOnce(scopeError())
+
+    await performSync(syncParams(supabase))
+
+    const [payload] = upsert.mock.calls[0]
+    expect(payload.value.needs_reauth_at).toBe('2026-07-01T03:00:00.000Z')
+  })
+
+  it('records a dead refresh token as token_revoked', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+    mockRefreshAccessToken.mockRejectedValueOnce(
+      new GoogleTokenRefreshError(400, '{"error":"invalid_grant"}')
+    )
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result).toMatchObject({ reason: 'needs_reauth', reauthReason: 'token_revoked' })
+    expect(upsert.mock.calls[0][0].value.needs_reauth_reason).toBe('token_revoked')
+  })
+
+  it('keeps an ordinary Drive failure a thrown error, connection untouched', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+    mockGetFileMeta.mockRejectedValueOnce(new Error('Drive API 500: backend error'))
+
+    await expect(performSync(syncParams(supabase))).rejects.toThrow(/500/)
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('clears the reason together with the flag once Drive answers again', async () => {
+    const { supabase, upsert } = makeSupabase({
+      connection: makeConnection({
+        status: 'needs_reauth',
+        needs_reauth_at: '2026-07-01T03:00:00.000Z',
+        needs_reauth_reason: 'missing_scope',
+      }),
+    })
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result.ok).toBe(true)
+    const connectionSave = upsert.mock.calls.find(([p]) => p.key === CONNECTION_KEY)
+    expect(connectionSave![0].value.status).toBe('active')
+    expect(connectionSave![0].value.needs_reauth_reason).toBeUndefined()
+  })
+})
+
+describe('performSync startDeadline', () => {
+  it('starts no archive once the deadline has passed', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+
+    const result = await performSync(
+      syncParams(supabase, { startDeadline: Date.now() - 1 })
+    )
+
+    expect(result).toMatchObject({ ok: false, reason: 'deferred' })
+    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
+    expect(mockUploadFile).not.toHaveBeenCalled()
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('keeps the archives finished before the deadline and stops at the next', async () => {
+    let now = 1_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      // Building the year archive takes longer than the time left.
+      mockGenerateFullArchive.mockImplementationOnce(async () => {
+        now += 200_000
+        return new ArrayBuffer(8)
+      })
+      const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+
+      const result = await performSync(syncParams(supabase, { startDeadline: 1_100_000 }))
+
+      expect(result).toMatchObject({ ok: false, reason: 'deferred' })
+      expect(mockUploadFile).toHaveBeenCalledTimes(1)
+      expect(mockGenerateBaseDataArchive).not.toHaveBeenCalled()
+      // The finished archive is persisted, so the next run skips it.
+      const snapshots = upsert.mock.calls.filter(([p]) => p.key === LAST_SYNC_KEY)
+      expect(snapshots).toHaveLength(1)
+      expect(snapshots[0][0].value.files).toHaveLength(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('completes an up-to-date backup whatever the deadline', async () => {
+    const { supabase } = makeSupabase({
+      connection: makeConnection(),
+      lastSync: upToDateLastSync(),
+    })
+
+    const result = await performSync(
+      syncParams(supabase, { startDeadline: Date.now() - 1 })
+    )
+
+    expect(result).toMatchObject({ ok: true, uploadedCount: 0 })
+  })
+})
+
 describe('performSync per-fiscal-year layout', () => {
   it('ignores extension runtime state when fingerprinting Grunddata', async () => {
     const { supabase, from } = makeSupabase({
@@ -379,6 +539,60 @@ describe('performSync per-fiscal-year layout', () => {
     // The final snapshot still refreshes `at` so the card shows recency.
     const lastSyncSaves = upsert.mock.calls.filter(([p]) => p.key === LAST_SYNC_KEY)
     expect(lastSyncSaves.length).toBe(1)
+    // A record from before the account was stored is trusted, then stamped.
+    expect(lastSyncSaves[0][0].value.account_email).toBe('user@example.com')
+  })
+
+  it('uploads everything again after reconnecting another account to the same path', async () => {
+    // Dropbox derives the folder from the company name alone, so a different
+    // account has the same folder id and none of the files.
+    const { supabase } = makeSupabase({
+      connection: makeConnection({ account_email: 'new@example.com' }),
+      lastSync: { ...upToDateLastSync(), account_email: 'old@example.com' },
+    })
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.uploadedCount).toBe(3)
+    expect(result.skippedCount).toBe(0)
+    expect(mockUpdateFile).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['an inline rättelse', { rattelser: [{ journal_entry_id: ENTRY.id, created_at: '2026-08-01T00:00:00Z' }] }],
+    ['a dimension retag', { retags: [{ journal_entry_id: ENTRY.id, created_at: '2026-08-01T00:00:00Z' }] }],
+  ])('uploads a year again after %s of its lines', async (_label, lineLogs) => {
+    // Both rewrite lines without touching the entry row, so the entry's
+    // updated_at alone would call the year unchanged.
+    const { supabase } = makeSupabase({
+      connection: makeConnection(),
+      lastSync: upToDateLastSync(),
+      ...lineLogs,
+    })
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.uploadedCount).toBe(1)
+    expect(mockUpdateFile).toHaveBeenCalledTimes(1)
+    expect(mockUpdateFile.mock.calls[0][1]).toBe('drive-period')
+  })
+
+  it('keeps a year whose line changes are older than its last entry update', async () => {
+    const { supabase } = makeSupabase({
+      connection: makeConnection(),
+      lastSync: upToDateLastSync(),
+      rattelser: [{ journal_entry_id: ENTRY.id, created_at: '2024-05-01T00:00:00Z' }],
+    })
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.uploadedCount).toBe(0)
   })
 
   it('updates only the changed period file, in place', async () => {
@@ -510,6 +724,27 @@ describe('performSync folder revalidation', () => {
     expect(connectionSave![0].value.company_folder_id).toBe('company-2')
     // Uploads target the recreated company folder.
     expect(mockUploadFile.mock.calls[0][1]).toBe('company-2')
+  })
+
+  it('fills a recreated folder with every file, not only the changed ones', async () => {
+    // Everything was up to date in the folder the user then trashed.
+    const { supabase } = makeSupabase({
+      connection: makeConnection(),
+      lastSync: upToDateLastSync(),
+    })
+    mockGetFileMeta
+      .mockResolvedValueOnce({ id: 'company-1', name: 'x', trashed: true })
+      .mockResolvedValueOnce({ id: 'root-1', name: 'gnubok', trashed: false })
+    mockEnsureFolder.mockResolvedValueOnce({ id: 'company-2', name: 'Testbolag AB' })
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.uploadedCount).toBe(3)
+    // Never written in place: the old ids are files in the trashed folder.
+    expect(mockUpdateFile).not.toHaveBeenCalled()
+    expect(mockUploadFile.mock.calls.every((call) => call[1] === 'company-2')).toBe(true)
   })
 
   it('does not touch folders when the cached company folder is alive', async () => {

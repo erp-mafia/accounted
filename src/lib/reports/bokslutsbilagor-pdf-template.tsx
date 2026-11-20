@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import type { BilagaAccount, BilagaChecklistItem, BokslutsbilagorReport } from '@/lib/reports/bokslutsbilagor-types'
 import { formatStockholmTimestamp } from '@/lib/reports/behandlingshistorik'
@@ -198,7 +198,7 @@ export function BokslutsbilagorPDF({ report }: BokslutsbilagorPDFProps) {
           </View>
           <View style={styles.companyInfo}>
             {report.company.name ? <Text style={styles.companyName}>{pdfText(report.company.name)}</Text> : null}
-            {report.company.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumber(report.company.org_number)}</Text> : null}
+            {report.company.org_number ? <Text style={styles.companyMeta}>Org.nr: {formatOrgNumberDisplay(report.company.org_number)}</Text> : null}
           </View>
         </View>
 
@@ -250,7 +250,7 @@ export function BokslutsbilagorPDF({ report }: BokslutsbilagorPDFProps) {
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
             {pdfText(report.company.name)}
-            {report.company.org_number ? ` · ${formatOrgNumber(report.company.org_number)}` : ''}
+            {report.company.org_number ? ` · ${formatOrgNumberDisplay(report.company.org_number)}` : ''}
             {' · Bokslutsbilagor '}
             {report.period.name}
           </Text>

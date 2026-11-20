@@ -2,11 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/facts/predicates'
 import { searchDocumentPages } from '@/lib/documents/read/search'
+import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 
 /**
  * Arkiv phase 9c: one search over the record, shared by the page and the
  * agent tool. Documents are found by page text (best page first, with the
- * matching passage), agreements by title or counterparty, facts by value or
+ * matching passage) and by file name (any part of it, so a half-typed word
+ * or a document nobody has read yet is found too), agreements by title or counterparty, facts by value or
  * by the Swedish name of the predicate. Every hit carries a record_ref and,
  * where it was read from a page, the page: the person opens it, the agent
  * passes it to gnubok_get_record. Retrieval only; how a hit is titled for a
@@ -50,9 +52,28 @@ export async function searchRecords(
   const items: SearchItem[] = []
 
   if (kinds.has('document')) {
-    const hits = await searchDocumentPages(supabase, companyId, query, limit)
+    // Page text is matched on whole words; the file name on any part of it. The same documents the Arkiv table lists.
+    const [hits, named] = await Promise.all([
+      searchDocumentPages(supabase, companyId, query, limit),
+      supabase
+        .from('document_attachments')
+        .select('id, file_name')
+        .eq('company_id', companyId)
+        .in('admission_state', ['admitted', 'held'])
+        .or(NOT_STRUCTURED_MIME_FILTER)
+        .ilike('file_name', like)
+        .order('created_at', { ascending: false })
+        .limit(limit),
+    ])
+    if (named.error) throw dbError(named.error)
     for (const hit of hits) {
       items.push({ record_ref: `document:${hit.document_id}`, kind: 'document', title: hit.file_name, snippet: hit.headline, document_id: hit.document_id, page: hit.page_no })
+    }
+    // A document whose pages matched is already there, with the passage; a name-only match follows, with no page.
+    const byPage = new Set(hits.map((hit) => hit.document_id))
+    for (const doc of (named.data ?? []) as Array<{ id: string; file_name: string }>) {
+      if (byPage.has(doc.id)) continue
+      items.push({ record_ref: `document:${doc.id}`, kind: 'document', title: doc.file_name, snippet: null, document_id: doc.id, page: null })
     }
   }
 
@@ -61,6 +82,9 @@ export async function searchRecords(
       .from('agreements')
       .select('id, title, counterparty_name, kind, ends_on')
       .eq('company_id', companyId)
+      // The archive's agreements: read from its documents. Manual ones are
+      // listed by gnubok_list_agreements (Avtal och åtaganden).
+      .not('source_document_id', 'is', null)
       .or(`title.ilike.${like},counterparty_name.ilike.${like}`)
       .limit(limit)
     if (error) throw dbError(error)

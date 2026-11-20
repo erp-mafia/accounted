@@ -17,10 +17,11 @@ import type { AgentActorContext } from '@/lib/agent/tools/types'
  * actions belong to the page-specific intents where a single entity is in
  * focus and the user expects a staged card.
  *
- * The registry is populated by the mcp-server extension at init
- * (ensureInitialized). In a core-only build it is empty, so this returns an
- * empty list and the assistant answers from the prompt + snapshot alone: the
- * graceful, correct degradation.
+ * The mcp-server extension registers the tool loader when lib/init loads it,
+ * which instrumentation.ts starts at boot and the first lookup waits for
+ * (lib/initialized.ts). In a core-only build
+ * nothing is registered, so this returns an empty list and the assistant
+ * answers from the prompt + snapshot alone: the graceful, correct degradation.
  */
 export const LEDGER_READ_TOOLS: readonly string[] = [
   // Reports (the canonical analytical surface)
@@ -59,19 +60,21 @@ export const LEDGER_READ_TOOLS: readonly string[] = [
  * context the streaming runtime uses (`agent_chat` + the conversation id, for
  * BFL audit). Each def's execute dispatches the real registered tool.
  */
-export function buildLedgerTools(
+export async function buildLedgerTools(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   conversationId?: string,
-): AiToolDef[] {
+  // The support assistant adds the skill readers to the list
+  // (lib/agent/support/service.ts); the filter below holds for any list.
+  names: readonly string[] = LEDGER_READ_TOOLS,
+): Promise<AiToolDef[]> {
   const actor: AgentActorContext = {
     type: 'agent_chat',
     ...(conversationId ? { id: conversationId } : {}),
   }
 
-  return agentToolRegistry
-    .getMany([...LEDGER_READ_TOOLS])
+  return (await agentToolRegistry.getMany([...names]))
     // Belt-and-suspenders on top of the curated whitelist: never expose a tool
     // the registry itself marks writable or destructive, even if it somehow
     // ended up on the list.

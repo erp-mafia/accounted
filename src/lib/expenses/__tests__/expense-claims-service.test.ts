@@ -1,14 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
+const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/operations/inbox-pair-guard', () => ({
+  refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
+}))
+
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const createJournalEntryMock = vi.fn()
 const findFiscalPeriodMock = vi.fn()
 const reverseEntryMock = vi.fn()
-vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: (...args: unknown[]) => createJournalEntryMock(...args),
-  findFiscalPeriod: (...args: unknown[]) => findFiscalPeriodMock(...args),
-  reverseEntry: (...args: unknown[]) => reverseEntryMock(...args),
-}))
+vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bookkeeping/engine')>()
+  return {
+    // The real payout door: it calls the RPC asserted below, then reloads the
+    // posted verifikat to announce it.
+    commitExpensePayoutBatch: actual.commitExpensePayoutBatch,
+    createJournalEntry: (...args: unknown[]) => createJournalEntryMock(...args),
+    findFiscalPeriod: (...args: unknown[]) => findFiscalPeriodMock(...args),
+    reverseEntry: (...args: unknown[]) => reverseEntryMock(...args),
+  }
+})
 
 const linkToJournalEntryMock = vi.fn()
 vi.mock('@/lib/core/documents/document-service', () => ({
@@ -28,8 +41,15 @@ vi.mock('@/lib/salary/expense-claim-lines', () => ({
 }))
 
 import { registerExpenseClaim, createPayoutBatch, deleteExpenseClaim } from '../expense-claims-service'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
 
-const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
+const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 // The queued mock is structurally sufficient for the service; the cast keeps
 // the test honest about not being a real client.
 const sb = supabase as unknown as import('@supabase/supabase-js').SupabaseClient
@@ -233,10 +253,11 @@ describe('registerExpenseClaim', () => {
 
   it('links an unanchored receipt document to the new verifikat', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null } }) // inbox item read
     enqueue({ data: { id: 'claim-1' } }) // insert
     enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
     enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
-    enqueue({ data: null }) // inbox item update
 
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
       description: 'Kvitto',
@@ -251,7 +272,173 @@ describe('registerExpenseClaim', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-1', 'je-1')
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-1', 'je-1', { link_basis: 'user_created', link_evidence: null })
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: 'je-1' }]])
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([
+      ['created_journal_entry_id', null],
+      ['created_supplier_invoice_id', null],
+    ])
+  })
+
+  // crm#2018: an agent staged the claim with inbox_item_id only; the item was
+  // marked booked and the verifikat carried no underlag.
+  it('attaches the inbox item\'s own document when the caller sent only inbox_item_id', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_id: 'doc-item' } }) // inbox item read
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
+    enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'email' } }) // document lookup
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Toner',
+      expense_date: '2026-11-16',
+      amount: 329,
+      vat_amount: 65.8,
+      currency: 'SEK',
+      expense_account: '5460',
+      claimant_name: 'Joakim',
+      inbox_item_id: 'inbox-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ document_id: 'doc-item' })
+    expect(findCalls('document_attachments', 'eq')).toContainEqual(['id', 'doc-item'])
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-item', 'je-1', { link_basis: 'user_created', link_evidence: null })
+  })
+
+  it('attaches the inbox item\'s document, not a different document_id sent with it', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_id: 'doc-item' } }) // inbox item read
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
+    enqueue({ data: { journal_entry_id: null, user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'email' } }) // document lookup
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Toner',
+      expense_date: '2026-11-16',
+      amount: 329,
+      vat_amount: 65.8,
+      currency: 'SEK',
+      expense_account: '5460',
+      claimant_name: 'Joakim',
+      document_id: 'doc-other',
+      inbox_item_id: 'inbox-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ document_id: 'doc-item' })
+    expect(linkToJournalEntryMock).toHaveBeenCalledTimes(1)
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(sb, COMPANY, 'doc-item', 'je-1', { link_basis: 'user_created', link_evidence: null })
+  })
+
+  it('links nothing for an inbox item without a document and no document_id', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null, document_id: null } }) // inbox item read
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim (compare-and-set)
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Toner',
+      expense_date: '2026-11-16',
+      amount: 100,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5460',
+      claimant_name: 'Joakim',
+      inbox_item_id: 'inbox-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ document_id: null })
+    expect(findCall('document_attachments', 'select')).toBeUndefined()
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  // accounted#14: the item stamp overwrote any pointer, so the same
+  // underlag registered twice kept two posted verifikat.
+  const INBOX_CLAIM_INPUT = {
+    description: 'Kvitto',
+    expense_date: '2026-09-01',
+    amount: 100,
+    vat_amount: 0,
+    currency: 'SEK' as const,
+    expense_account: '5410',
+    claimant_name: 'Joakim',
+    document_id: 'doc-1',
+    inbox_item_id: 'inbox-1',
+  }
+
+  it('refuses an inbox item another verifikat still books, before writing anything', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: 'je-first', created_supplier_invoice_id: null } })
+    enqueue({ data: { status: 'posted' } }) // the pointer's verifikat
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+
+    expect(result).toEqual({ ok: false, code: 'INBOX_ITEM_BOOKED' })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'insert')).toBeUndefined()
+  })
+
+  it('refuses an utlägg of an item whose other half is booked already (reported 2026-10-15), before writing anything', async () => {
+    refuseWhenPairBookedMock.mockResolvedValueOnce({
+      ok: false,
+      code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED',
+      details: { inbox_item_id: 'item-1', sibling_item_id: 'item-receipt', sibling_kind: 'receipt', journal_entry_id: 'je-66', voucher: 'A66', supplier_invoice_id: null },
+      messageSv: 'Kvittot från samma köp är redan bokfört på verifikat A66. Lägg till det här underlaget där i stället, så bokförs köpet inte två gånger.',
+      messageEn: 'The receipt from the same purchase is booked already on voucher A66. Add this document there instead, so the purchase is not booked twice.',
+    })
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null } }) // the item itself is unbooked
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+    expect(result).toMatchObject({ ok: false, code: 'INBOX_ITEM_PAIR_BOOKED' })
+    expect((result as { detail?: string }).detail).toContain('A66')
+    expect(refuseWhenPairBookedMock).toHaveBeenCalledWith(sb, COMPANY, 'inbox-1')
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'insert')).toBeUndefined()
+  })
+
+  it('loses the claim to a concurrent registration: reverses its verifikat, removes its row, attaches nothing', async () => {
+    reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
+    findPayslipLineForClaimMock.mockResolvedValue(null)
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: null, created_supplier_invoice_id: null } }) // still unbooked
+    enqueue({ data: { id: 'claim-2' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [] }) // inbox item claim: the other registration stamped first
+    enqueue({ data: { id: 'claim-2', status: 'registered', journal_entry_id: 'je-1' } }) // delete: claim read
+    enqueue({ data: { status: 'posted', reversed_by_id: null } }) // delete: entry status
+    enqueue({ data: null }) // delete: claim row
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+
+    expect(result).toEqual({ ok: false, code: 'INBOX_ITEM_BOOKED' })
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCall('document_attachments', 'insert')).toBeUndefined()
+  })
+
+  it('replaces a stale pointer at a reversed verifikat, exactly that value', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { created_journal_entry_id: 'je-stornoed', created_supplier_invoice_id: null } })
+    enqueue({ data: { status: 'reversed' } })
+    enqueue({ data: { id: 'claim-3' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+    enqueue({ data: [{ id: 'inbox-1' }] }) // inbox item claim on the stale value
+    enqueue({ data: { journal_entry_id: 'je-stornoed', user_id: 'user-1', storage_path: 'p', file_name: 'kvitto.pdf', file_size_bytes: 1, mime_type: 'application/pdf', sha256_hash: 'x', uploaded_by: 'user-1', upload_source: 'file_upload' } }) // document lookup
+    enqueue({ data: { id: 'doc-copy' } }) // attachment copy insert
+    enqueue({ data: null }) // claim document_id update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, INBOX_CLAIM_INPUT)
+
+    expect(result.ok).toBe(true)
+    expect(findCalls('invoice_inbox_items', 'eq')).toContainEqual(['created_journal_entry_id', 'je-stornoed'])
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([['created_supplier_invoice_id', null]])
+    expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
   it('copies an already-anchored receipt instead of re-pointing it (BFL immutability)', async () => {
@@ -317,6 +504,40 @@ describe('registerExpenseClaim', () => {
     expect(insert?.[0]).toMatchObject({ vat_sek: 0 })
   })
 
+  it('crm#1377: a privately paid EU reverse-charge invoice posts its fiktiv moms in SEK, the person owed the net', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { id: 'claim-rc' } }) // insert
+    enqueue({ data: null }) // update
+
+    // The lines buildSupplierInvoicePrivatelyPaidLines hands over for one EUR
+    // row on 4535 (which reports ruta 21 itself, so no basis pair).
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Faktura RC-1',
+      expense_date: '2026-10-21',
+      amount: 180,
+      vat_amount: 0,
+      currency: 'EUR',
+      exchange_rate: 11.123,
+      expense_account: '4535',
+      claimant_name: 'Ägare',
+      lines: [
+        { account_number: '4535', debit_amount: 180, credit_amount: 0 },
+        { account_number: '2645', debit_amount: 45, credit_amount: 0 },
+        { account_number: '2614', debit_amount: 0, credit_amount: 45 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 180 },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    const input = createJournalEntryMock.mock.calls[0][3]
+    const byAccount = Object.fromEntries(input.lines.map((l: { account_number: string }) => [l.account_number, l]))
+    expect(byAccount['4535'].debit_amount).toBe(2002.14)
+    expect(byAccount['2645'].debit_amount).toBe(500.54)
+    expect(byAccount['2614'].credit_amount).toBe(500.54)
+    expect(byAccount['2893'].credit_amount).toBe(2002.14)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ amount_sek: 2002.14, vat_sek: 0 })
+  })
+
   it('rejects unbalanced custom lines before touching the ledger', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     const result = await registerExpenseClaim(sb, COMPANY, USER, {
@@ -330,6 +551,26 @@ describe('registerExpenseClaim', () => {
       lines: [
         { account_number: '5410', debit_amount: 90, credit_amount: 0 },
         { account_number: '2893', debit_amount: 0, credit_amount: 100 },
+      ],
+    })
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects custom lines that balance only before each line is rounded', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'x',
+      expense_date: '2026-09-01',
+      amount: 200.01,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Joakim',
+      lines: [
+        { account_number: '5410', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '5420', debit_amount: 100.004, credit_amount: 0 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 200.01 },
       ],
     })
     expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
@@ -405,6 +646,7 @@ describe('createPayoutBatch', () => {
         claim_count: 2,
       },
     })
+    enqueue({ data: { id: 'je-2', company_id: COMPANY, status: 'posted', lines: [] } }) // engine door reload
 
     const result = await createPayoutBatch(sb, COMPANY, USER, {
       claim_ids: ['c1', 'c2', 'c1'],
@@ -441,6 +683,7 @@ describe('createPayoutBatch', () => {
     enqueue({
       data: { ok: true, batch_id: 'batch-2', journal_entry_id: 'je-3', voucher_number: 8, total_sek: 1596, claim_count: 2 },
     })
+    enqueue({ data: { id: 'je-3', company_id: COMPANY, status: 'posted', lines: [] } }) // engine door reload
     const result = await createPayoutBatch(sb, COMPANY, USER, {
       claim_ids: ['c2', 'c3'],
       payout_date: '2026-09-10',
@@ -501,7 +744,13 @@ describe('createPayoutBatch', () => {
       payout_date: '2026-09-05',
       cash_account: '1935',
     })
-    expect(result).toEqual({ ok: false, code: 'BATCH_INSERT_FAILED', detail: 'Perioden är låst' })
+    // The RPC error rides along so the doors can classify the trigger (PERIOD_LOCKED).
+    expect(result).toEqual({
+      ok: false,
+      code: 'BATCH_INSERT_FAILED',
+      detail: 'Perioden är låst',
+      error: { message: 'Perioden är låst', code: 'P0001' },
+    })
   })
 })
 
@@ -544,6 +793,7 @@ describe('deleteExpenseClaim', () => {
 
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
     expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
+    expect(invalidateRunCalculation).toHaveBeenCalledWith(sb, COMPANY, { salaryRunId: 'run-1' })
     expect(findCall('salary_line_items', 'delete')).toBeTruthy()
     expect(findCall('salary_line_items', 'eq')).toEqual(['id', 'li-1'])
     expect(findCall('expense_claims', 'delete')).toBeTruthy()
@@ -723,5 +973,132 @@ describe('registerExpenseClaim: custom lines from a supplier invoice', () => {
 
     const input = createJournalEntryMock.mock.calls[0][3]
     for (const line of input.lines) expect(line).not.toHaveProperty('dimensions')
+  })
+})
+
+describe('registerExpenseClaim: omvänd skattskyldighet on a receipt from abroad (crm#1028)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    findFiscalPeriodMock.mockResolvedValue('period-1')
+    createJournalEntryMock.mockResolvedValue({ id: 'je-1' })
+  })
+
+  const saas = {
+    description: 'SaaS-abonnemang',
+    expense_date: '2026-09-01',
+    amount: 25,
+    vat_amount: 0,
+    currency: 'USD' as const,
+    exchange_rate: 10.5,
+    expense_account: '6540',
+    claimant_name: 'Ägare',
+  }
+
+  it('books the fiktiv moms and the ruta 22 basis pair on the SEK amount, balanced', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { default_vat_treatment: null, default_vat_rate: null } }) // chart row of 6540
+    enqueue({ data: { id: 'claim-rc' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, { ...saas, reverse_charge: 'non_eu_services' })
+
+    expect(result.ok).toBe(true)
+    const lines = createJournalEntryMock.mock.calls[0][3].lines as Array<{
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+    }>
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['6540', 262.5, 0],
+      ['2645', 65.63, 0],
+      ['2614', 0, 65.63],
+      ['4531', 262.5, 0],
+      ['4598', 0, 262.5],
+      ['2893', 0, 262.5],
+    ])
+    expect(lines[0]).toMatchObject({ currency: 'USD', amount_in_currency: 25, exchange_rate: 10.5 })
+    const debit = lines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+    expect(findCalls('chart_of_accounts', 'eq')).toEqual([
+      ['company_id', COMPANY],
+      ['account_number', '6540'],
+    ])
+    // Nothing is deductible on 2641: the claim owes the gross and shows no VAT.
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ amount_sek: 262.5, vat_sek: 0 })
+  })
+
+  it('adds no basis pair when the cost account reports the ruta itself', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { default_vat_treatment: null, default_vat_rate: null } }) // chart row of 4535
+    enqueue({ data: { id: 'claim-rc' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    await registerExpenseClaim(sb, COMPANY, USER, {
+      ...saas,
+      currency: 'EUR',
+      exchange_rate: 11,
+      amount: 10,
+      expense_account: '4535',
+      reverse_charge: 'eu_services',
+    })
+
+    const lines = createJournalEntryMock.mock.calls[0][3].lines as Array<{ account_number: string }>
+    expect(lines.map((l) => l.account_number)).toEqual(['4535', '2645', '2614', '2893'])
+  })
+
+  it.each([
+    ['the import basis (ruta 50)', '4545', { default_vat_treatment: null, default_vat_rate: null }],
+    ['a reverse-charge momskod without a rate', '6541', { default_vat_treatment: 'reverse_charge_eu_services', default_vat_rate: 0 }],
+    ['the other region (4535 is ruta 21)', '4535', { default_vat_treatment: null, default_vat_rate: null }],
+  ])('refuses reverse_charge on %s before writing anything (crm#1028 review)', async (_case, account, row) => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: row }) // chart row of the cost account
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      ...saas,
+      expense_account: account,
+      reverse_charge: 'non_eu_services',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+    expect(findCall('expense_claims', 'insert')).toBeUndefined()
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('books a receipt from abroad without reverse_charge gross, with no moms lines', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { id: 'claim-gross' } }) // insert
+    enqueue({ data: null }) // journal_entry_id update
+
+    await registerExpenseClaim(sb, COMPANY, USER, saas)
+
+    const lines = createJournalEntryMock.mock.calls[0][3].lines as Array<{ account_number: string }>
+    expect(lines.map((l) => l.account_number)).toEqual(['6540', '2893'])
+    expect(findCall('chart_of_accounts', 'select')).toBeUndefined()
+  })
+
+  it.each([
+    ['with VAT on the receipt', { vat_amount: 5 }],
+    [
+      'beside custom lines',
+      {
+        lines: [
+          { account_number: '6540', debit_amount: 25, credit_amount: 0 },
+          { account_number: '2893', debit_amount: 0, credit_amount: 25 },
+        ],
+      },
+    ],
+  ])('refuses reverse_charge %s before touching the database', async (_case, extra) => {
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      ...saas,
+      ...extra,
+      reverse_charge: 'eu_services',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_LINES' })
+    expect(findCall('companies', 'select')).toBeUndefined()
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 })

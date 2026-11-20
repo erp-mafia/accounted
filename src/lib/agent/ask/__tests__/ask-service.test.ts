@@ -14,9 +14,14 @@ vi.mock('../ledger-tools', () => ({
 vi.mock('../snapshot', () => ({
   buildAssistantSnapshot: (...a: unknown[]) => buildAssistantSnapshot(...a),
 }))
+const buildUiGrounding = vi.fn()
+vi.mock('../ui-map', () => ({
+  buildUiGrounding: (...a: unknown[]) => buildUiGrounding(...a),
+}))
 
 import { answerAssistantQuestion } from '../ask-service'
 import { EmptyModelAnswerError } from '../errors'
+import { replyLanguageRule } from '@/lib/agent/reply-language'
 
 function supabaseWith(company: { name?: string; entity_type?: string } | null): SupabaseClient {
   const chain = {
@@ -30,8 +35,9 @@ function supabaseWith(company: { name?: string; entity_type?: string } | null): 
 beforeEach(() => {
   vi.clearAllMocks()
   generateText.mockResolvedValue({ text: 'Svar', model: 'qwen3.8', usage: {} })
-  buildLedgerTools.mockReturnValue([])
+  buildLedgerTools.mockResolvedValue([])
   buildAssistantSnapshot.mockResolvedValue('')
+  buildUiGrounding.mockResolvedValue('')
 })
 
 describe('answerAssistantQuestion', () => {
@@ -94,7 +100,7 @@ describe('answerAssistantQuestion', () => {
     const tools = [
       { name: 'gnubok_get_income_statement', description: 'd', jsonSchema: {}, execute: vi.fn() },
     ]
-    buildLedgerTools.mockReturnValue(tools)
+    buildLedgerTools.mockResolvedValue(tools)
     buildAssistantSnapshot.mockResolvedValue('Status: momsregistrerad (momsperiod: quarterly).')
 
     await answerAssistantQuestion({
@@ -117,9 +123,9 @@ describe('answerAssistantQuestion', () => {
     expect(call.prompt).toContain('Status: momsregistrerad (momsperiod: quarterly).')
   })
 
-  it('defaults maxTokens to 5400 (the streaming chat reply ceiling; 1500 caused empty max_tokens answers)', async () => {
+  it('defaults maxTokens to 16000: the model thinks by default and thinking shares the ceiling (5400 left empty answers, B04)', async () => {
     await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
-    expect(generateText.mock.calls[0][0].maxTokens).toBe(5400)
+    expect(generateText.mock.calls[0][0].maxTokens).toBe(16_000)
   })
 
   it('rejects with the typed empty-answer error when the model returns no visible text', async () => {
@@ -130,7 +136,40 @@ describe('answerAssistantQuestion', () => {
       question: 'Hej?',
     })
     await expect(promise).rejects.toBeInstanceOf(EmptyModelAnswerError)
-    await expect(promise).rejects.toMatchObject({ code: 'empty_model_answer' })
+    await expect(promise).rejects.toMatchObject({ code: 'empty_model_answer', truncated: false })
+  })
+
+  it('marks the empty-answer error truncated when the ceiling was hit, so the user is told to narrow the question', async () => {
+    generateText.mockResolvedValue({
+      text: '',
+      model: 'claude-sonnet-5',
+      usage: {},
+      truncated: true,
+      stopReason: 'max_tokens',
+      forcedFinal: 'no_text',
+    })
+    await expect(
+      answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' }),
+    ).rejects.toMatchObject({ code: 'empty_model_answer', truncated: true })
+  })
+
+  it('says so under an answer cut off at the ceiling, in the UI locale', async () => {
+    generateText.mockResolvedValue({ text: 'Del ett av svaret', model: 'm', usage: {}, truncated: true })
+    const sv = await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+    expect(sv.answer.startsWith('Del ett av svaret\n\n(Svaret avbröts')).toBe(true)
+    const en = await answerAssistantQuestion({
+      supabase: supabaseWith(null),
+      companyId: 'c1',
+      question: 'Hi?',
+      locale: 'en',
+    })
+    expect(en.answer).toContain('(The answer was cut off')
+  })
+
+  it('returns an answer from the final answer turn unchanged', async () => {
+    generateText.mockResolvedValue({ text: 'Svar efter sista turen', model: 'm', usage: {}, forcedFinal: 'no_text' })
+    const result = await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+    expect(result).toEqual({ answer: 'Svar efter sista turen', model: 'm' })
   })
 
   it('forwards the earlier turns as history so a follow-up can refer back', async () => {
@@ -157,8 +196,51 @@ describe('answerAssistantQuestion', () => {
     expect('history' in generateText.mock.calls[0][0]).toBe(false)
   })
 
+  // Production report: in Underlag and Bokföring the assistant named buttons
+  // and menus that do not exist. It was told to "point the user to the right
+  // page" but was never told which page they were on or what pages exist.
+  describe('UI grounding (the assistant names only UI that exists)', () => {
+    const GROUNDING =
+      'Användaren är på sidan: Dokument → Inkommande (/e/general/invoice-inbox).\n\nAppens meny för det här bolaget ...'
+
+    it('grounds the answer in the page the user asked from and the real menu', async () => {
+      buildUiGrounding.mockResolvedValue(GROUNDING)
+      const supabase = supabaseWith(null)
+      await answerAssistantQuestion({
+        supabase,
+        companyId: 'company-1',
+        userId: 'u1',
+        question: 'Var bokför jag det här kvittot?',
+        route: '/e/general/invoice-inbox',
+        locale: 'sv',
+      })
+      expect(buildUiGrounding).toHaveBeenCalledWith(supabase, 'company-1', {
+        route: '/e/general/invoice-inbox',
+        locale: 'sv',
+      })
+      const call = generateText.mock.calls[0][0]
+      expect(call.prompt).toContain(GROUNDING)
+      // Grounding comes before the question, as data the answer builds on.
+      expect(call.prompt.indexOf(GROUNDING)).toBeLessThan(call.prompt.indexOf('Fråga:'))
+    })
+
+    it('tells the model to name only menu entries it was given and never invent buttons', async () => {
+      await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+      const system = generateText.mock.calls[0][0].system
+      expect(system).toContain('"Appens meny"')
+      expect(system).toContain('Hitta ALDRIG på knappar')
+      expect(system).toContain('säg det rakt ut i stället för att gissa')
+    })
+
+    it('still answers when no grounding could be built', async () => {
+      buildUiGrounding.mockResolvedValue('')
+      await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+      expect(generateText.mock.calls[0][0].prompt).toBe('Fråga: Hej?')
+    })
+  })
+
   it('honours a custom maxSteps', async () => {
-    buildLedgerTools.mockReturnValue([
+    buildLedgerTools.mockResolvedValue([
       { name: 'gnubok_get_vat_report', description: 'd', jsonSchema: {}, execute: vi.fn() },
     ])
     await answerAssistantQuestion({
@@ -169,5 +251,21 @@ describe('answerAssistantQuestion', () => {
       maxSteps: 3,
     })
     expect(generateText.mock.calls[0][0].maxSteps).toBe(3)
+  })
+})
+
+describe('answerAssistantQuestion: answer language', () => {
+  it('answers in the UI locale: English for en, Swedish otherwise', async () => {
+    for (const [locale, rule] of [
+      ['en', replyLanguageRule('en')],
+      ['sv', replyLanguageRule('sv')],
+      [undefined, replyLanguageRule('sv')],
+    ] as const) {
+      generateText.mockClear()
+      await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?', locale })
+      const system = generateText.mock.calls[0][0].system as string
+      expect(system).toContain(rule)
+      if (locale === 'en') expect(system).not.toContain('Du svarar alltid på svenska')
+    }
   })
 })

@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Search, X } from 'lucide-react'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { MagnifyingGlassIcon, XMarkIcon } from '@/components/icons'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { cn, formatDate } from '@/lib/utils'
@@ -67,9 +67,12 @@ export function ReportLibrary({
 
   return (
     <div className="space-y-4">
-      <div className="relative max-w-sm">
-        <Search
-          className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+      {/* The search ends the toolbar row at the one list-search width (V7
+          list toolbars), a full row on a phone. */}
+      <div className="flex">
+      <div className="relative w-full sm:ml-auto sm:w-60">
+        <MagnifyingGlassIcon
+          className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
           aria-hidden="true"
         />
         <Input
@@ -80,7 +83,7 @@ export function ReportLibrary({
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t('search_placeholder')}
           aria-label={t('search_placeholder')}
-          className="h-9 pl-9 pr-9 text-[13px]"
+          className="h-8 rounded-md pl-8 pr-8 text-[13px]"
         />
         {query && (
           <button
@@ -89,17 +92,23 @@ export function ReportLibrary({
             aria-label={t('search_clear')}
             className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
+            <XMarkIcon className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         )}
       </div>
+      </div>
 
       {sections.length === 0 ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">
-          {t('search_no_results', { query: query.trim() })}
+        // No hits: one muted line where the rows would be, with the quiet way back.
+        <p className="px-1 py-3 text-[13px] text-muted-foreground">
+          {/* data-ph-mask: the search term is user data */}
+          <span data-ph-mask="">{t('search_no_results', { query: query.trim() })}</span>{' '}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setQuery('')}>
+            {t('search_clear')}
+          </button>
         </p>
       ) : (
-        <div className="overflow-x-auto" role="region" aria-label={t('title')}>
+        <div className="-mx-2 overflow-x-auto" role="region" aria-label={t('title')}>
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -146,7 +155,7 @@ function SectionRows({
       <tr className="bg-muted/30">
         <td
           colSpan={3}
-          className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+          className="px-4 py-2 text-xs font-semibold text-muted-foreground"
         >
           {label}
         </td>
@@ -179,9 +188,12 @@ function SectionRows({
 }
 
 function EntityMark({ item }: { item: ReportDescriptor }) {
-  if (item.entityType === 'enskild_firma')
-    return <span className="text-xs text-muted-foreground">EF</span>
-  if (item.entityType === 'aktiebolag')
-    return <span className="text-xs text-muted-foreground">AB</span>
-  return null
+  const t = useTranslations('reports')
+  if (!item.entityType) return null
+  const forms: readonly EntityType[] = Array.isArray(item.entityType) ? item.entityType : [item.entityType]
+  return (
+    <span className="text-xs text-muted-foreground">
+      {forms.map((form) => t(`entity_mark_${form}`)).join(' / ')}
+    </span>
+  )
 }

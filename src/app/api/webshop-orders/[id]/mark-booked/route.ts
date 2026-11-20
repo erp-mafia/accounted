@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MarkWebshopOrderBookedSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
 
 /**
  * POST /api/webshop-orders/[id]/mark-booked
@@ -62,12 +59,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // row unlocks the mark (no open path to a duplicate remains).
     if (order.legacy_transaction_id) {
       const { data: legacyTxn } = await supabase
-        .from('transactions')
-        .select('id, journal_entry_id, is_ignored')
+        .from('open_bank_rows')
+        .select('id')
         .eq('id', order.legacy_transaction_id)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (legacyTxn && !legacyTxn.journal_entry_id && !legacyTxn.is_ignored) {
+      if (legacyTxn) {
         return errorResponseFromCode('WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN', log, {
           requestId,
           details: { transaction_id: legacyTxn.id },

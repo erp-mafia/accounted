@@ -4,7 +4,10 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { yearEndAccrualBusinessEvent } from '@/lib/bookkeeping/accruals/business-events'
+import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import {
   buildAccrualsProposal,
   proposeAccruedInterest,
@@ -71,6 +74,23 @@ export const GET = withRouteContext(
 const EXPENSE_ACCOUNT_RE = /^[5-8]\d{3}$/
 const REVENUE_ACCOUNT_RE = /^3\d{3}$/
 
+// The manual kinds take an optional kostnadsställe/projekt bag. It tags the
+// result leg (the 3xxx-8xxx expense or revenue line: the other leg is always
+// 17xx/29xx per the schema below), so a year-end periodisering lands on the
+// same project as the cost it moves and meets a required dimension rule on
+// that account. The interim leg stays untagged, like every other producer.
+const RESULT_ACCOUNT_RE = /^[3-8]/
+
+function tagResultLines(
+  lines: AccrualProposal['lines'],
+  dimensions: Record<string, string> | undefined,
+): AccrualProposal['lines'] {
+  if (!dimensions || Object.keys(dimensions).length === 0) return lines
+  return lines.map((line) =>
+    RESULT_ACCOUNT_RE.test(line.account_number) ? { ...line, dimensions } : line,
+  )
+}
+
 const PostItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('vacation_liability_change') }),
   z.object({
@@ -84,6 +104,7 @@ const PostItemSchema = z.discriminatedUnion('kind', [
     expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     prepaid_account: z.string().regex(/^17\d{2}$/),
     description: z.string().min(1),
+    dimensions: DimensionsBagSchema.optional(),
   }),
   z.object({
     kind: z.literal('manual_accrued_expense'),
@@ -91,6 +112,7 @@ const PostItemSchema = z.discriminatedUnion('kind', [
     expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     accrued_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
+    dimensions: DimensionsBagSchema.optional(),
   }),
   z.object({
     kind: z.literal('deferred_revenue'),
@@ -98,6 +120,7 @@ const PostItemSchema = z.discriminatedUnion('kind', [
     revenue_account: z.string().regex(REVENUE_ACCOUNT_RE),
     deferred_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
+    dimensions: DimensionsBagSchema.optional(),
   }),
   z.object({
     kind: z.literal('accrued_interest'),
@@ -105,6 +128,7 @@ const PostItemSchema = z.discriminatedUnion('kind', [
     expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     accrued_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
+    dimensions: DimensionsBagSchema.optional(),
   }),
   z.object({
     kind: z.literal('accrued_utility'),
@@ -112,6 +136,7 @@ const PostItemSchema = z.discriminatedUnion('kind', [
     expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     accrued_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
+    dimensions: DimensionsBagSchema.optional(),
   }),
 ])
 
@@ -233,13 +258,31 @@ export const POST = withRouteContext(
         const description = proposal.reverses_on
           ? `Periodisering: ${proposal.label} (vänds ${proposal.reverses_on})`
           : `Bokslutsjustering: ${proposal.label}`
-        const entry = await createJournalEntry(supabase, companyId, user.id, {
-          fiscal_period_id: id,
-          entry_date: period.period_end,
-          description,
-          source_type: 'manual',
-          voucher_series: 'A',
-          lines: proposal.lines,
+        // Posting port (step 2g): the engine gets the input unchanged; while
+        // POSTING_EVENTS is on, the periodisering's event (ledger.accrual, or
+        // payroll.vacation_liability_adjusted) is recorded first and linked
+        // to the draft before a number is drawn.
+        const booked = proposal
+        const entry = await postingPort.postJournalEntry({
+          supabase,
+          companyId,
+          userId: user.id,
+          event: () =>
+            yearEndAccrualBusinessEvent({
+              accrual: item.kind,
+              fiscalPeriodId: id,
+              periodEnd: period.period_end,
+              amount: booked.amount,
+              linkBasis: linkBasisColumns('user_created'),
+            }),
+          input: {
+            fiscal_period_id: id,
+            entry_date: period.period_end,
+            description,
+            source_type: 'manual',
+            voucher_series: 'A',
+            lines: tagResultLines(proposal.lines, 'dimensions' in item ? item.dimensions : undefined),
+          },
         })
 
         created.push({ kind: item.kind, entry, reverses_on: proposal.reverses_on })

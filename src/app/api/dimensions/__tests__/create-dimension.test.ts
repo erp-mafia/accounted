@@ -1,5 +1,5 @@
 /**
- * Tests for POST /api/dimensions (create a custom dimension — PR10).
+ * Tests for POST /api/dimensions (create a custom dimension - PR10).
  *
  * Covers: auto-picking the next free SIE number >= 20 (proved both via the
  * insert result and via the self-parent guard, which names the picked

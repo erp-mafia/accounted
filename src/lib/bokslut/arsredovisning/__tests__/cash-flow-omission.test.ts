@@ -10,7 +10,7 @@ import {
   resolveCashFlowOmission,
 } from '../cash-flow-omission'
 import { applyCashFlowOmission } from '../model'
-import { K3_CASH_FLOW_FAILED_WARNING, k3ContentsNotice } from '../build-data'
+import { K3_CASH_FLOW_FAILED_WARNING, K3_CASH_FLOW_TAX_ALLOCATION_WARNING, k3ContentsNotice } from '../build-data'
 import {
   emptyAnnualReportProfile,
   type AnnualReportEligibilityResult,
@@ -43,6 +43,27 @@ describe('cashFlowOmissionRule', () => {
         securitiesTradedOnRegulatedMarket: false,
       }),
     ).toBe('forbidden')
+  })
+
+  it('forbids omission for a form that must always have one (bostadsrättsförening), whatever the size', () => {
+    expect(
+      cashFlowOmissionRule({
+        framework: 'k3',
+        sizeClassification: 'smaller',
+        metrics: twoYears,
+        securitiesTradedOnRegulatedMarket: false,
+        formRequirement: 'always',
+      }),
+    ).toBe('forbidden')
+    expect(
+      cashFlowOmissionRule({
+        framework: 'k3',
+        sizeClassification: 'smaller',
+        metrics: twoYears,
+        securitiesTradedOnRegulatedMarket: false,
+        formRequirement: 'larger',
+      }),
+    ).toBe('allowed')
   })
 
   it('forbids omission when securities are traded on a regulated market, whatever the size', () => {
@@ -102,6 +123,15 @@ describe('cashFlowOmissionIssues', () => {
     expect(issues.map((i) => i.code)).toEqual(['AR-K3-CASHFLOW-REQUIRED'])
   })
 
+  it('names the form, not the size, when the form requires the statement', () => {
+    const issues = cashFlowOmissionIssues(
+      resolveCashFlowOmission({ rule: 'forbidden', requested: true, confirmed: true, requiredByForm: true }),
+    )
+    expect(issues.map((i) => i.code)).toEqual(['AR-K3-CASHFLOW-REQUIRED'])
+    expect(issues[0].message).toContain('bostadsrättsförening')
+    expect(issues[0].message).not.toContain('större företag')
+  })
+
   it('warns when the confirmation is missing', () => {
     const issues = cashFlowOmissionIssues(
       resolveCashFlowOmission({ rule: 'requires_confirmation', requested: true, confirmed: false }),
@@ -123,6 +153,7 @@ describe('cashFlowOmissionIssues', () => {
 function makeReport(framework: 'k2' | 'k3', omit: boolean, confirmed = false): ArsredovisningData {
   return {
     accounting_framework: framework,
+    company: { entity_type: 'aktiebolag' },
     kassaflodesanalys: { total_cash_flow: 1 },
     warnings: [K3_CASH_FLOW_FAILED_WARNING, k3ContentsNotice(true), 'annan varning'],
     disclosures: {
@@ -151,6 +182,7 @@ const unlistedProfile = {
 describe('applyCashFlowOmission', () => {
   it('drops the statement and its warnings when the omission is honoured', () => {
     const report = makeReport('k3', true)
+    report.warnings.push(K3_CASH_FLOW_TAX_ALLOCATION_WARNING)
     applyCashFlowOmission(report, eligibility('smaller'), twoYears, unlistedProfile)
     expect(report.kassaflodesanalys).toBeUndefined()
     expect(report.kassaflodesanalys_omission).toMatchObject({ rule: 'allowed', omitted: true })
@@ -165,13 +197,17 @@ describe('applyCashFlowOmission', () => {
     expect(report.warnings).toContain(k3ContentsNotice(true))
   })
 
-  it('keeps the statement until the user confirms an undeterminable size', () => {
-    const report = makeReport('k3', true, false)
+  it('withholds the statement from a mindre företag, chosen or not, until it meets K3 kapitel 7', () => {
+    const report = makeReport('k3', false, false)
     applyCashFlowOmission(report, eligibility('smaller'), oneYear, unlistedProfile)
-    expect(report.kassaflodesanalys).toBeDefined()
-    const confirmed = makeReport('k3', true, true)
-    applyCashFlowOmission(confirmed, eligibility('smaller'), oneYear, unlistedProfile)
-    expect(confirmed.kassaflodesanalys).toBeUndefined()
+    expect(report.kassaflodesanalys).toBeUndefined()
+    expect(report.kassaflodesanalys_omission).toMatchObject({
+      rule: 'requires_confirmation',
+      requested: false,
+      omitted: true,
+      withheld: true,
+    })
+    expect(report.warnings).toContain(k3ContentsNotice(false))
   })
 
   it('leaves K2 untouched', () => {

@@ -3,6 +3,7 @@ import {
   ROT_RUT_LIST_FILTERS,
   matchesRotRutListFilter,
   parseRotRutListFilter,
+  payoutDialogTypeFor,
   rotRutListStateOf,
   type RotRutListInvoice,
   type RotRutListRequest,
@@ -113,5 +114,58 @@ describe('parseRotRutListFilter', () => {
     expect(parseRotRutListFilter('cancelled')).toBeNull()
     expect(parseRotRutListFilter('')).toBeNull()
     expect(parseRotRutListFilter(null)).toBeNull()
+  })
+})
+
+describe('grön teknik: requested in the e-tjänst, never "Att begära"', () => {
+  const gronLines = [{ deduction_type: 'gron_teknik' }, { deduction_type: null }]
+
+  it('reads a paid grön teknik invoice without a begäran row as etjanst, not claimable', () => {
+    expect(rotRutListStateOf(invoice({ requests: [], deduction_lines: gronLines }))).toBe('etjanst')
+  })
+
+  it('keeps it out of the Att begära filter and every other filter but all', () => {
+    const gron = invoice({ requests: [], deduction_lines: gronLines })
+    expect(ROT_RUT_LIST_FILTERS.filter((f) => matchesRotRutListFilter(gron, f))).toEqual(['all'])
+    expect(ROT_RUT_LIST_FILTERS).not.toContain('etjanst')
+    expect(parseRotRutListFilter('etjanst')).toBeNull()
+  })
+
+  it('says nothing before the customer has paid', () => {
+    expect(rotRutListStateOf(invoice({ status: 'sent', deduction_lines: gronLines }))).toBeNull()
+  })
+
+  it('lets a begäran row speak for it once one exists', () => {
+    expect(
+      rotRutListStateOf(invoice({ requests: [request({ status: 'submitted' })], deduction_lines: gronLines })),
+    ).toBe('submitted')
+  })
+
+  it('leaves ROT and RUT invoices claimable, with or without their lines embedded', () => {
+    expect(rotRutListStateOf(invoice({ requests: [], deduction_lines: [{ deduction_type: 'rot' }] }))).toBe('claimable')
+    expect(rotRutListStateOf(invoice({ requests: [], deduction_lines: [{ deduction_type: 'rut' }] }))).toBe('claimable')
+    expect(rotRutListStateOf(invoice({ requests: [] }))).toBe('claimable')
+    // A mix (refused at creation) is not grön teknik only: the ROT part is
+    // still to request with a file.
+    expect(
+      rotRutListStateOf(
+        invoice({ requests: [], deduction_lines: [{ deduction_type: 'rot' }, { deduction_type: 'gron_teknik' }] }),
+      ),
+    ).toBe('claimable')
+  })
+})
+
+describe('payoutDialogTypeFor', () => {
+  const lines = (...kinds: Array<string | null>) => ({ deduction_lines: kinds.map((k) => ({ deduction_type: k })) })
+
+  it('opens on grön teknik when every deduction invoice is grön teknik', () => {
+    expect(payoutDialogTypeFor([lines('gron_teknik', null), lines(), lines('gron_teknik')])).toBe('gron_teknik')
+  })
+
+  it('stays on ROT as soon as any ROT or RUT invoice exists, or none at all', () => {
+    expect(payoutDialogTypeFor([lines('gron_teknik'), lines('rut')])).toBe('rot')
+    expect(payoutDialogTypeFor([lines('rot')])).toBe('rot')
+    expect(payoutDialogTypeFor([lines(), { deduction_lines: null }])).toBe('rot')
+    expect(payoutDialogTypeFor([])).toBe('rot')
   })
 })

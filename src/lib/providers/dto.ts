@@ -140,46 +140,42 @@ export interface CreditedInvoiceRefDto {
 /** UNCL1001 document type of a kreditfaktura: the value `invoiceTypeCode` is read for. */
 export const CREDIT_NOTE_TYPE_CODE = '381';
 
-/**
- * The `invoiceTypeCode` a sales or a supplier document carries: 381 for a
- * credit note, nothing for an ordinary invoice. The sales mappers whose
- * provider sends negative credit amounts (Fortnox, Briox, Björn Lundén, WINT)
- * and EVERY supplier mapper set the field through this function, so the rule
- * is stated once; the Visma and Bokio sales mappers set it from their own
- * credit flag, which the contract test pins.
- *
- * A document is a credit note when the provider flags it as one, OR when its
- * payable total is negative. The second half is not a guess: a sales document
- * that owes the customer money cannot be a claim on them, and a supplier
- * document that owes US money cannot be a payable, whatever the source
- * system calls it. It is the only signal several payloads carry at all
- * (Fortnox's list form has no `Credit` field; Briox, Björn Lundén and WINT
- * document no credit flag this code could be verified against; Bokio's
- * supplier invoice has none). It is also
- * what keeps a wrong guess about the flag's wire format from failing silently:
- * the Fortnox mapper tested `Credit === true` while Fortnox's schema types the
- * flag as the string "true", and 3 200 credit notes reached production as
- * paid invoices without a single one ever reading as credited (#2789). The
- * supplier side had the mirror defect: about 40 supplier credit notes reached
- * production as ordinary invoices with a negative total (#2838).
- *
- * `flaggedByProvider` must mean "this document IS a credit note". A status
- * that says the document HAS BEEN credited (Bokio `credited`, WINT
- * `CreditStatus`) describes the original and must not be passed here: typing
- * the original 381 would reverse the sign of a real receivable.
- */
-export function creditNoteTypeCode(
-  flaggedByProvider: boolean,
-  payableTotal: number,
-): typeof CREDIT_NOTE_TYPE_CODE | undefined {
-  return flaggedByProvider || payableTotal < 0 ? CREDIT_NOTE_TYPE_CODE : undefined;
-}
-
 // ============================================
 // Sales Invoice
 // ============================================
 
 export type InvoiceStatusCode = 'draft' | 'sent' | 'booked' | 'paid' | 'overdue' | 'cancelled' | 'credited';
+
+/** The number a provider states for a document, trimmed; '' when it states none. */
+export function statedDocumentNumber(value: unknown): string {
+  return value == null ? '' : String(value).trim();
+}
+
+/**
+ * The invoice number of a provider's sales document, the one rule every
+ * sales mapper that keeps a record id beside the number shares (Bokio,
+ * Briox, WINT).
+ *
+ * A provider numbers a document when it is issued, so a draft may have none
+ * (Bokio: "generated at the time of publishing"; WINT: `SerialNumber` is
+ * nullable). The provider's record id is not an invoice number: substituting
+ * it put a UUID in "Fakturanummer" on every unnumbered Bokio draft
+ * (crm#1084), and a Briox or WINT id is an integer that reads as a number in
+ * the company's own series, which must stay one unbroken löpnummer run
+ * (ML 2023:200 17 kap. 24 § p. 2). Empty becomes NULL at the insert, which
+ * invoices_sent_requires_number allows for draft and cancelled; the record
+ * id stays on the DTO's `id`.
+ *
+ * Every other status requires a number, so an issued document that arrives
+ * without one keeps the record id: refused at the insert, it would not be
+ * imported at all.
+ */
+export function salesDocumentNumber(stated: unknown, recordId: unknown, status: InvoiceStatusCode): string {
+  const number = statedDocumentNumber(stated);
+  if (number) return number;
+  if (status === 'draft' || status === 'cancelled') return '';
+  return recordId == null ? '' : String(recordId);
+}
 
 export interface LegalMonetaryTotalDto {
   /**
@@ -216,10 +212,59 @@ export interface PaymentStatusDto {
   source?: 'enum' | 'balance';
 }
 
+/**
+ * A household deduction (ROT, RUT or grön teknik) the source invoice
+ * carries under fakturamodellen: the buyer was invoiced the total minus
+ * `amount`, and `amount` is the company's claim on Skatteverket.
+ *
+ * The importer does not write it: Visma books the whole invoice on 1510, so
+ * moving the deduction onto 1513 needs its own voucher. The post-migration
+ * deduction step reads it from the provider's invoice detail
+ * (lib/invoices/migrated-deduction-plan.ts).
+ */
+export interface HouseholdDeductionDto {
+  kind: 'rot' | 'rut' | 'gron_teknik';
+  /** The deduction on the invoice, in invoice currency. */
+  amount: number;
+  /** The buyers the deduction is split between, as the provider states them. */
+  buyers: Array<{ personnummer?: string; amount?: number }>;
+  /** Fastighetsbeteckning, or lägenhetsnummer plus the förening's orgnr. */
+  property?: { designation?: string; brfOrgNumber?: string; type?: 'property' | 'apartment' };
+  /**
+   * Where the claim stands at Skatteverket according to the provider:
+   * 'open' not yet requested, 'requested' sent to Skatteverket from the
+   * provider, 'rejected' refused there. Absent when the provider says nothing.
+   */
+  providerState?: 'open' | 'requested' | 'rejected';
+}
+
+/**
+ * The deduction data of one work row. `workType` is Skatteverket's
+ * arbetstypskod (lib/bookkeeping/rot-rut-rules.ts), or null when the provider's
+ * type has no element in the begäran schema; `providerWorkType` keeps the
+ * provider's own code for the review list.
+ */
+export interface HouseholdWorkDto {
+  workType: string | null;
+  providerWorkType: string;
+  hours?: number;
+  materialCost?: number;
+}
+
 export interface SalesInvoiceLineDto {
   id: string;
+  /**
+   * The row kind, when the provider states it (Bokio itemType). Absent: the
+   * importer infers a text row from a row with no quantity and no amount.
+   */
+  lineType?: 'product' | 'text';
   description?: string;
   quantity?: number;
+  /**
+   * The unit as the provider states it. Absent means the source said
+   * nothing (the importer's default applies); an empty string is a stated
+   * "no unit" and is kept empty.
+   */
   unitCode?: string;
   unitPrice?: AmountType;
   lineExtensionAmount: AmountType;
@@ -229,6 +274,8 @@ export interface SalesInvoiceLineDto {
   itemName?: string;
   articleNumber?: string;
   financialDimensions?: FinancialDimensionRef[];
+  /** Set on the rows the provider marks as deduction work. */
+  householdWork?: HouseholdWorkDto;
 }
 
 export interface SalesInvoiceDto {
@@ -239,7 +286,7 @@ export interface SalesInvoiceDto {
   deliveryDate?: string;
   /**
    * UNCL1001 document type: '381' marks a kreditfaktura. Every provider
-   * mapper MUST set it for a credit note (see creditNoteTypeCode); it is
+   * mapper MUST set it for a credit note (see documentState); it is
    * the one signal the importer reads
    * (extensions/general/arcim-migration/lib/entity-mapper.ts), and a mapper
    * that leaves it unset lands the credit note as an ordinary invoice.
@@ -261,6 +308,7 @@ export interface SalesInvoiceDto {
   taxTotal?: TaxTotalDto;
   legalMonetaryTotal: LegalMonetaryTotalDto;
   paymentStatus: PaymentStatusDto;
+  householdDeduction?: HouseholdDeductionDto;
   paymentTerms?: string;
   note?: string;
   buyerReference?: string;
@@ -299,7 +347,7 @@ export interface SupplierInvoiceDto {
   deliveryDate?: string;
   /**
    * UNCL1001 document type: '381' marks a supplier kreditfaktura. Every
-   * supplier mapper MUST set it through creditNoteTypeCode; it is the one
+   * supplier mapper MUST set it through documentState; it is the one
    * signal the importer reads, and a mapper that leaves it unset lands the
    * credit note as an ordinary payable with a negative total (#2838).
    * Enforced for every registered supplier mapper by
@@ -380,9 +428,22 @@ export interface SupplierDto {
   financialDimensions?: FinancialDimensionRef[];
   active: boolean;
   vatNumber?: string;
+  /** The account number; with the clearing number in front when the provider keeps them together. */
   bankAccount?: string;
+  /** The clearing number, where the provider names it apart from the account. */
+  clearingNumber?: string;
   bankGiro?: string;
   plusGiro?: string;
+  iban?: string;
+  bic?: string;
+  /** The currency the supplier bills in (ISO 4217). */
+  currencyCode?: string;
+  /**
+   * The account the provider proposes for the supplier's invoices (Fortnox's
+   * PreDefinedAccount), as the provider states it. Not vetted against any
+   * chart here: the migration keeps it only when the company's chart holds it.
+   */
+  defaultExpenseAccount?: string;
   defaultPaymentTermsDays?: number;
   note?: string;
   createdAt?: string;
@@ -466,17 +527,3 @@ export interface CompanyInformationDto {
 // ============================================
 
 export type PaymentMethodCode = 'bank_transfer' | 'card' | 'cash' | 'autogiro' | 'bankgiro' | 'plusgiro' | 'swish' | 'other';
-
-export interface PaymentDto {
-  id: string;
-  paymentNumber?: string;
-  invoiceId: string;
-  paymentDate: string;
-  amount: AmountType;
-  paymentMethod?: PaymentMethodCode;
-  reference?: string;
-  note?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  _raw?: Record<string, unknown>;
-}

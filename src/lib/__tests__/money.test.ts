@@ -1,12 +1,22 @@
 import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import {
   roundOre,
+  parseAmountInput,
+  parseAmountTerm,
+  parseDecimalInput,
+  formatAmountInput,
   truncateToWholeKronor,
+  roundToWholeKronor,
   ORE_TOLERANCE,
   ORE_ROUNDING_ACCOUNT,
   equalOre,
   isZeroOre,
   sumOre,
+  multiplyOre,
+  parseSwedishAmount,
+  inferDecimalMark,
 } from '@/lib/money'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
@@ -79,7 +89,7 @@ describe('roundOre', () => {
     // Negative exact halves round toward positive infinity: Math.round's own
     // asymmetry, kept deliberately. -1.005 → -1.00, not -1.01. Symmetric
     // away-from-zero rounding would move credit notes and reversals one öre
-    // relative to the invoices they cancel, so it is a founder decision, not a
+    // relative to the invoices they cancel, so it is a product decision, not a
     // refactor. Pinned here so it cannot flip silently.
     expect(roundOre(-1.005)).toBe(-1)
     expect(roundOre(-10.075)).toBe(-10.07)
@@ -98,6 +108,48 @@ describe('roundOre', () => {
       if (!Object.is(actual, expected)) failures.push(`${literal} → ${actual}, expected ${expected}`)
     }
     expect(failures).toEqual([])
+  })
+})
+
+describe('multiplyOre', () => {
+  it('rounds the decimal product, not the float one, half away from zero: what round(a * b, 2) answers in PostgreSQL', () => {
+    // 33.33 * 11.5 is 383.29499999999996 as a double and 383.295 in decimals.
+    expect(roundOre(33.33 * 11.5)).toBe(383.29)
+    expect(multiplyOre(33.33, 11.5)).toBe(383.3)
+    expect(multiplyOre(79999.99, 11.5)).toBe(919999.89)
+    expect(multiplyOre(80000.01, 10.25)).toBe(820000.1)
+    expect(multiplyOre(1.005, 10.25)).toBe(10.3)
+    expect(multiplyOre(1.005, 1)).toBe(1.01)
+    expect(multiplyOre(100, 11.4532871)).toBe(1145.33)
+  })
+
+  it('keeps exact products, signs, zero and large or exponent-written numbers', () => {
+    expect(multiplyOre(500, 11.5)).toBe(5750)
+    expect(multiplyOre(-33.33, 11.5)).toBe(-383.3)
+    expect(multiplyOre(33.33, -11.5)).toBe(-383.3)
+    expect(multiplyOre(0, 11.5)).toBe(0)
+    expect(multiplyOre(1e21, 2)).toBe(2e21)
+    expect(multiplyOre(1e-7, 1)).toBe(0)
+    expect(multiplyOre(123456789.12, 9.87654321)).toBe(1219326312.31)
+    expect(Number.isNaN(multiplyOre(Number.NaN, 1))).toBe(true)
+  })
+})
+
+describe('roundToWholeKronor', () => {
+  it('rounds to the nearest krona, 50 öre up', () => {
+    expect(roundToWholeKronor(31249.5)).toBe(31250)
+    expect(roundToWholeKronor(31249.49)).toBe(31249)
+    expect(roundToWholeKronor(31250)).toBe(31250)
+  })
+
+  it('does not flip a krona on IEEE drift around the half', () => {
+    expect(roundToWholeKronor(31249.499999999996)).toBe(31250)
+  })
+
+  it('rounds a negative half toward zero and normalizes -0', () => {
+    expect(roundToWholeKronor(-0.5)).toBe(0)
+    expect(Object.is(roundToWholeKronor(-0.4), -0)).toBe(false)
+    expect(roundToWholeKronor(-1200.5)).toBe(-1200)
   })
 })
 
@@ -181,5 +233,273 @@ describe('ORE_ROUNDING_ACCOUNT', () => {
     expect(ORE_ROUNDING_ACCOUNT).toBe('3740')
     expect(reference?.account_name).toBe('Öres- och kronutjämning')
     expect(reference?.account_class).toBe(3)
+  })
+})
+
+describe('parseAmountInput', () => {
+  it('reads the Swedish form a person types or pastes: space groups, decimal comma', () => {
+    expect(parseAmountInput('12 345,67')).toBe(12345.67)
+    expect(parseAmountInput('1 234 567,89')).toBe(1234567.89)
+    expect(parseAmountInput('12345,67')).toBe(12345.67)
+  })
+
+  it('accepts non-breaking and narrow no-break spaces as group separators', () => {
+    // sv-SE Intl formatting and copied bank statements use U+00A0 / U+202F.
+    expect(parseAmountInput('12\u00a0345,67')).toBe(12345.67)
+    expect(parseAmountInput('12\u202f345,67')).toBe(12345.67)
+    expect(parseAmountInput('1\u2009000')).toBe(1000)
+  })
+
+  it('accepts a dot as decimal separator', () => {
+    expect(parseAmountInput('12345.67')).toBe(12345.67)
+    expect(parseAmountInput('12 345.67')).toBe(12345.67)
+  })
+
+  it('reads dot or comma thousands when the other mark is the decimal', () => {
+    expect(parseAmountInput('1.234,56')).toBe(1234.56)
+    expect(parseAmountInput('1,234.56')).toBe(1234.56)
+    expect(parseAmountInput('1.234.567,89')).toBe(1234567.89)
+    expect(parseAmountInput('1,234,567.89')).toBe(1234567.89)
+  })
+
+  it('accepts an ASCII hyphen or a Unicode minus sign', () => {
+    expect(parseAmountInput('-500')).toBe(-500)
+    expect(parseAmountInput('\u2212500')).toBe(-500)
+    expect(parseAmountInput('\u221212 345,67')).toBe(-12345.67)
+  })
+
+  it('trims surrounding whitespace and tolerates a half-typed decimal', () => {
+    expect(parseAmountInput('  100  ')).toBe(100)
+    expect(parseAmountInput('12,')).toBe(12)
+    expect(parseAmountInput(',5')).toBe(0.5)
+  })
+
+  it('rounds to the öre with roundOre', () => {
+    expect(parseAmountInput('1,005')).toBe(roundOre(1.005))
+    expect(parseAmountInput('10,075')).toBe(10.08)
+    expect(parseAmountInput('0,001')).toBe(0)
+  })
+
+  it('never returns negative zero', () => {
+    expect(Object.is(parseAmountInput('-0'), 0)).toBe(true)
+    expect(Object.is(parseAmountInput('-0,001'), 0)).toBe(true)
+  })
+
+  it('returns null for empty or non-amount input instead of guessing', () => {
+    for (const input of [
+      '',
+      '   ',
+      '-',
+      ',',
+      'abc',
+      '12 kr',
+      '1e5',
+      'Infinity',
+      '0x10',
+      '12,3,4',
+      '1.234.567',
+      '1,23.45',
+      '12-3',
+      '--5',
+      null,
+      undefined,
+    ]) {
+      expect(parseAmountInput(input as string | null | undefined), String(input)).toBeNull()
+    }
+  })
+})
+
+describe('parseAmountInput call sites', () => {
+  const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../../', rel), 'utf8')
+
+  it('"Betalt i SEK" on a supplier invoice reads 12 345,67 into the preview', () => {
+    // The page parsed with Number(s.replace(',', '.')): "12 345,67" became
+    // NaN, then 0, so the typed SEK figure never reached the mark-paid
+    // preview or the booking, and the default SEK amount was booked instead.
+    // The payment dialog moved out of the page into SupplierPaymentDialog.
+    const src = read('components/supplier-invoices/SupplierPaymentDialog.tsx')
+    expect(src).toContain("from '@/lib/money'")
+    expect(src).toMatch(/paySekNum = isForeignInvoice \? parseAmountInput\(paySek\)/)
+    expect(src).not.toContain(".replace(',', '.')")
+    expect(parseAmountInput('12 345,67')).toBe(12345.67)
+  })
+
+  it('the payment Bokföring rows read edited line amounts with parseAmountInput', () => {
+    // One module for the bank-match dialog and the supplier payment dialog.
+    const src = read('components/bookkeeping/payment-preview-lines.ts')
+    expect(src).toMatch(/function amountOf\(line: EditablePaymentLine\): number \{\s*return parseAmountInput\(line\.amount\) \?\? 0/)
+  })
+
+  /*
+   * Every UI field that takes a typed amount, quantity or rate parses it with
+   * parseAmountInput or parseDecimalInput. A hand-rolled
+   * `Number(s.replace(',', '.'))` reads "12 345,67" as NaN (then 0) and a
+   * Unicode minus as nothing, and a local naive round2 rounds 1,005 down.
+   */
+  const UI_ROOTS = ['components', 'app', 'extensions']
+  const uiFiles = (): string[] => {
+    const out: string[] = []
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (entry.name === '__tests__' || full.endsWith(path.join('app', 'api'))) continue
+          walk(full)
+        } else if (/\.tsx?$/.test(entry.name)) {
+          out.push(full)
+        }
+      }
+    }
+    for (const root of UI_ROOTS) walk(path.resolve(__dirname, '../../', root))
+    return out
+  }
+  const rel = (full: string) => path.relative(path.resolve(__dirname, '../../'), full)
+
+  // Each entry names who removes it.
+  const COMMA_PARSE_ALLOWED = new Set([
+    // Bank-file preview: reads the file's own decimal mark, like the bank
+    // parsers it previews (plan step B3, one parseSwedishAmount).
+    'components/import/BankFileColumnMappingStep.tsx',
+    // Deleted by the one register review step (plan step H1).
+    'components/import/ArticlesEditStep.tsx',
+  ])
+
+  it('no UI field parses a typed number with replace(",", ".")', () => {
+    const offenders = uiFiles()
+      .filter((f) => /replace\(\s*['"],['"]\s*,\s*['"]\.['"]\s*\)/.test(fs.readFileSync(f, 'utf8')))
+      .map(rel)
+      .filter((f) => !COMMA_PARSE_ALLOWED.has(f))
+    expect(offenders).toEqual([])
+  })
+
+  it('no UI module keeps a local round2 helper', () => {
+    const offenders = uiFiles()
+      .filter((f) => /\b(function round2|const round2 =)/.test(fs.readFileSync(f, 'utf8')))
+      .map(rel)
+    expect(offenders).toEqual([])
+  })
+})
+
+describe('parseDecimalInput', () => {
+  it('reads the same Swedish forms as parseAmountInput, without rounding', () => {
+    expect(parseDecimalInput('12 345,6789')).toBe(12345.6789)
+    expect(parseDecimalInput('0,125')).toBe(0.125)
+    expect(parseDecimalInput('10,8642')).toBe(10.8642)
+    expect(parseDecimalInput('\u22121,5')).toBe(-1.5)
+  })
+
+  it('refuses the same ambiguous or non-numeric input', () => {
+    for (const input of ['', '-', ',', 'abc', '1e5', '12,3,4', '1.234.567', null, undefined]) {
+      expect(parseDecimalInput(input as string | null | undefined), String(input)).toBeNull()
+    }
+  })
+
+  it('never returns negative zero', () => {
+    expect(Object.is(parseDecimalInput('-0'), 0)).toBe(true)
+  })
+})
+
+describe('parseAmountTerm', () => {
+  it('parses plain, spaced, and decimal amounts', () => {
+    expect(parseAmountTerm('14000')).toBe(14000)
+    expect(parseAmountTerm('14 000')).toBe(14000)
+    expect(parseAmountTerm('17 500')).toBe(17500) // NBSP thousand separator
+    expect(parseAmountTerm('17 500,50')).toBe(17500.5)
+    expect(parseAmountTerm('17500.50')).toBe(17500.5)
+  })
+
+  it('reads an amount with a trailing "kr", as a list or a total writes it', () => {
+    expect(parseAmountTerm('12 500 kr')).toBe(12500)
+    expect(parseAmountTerm('12500kr')).toBe(12500)
+    expect(parseAmountTerm('12 500,50 Kr')).toBe(12500.5)
+  })
+
+  it('rejects non-amounts', () => {
+    expect(parseAmountTerm('Testbrand')).toBeNull()
+    expect(parseAmountTerm('26-27')).toBeNull()
+    expect(parseAmountTerm('14000,123')).toBeNull()
+    expect(parseAmountTerm('')).toBeNull()
+    expect(parseAmountTerm('kr')).toBeNull()
+    expect(parseAmountTerm('12 500 kronor')).toBeNull()
+  })
+})
+
+describe('formatAmountInput', () => {
+  it('writes two decimals with a decimal comma and no grouping', () => {
+    expect(formatAmountInput(1234.5)).toBe('1234,50')
+    expect(formatAmountInput(1234567.891)).toBe('1234567,89')
+    expect(formatAmountInput(-12.3)).toBe('-12,30')
+    expect(formatAmountInput(0)).toBe('0,00')
+  })
+
+  it('writes a dot for number inputs', () => {
+    expect(formatAmountInput(1234.5, '.')).toBe('1234.50')
+  })
+
+  it('rounds with roundOre where toFixed rounds the half down', () => {
+    expect((1.005).toFixed(2)).toBe('1.00')
+    expect(formatAmountInput(1.005, '.')).toBe('1.01')
+    expect(formatAmountInput(10.075)).toBe('10,08')
+  })
+
+  it('never writes a negative zero', () => {
+    expect(formatAmountInput(-0)).toBe('0,00')
+    expect(formatAmountInput(-0.001)).toBe('0,00')
+  })
+
+  it('round-trips through parseAmountInput', () => {
+    for (const n of [0, 1, 0.5, 1.01, 12345.67, -9876.54, 1234567.89]) {
+      expect(parseAmountInput(formatAmountInput(n))).toBe(n)
+      expect(parseAmountInput(formatAmountInput(n, '.'))).toBe(n)
+    }
+  })
+})
+
+describe('inferDecimalMark (crm#1528)', () => {
+  it('reads the mark from any cell that cannot be a thousands grouping', () => {
+    expect(inferDecimalMark(['-349.000', '1422.190'])).toBe('.')
+    expect(inferDecimalMark(['349.000', '12.5'])).toBe('.')
+    expect(inferDecimalMark(['-349,00', '1 234,56'])).toBe(',')
+    expect(inferDecimalMark(['1.234,56'])).toBe(',')
+    expect(inferDecimalMark(['1,234.56'])).toBe('.')
+  })
+
+  it('decides nothing from ambiguous, empty or non-numeric cells alone', () => {
+    expect(inferDecimalMark(['349.000', '1.234', '12'])).toBeNull()
+    expect(inferDecimalMark(['', null, undefined, 'abc', '-'])).toBeNull()
+  })
+
+  it('decides nothing when the cells contradict each other', () => {
+    expect(inferDecimalMark(['12.50', '12,50'])).toBeNull()
+  })
+})
+
+describe('parseSwedishAmount with a known decimal mark (crm#1528)', () => {
+  it('without a mark keeps the per-cell reading: a dot-grouped cell is thousands', () => {
+    expect(parseSwedishAmount('349.000')).toBe(349000)
+    expect(parseSwedishAmount('1.234')).toBe(1234)
+  })
+
+  it('with a dot mark reads the dot as the decimal and a comma only as grouping', () => {
+    expect(parseSwedishAmount('349.000', '.')).toBe(349)
+    expect(parseSwedishAmount('-5000.000', '.')).toBe(-5000)
+    expect(parseSwedishAmount('0.500', '.')).toBe(0.5)
+    expect(parseSwedishAmount('1,234.56', '.')).toBe(1234.56)
+    expect(parseSwedishAmount('1,234', '.')).toBe(1234)
+    expect(parseSwedishAmount('\u2212349.000 kr', '.')).toBe(-349)
+    expect(parseSwedishAmount('1.234.567', '.')).toBeNull()
+    expect(parseSwedishAmount('12,50', '.')).toBeNull()
+  })
+
+  it('reads an em dash as a minus, and a dash alone as no amount', () => {
+    expect(parseSwedishAmount('\u2014250,50', ',')).toBe(-250.5)
+    expect(parseSwedishAmount('\u2014', ',')).toBeNull()
+  })
+
+  it('with a comma mark reads the dot only as grouping', () => {
+    expect(parseSwedishAmount('1.234', ',')).toBe(1234)
+    expect(parseSwedishAmount('1.234,56', ',')).toBe(1234.56)
+    expect(parseSwedishAmount('-349,00', ',')).toBe(-349)
+    expect(parseSwedishAmount('12.50', ',')).toBeNull()
   })
 })

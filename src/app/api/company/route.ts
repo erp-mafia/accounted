@@ -11,7 +11,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  *
  * Used by the account danger zone to show a blockers list before
  * allowing account deletion. User-level (spans ALL memberships), so it uses
- * requireAuth() directly — no single active-company context applies.
+ * requireAuth() directly - no single active-company context applies.
  */
 export async function GET(request: Request) {
   const auth = await requireAuth()

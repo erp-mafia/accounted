@@ -56,7 +56,7 @@ describe('lockPeriod', () => {
     results = [
       { data: period, error: null },              // fetch
       { count: 0, data: null, error: null },       // guard leg 1: untriaged count
-      { data: [], error: null },                   // guard leg 2: business-unbooked candidates
+      { count: 0, data: null, error: null },       // guard leg 2: business-unbooked count
       { data: lockedPeriod, error: null },         // update
     ]
 
@@ -88,18 +88,18 @@ describe('lockPeriod', () => {
 // lockPeriod: unbooked-transaction guard
 //
 // These use a filter-aware client that records the filters the guard
-// actually applies and evaluates them against in-memory tables, so the
-// assertions turn on which rows the predicate matches rather than on a
-// canned count handed back by the mock. Both anchoring locations that
-// keep journal_entry_id NULL (transaction_voucher_links, the two payment
-// tables) are modelled, because the guard must not block on those.
+// actually applies and evaluates them against what public.open_bank_rows
+// answers, so the assertions turn on which rows the two legs match rather
+// than on a canned count handed back by the mock. Which rows the view holds
+// is the database's answer, every anchor shape included:
+// tests/pg/bank-row-open-read.pg.test.ts.
 // ============================================================
 
 type Row = Record<string, unknown>
 
 interface FilterSpec {
   col: string
-  op: 'eq' | 'is' | 'gte' | 'lte' | 'in'
+  op: 'eq' | 'is' | 'gte' | 'lte'
   val: unknown
 }
 
@@ -114,81 +114,50 @@ function matchesAll(row: Row, specs: FilterSpec[]): boolean {
     const v = row[s.col]
     if (s.op === 'gte') return String(v) >= String(s.val)
     if (s.op === 'lte') return String(v) <= String(s.val)
-    if (s.op === 'in') return Array.isArray(s.val) && s.val.includes(v)
     return v === s.val
   })
 }
 
-const GUARD_TABLES = [
-  'transactions',
-  'transaction_voucher_links',
-  'invoice_payments',
-  'supplier_invoice_payments',
-] as const
-
 interface GuardStore {
-  transactions?: Row[]
-  transaction_voucher_links?: Row[]
-  invoice_payments?: Row[]
-  supplier_invoice_payments?: Row[]
-  /** Table name -> PostgREST error message to return instead of rows. */
-  failOn?: Partial<Record<(typeof GUARD_TABLES)[number], string>>
+  /** The rows public.open_bank_rows answers. */
+  open_bank_rows?: Row[]
+  /** Read index on the view (0: untriaged leg, 1: business leg) -> PostgREST error message. */
+  failOn?: Record<number, string>
 }
 
 /**
- * Client whose guard-table reads are predicate-evaluated against `store`.
+ * Client whose open_bank_rows reads are predicate-evaluated against `store`.
  * `fiscal_periods` still comes from the sequential `results` queue.
  *
- * `.range(from, to)` slices the matched rows exactly like PostgREST pages
- * them, so a fetchAllRows caller is actually exercised page by page; a query
- * that never calls `.range()` gets everything back at once (the old
- * cap-oblivious behaviour a real PostgREST would truncate at 1000 rows).
+ * Only a head count answers with a count: a read of the rows would stop at the
+ * PostgREST page cap, and this client hands it no count, so the guard would
+ * read zero and lock.
  */
 function makeGuardClient(store: GuardStore) {
-  const queries: Array<{
-    table: string
-    specs: FilterSpec[]
-    orderedBy: string | null
-    range: { from: number; to: number } | null
-  }> = []
+  const queries: Array<{ table: string; specs: FilterSpec[]; head: boolean }> = []
 
-  function guardBuilder(table: (typeof GUARD_TABLES)[number]) {
+  function guardBuilder(table: string) {
+    const readIndex = queries.length
     const specs: FilterSpec[] = []
-    const record: (typeof queries)[number] = { table, specs, orderedBy: null, range: null }
+    const record: (typeof queries)[number] = { table, specs, head: false }
     queries.push(record)
-    let head = false
     const b: Record<string, unknown> = {}
     b.select = vi.fn((_cols?: string, opts?: { head?: boolean }) => {
-      head = opts?.head === true
+      record.head = opts?.head === true
       return b
     })
-    for (const op of ['eq', 'is', 'gte', 'lte', 'in'] as const) {
+    for (const op of ['eq', 'is', 'gte', 'lte'] as const) {
       b[op] = vi.fn((col: string, val: unknown) => {
         specs.push({ col, op, val })
         return b
       })
     }
-    b.order = vi.fn((col: string) => {
-      record.orderedBy = col
-      return b
-    })
-    b.range = vi.fn((from: number, to: number) => {
-      record.range = { from, to }
-      return b
-    })
     b.then = (resolve: (v: unknown) => void) => {
-      const failure = store.failOn?.[table]
+      const failure = store.failOn?.[readIndex]
       if (failure) return resolve({ data: null, count: null, error: { message: failure } })
-      let matched = (store[table] ?? []).filter((r) => matchesAll(r, specs))
-      if (record.orderedBy) {
-        const col = record.orderedBy
-        matched = [...matched].sort((a, c) => String(a[col]).localeCompare(String(c[col])))
-      }
-      if (record.range) {
-        matched = matched.slice(record.range.from, record.range.to + 1)
-      }
+      const matched = (store.open_bank_rows ?? []).filter((r) => matchesAll(r, specs))
       return resolve(
-        head
+        record.head
           ? { count: matched.length, data: null, error: null }
           : { data: matched, count: null, error: null },
       )
@@ -197,11 +166,7 @@ function makeGuardClient(store: GuardStore) {
   }
 
   const client = {
-    from: vi.fn((table: string) =>
-      (GUARD_TABLES as readonly string[]).includes(table)
-        ? guardBuilder(table as (typeof GUARD_TABLES)[number])
-        : makeBuilder(),
-    ),
+    from: vi.fn((table: string) => (table === 'open_bank_rows' ? guardBuilder(table) : makeBuilder())),
     rpc: vi.fn(),
   }
   return { client, queries }
@@ -242,7 +207,7 @@ describe('lockPeriod: unbooked transaction guard', () => {
 
     // Not yet triaged: is_business IS NULL, not ignored.
     const { client } = makeGuardClient({
-      transactions: [
+      open_bank_rows: [
         tx({ id: 't1' }),
         tx({ id: 't2', date: '2026-07-01' }),
         tx({ id: 't3', date: '2026-11-30' }),
@@ -260,7 +225,7 @@ describe('lockPeriod: unbooked transaction guard', () => {
     results = [{ data: openPeriod(), error: null }]
 
     const { client } = makeGuardClient({
-      transactions: [
+      open_bank_rows: [
         tx({ id: 'b1', is_business: true, journal_entry_id: null }),
         tx({ id: 'b2', is_business: true, journal_entry_id: null, date: '2026-09-09' }),
       ],
@@ -275,7 +240,7 @@ describe('lockPeriod: unbooked transaction guard', () => {
     results = [{ data: openPeriod(), error: null }]
 
     const { client } = makeGuardClient({
-      transactions: [
+      open_bank_rows: [
         tx({ id: 'u1' }),
         tx({ id: 'u2' }),
         tx({ id: 'b1', is_business: true, journal_entry_id: null }),
@@ -298,7 +263,7 @@ describe('lockPeriod: unbooked transaction guard', () => {
     expectLockToSucceed(openPeriod())
 
     const { client } = makeGuardClient({
-      transactions: [
+      open_bank_rows: [
         tx({ id: 'before', date: '2025-12-31' }),
         tx({ id: 'after', date: '2027-01-01' }),
         tx({ id: 'biz-before', date: '2025-06-01', is_business: true }),
@@ -313,9 +278,10 @@ describe('lockPeriod: unbooked transaction guard', () => {
     expectLockToSucceed(openPeriod())
 
     // is_business = false is privat uttag: triaged and deliberately excluded.
-    // Neither leg of the guard may count it, with or without a journal entry.
+    // The view leaves such a row out, and the two legs ask for NULL and true
+    // only, so neither counts one even so, with or without a journal entry.
     const { client } = makeGuardClient({
-      transactions: [
+      open_bank_rows: [
         tx({ id: 'p1', is_business: false, journal_entry_id: 'je-1' }),
         tx({ id: 'p2', is_business: false, journal_entry_id: null }),
       ],
@@ -325,79 +291,56 @@ describe('lockPeriod: unbooked transaction guard', () => {
     expect(result.locked_at).toBeTruthy()
   })
 
-  it('locks a clean period: booked, private and ignored rows do not block', async () => {
+  it('locks a clean period: the guard asks the view and nothing else', async () => {
+    // Booked rows of every shape, private rows and ignored rows leave the view:
+    // tests/pg/bank-row-open-read.pg.test.ts runs each shape through this count.
     expectLockToSucceed(openPeriod())
 
-    const { client } = makeGuardClient({
-      transactions: [
-        // Booked the 1:1 way.
-        tx({ id: 'b1', is_business: true, journal_entry_id: 'je-1' }),
-        // Bulk-booked: anchored via transaction_voucher_links, journal_entry_id
-        // stays NULL (lib/transactions/is-booked.ts).
-        tx({ id: 'b2', is_business: true, journal_entry_id: null }),
-        // Multi-allocated across customer invoices.
-        tx({ id: 'b3', is_business: true, journal_entry_id: null }),
-        // Multi-allocated across supplier invoices.
-        tx({ id: 'b4', is_business: true, journal_entry_id: null }),
-        // Triaged as private.
-        tx({ id: 'p1', is_business: false, journal_entry_id: 'je-2' }),
-        // Explicitly suppressed: "never going to book it".
-        tx({ id: 'i1', is_business: null, is_ignored: true }),
-      ],
-      transaction_voucher_links: [{ transaction_id: 'b2' }],
-      invoice_payments: [{ transaction_id: 'b3' }],
-      supplier_invoice_payments: [{ transaction_id: 'b4' }],
-    })
+    const { client } = makeGuardClient({ open_bank_rows: [] })
 
     const result = await lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')
     expect(result.locked_at).toBeTruthy()
+    expect(client.from.mock.calls.map(([table]) => table)).toEqual([
+      'fiscal_periods',
+      'open_bank_rows',
+      'open_bank_rows',
+      'fiscal_periods',
+    ])
   })
 
-  it('paginates the business-unbooked candidate fetch past the 1000-row PostgREST page cap', async () => {
-    // Bulk-booked transactions keep journal_entry_id NULL, so >1000 candidates
-    // is realistic. A bare .select() would silently stop at 1000 rows; the
-    // guard must page through all 1500 and refuse with the full count.
+  it('reports the full count past the 1000-row PostgREST page cap: both legs are head counts', async () => {
+    // A bare .select() would silently stop at 1000 rows. A head count has no
+    // page, so the guard refuses with all 1500.
     results = [{ data: openPeriod(), error: null }]
 
     const rows = Array.from({ length: 1500 }, (_, i) =>
       tx({ id: `t${String(i).padStart(4, '0')}`, is_business: true, journal_entry_id: null }),
     )
-    const { client, queries } = makeGuardClient({ transactions: rows })
+    const { client, queries } = makeGuardClient({ open_bank_rows: rows })
 
     await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
       /1500 banktransaktion\(er\)[\s\S]*1500 markerade som affärshändelse men utan verifikat/,
     )
-
-    // The candidate fetch (non-head transactions reads) is paginated with a
-    // stable unique order, per the fetch-all.ts ordering invariant.
-    const candidatePages = queries.filter((q) => q.table === 'transactions' && q.range !== null)
-    expect(candidatePages.length).toBeGreaterThanOrEqual(2)
-    for (const page of candidatePages) {
-      expect(page.orderedBy).toBe('id')
-    }
-    expect(candidatePages[0].range).toEqual({ from: 0, to: 999 })
-    expect(candidatePages[1].range).toEqual({ from: 1000, to: 1999 })
+    expect(queries.map((q) => q.head)).toEqual([true, true])
   })
 
-  it('anchored rows beyond the first page still reduce the blocking count', async () => {
-    // 1200 candidates, of which the LAST 100 (sorted by id, i.e. entirely on
-    // page 2) are bulk-booked via transaction_voucher_links. Without
-    // pagination those rows were never fetched, so their anchoring never
-    // mattered; with it, 1200 - 100 = 1100 genuinely unbooked rows block.
+  it('counts this company\'s rows only: both legs filter on company_id', async () => {
     results = [{ data: openPeriod(), error: null }]
 
-    const rows = Array.from({ length: 1200 }, (_, i) =>
-      tx({ id: `t${String(i).padStart(4, '0')}`, is_business: true, journal_entry_id: null }),
-    )
-    const anchoredIds = rows.slice(1100).map((r) => r.id as string)
-    const { client } = makeGuardClient({
-      transactions: rows,
-      transaction_voucher_links: anchoredIds.map((id) => ({ transaction_id: id })),
+    const { client, queries } = makeGuardClient({
+      open_bank_rows: [
+        tx({ id: 'b1', is_business: true, journal_entry_id: null }),
+        tx({ id: 'other', company_id: 'company-2', is_business: true, journal_entry_id: null }),
+      ],
     })
 
     await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
-      /1100 banktransaktion\(er\)[\s\S]*1100 markerade som affärshändelse men utan verifikat/,
+      /1 banktransaktion\(er\)[\s\S]*1 markerade som affärshändelse men utan verifikat/,
     )
+    expect(queries).toHaveLength(2)
+    for (const read of queries) {
+      expect(read.specs).toContainEqual({ col: 'company_id', op: 'eq', val: 'company-1' })
+    }
   })
 
   it('regression: the old journal_entry_id IS NULL + is_business = true guard let untriaged rows through', async () => {
@@ -412,19 +355,15 @@ describe('lockPeriod: unbooked transaction guard', () => {
     expect(untriaged.filter((r) => matchesAll(r, OLD_DEAD_GUARD))).toHaveLength(0)
 
     // The guard as it stands now does catch them.
-    const { client, queries } = makeGuardClient({ transactions: untriaged })
+    const { client, queries } = makeGuardClient({ open_bank_rows: untriaged })
     await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
       /saknar bokföring/,
     )
 
     // Leg 1 is the canonical worklist predicate, not the old one.
-    const legOne = queries.find((q) => q.table === 'transactions')?.specs ?? []
-    expect(legOne).toEqual(
-      expect.arrayContaining([
-        { col: 'is_business', op: 'is', val: null },
-        { col: 'is_ignored', op: 'eq', val: false },
-      ]),
-    )
+    expect(queries[0].table).toBe('open_bank_rows')
+    const legOne = queries[0].specs
+    expect(legOne).toContainEqual({ col: 'is_business', op: 'is', val: null })
     expect(legOne).not.toContainEqual({ col: 'journal_entry_id', op: 'is', val: null })
   })
 
@@ -432,8 +371,8 @@ describe('lockPeriod: unbooked transaction guard', () => {
     results = [{ data: openPeriod(), error: null }]
 
     const { client } = makeGuardClient({
-      transactions: [],
-      failOn: { transactions: 'connection reset' },
+      open_bank_rows: [],
+      failOn: { 0: 'connection reset' },
     })
 
     await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
@@ -441,12 +380,12 @@ describe('lockPeriod: unbooked transaction guard', () => {
     )
   })
 
-  it('refuses to lock when an anchor lookup errors: a half-run guard is no guard', async () => {
+  it('refuses to lock when the business count errors: a half-run guard is no guard', async () => {
     results = [{ data: openPeriod(), error: null }]
 
     const { client } = makeGuardClient({
-      transactions: [tx({ id: 'b1', is_business: true, journal_entry_id: null })],
-      failOn: { transaction_voucher_links: 'statement timeout' },
+      open_bank_rows: [],
+      failOn: { 1: 'statement timeout' },
     })
 
     await expect(lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
@@ -458,8 +397,8 @@ describe('lockPeriod: unbooked transaction guard', () => {
     // An unreachable DB must not send an agent off remediating transactions.
     results = [{ data: openPeriod(), error: null }]
     const { client } = makeGuardClient({
-      transactions: [],
-      failOn: { transactions: 'connection reset' },
+      open_bank_rows: [],
+      failOn: { 0: 'connection reset' },
     })
 
     let thrown: Error | undefined
@@ -488,7 +427,7 @@ describe('lockPeriod: unbooked transaction guard', () => {
   ])('throws a message both error mappers still recognise (%s)', async (_label, rows) => {
     results = [{ data: openPeriod(), error: null }]
 
-    const { client } = makeGuardClient({ transactions: rows as Row[] })
+    const { client } = makeGuardClient({ open_bank_rows: rows as Row[] })
     let thrown: Error | undefined
     try {
       await lockPeriod(client as never, 'company-1', 'user-1', 'fp-1')
@@ -672,7 +611,7 @@ describe('markPeriodClosedExternally', () => {
       { data: period, error: null },          // fetch
       { count: 3, data: null, error: null },  // imported-verifikat count (migrated year)
       { count: 0, data: null, error: null },  // guard leg 1: untriaged count
-      { data: [], error: null },              // guard leg 2: business-unbooked candidates
+      { count: 0, data: null, error: null },  // guard leg 2: business-unbooked count
       { data: updated, error: null },         // update
       { data: null, error: null },            // audit_log insert
     ]
@@ -693,7 +632,7 @@ describe('markPeriodClosedExternally', () => {
       { count: 0, data: null, error: null },  // imported-verifikat count
       { data: [], error: null },              // period entries (id-only page): none
       { count: 0, data: null, error: null },  // guard leg 1: untriaged count
-      { data: [], error: null },              // guard leg 2: business-unbooked candidates
+      { count: 0, data: null, error: null },  // guard leg 2: business-unbooked count
       { data: updated, error: null },         // update
       { data: null, error: null },            // audit_log insert
     ]
@@ -704,7 +643,7 @@ describe('markPeriodClosedExternally', () => {
   })
 
   it('allows a migrated first year whose only native voucher is balance-sheet only and the next year has IB', async () => {
-    // The EHAL shape (2026-09-07): SIE import into the historical year failed,
+    // The reported shape (2026-09-07): SIE import into the historical year failed,
     // so the owner re-keyed the opening voucher by hand (1930 D / 2081 K
     // aktiekapital). Nothing on 3xxx-8xxx, so there is no result for a
     // bokslutsverifikat to transfer; the next year's IB is already imported,
@@ -726,7 +665,7 @@ describe('markPeriodClosedExternally', () => {
       { data: period, error: null },                  // findNextPeriod: fetch current
       { data: next, error: null },                    // findNextPeriod: chained lookup, has IB
       { count: 0, data: null, error: null },          // guard leg 1: untriaged count
-      { data: [], error: null },                      // guard leg 2: business-unbooked candidates
+      { count: 0, data: null, error: null },          // guard leg 2: business-unbooked count
       { data: updated, error: null },                 // update
       { data: null, error: null },                    // audit_log insert
     ]
@@ -865,7 +804,7 @@ describe('markPeriodClosedExternally', () => {
       { data: period, error: null },
       { count: 1, data: null, error: null },  // imported-verifikat count
       { count: 2, data: null, error: null },  // untriaged
-      { data: [], error: null },              // business-unbooked candidates
+      { count: 0, data: null, error: null },  // business-unbooked
     ]
 
     const supabase = makeClient()
@@ -1030,6 +969,11 @@ describe('createNextPeriod', () => {
     expect(result.period_start).toBe('2025-01-01')
     expect(result.period_end).toBe('2025-12-31')
     expect(result.previous_period_id).toBe('fp-2024')
+    // Swedish like every other door: the name prints in the årsredovisning.
+    const insertCall = supabase.from.mock.results
+      .map((entry) => entry.value as Record<string, ReturnType<typeof vi.fn>>)
+      .find((builder) => builder.insert.mock.calls.length > 0)
+    expect(insertCall!.insert.mock.calls[0][0]).toMatchObject({ name: 'Räkenskapsår 2025' })
   })
 
   it('calculates correct dates for broken (Jul-Jun) fiscal year', async () => {
@@ -1195,6 +1139,34 @@ describe('findNextPeriod', () => {
 })
 
 describe('createNextPeriod chain healing', () => {
+  it('asks for the year starting the day after, whatever it was linked to', async () => {
+    const current = makeFiscalPeriod({ id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' })
+    const created = makeFiscalPeriod({ id: 'fp-2026', period_start: '2026-01-01', period_end: '2026-12-31' })
+    results = [
+      { data: current, error: null },
+      { data: [], error: null },
+      { data: created, error: null },
+      { data: [], error: null },
+    ]
+
+    const client = makeClient()
+    const builders: Array<Record<string, unknown>> = []
+    const from = client.from
+    client.from = vi.fn().mockImplementation(() => {
+      const b = from()
+      builders.push(b)
+      return b
+    })
+
+    await createNextPeriod(client as never, 'company-1', 'user-1', 'fp-2025')
+
+    const successorRead = builders[3].eq as ReturnType<typeof vi.fn>
+    expect(successorRead.mock.calls).toEqual([
+      ['company_id', 'company-1'],
+      ['period_start', '2027-01-01'],
+    ])
+  })
+
   it('relinks a successor that was chained across the gap onto the new period', async () => {
     const current = makeFiscalPeriod({
       id: 'fp-2024-25',
@@ -1232,5 +1204,111 @@ describe('createNextPeriod chain healing', () => {
     expect(relink).toBeDefined()
     expect((relink!.update as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual({ previous_period_id: 'fp-2025-26' })
     expect((relink!.in as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual(['id', ['fp-2026-27']])
+  })
+})
+
+// ============================================================
+// SIE import hold (crm#1029): a year an SIE import, or its undo, still holds
+// is not locked or closed. The database refuses it too (guard_sie_period_hold)
+// but in English and without a code: the user saw "Något gick fel" and an
+// agent's approval failed as UNKNOWN_ERROR. These refusals carry a stable
+// code and a Swedish sentence naming the year and the way out.
+// ============================================================
+
+describe('SIE import hold refusals', () => {
+  const HELD = { name: 'Räkenskapsår 2024', import_hold: 'imp-1' }
+
+  function caught(fn: () => unknown): Promise<Error> {
+    return Promise.resolve()
+      .then(fn)
+      .then(
+        () => {
+          throw new Error('expected a refusal')
+        },
+        (e: Error) => e,
+      )
+  }
+
+  it('lockPeriod refuses a held year before any guard query or write', async () => {
+    results = [{ data: makeFiscalPeriod({ id: 'fp-1', ...HELD }), error: null }]
+    const supabase = makeClient()
+
+    const err = await caught(() => lockPeriod(supabase as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte låsas')
+    expect(err.message).toContain('Fortsätt')
+    expect(err.message).toContain('Ångra import')
+    // Only the period fetch ran: no unbooked count, no update.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+
+    const structured = getStructuredError(err)
+    expect(structured.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(structured.message_sv).toBe(err.message)
+    expect(structured.retryable).toBe(false)
+    expect(structured.remediation?.tool).toBe('gnubok_sie_import_status')
+    expect(structured.remediation?.args).toEqual({ import_id: 'imp-1' })
+  })
+
+  it('answers the database guard the same way when the hold lands after the read', async () => {
+    results = [
+      { data: makeFiscalPeriod({ id: 'fp-1', name: 'Räkenskapsår 2024' }), error: null },
+      { count: 0, data: null, error: null }, // untriaged count
+      { count: 0, data: null, error: null }, // business-unbooked count
+      {
+        data: null,
+        error: { code: '55000', message: 'SIE import is unfinished: resume or undo it before closing' },
+      },
+    ]
+    const err = await caught(() => lockPeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte låsas')
+    expect(getStructuredError(err).code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+  })
+
+  it('keeps any other update failure as before', async () => {
+    results = [
+      { data: makeFiscalPeriod({ id: 'fp-1' }), error: null },
+      { count: 0, data: null, error: null },
+      { count: 0, data: null, error: null },
+      { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+    ]
+    const err = await caught(() => lockPeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toMatch(/^Failed to lock period/)
+    expect(getStructuredError(err).code).not.toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+  })
+
+  it('closePeriod refuses a held year', async () => {
+    results = [{
+      data: makeFiscalPeriod({
+        id: 'fp-1', locked_at: '2025-01-10T00:00:00Z', closing_entry_id: 'ce-1', ...HELD,
+      }),
+      error: null,
+    }]
+    const err = await caught(() => closePeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte stängas')
+    expect(getStructuredError(err).code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+  })
+
+  it('markPeriodClosedExternally (klarmarkera) refuses a held year before it reads the ledger', async () => {
+    results = [{ data: makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31', ...HELD }), error: null }]
+    const supabase = makeClient()
+    const err = await caught(() => markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte markeras som avslutat')
+    expect(getStructuredError(err).code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('unlocking a held year stays allowed: it is the way out when a lock stopped the run', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', locked_at: '2025-01-10T00:00:00Z', ...HELD })
+    results = [
+      { data: period, error: null },
+      { data: { ...period, locked_at: null }, error: null },
+      { data: null, error: null }, // audit_log
+    ]
+    const result = await unlockPeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.locked_at).toBeNull()
   })
 })

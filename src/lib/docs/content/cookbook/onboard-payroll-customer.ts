@@ -13,19 +13,19 @@ This is the operator-side companion to [Run payroll and generate the AGI XML](/d
 ## 1. Create the company
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies" \\
+curl "https://app.accounted.se/api/v1/companies" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
-  -d '{ "name": "Ingager AB", "entity_type": "aktiebolag", "org_number": "5566778899", "vat_registered": true, "moms_period": "monthly", "accounting_method": "accrual", "f_skatt": true }'
+  -d '{ "name": "Exempelbolaget AB", "entity_type": "aktiebolag", "org_number": "5566778899", "vat_registered": true, "moms_period": "monthly", "accounting_method": "accrual", "f_skatt": true }'
 \`\`\`
 
-The response carries the \`id\` you use as \`$COMPANY_ID\` from here on. The BAS chart of accounts is seeded on creation; the fiscal year follows \`fiscal_year_start_month\` (default January). Bank details for the payment file (IBAN + BIC for pain.001, bankgiro for Bankgirot LB) go on \`PATCH /companies/{id}/settings\`.
+The response carries the \`id\` you use as \`$COMPANY_ID\` from here on. The BAS chart of accounts is seeded on creation; the fiscal year follows \`fiscal_year_start_month\` (default January). The pain.001 payment file pays from the account the salaries are booked on, the company's primary bank account, with that account's IBAN and BIC. A company whose only bank account has no IBAN of its own (a company created over the API starts with one, 1930) uses the IBAN and BIC on \`PATCH /companies/{id}/settings\`; the bankgiro a Bankgirot LB file is sent from goes there too.
 
 ## 2. Payroll settings, once, before the first run
 
 \`\`\`bash
-curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
+curl -X PATCH "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -33,7 +33,6 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/setting
     "salary_pay_day": 25,
     "salary_deviation_period": "previous_month",
     "preferred_payment_format": "pain001",
-    "salary_default_bank": "seb",
     "salary_net_rounding": false,
     "salary_voucher_series": "L"
   }'
@@ -41,16 +40,17 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/setting
 
 - \`salary_deviation_period\` is the avvikelseperiod: \`previous_month\` means a run for September reads August's absence, sick days, VAB and worked hours (the standard "innevarande månads lön, föregående månads avvikelser"). \`same_month\` reads September. The window is snapshotted on each run at creation, so decide this before the first run: switching later makes the next run's window overlap the previous run and it is refused with \`409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP\`.
 - \`salary_pay_day\` only sets the default \`payment_date\` of new runs.
+- There is no salary bank to set: the file pays from the primary bank account, and the dashboard shows the upload instructions of that account's bank. \`salary_default_bank\` is still accepted, as the fallback for an account whose bank has no instructions in the dashboard.
 - \`salary_voucher_series\` is the verifikationsserie salary vouchers book under. A fresh company defaults to K; send the letter explicitly when provisioning so it is never a surprise.
 
 Read it back with \`GET /salary/settings\`. There is no separate "avtal" to configure: statutory parameters (arbetsgivaravgifter, traktamenten, karens, sjuklön) live centrally per year and are maintained by Accounted.
 
 ### Calculation policies
 
-The law fixes what is paid (sjuklön at 80 %, one karensavdrag per sjuklöneperiod, semesterlön); how a monthly salary is turned into a day, an hour or a partial month follows the employment contract and the kollektivavtal, and every payroll system has its conventions. \`salary_calculation_policy\` on the same endpoint makes them explicit per company. Every key defaults to the calculation Accounted has always done; the other value of each is what Fortnox does, so a customer you take over from Fortnox keeps the öre on their payslips. Send only the keys you change; they are merged into the stored policy and the response always shows all six.
+The law fixes what is paid (sjuklön at 80 %, one karensavdrag per sjuklöneperiod, semesterlön); how a monthly salary is turned into a day, an hour or a partial month follows the employment contract and the kollektivavtal, and every payroll system has its conventions. \`salary_calculation_policy\` on the same endpoint makes them explicit per company. Every key defaults to the calculation Accounted has always done; the other value of each is what Fortnox does, so a customer you take over from Fortnox keeps the öre on their payslips. Send only the keys you change; they are merged into the stored policy and the response always shows all seven.
 
 \`\`\`bash
-curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
+curl -X PATCH "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -65,13 +65,14 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/setting
 | \`leave_context\` | \`all_registered\`: days registered after the deviation period's end count toward the five-day threshold | \`through_deviation_end\`: only days up to the period's end count, so a later registration never reprices a settled month | Only under \`calendar_after_five_workdays\`. Choose \`through_deviation_end\` when the customer registers leave month by month. |
 | \`net_rounding\` | \`up\`: whole-krona öresavrundning always rounds up | \`nearest\`: to the nearest krona; a negative difference books as a 3740 credit | Only when \`salary_net_rounding\` is on. |
 | \`one_off_tax_rounding\` | \`truncate\`: engångsskatt = belopp × procent, öretal bortfaller (SFL 22 kap. 1 §) | \`nearest\`: round to the nearest krona | Engångsskatt on lines with \`one_off_tax_percent\` (step 5). Keep the statutory default unless you are reproducing another system's history. |
+| \`vacation_day_value\` | \`daily_divisor\`: a paid semesterdag under sammalöneregeln is worth månadslön / 21 (schedule divisor for part-time weeks) | \`percent_4_6\`: 4,6 % of the månadslön per paid day | Only the valuation of the semesterlöneskuld (report, vacation-year close, remeasurement); never what a payslip pays. |
 
 The conventions are read at \`:calculate\` and frozen into the run's \`calculation_params.salary_calculation_policy\`, so a change never moves a run that is already calculated; recalculate a draft to apply it, \`:correct\` a booked run. Set them in step 2, and compare one historical payslip from the old system against a dry run before the first live month.
 
 ## 3. Employees
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -81,18 +82,18 @@ curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees" \\
     "salary_type": "monthly", "monthly_salary": 35000, "employment_degree": 100,
     "workdays_per_week": 5,
     "tax_table_number": 33, "tax_column": 1, "f_skatt_status": "a_skatt",
-    "vacation_rule": "sammalone", "vacation_days_per_year": 25, "semestertillagg_rate": 0.0043,
+    "vacation_rule": "sammaloneregeln", "vacation_days_per_year": 25, "semestertillagg_rate": 0.0043,
     "clearing_number": "5000", "bank_account_number": "1234567890",
     "email": "anna@example.se"
   }'
 \`\`\`
 
-Hourly staff: \`"salary_type": "hourly", "hourly_rate": 210\` and no \`monthly_salary\`; their gross derives from the worked days you register in step 5. Jämkning (\`jamkning_percentage\` with \`valid_from\` and \`valid_to\`), växa-stöd and part-time schedules (\`workdays_per_week\`) are fields on the same record. \`personnummer\` is masked on the list, full on the detail endpoint.
+Hourly staff: \`"salary_type": "hourly", "hourly_rate": 210\` and no \`monthly_salary\`; their gross derives from the worked days you register in step 5. Jämkning (\`jamkning_percentage\` with \`jamkning_valid_from\` and \`jamkning_valid_to\`), an extra tax deduction the employee asked for (\`extra_tax_amount\` in kronor per run, or \`extra_tax_percentage\` as a total, one of them), växa-stöd and part-time schedules (\`workdays_per_week\`) are fields on the same record. \`personnummer\` is masked on the list, full on the detail endpoint.
 
 ## 4. Cutover balances (only when you take over mid-year)
 
 \`\`\`bash
-curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/opening-balances" \\
+curl -X PUT "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/opening-balances" \\
   -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
@@ -141,7 +142,7 @@ Register deviations on the dates they happened. The run reads them from its avvi
 **Absence** (sick, vab, parental, unpaid leave and so on), weekends skipped unless \`include_weekends\`:
 
 \`\`\`bash
-curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/absence" \\
+curl -X PUT "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/absence" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Content-Type: application/json" \\
   -d '{ "from": "2026-08-10", "to": "2026-08-12", "absence_type": "sick" }'
 \`\`\`
@@ -151,7 +152,7 @@ Karensavdrag, sjuklön dag 2-14, day 15+ (Försäkringskassan), återinsjuknande
 **Worked days** for hourly staff, and for OB/shift premiums on anyone:
 
 \`\`\`bash
-curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/worked-days" \\
+curl -X PUT "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/worked-days" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Content-Type: application/json" \\
   -d '{ "days": [
     { "work_date": "2026-08-03", "hours": 8, "start_time": "07:00", "end_time": "15:30" },
@@ -162,27 +163,27 @@ curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLO
 **Standing rows and benefits** live on the employee and are re-derived on every run whose payment date falls inside their validity:
 
 \`\`\`bash
-# A monthly allowance that recurs until further notice
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/recurring-lines" \\
+# A text row on every payslip that explains how the salary is built up (words only, no amount)
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/recurring-lines" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
-  -d '{ "item_type": "allowance", "description": "Friskvårdsbidrag", "amount": 416.67, "valid_from": "2026-09-01" }'
+  -d '{ "item_type": "text", "description": "Månadslön 32 000 kr, varav personligt tillägg 2 000 kr", "valid_from": "2026-09-01" }'
 
 # Bilförmån at the Skatteverket schablon value
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/benefits" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/benefits" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
   -d '{ "benefit_type": "car", "description": "Volvo XC40 2025", "monthly_value": 4210, "valid_from": "2026-09-01" }'
 \`\`\`
 
-Deductions carry a negative amount and the API rejects the wrong sign for the item type. The förmånsvärde is added to the tax and avgifter basis at \`:calculate\`; supply the schablon figure, the API does not compute it from the car.
+A recurring line is a deduction with a negative amount (the API rejects the wrong sign for the item type) or a text row with no amount. Recurring additions are refused, because proration, absence, sjuklön and semestertillägg read only the employee's \`monthly_salary\`: put a standing raise there. The förmånsvärde is added to the tax and avgifter basis at \`:calculate\`; supply the schablon figure, the API does not compute it from the car.
 
-**Vacation taken** is a payslip line too: \`item_type: "vacation"\` with \`quantity\` = days, and \`vacation_category\` when the days are not this year's paid days (\`saved\` with an optional \`vacation_saved_year\`, else the oldest saved year is consumed first; \`unpaid\`; \`advance\`; \`extra_paid\`), so the ledger draws them from the right pool loaded in step 4.
+**Vacation taken** is a payslip line too: \`item_type: "vacation"\` with \`quantity\` = days, and \`vacation_category\` when the days are not this year's paid days (\`saved\` with an optional \`vacation_saved_year\`, else the oldest saved year is consumed first; \`unpaid\`; \`advance\`; \`extra_paid\`), so the ledger draws them from the right pool loaded in step 4. Leave the amount out and \`:calculate\` prices the days from the employee's vacation rule: a semestertillägg under sammalöneregeln (\`semestertillagg_rate\` of the monthly salary per paid day), a semesterlöneavdrag plus the semesterlön under procentregeln (12 % of the previous year's semesterlönegrundande pay per paid day earned, read from the run history), a deduction for unpaid days, nothing for förskott. An amount on the line is paid as entered instead. A procentregeln employee whose previous year is not in Accounted (a customer moving mid-year) is refused with \`SALARY_RUN_VACATION_PAY_UNDETERMINED\` until you put the semesterlön on the line.
 
 **One-off lines** (bonus, deduction, reimbursement) go on the run itself once it exists: \`POST /salary-runs/{id}/employees/{employeeId}/lines\`. A bonus, provision or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp takes \`one_off_tax_percent\` with the percentage you verified for the employee's yearly income; the line is then withheld at that flat rate instead of through the monthly table (a valid jämkning decision on the employee still wins), equal percentages are summed before the öre are dropped, and the payslip breakdown shows an "Engångsskatt (x %)" step. A different base salary for one month: \`PATCH /salary-runs/{id}/employees/{employeeId}\` with \`monthly_salary\`.
 
 ## 6. Run payroll
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
   -d '{ "period_year": 2026, "period_month": 9, "payment_date": "2026-09-25", "voucher_series": "L" }'
 \`\`\`
@@ -192,7 +193,7 @@ The response echoes \`deviation_period_start\` / \`deviation_period_end\` (here 
 ## 7. Pay
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs/$RUN_ID/payment-file" \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/salary-runs/$RUN_ID/payment-file" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
   -d '{ "format": "pain001" }'
 \`\`\`

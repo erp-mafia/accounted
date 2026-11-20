@@ -78,6 +78,14 @@ const K2_COMPANY = { data: { accounting_framework: 'k2', entity_type: 'aktiebola
 
 const noopSupabase = { from: vi.fn() } as never
 
+// Keys of a returned asset that its item schema does not declare. The schema is
+// open, so nothing else notices a key assetView() adds; strict clients refused
+// every call while three keys were missing here (feedback seq 788784).
+function undeclaredKeys(row: Record<string, unknown>, itemSchema: unknown): string[] {
+  const declared = (itemSchema as { properties: Record<string, unknown> }).properties
+  return Object.keys(row).filter((key) => !(key in declared))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 })
@@ -112,7 +120,7 @@ describe('asset tools: registration', () => {
     expect(TOOL_SCOPE_MAP.gnubok_dispose_asset).toBe('bookkeeping:write')
     expect(OPERATION_RISK_TIERS.create_asset).toBe('low')
     expect(OPERATION_RISK_TIERS.update_asset).toBe('low')
-    expect(OPERATION_RISK_TIERS.dispose_asset).toBe('medium')
+    expect(OPERATION_RISK_TIERS.dispose_asset).toBe('high')
   })
 
   it('declares the required write arguments', () => {
@@ -144,6 +152,8 @@ describe('gnubok_list_assets', () => {
       has_posted_depreciation: true,
     })
     expect(result.assets[0]).not.toHaveProperty('id')
+    const itemSchema = (listTool.outputSchema as { properties: { assets: { items: unknown } } }).properties.assets.items
+    expect(undeclaredKeys(result.assets[0], itemSchema)).toEqual([])
   })
 })
 
@@ -174,6 +184,8 @@ describe('gnubok_get_asset', () => {
       depreciation_schedule: Array<Record<string, unknown>>
     }
     expect(result.asset).toMatchObject({ asset_id: ASSET_ID, has_posted_depreciation: true })
+    const itemSchema = (getTool.outputSchema as { properties: { asset: unknown } }).properties.asset
+    expect(undeclaredKeys(result.asset, itemSchema)).toEqual([])
     expect(result.depreciation_schedule).toEqual([
       { fiscal_period_id: PERIOD_ID, planned_depreciation: 8888.89, journal_entry_id: 'je-1' },
       { fiscal_period_id: 'p-2027', planned_depreciation: 10666.67, journal_entry_id: null },
@@ -193,10 +205,10 @@ describe('gnubok_create_asset', () => {
   it('rejects invalid arguments before any DB call', async () => {
     await expect(
       createTool.execute({ ...validArgs, acquisition_cost: -1 }, COMPANY_ID, 'user-1', noopSupabase),
-    ).rejects.toThrow(/Invalid acquisition_cost/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/acquisition_cost/) })
     await expect(
       createTool.execute({ ...validArgs, bas_asset_account: '1110' }, COMPANY_ID, 'user-1', noopSupabase),
-    ).rejects.toThrow(/Invalid bas_asset_account/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/bas_asset_account/) })
   })
 
   it('refuses k3_components for a K2 company with the registry code', async () => {
@@ -303,7 +315,7 @@ describe('gnubok_dispose_asset', () => {
         'user-1',
         noopSupabase,
       ),
-    ).rejects.toThrow(/Invalid disposed_proceeds/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/disposed_proceeds/) })
     expect(vi.mocked(previewAssetDisposal)).not.toHaveBeenCalled()
   })
 

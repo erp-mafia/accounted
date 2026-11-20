@@ -143,7 +143,7 @@ describe('buildKnownFacts', () => {
     expect(facts).toContain('Arbetsgivarregistrerad: ja')
     expect(facts).toContain('Betalar ut lön: ja')
     expect(facts).toContain('Momsperiod: kvartalsvis')
-    expect(facts).toContain('Säte: Göteborg')
+    expect(facts).toContain('Ort: Göteborg')
   })
 
   it('states a headcount even when the company has no company_settings row', () => {

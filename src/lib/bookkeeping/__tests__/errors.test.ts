@@ -14,11 +14,15 @@ import {
   JournalEntryNotFoundError,
   JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
+  MandatoryDimensionMissingError,
+  TransactionMissingSekValueError,
   accountsNotInChartResponse,
   bookkeepingErrorResponse,
   isAccountsNotInChartError,
   isBookkeepingError,
 } from '../errors'
+import { formatDimensionValidationIssues } from '../dimension-errors'
+import { errorResponse, getStructuredError } from '@/lib/errors/get-structured-error'
 
 describe('Typed bookkeeping errors', () => {
   it('AccountsNotInChartError carries sorted, deduped account numbers', () => {
@@ -158,8 +162,8 @@ describe('Typed bookkeeping errors', () => {
 
   it('DimensionValidationError carries issues and a Swedish message naming every code', () => {
     const err = new DimensionValidationError([
-      { sie_dim_no: '6', code: 'P999', reason: 'unknown_value' },
-      { sie_dim_no: '1', code: 'KS-GAMMAL', reason: 'archived_value' },
+      { sie_dim_no: '6', code: 'P999', reason: 'unknown_value', dimension_name: 'Projekt' },
+      { sie_dim_no: '1', code: 'KS-GAMMAL', reason: 'archived_value', dimension_name: 'Kostnadsställe' },
       { sie_dim_no: '9', code: null, reason: 'unknown_dimension' },
     ])
     expect(err.code).toBe('DIMENSION_VALIDATION_FAILED')
@@ -167,12 +171,58 @@ describe('Typed bookkeeping errors', () => {
     expect(err).toBeInstanceOf(Error)
     expect(err.issues).toHaveLength(3)
     expect(err.message).toContain(
-      'Okänt kostnadsställe/projekt: "P999" (dimension 6). Skapa värdet i registret först.'
+      'Okänt värde "P999" i Projekt (dimension 6). Skapa värdet i registret först.'
     )
     expect(err.message).toContain(
-      '"KS-GAMMAL" är arkiverat: återaktivera värdet för att använda det.'
+      '"KS-GAMMAL" i Kostnadsställe (dimension 1) är arkiverat: återaktivera värdet för att använda det.'
     )
     expect(err.message).toContain('Okänd dimension 9. Skapa dimensionen i registret först.')
+  })
+
+  it('DimensionValidationError names a custom dimension, never "kostnadsställe/projekt"', () => {
+    const named = new DimensionValidationError([
+      { sie_dim_no: '21', code: 'KB7', reason: 'unknown_value', dimension_name: 'Kostnadsbärare' },
+    ])
+    expect(named.message).toBe(
+      'Okänt värde "KB7" i Kostnadsbärare (dimension 21). Skapa värdet i registret först.'
+    )
+    // No registry name at hand (e.g. an older serialized envelope): the number.
+    const unnamed = new DimensionValidationError([
+      { sie_dim_no: '21', code: 'KB7', reason: 'archived_value' },
+    ])
+    expect(unnamed.message).toBe(
+      '"KB7" i dimension 21 är arkiverat: återaktivera värdet för att använda det.'
+    )
+    expect(`${named.message} ${unnamed.message}`).not.toMatch(/kostnadsställe\/projekt/i)
+  })
+
+  it('formatDimensionValidationIssues rebuilds the named sentence from serialized details', () => {
+    expect(
+      formatDimensionValidationIssues([
+        { sie_dim_no: '21', code: 'KB7', reason: 'unknown_value', dimension_name: 'Kostnadsbärare' },
+      ])
+    ).toBe('Okänt värde "KB7" i Kostnadsbärare (dimension 21). Skapa värdet i registret först.')
+    expect(
+      formatDimensionValidationIssues([
+        { sie_dim_no: '21', code: 'KB1', reason: 'archived_dimension', dimension_name: 'Kostnadsbärare' },
+      ])
+    ).toBe(
+      '"KB1" i Kostnadsbärare (dimension 21): dimensionen är arkiverad. Återaktivera dimensionen för att använda värdet.'
+    )
+    // A malformed name is not trusted into the sentence.
+    expect(
+      formatDimensionValidationIssues([
+        { sie_dim_no: '21', code: 'KB7', reason: 'unknown_value', dimension_name: 42 },
+      ])
+    ).toBeNull()
+  })
+
+  it('MandatoryDimensionMissingError names account and dimension without a dash', () => {
+    const err = new MandatoryDimensionMissingError([
+      { account_number: '4010', sie_dim_no: '21', dimension_name: 'Kostnadsbärare' },
+    ])
+    expect(err.message).toBe('Konto 4010 kräver Kostnadsbärare: välj ett värde innan bokföring.')
+    expect(err.message).not.toMatch(/[\u2013\u2014]/)
   })
 })
 
@@ -349,16 +399,18 @@ describe('bookkeepingErrorResponse', () => {
 
   it('returns 400 for DimensionValidationError with issue details and Swedish message', async () => {
     const response = bookkeepingErrorResponse(
-      new DimensionValidationError([{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value' }])
+      new DimensionValidationError([
+        { sie_dim_no: '6', code: 'P999', reason: 'unknown_value', dimension_name: 'Projekt' },
+      ])
     )!
     expect(response.status).toBe(400)
     const body = await response.json()
     expect(body.error.code).toBe('DIMENSION_VALIDATION_FAILED')
     expect(body.error.message).toBe(
-      'Okänt kostnadsställe/projekt: "P999" (dimension 6). Skapa värdet i registret först.'
+      'Okänt värde "P999" i Projekt (dimension 6). Skapa värdet i registret först.'
     )
     expect(body.error.details).toEqual({
-      issues: [{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value' }],
+      issues: [{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value', dimension_name: 'Projekt' }],
     })
   })
 
@@ -371,5 +423,42 @@ describe('bookkeepingErrorResponse', () => {
     expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
     expect(body.error.details).toEqual({ operation: 'commit_entry' })
     expect(body.error.message).toContain('constraint violation')
+  })
+})
+
+// Agent feedback seq 887729: booking a foreign row with no SEK value is refused
+// with a registered code whose remediation names the rate refresh.
+describe('TransactionMissingSekValueError', () => {
+  const err = () => new TransactionMissingSekValueError('tx-1', 'CAD', '2026-09-30')
+
+  it('is a typed bookkeeping error carrying the row facts', () => {
+    expect(err().code).toBe('TX_MISSING_SEK_VALUE')
+    expect(err().name).toBe('TransactionMissingSekValueError')
+    expect(isBookkeepingError(err())).toBe(true)
+  })
+
+  it('answers 400 with the row facts through bookkeepingErrorResponse', async () => {
+    const response = bookkeepingErrorResponse(err())!
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(body.error.details).toEqual({ transactionId: 'tx-1', currency: 'CAD', date: '2026-09-30' })
+  })
+
+  it('reaches agents as the registered code with Swedish text and the refresh remediation', () => {
+    const structured = getStructuredError(err())
+    expect(structured.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(structured.message_sv).toMatch(/saknar SEK-belopp och växelkurs/)
+    expect(structured.retryable).toBe(false)
+    expect(structured.remediation?.description).toContain('refresh-exchange-rate')
+  })
+
+  it('answers 400 with details through the route error dispatch', async () => {
+    const log = { warn: () => {}, error: () => {} }
+    const response = errorResponse(err(), log)
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(body.error.details).toMatchObject({ currency: 'CAD' })
   })
 })

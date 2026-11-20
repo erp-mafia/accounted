@@ -217,6 +217,66 @@ describe('company_sending_domains', () => {
     expect(presentation.rowCount).toBe(1)
   })
 
+  it('tenant guard: a company_id change passes only for a recorded migration-reset pair, state unchanged (20261018134300)', async () => {
+    const movingOwnerId = await insertAuthUser()
+    const sourceId = await insertCompany({ createdBy: movingOwnerId })
+    const replacementId = await insertCompany({ createdBy: movingOwnerId })
+    const unrelatedId = await insertCompany({ createdBy: movingOwnerId })
+    for (const id of [sourceId, replacementId, unrelatedId]) {
+      await insertCompanyMember({ companyId: id, userId: movingOwnerId, role: 'owner' })
+    }
+    const movingDomain = `moving-${domain}`
+    await getPool().query(
+      `INSERT INTO public.company_sending_domains (company_id, domain, status, resend_domain_id, verified_at)
+       VALUES ($1, $2, 'verified', $3, now())`,
+      [sourceId, movingDomain, `rd_${randomUUID()}`],
+    )
+
+    // No reset recorded: an owner of both companies still cannot retarget.
+    await expect(
+      withUserContext(movingOwnerId, (c) =>
+        c.query(`UPDATE public.company_sending_domains SET company_id = $1 WHERE company_id = $2`, [
+          replacementId,
+          sourceId,
+        ]),
+      ),
+    ).rejects.toThrow(/server-managed/)
+
+    await getPool().query(
+      `INSERT INTO public.company_migration_resets
+         (source_company_id, replacement_company_id, actor_id, reason, confirmation_snapshot, source_counts)
+       VALUES ($1, $2, $3, 'pg-real guard pair for the sending-domain move', '{}'::jsonb, '{}'::jsonb)`,
+      [sourceId, replacementId, movingOwnerId],
+    )
+
+    // The recorded pair, but to another company: refused.
+    await expect(
+      withUserContext(movingOwnerId, (c) =>
+        c.query(`UPDATE public.company_sending_domains SET company_id = $1 WHERE company_id = $2`, [
+          unrelatedId,
+          sourceId,
+        ]),
+      ),
+    ).rejects.toThrow(/server-managed/)
+    // The recorded pair, but verification state changes along with it: refused.
+    await expect(
+      withUserContext(movingOwnerId, (c) =>
+        c.query(
+          `UPDATE public.company_sending_domains SET company_id = $1, status = 'pending' WHERE company_id = $2`,
+          [replacementId, sourceId],
+        ),
+      ),
+    ).rejects.toThrow(/server-managed/)
+    // The recorded pair with nothing else changed: admitted.
+    const moved = await withUserContext(movingOwnerId, (c) =>
+      c.query(
+        `UPDATE public.company_sending_domains SET company_id = $1 WHERE company_id = $2 RETURNING status`,
+        [replacementId, sourceId],
+      ),
+    )
+    expect(moved.rows).toEqual([{ status: 'verified' }])
+  })
+
   it('tenant guard: the service role and direct sessions may write verification state', async () => {
     await runAsServiceRole(async (c) => {
       const r = await c.query(

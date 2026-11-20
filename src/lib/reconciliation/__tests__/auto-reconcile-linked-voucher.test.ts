@@ -3,12 +3,22 @@ import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/b
 import { eventBus } from '@/lib/events/bus'
 import { makeTransaction } from '@/tests/helpers'
 
+// Whether the link anchors the row's underlag to the verifikat (crm#1101):
+// the propagation itself is tested in lib/transactions/__tests__.
+const { propagateUnderlag } = vi.hoisted(() => ({ propagateUnderlag: vi.fn() }))
+vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/inbox-underlag')>()),
+  propagateUnderlagForBookedTransaction: (...args: unknown[]) => propagateUnderlag(...args),
+}))
+
 // Queue-based Supabase mock: every awaited chain consumes the next enqueued
 // result regardless of the builder methods called, so we enqueue results in the
 // exact order the function under test awaits them. Mirrors the manualLink suite
 // in bank-reconciliation.test.ts.
 function createQueueMockSupabase() {
   const resultQueue: { data: unknown; error: unknown }[] = []
+  // Every chain, with the builder calls made on it, for asserting on a write.
+  const chains: Array<{ table: string; calls: Array<{ method: string; args: unknown[] }> }> = []
 
   const enqueue = (...results: { data?: unknown; error?: unknown }[]) => {
     for (const r of results) {
@@ -16,25 +26,44 @@ function createQueueMockSupabase() {
     }
   }
 
-  const buildChain = (): unknown => {
+  const buildChain = (record: (typeof chains)[number]): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
           const next = resultQueue.shift() ?? { data: null, error: null }
           return (resolve: (v: unknown) => void) => resolve(next)
         }
-        return (..._args: unknown[]) => buildChain()
+        return (...args: unknown[]) => {
+          record.calls.push({ method: String(prop), args })
+          return buildChain(record)
+        }
       },
     }
     return new Proxy({}, handler)
   }
 
-  const supabase = {
-    from: vi.fn().mockImplementation(() => buildChain()),
-    rpc: vi.fn().mockImplementation(() => buildChain()),
+  const open = (table: string) => {
+    const record: (typeof chains)[number] = { table, calls: [] }
+    chains.push(record)
+    return buildChain(record)
   }
 
-  return { supabase, enqueue }
+  const supabase = {
+    from: vi.fn().mockImplementation((table: string) => open(table)),
+    rpc: vi.fn().mockImplementation((fn: string) => open(`rpc:${fn}`)),
+  }
+
+  return { supabase, enqueue, chains }
+}
+
+/** The transactions updates the call made, with their values and filters. */
+function transactionUpdates(chains: ReturnType<typeof createQueueMockSupabase>['chains']) {
+  return chains
+    .filter((c) => c.table === 'transactions' && c.calls.some((call) => call.method === 'update'))
+    .map((c) => ({
+      values: c.calls.find((call) => call.method === 'update')!.args[0] as Record<string, unknown>,
+      filters: c.calls.filter((call) => call.method === 'eq' || call.method === 'is').map((call) => [call.method, ...call.args]),
+    }))
 }
 
 const POSTED_VOUCHER = { id: 'je-1', entry_date: '2026-05-10', status: 'posted' }
@@ -56,6 +85,7 @@ function enqueueManualLinkSuccess(
   enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: null, amount: txAmount, currency: 'SEK' }) })
   enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
   enqueue({ data: [{ debit_amount: Math.max(txAmount, 0), credit_amount: Math.max(-txAmount, 0), account_number: '1930' }] })
+  enqueue({ data: [] }, { data: [] }) // the room check: no bank_line slice, no pointer (GitHub #3507)
   enqueue({ data: [{ id: 'tx-1' }] }) // update: .select('id') returns the updated row
 }
 
@@ -67,7 +97,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
 
   it('links the single matching unbooked transaction for a customer payment (income)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] }) // 1. no tx already reconciled to the voucher
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER }) // 2. voucher
     enqueue({ data: [ // 3. lines: one 1930 debit + the 1510 credit
       { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
@@ -84,9 +114,68 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     expect(result).toEqual({ linkedTransactionId: 'tx-1' })
   })
 
+  it('skips a row booked through a bank_line link: it has no pointer, and one written here would anchor it to a second verifikat', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [] }, { data: [] }) // nobody holds the voucher
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ] })
+    enqueue({ data: [SEK_PRIMARY] })
+    enqueue({ data: [{ id: 'tx-1', amount: 1000, transaction_voucher_links: [{ role: 'bank_line' }] }] })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+  })
+
+  it('still links a row whose only link is a supplementary one: a residual is not the booking of the bank line', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [] }, { data: [] })
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+    ] })
+    enqueue({ data: [SEK_PRIMARY] })
+    enqueue({ data: [{ id: 'tx-1', amount: 1000, transaction_voucher_links: [{ role: 'other' }] }] })
+    enqueueManualLinkSuccess(enqueue, 1000)
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toEqual({ linkedTransactionId: 'tx-1' })
+  })
+
+  it("leaves the row's underlag on the row: a guessed link never makes its receipt that verifikat's for good (crm#1101)", async () => {
+    // An anchored document stays the verifikat's underlag, and Koppla bort
+    // only clears the row's pointer, so a wrong guess could not free it.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: [
+      { account_number: '2440', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ] })
+    enqueue({ data: [SEK_PRIMARY] })
+    enqueue({ data: [{ id: 'tx-1', amount: -1000 }] })
+    enqueueManualLinkSuccess(enqueue, -1000)
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-1' },
+    )
+
+    expect(result).toEqual({ linkedTransactionId: 'tx-1' })
+    expect(propagateUnderlag).not.toHaveBeenCalled()
+  })
+
   it('links the single matching unbooked transaction for a supplier payment (expense)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [ // 2440 debit + 1930 credit (money out)
       { account_number: '2440', debit_amount: 1000, credit_amount: 0 },
@@ -103,20 +192,175 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     expect(result).toEqual({ linkedTransactionId: 'tx-1' })
   })
 
-  it('does nothing when a transaction is already reconciled to the voucher', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [{ id: 'tx-existing' }] }) // voucher already has a bank line
+  // ------------------------------------------------------------------
+  // A row already holds the voucher (a sweep, a typed verifikat linked at
+  // posting): never a second link, but the holder gets the invoice tag the
+  // link writes, when that is unambiguous (#204).
+  // ------------------------------------------------------------------
+
+  const INCOME_LINES = [
+    { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '1510', debit_amount: 0, credit_amount: 1000 },
+  ]
+  const EXPENSE_LINES = [
+    { account_number: '2440', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+  ]
+
+  /** Holders read (one pointer holder), voucher, lines, cash accounts. */
+  function enqueueHeldVoucher(
+    enqueue: ReturnType<typeof createQueueMockSupabase>['enqueue'],
+    amount: number,
+    lines: Array<Record<string, unknown>>,
+  ) {
+    enqueue({ data: [] }) // no bank_line slice
+    enqueue({ data: [{ id: 'tx-existing', journal_entry_id: 'je-1', amount, currency: 'SEK', cash_account_id: CA_1930 }] }) // a pointer
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: lines })
+    enqueue({ data: [SEK_PRIMARY] })
+  }
+
+  it.each([
+    {
+      kind: 'customer invoice',
+      amount: 1000,
+      lines: INCOME_LINES,
+      options: { invoiceId: 'inv-1' },
+      tag: { invoice_id: 'inv-1', potential_invoice_id: null, potential_rot_rut_payout_request_id: null },
+    },
+    {
+      kind: 'supplier invoice',
+      amount: -1000,
+      lines: EXPENSE_LINES,
+      options: { supplierInvoiceId: 'si-1' },
+      tag: {
+        supplier_invoice_id: 'si-1',
+        potential_invoice_id: null,
+        potential_supplier_invoice_id: null,
+        potential_rot_rut_payout_request_id: null,
+      },
+    },
+  ])('tags the untagged row that already holds the voucher with the $kind, without linking anything', async ({ amount, lines, options, tag }) => {
+    const { supabase, enqueue, chains } = createQueueMockSupabase()
+    enqueueHeldVoucher(enqueue, amount, lines)
+    enqueue({ data: { journal_entry_id: 'je-1', invoice_id: null, supplier_invoice_id: null, transaction_voucher_links: [] } })
+    enqueue({ data: [{ id: 'tx-existing' }] }) // the tag update
+    enqueue({ data: null }) // payment_match_log insert
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', options,
+    )
+
+    // Nothing was linked by this call: the caller does not report a reconciled row.
+    expect(result).toBeNull()
+    const updates = transactionUpdates(chains)
+    expect(updates).toHaveLength(1)
+    expect(updates[0].values).toEqual(tag)
+    // The write repeats the conditions it was decided on.
+    expect(updates[0].filters).toEqual(expect.arrayContaining([
+      ['eq', 'id', 'tx-existing'],
+      ['eq', 'company_id', 'company-1'],
+      ['eq', 'journal_entry_id', 'je-1'],
+      ['is', 'invoice_id', null],
+      ['is', 'supplier_invoice_id', null],
+    ]))
+    // No candidate search, no second link.
+    expect(chains.some((c) => c.table === 'open_bank_rows')).toBe(false)
+    const audit = chains.find((c) => c.table === 'payment_match_log')
+    expect(audit?.calls.find((call) => call.method === 'insert')?.args[0]).toEqual(expect.objectContaining({
+      transaction_id: 'tx-existing',
+      action: 'linked_to_existing_voucher',
+    }))
+  })
+
+  it.each([
+    { kind: 'another customer invoice', state: { invoice_id: 'inv-other', supplier_invoice_id: null } },
+    { kind: 'a supplier invoice', state: { invoice_id: null, supplier_invoice_id: 'si-other' } },
+  ])('leaves a row that already carries $kind as its tag untouched', async ({ state }) => {
+    const { supabase, enqueue, chains } = createQueueMockSupabase()
+    enqueueHeldVoucher(enqueue, 1000, INCOME_LINES)
+    enqueue({ data: { journal_entry_id: 'je-1', ...state, transaction_voucher_links: [] } })
 
     const result = await autoReconcileTransactionForLinkedVoucher(
       supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
     )
 
     expect(result).toBeNull()
+    expect(transactionUpdates(chains)).toHaveLength(0)
+  })
+
+  it.each([
+    {
+      kind: 'its pointer now names another verifikat',
+      state: { journal_entry_id: 'je-2', transaction_voucher_links: [] },
+    },
+    {
+      kind: 'a bank_line slice books it on another verifikat',
+      state: { journal_entry_id: 'je-1', transaction_voucher_links: [{ journal_entry_id: 'je-2', role: 'bank_line' }] },
+    },
+  ])('leaves a row that holds another verifikat untouched: $kind', async ({ state }) => {
+    const { supabase, enqueue, chains } = createQueueMockSupabase()
+    enqueueHeldVoucher(enqueue, 1000, INCOME_LINES)
+    enqueue({ data: { invoice_id: null, supplier_invoice_id: null, ...state } })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+    expect(transactionUpdates(chains)).toHaveLength(0)
+  })
+
+  it('tags nothing when several rows hold the voucher (N:1): which one paid is not known', async () => {
+    const { supabase, enqueue, chains } = createQueueMockSupabase()
+    enqueue({ data: [] }) // no bank_line slice
+    enqueue({ data: [
+      { id: 'tx-a', journal_entry_id: 'je-1', amount: 500, currency: 'SEK', cash_account_id: CA_1930 },
+      { id: 'tx-b', journal_entry_id: 'je-1', amount: 500, currency: 'SEK', cash_account_id: CA_1930 },
+    ] })
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: INCOME_LINES })
+    enqueue({ data: [SEK_PRIMARY] })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+    expect(transactionUpdates(chains)).toHaveLength(0)
+    // Decided on the holders alone: the row is not even read.
+    expect(supabase.from).toHaveBeenCalledTimes(5)
+  })
+
+  it('does not link a second row when a bulk-booked row already holds the voucher through a bank_line slice (GitHub #3507), and tags nothing on it', async () => {
+    // The pointer stays NULL for a samlingsverifikat's rows: the pointer-only
+    // check used to read the voucher as free and attach a second row. A row
+    // holding it only through a slice has no pointer to tag beside.
+    const { supabase, enqueue, chains } = createQueueMockSupabase()
+    enqueue({
+      data: [{
+        transaction_id: 'tx-bulk', journal_entry_id: 'je-1', allocated_amount: 1000,
+        transactions: { amount: 1000, currency: 'SEK', cash_account_id: null },
+      }],
+    })
+    enqueue({ data: [] }) // no pointer
+    enqueue({ data: POSTED_VOUCHER })
+    enqueue({ data: INCOME_LINES })
+    enqueue({ data: [SEK_PRIMARY] })
+    enqueue({ data: { journal_entry_id: null, invoice_id: null, supplier_invoice_id: null, transaction_voucher_links: [{ journal_entry_id: 'je-1', role: 'bank_line' }] } })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+    expect(transactionUpdates(chains)).toHaveLength(0)
+    expect(chains.some((c) => c.table === 'open_bank_rows')).toBe(false)
   })
 
   it('does nothing when the voucher has no cash-account line (AR/AP reclass)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [ // no 19xx line at all
       { account_number: '1510', debit_amount: 1000, credit_amount: 0 },
@@ -133,7 +377,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
 
   it('does nothing when the voucher touches two cash accounts (a transfer)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [
       { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
@@ -150,7 +394,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
 
   it('does nothing when two unbooked transactions match the amount (ambiguous)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [
       { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
@@ -168,7 +412,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
 
   it('does nothing when no candidate matches the bank movement amount', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [
       { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
@@ -193,7 +437,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
 
   it('does NOT link a same-magnitude SEK-figure transaction on a EUR account', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [ // 100 EUR at 11.50 = 1150 SEK in the ledger columns
       { account_number: '1932', debit_amount: 1150, credit_amount: 0, currency: 'EUR', amount_in_currency: 100 },
@@ -219,7 +463,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
 
   it('links the transaction whose EUR amount matches the voucher bank leg', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [
       { account_number: '1932', debit_amount: 1150, credit_amount: 0, currency: 'EUR', amount_in_currency: 100 },
@@ -230,6 +474,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     enqueue({ data: makeTransaction({ id: 'tx-eur', journal_entry_id: null, cash_account_id: null, amount: 100, currency: 'EUR' }) })
     enqueue({ data: { id: 'je-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1150, credit_amount: 0, account_number: '1932' }] })
+    enqueue({ data: [] }, { data: [] }) // the room check: no bank_line slice, no pointer
     enqueue({ data: [{ id: 'tx-eur' }] })
 
     const result = await autoReconcileTransactionForLinkedVoucher(
@@ -244,7 +489,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     // nothing safe to compare, so leave it for the user rather than persist a
     // guess that reads the SEK figure as EUR.
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [
       { account_number: '1932', debit_amount: 1150, credit_amount: 0, currency: 'SEK' },
@@ -269,7 +514,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     // 'EUR' while debit/credit are SEK. The SEK account must reconcile on the
     // SEK columns exactly as before.
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: POSTED_VOUCHER })
     enqueue({ data: [
       { account_number: '2440', debit_amount: 1150, credit_amount: 0 },
@@ -288,7 +533,7 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
 
   it('does nothing when the voucher is not posted', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] })
+    enqueue({ data: [] }, { data: [] }) // 1. nobody holds the voucher: no bank_line slice, no pointer
     enqueue({ data: { id: 'je-1', entry_date: '2026-05-10', status: 'draft' } })
 
     const result = await autoReconcileTransactionForLinkedVoucher(

@@ -68,38 +68,10 @@ import { GET as trialBalance } from '../trial-balance/route'
 import { GET as incomeStatement } from '../income-statement/route'
 import { GET as sieExport } from '../sie-export/route'
 import { GET as vatDeclaration } from '../vat-declaration/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-  count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_t, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const PERIOD_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -129,9 +101,9 @@ beforeEach(() => {
 describe('GET /reports/trial-balance', () => {
   it('returns 400 VALIDATION_ERROR when period_id is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await trialBalance(
@@ -148,9 +120,9 @@ describe('GET /reports/trial-balance', () => {
 
   it('returns 400 VALIDATION_ERROR when period_id is not a UUID', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await trialBalance(
@@ -166,10 +138,10 @@ describe('GET /reports/trial-balance', () => {
 
   it('returns 404 NOT_FOUND when the period belongs to another company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await trialBalance(
@@ -185,7 +157,7 @@ describe('GET /reports/trial-balance', () => {
 
   it('returns the trial-balance from the generator on the happy path', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -197,7 +169,7 @@ describe('GET /reports/trial-balance', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
     mocks.generateTrialBalance.mockResolvedValue({
       rows: [],
@@ -221,7 +193,7 @@ describe('GET /reports/trial-balance', () => {
 
   it('surfaces REPORT_GENERATION_FAILED when the lib throws', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -233,7 +205,7 @@ describe('GET /reports/trial-balance', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
     mocks.generateTrialBalance.mockRejectedValue(new Error('lib crash'))
 
@@ -258,7 +230,7 @@ describe('GET /reports/trial-balance', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await trialBalance(
       makeReq(
@@ -274,7 +246,7 @@ describe('GET /reports/trial-balance', () => {
 describe('GET /reports/balance-sheet', () => {
   it('enriches the generator result with period dates', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -286,7 +258,7 @@ describe('GET /reports/balance-sheet', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
     mocks.generateBalanceSheet.mockResolvedValue({ sections: [], totals: {} })
 
@@ -304,7 +276,7 @@ describe('GET /reports/balance-sheet', () => {
 
   it('maps as_of to the generator toDate and echoes the effective window', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -316,7 +288,7 @@ describe('GET /reports/balance-sheet', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
     mocks.generateBalanceSheet.mockResolvedValue({ sections: [], totals: {} })
 
@@ -340,7 +312,7 @@ describe('GET /reports/balance-sheet', () => {
 
   it('rejects from_date as an unknown parameter (a balance sheet is a position, not a flow)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -352,7 +324,7 @@ describe('GET /reports/balance-sheet', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await balanceSheet(
@@ -371,7 +343,7 @@ describe('GET /reports/balance-sheet', () => {
 
   it('returns 400 VALIDATION_ERROR when both as_of and to_date are passed', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -383,7 +355,7 @@ describe('GET /reports/balance-sheet', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await balanceSheet(
@@ -403,7 +375,7 @@ describe('GET /reports/balance-sheet', () => {
 describe('GET /reports/income-statement', () => {
   it('enriches the generator result with period dates', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -415,7 +387,7 @@ describe('GET /reports/income-statement', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
     mocks.generateIncomeStatement.mockResolvedValue({ sections: [], grossMargin: 0, netResult: 0 })
 
@@ -433,7 +405,7 @@ describe('GET /reports/income-statement', () => {
 
   function mockPeriodClient() {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -445,7 +417,7 @@ describe('GET /reports/income-statement', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
   }
 
@@ -570,7 +542,7 @@ describe('GET /reports/income-statement', () => {
 describe('GET /reports/sie-export', () => {
   it('returns the SIE content with text/plain Content-Type + attachment Content-Disposition', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: {
@@ -586,7 +558,7 @@ describe('GET /reports/sie-export', () => {
           data: { company_name: 'Test AB', org_number: '5566778899' },
           error: null,
         },
-      }),
+      }).supabase,
     )
     mocks.generateSIEExport.mockResolvedValue('#FLAGGA 0\n#PROGRAM Accounted\n')
 
@@ -608,9 +580,9 @@ describe('GET /reports/sie-export', () => {
 describe('GET /reports/vat-declaration', () => {
   it('rejects missing required period_type/year/period', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await vatDeclaration(
@@ -626,9 +598,9 @@ describe('GET /reports/vat-declaration', () => {
 
   it('rejects out-of-range period_type', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await vatDeclaration(
@@ -643,9 +615,9 @@ describe('GET /reports/vat-declaration', () => {
 
   it('passes through to calculateVatDeclaration on the happy path', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     mocks.calculateVatDeclaration.mockResolvedValue({ rutor: { ruta49: 0 } })
 

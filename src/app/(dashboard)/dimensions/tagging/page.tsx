@@ -1,3 +1,4 @@
+import { getTranslations } from 'next-intl/server'
 import { PageHeader } from '@/components/ui/page-header'
 import BulkTagWorkbench from '@/components/dimensions/BulkTagWorkbench'
 
@@ -5,14 +6,13 @@ import BulkTagWorkbench from '@/components/dimensions/BulkTagWorkbench'
  * Bulk retro-tagging workbench (dimensions plan PR6 §3): tag or retag
  * dimensions on already-posted verifikat lines through the audited
  * retag_line_dimensions path. Thin shell; the workbench is client-side.
- *
- * Hardcoded Swedish like the rest of the dimensions/verifikat surface
- * (.claude/rules/i18n.md: operates directly on posted vouchers).
  */
-export default function DimensionTaggingPage() {
+export default async function DimensionTaggingPage() {
+  const t = await getTranslations('dimensions')
+  const tNav = await getTranslations('nav')
   return (
     <div className="space-y-8">
-      <PageHeader title="Tagga historik" />
+      <PageHeader title={t('tag_history')} parent={{ label: tNav('v3_vouchers'), href: '/bookkeeping' }} />
       <BulkTagWorkbench />
     </div>
   )

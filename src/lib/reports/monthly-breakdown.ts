@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import { roundOre } from '@/lib/money'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
+import { excludeYearEndChain, fetchYearEndEntryIds } from './trial-balance'
 
 export interface MonthlyBreakdownMonth {
   label: string
@@ -106,10 +108,16 @@ export function assembleMonthlyBreakdown(
  * Year-end entries are excluded, including the storno/correction chain of a
  * REVERSED year-end entry (an undone bokslut). Without that the resultatavslut,
  * which posts the mirror image of every P&L account, showed the whole year's
- * revenue as negative income in the fiscal-year-end month: measured on
- * production as 28 companies affected, worst case a single month understated by
- * 10 347 472 kr. Mirrors tb_ex_ye_entries in get_kpi_report_aggregates, which
+ * revenue as negative income in the fiscal-year-end month: measured in
+ * real ledgers, worst case a single month understated by millions. Mirrors tb_ex_ye_entries in get_kpi_report_aggregates, which
  * serves the same chart on the no-dimension hot path; the two must agree.
+ *
+ * Without a dimension filter the months come from that RPC itself (its
+ * `monthly`, with no IB entry left out, which is this function's entry set):
+ * it reads ledger_account_days, while summing the lines here paged every
+ * verifikat and line of the period through PostgREST (~550 round trips and
+ * ~2.5 s for a year of 50 000 verifikat). A dimension filter keeps the line
+ * path below, since the daily sums cannot be split by dimension.
  */
 export async function generateMonthlyBreakdown(
   supabase: SupabaseClient,
@@ -122,69 +130,75 @@ export async function generateMonthlyBreakdown(
   }
 ): Promise<MonthlyBreakdown> {
 
-  // Get the fiscal period date range
+  // Get the fiscal period date range. An unknown period is an empty chart;
+  // a failed read is an error, not a chart of zeros.
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
     .select('period_start, period_end')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
-    .single()
+    .maybeSingle()
 
-  if (periodError || !period) {
+  if (periodError) throw dbError(periodError, 'monthly breakdown: fiscal period read failed')
+  if (!period) {
     return { months: [] }
   }
 
-  // Ids of REVERSED year-end entries, company-wide (no period filter): a storno
-  // in this period can reverse a year-end entry from another period. Mirrors the
-  // wave-1 fetch in lib/reports/trial-balance.ts and ye_reversed in
-  // get_kpi_report_aggregates.
-  const reversedYearEndIds = (
-    await fetchAllRows<{ id: string }>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('source_type', 'year_end')
-        .eq('status', 'reversed')
-        .order('id', { ascending: true })
-        .range(from, to)
+  if (!options?.dimensions || Object.keys(options.dimensions).length === 0) {
+    const { data, error } = await supabase.rpc('get_kpi_report_aggregates', {
+      p_company_id: companyId,
+      p_fiscal_period_id: fiscalPeriodId,
+      p_ob_entry_id: null,
+    })
+    if (error) throw dbError(error, 'monthly breakdown: get_kpi_report_aggregates failed')
+    const monthly = ((data as { monthly?: unknown } | null)?.monthly ?? []) as Array<{
+      year: number
+      month: number
+      income: number
+      expenses: number
+    }>
+    return assembleMonthlyBreakdown(
+      period.period_start,
+      period.period_end,
+      monthly.map((m) => ({
+        year: Number(m.year),
+        month0: Number(m.month) - 1,
+        income: Number(m.income) || 0,
+        expenses: Number(m.expenses) || 0,
+      })),
     )
-  ).map((r) => r.id)
+  }
+
+  // Year-end exclusion, the trial balance's 'exclude-all-year-end' set
+  // (fetchYearEndEntryIds), the same set as tb_ex_ye_entries in
+  // get_kpi_report_aggregates: both read year_end_chain_entry_ids.
+  const yearEndEntryIds = await fetchYearEndEntryIds(supabase, companyId, fiscalPeriodId)
 
   // Get all posted and reversed journal entry lines for this period with their
   // entry dates, via the two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts).
+  // A failed read throws: the callers answer 500 instead of drawing an empty chart.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let lines: any[]
-  try {
-    lines = await fetchEntryLines({
-      supabase,
-      entryColumns: 'entry_date, status, company_id, fiscal_period_id',
-      lineColumns: 'account_number, debit_amount, credit_amount',
-      filterEntries: (q: EntryLinesQuery) => {
-        let query = q
+  const lines: any[] = await fetchEntryLines({
+    supabase,
+    entryColumns: 'entry_date, status, company_id, fiscal_period_id',
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      excludeYearEndChain(
+        q
           .eq('fiscal_period_id', fiscalPeriodId)
           .eq('company_id', companyId)
           // posted + reversed: the same set as tb_ex_ye_entries in the RPC.
-          .in('status', ['posted', 'reversed'])
-          .neq('source_type', 'year_end')
-        if (reversedYearEndIds.length > 0) {
-          const idList = `(${reversedYearEndIds.join(',')})`
-          query = query.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
-          query = query.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
-        }
-        return query
-      },
-      filterLines:
-        options?.dimensions && Object.keys(options.dimensions).length > 0
-          ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
-            (q: EntryLinesQuery) => q.contains('dimensions', options.dimensions)
-          : undefined,
-      // The old embed was aliased: journal_entry:journal_entries!inner(...).
-      attachEntriesAs: 'journal_entry',
-    })
-  } catch {
-    return { months: [] }
-  }
+          .in('status', ['posted', 'reversed']),
+        yearEndEntryIds,
+      ),
+    filterLines:
+      options?.dimensions && Object.keys(options.dimensions).length > 0
+        ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
+          (q: EntryLinesQuery) => q.contains('dimensions', options.dimensions)
+        : undefined,
+    // The old embed was aliased: journal_entry:journal_entries!inner(...).
+    attachEntriesAs: 'journal_entry',
+  })
 
   // Sum lines into per-month buckets (raw sums; assembleMonthlyBreakdown
   // rounds once per bucket), keyed year-aware for non-calendar fiscal years.
@@ -213,11 +227,11 @@ export async function generateMonthlyBreakdown(
     } else if (accountClass >= 4 && accountClass <= 7) {
       // Expense accounts: debit side represents expenses
       bucket.expenses += line.debit_amount - line.credit_amount
-    } else if (accountClass === 8 && line.account_number !== '8999') {
+    } else if (accountClass === 8 && !isAretsResultatAccount(line.account_number)) {
       // Financial items (class 8): interest, exchange gains/losses, etc.
-      // 8999 "Årets resultat" is a year-end closing account: its debit/credit
-      // mirrors the computed profit, so including it here would cancel the
-      // period's income-vs-expense signal on the month of closing.
+      // Årets resultat (8990-8999) holds year-end closing omföringar: their
+      // debit/credit mirrors the computed profit, so including them here would
+      // cancel the period's income-vs-expense signal on the month of closing.
       const amount = line.credit_amount - line.debit_amount
       if (amount >= 0) {
         bucket.income += amount

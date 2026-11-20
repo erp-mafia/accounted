@@ -68,13 +68,3 @@ export function getContrastRatio(hexFg: string, hexBg: string): number {
   const darker = Math.min(l1, l2)
   return (lighter + 0.05) / (darker + 0.05)
 }
-
-/**
- * Returns true when the contrast ratio between fg and bg meets WCAG 2.2 AA
- * for normal text (4.5:1). Use this to warn users when their brand color
- * would render text that fails AA on the invoice background (which is
- * effectively white in the current PDF template).
- */
-export function isWcagAACompliant(fg: string, bg: string): boolean {
-  return getContrastRatio(fg, bg) >= 4.5
-}

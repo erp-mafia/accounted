@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Loader2 } from 'lucide-react'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import {
   Select,
   SelectContent,
@@ -25,7 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatRowAmount } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import type { Asset } from '@/types'
 import type {
@@ -33,6 +34,7 @@ import type {
   TaxDepreciationRule as TaxRule,
 } from '@/lib/bokslut/assets/tax-depreciation'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { parseAmountInput } from '@/lib/money'
 
 interface ProposalItem {
   asset: Asset
@@ -108,6 +110,7 @@ export function DepreciationPanel({ periodId, onPosted, onTaxDirtyChange }: Depr
   const [error, setError] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
   const [taxDirty, setTaxDirty] = useState(false)
+  const { canWrite, lockedTitle } = useViewerLock()
 
   const handleTaxDirtyChange = useCallback((dirty: boolean) => {
     setTaxDirty(dirty)
@@ -171,19 +174,22 @@ export function DepreciationPanel({ periodId, onPosted, onTaxDirtyChange }: Depr
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-2">
-          <Skeleton className="h-5 w-1/3" />
-          <Skeleton className="h-20 w-full" />
-        </CardContent>
-      </Card>
+      <LateReveal className="space-y-2">
+        <Skeleton className="h-5 w-1/3" />
+        <Skeleton className="h-20 w-full" />
+      </LateReveal>
     )
+  }
+
+  // Nothing loaded yet: the load failed, say so in place with a retry.
+  if (error && !proposal) {
+    return <LoadError title={error} onRetry={() => void load()} />
   }
 
   if (error) {
     return (
       <Card>
-        <CardContent className="p-6 text-destructive">{error}</CardContent>
+        <CardContent className="text-destructive">{error}</CardContent>
       </Card>
     )
   }
@@ -256,17 +262,17 @@ export function DepreciationPanel({ periodId, onPosted, onTaxDirtyChange }: Depr
               <TableRow key={item.asset.id}>
                 <TableCell className="text-sm">{item.asset.name}</TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {formatCurrency(item.amount)}
+                  {formatRowAmount(item.amount)}
                   {item.proRated && (
-                    <span className="block text-[10px] text-muted-foreground">pro-rata</span>
+                    <span className="block text-xs text-muted-foreground">pro-rata</span>
                   )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {formatCurrency(item.netBookValueAfter)}
+                  {formatRowAmount(item.netBookValueAfter)}
                 </TableCell>
                 <TableCell>
                   {item.existingJournalEntryId ? (
-                    <Badge variant="success">Bokförd</Badge>
+                    <span className="text-xs text-muted-foreground">Bokförd</span>
                   ) : (
                     <Badge variant="outline">Föreslagen</Badge>
                   )}
@@ -278,11 +284,9 @@ export function DepreciationPanel({ periodId, onPosted, onTaxDirtyChange }: Depr
 
         {anyPending && (
           <div className="flex justify-end">
-            <Button onClick={handlePost} disabled={posting || taxDirty}>
+            <Button onClick={handlePost} disabled={!canWrite || taxDirty} loading={posting} title={lockedTitle}>
               {posting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
-                </>
+                'Bokför…'
               ) : (
                 'Bokför alla avskrivningar'
               )}
@@ -321,6 +325,7 @@ function TaxDepreciationCard({
   const [dirty, setDirty] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const { canWrite, lockedTitle } = useViewerLock()
   const [saveError, setSaveError] = useState<string | null>(null)
   const requestVersion = useRef(0)
   const saveSequence = useRef(0)
@@ -369,8 +374,8 @@ function TaxDepreciationCard({
       setSaveError('Ange skattemässigt värde vid årets ingång.')
       return null
     }
-    const opening = Number(openingValue.replace(',', '.'))
-    if (!Number.isFinite(opening) || opening < 0) {
+    const opening = parseAmountInput(openingValue)
+    if (opening === null || opening < 0) {
       setSaveError('Ange ett ingående skattemässigt värde på 0 kr eller mer.')
       return null
     }
@@ -427,8 +432,8 @@ function TaxDepreciationCard({
       setSaveError('Ange årets faktiska skattemässiga avdrag.')
       return
     }
-    const deduction = Number(electedDeduction.replace(',', '.'))
-    if (!Number.isFinite(deduction) || deduction < 0) {
+    const deduction = parseAmountInput(electedDeduction)
+    if (deduction === null || deduction < 0) {
       setSaveError('Årets faktiska avdrag måste vara 0 kr eller mer.')
       return
     }
@@ -585,7 +590,7 @@ function TaxDepreciationCard({
         </div>
 
         {dirty && !preview && (
-          <p className="rounded-lg border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+          <p className="rounded-lg p-3 text-sm text-muted-foreground bg-control shadow-raised">
             Inställningarna är ändrade. Beräkna förslaget för att se rätt gränsbelopp innan du
             sparar.
           </p>
@@ -593,7 +598,7 @@ function TaxDepreciationCard({
 
         {result && (
           <>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg border border-border bg-muted/20 p-4 text-sm sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg p-4 text-sm sm:grid-cols-3 bg-control shadow-raised">
               <TaxValue label="Ingående värde" value={result.openingTaxValue} />
               <TaxValue label="Årets anskaffningar" value={result.additions} />
               <TaxValue label="Årets avyttringar" value={-result.disposals} />
@@ -607,7 +612,7 @@ function TaxDepreciationCard({
             </div>
             {method === 'rakenskapsenlig' && (
               <div className="space-y-2">
-                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <p className="text-xs font-medium text-muted-foreground">
                   Jämförelse
                 </p>
                 {result.alternatives.map((alternative) => (
@@ -640,7 +645,7 @@ function TaxDepreciationCard({
               </div>
             )}
             {dirty && method === 'rakenskapsenlig' && (
-              <div className="flex items-start gap-2 rounded-lg border border-border p-3">
+              <div className="flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised">
                 <Checkbox
                   id="tax-book-conformity"
                   checked={bookConformityConfirmed}
@@ -691,27 +696,27 @@ function TaxDepreciationCard({
               variant="outline"
               onClick={loadPreview}
               disabled={
-                previewing
-                || saving
+                saving
                 || formBlocked
               }
+              loading={previewing}
               className="w-full sm:w-auto"
             >
-              {previewing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Beräkna förslag
             </Button>
             <Button
               type="button"
               onClick={save}
+              title={lockedTitle}
               disabled={
-                saving
+                !canWrite
                 || !dirty
                 || !result
                 || formBlocked
               }
+              loading={saving}
               className="w-full sm:w-auto"
             >
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Spara faktiskt avdrag
             </Button>
           </div>

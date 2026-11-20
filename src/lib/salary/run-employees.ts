@@ -3,19 +3,24 @@
  *
  * Single source of truth consumed by the internal dashboard routes
  * (app/api/salary/runs/[id]/employees/**) and the v1 REST routes. Attaching
- * snapshots the employee's pay config onto salary_run_employees (so later
- * employee edits don't retroactively change an open run) and seeds the base
- * salary line item.
+ * copies the employee's pay config onto salary_run_employees and seeds the
+ * base salary line item. In a draft the calculation prices the employee's
+ * live pay type, rate, degree and tax table; the row's monthly salary is the
+ * one per-run figure (a salary typed in the run), and it follows a corrected
+ * employee salary until one is typed (followEmployeeSalaryInDraftRuns).
+ * An approved or booked run keeps what it was calculated with.
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { roundOre } from '@/lib/money'
 import { degreeAdjustedMonthlySalary } from '@/lib/salary/work-schedule'
-import { SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
-import type { SalaryLineItemType } from '@/types'
+import { runDeviationWindow } from '@/lib/salary/deviation-period'
+import { HOURS_WORKED_MAX, SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
+import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from '@/lib/salary/base-salary-line'
+import { invalidateRunCalculation } from '@/lib/salary/invalidate-calculation'
+import { baseSalaryLineType, payslipLineFlags } from '@/lib/salary/line-item-roles'
 
 export type RunEmployeeResult<T> =
   | { ok: true; data: T }
@@ -36,14 +41,23 @@ export interface SalaryRunEmployeeRow {
   updated_at: string
 }
 
+interface DraftRunGate {
+  id: string
+  status: string
+  period_year: number
+  period_month: number
+  deviation_period_start?: string | null
+  deviation_period_end?: string | null
+}
+
 async function assertRunDraftForRoster(
   supabase: SupabaseClient,
   companyId: string,
   salaryRunId: string,
-): Promise<RunEmployeeResult<{ id: string; status: string }>> {
+): Promise<RunEmployeeResult<DraftRunGate>> {
   const { data: run, error } = await supabase
     .from('salary_runs')
-    .select('id, status')
+    .select('id, status, period_year, period_month, deviation_period_start, deviation_period_end')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -61,7 +75,7 @@ async function assertRunDraftForRoster(
       details: { current_status: (run as { status: string }).status },
     }
   }
-  return { ok: true, data: run as { id: string; status: string } }
+  return { ok: true, data: run as DraftRunGate }
 }
 
 export async function addEmployeeToRun(
@@ -129,7 +143,7 @@ export async function addEmployeeToRun(
     employee_id: emp.id,
     company_id: args.companyId,
     employment_degree: emp.employment_degree,
-    monthly_salary: emp.monthly_salary || 0,
+    monthly_salary: runMonthlySalaryFor(emp),
     salary_type: emp.salary_type,
     hours_worked: args.hoursWorked ?? null,
     tax_table_number: emp.tax_table_number,
@@ -157,8 +171,7 @@ export async function addEmployeeToRun(
 
   // Seed the base salary line so the run displays a sensible gross before
   // the first :calculate.
-  const baseSalaryType: SalaryLineItemType =
-    emp.salary_type === 'monthly' ? 'monthly_salary' : 'hourly_salary'
+  const baseSalaryType = baseSalaryLineType(emp.salary_type)
   const baseAmount =
     emp.salary_type === 'monthly'
       ? degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
@@ -172,10 +185,8 @@ export async function addEmployeeToRun(
     quantity: emp.salary_type === 'hourly' ? args.hoursWorked ?? null : null,
     unit_price: emp.salary_type === 'hourly' ? emp.hourly_rate : null,
     amount: baseAmount,
-    is_taxable: true,
-    is_avgift_basis: true,
-    is_vacation_basis: true,
-    account_number: getLineItemAccount(baseSalaryType, emp.employment_type as never),
+    ...payslipLineFlags(baseSalaryType),
+    account_number: null,
     sort_order: 0,
   })
 
@@ -193,6 +204,11 @@ export interface SetRunSalaryData {
   employment_degree: number
   previous_monthly_salary: number
   monthly_salary: number
+  /** Hourly employees: the per-run hours before and after this change. */
+  previous_hours_worked: number | null
+  hours_worked: number | null
+  /** Hourly employees: the rate the Timlön display line is priced at. */
+  hourly_rate: number | null
 }
 
 /**
@@ -208,18 +224,32 @@ export async function setRunEmployeeSalary(
     companyId: string
     salaryRunId: string
     employeeId: string
-    monthlySalary: number
+    /** Monthly-paid employees: this run's gross base salary. */
+    monthlySalary?: number
+    /** Hourly-paid employees: this run's hours (only when the period has no
+     * calendar days, which the calculation would otherwise derive from). */
+    hoursWorked?: number
     /** Validate + resolve only; return the would-be change without writing. */
     dryRun?: boolean
   },
 ): Promise<RunEmployeeResult<SetRunSalaryData>> {
-  // Single enforcement point for the salary bound: the cookie route's Zod
-  // schema, the v1 body schema and the MCP tool all funnel through here. The
+  const hasMonthly = args.monthlySalary !== undefined
+  const hasHours = args.hoursWorked !== undefined
+  if (hasMonthly === hasHours) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { message: 'Pass exactly one of monthly_salary or hours_worked' },
+    }
+  }
+  // Single enforcement point for the bounds: the cookie route's Zod schema,
+  // the v1 body schema and the MCP tool all funnel through here. The salary
   // cap also keeps roundOre far away from Infinity (1e307 * 100 overflows).
   if (
-    !Number.isFinite(args.monthlySalary) ||
-    args.monthlySalary < 0 ||
-    args.monthlySalary > SALARY_OVERRIDE_MAX
+    hasMonthly &&
+    (!Number.isFinite(args.monthlySalary) ||
+      (args.monthlySalary as number) < 0 ||
+      (args.monthlySalary as number) > SALARY_OVERRIDE_MAX)
   ) {
     return {
       ok: false,
@@ -227,14 +257,26 @@ export async function setRunEmployeeSalary(
       details: { field: 'monthly_salary', max: SALARY_OVERRIDE_MAX },
     }
   }
+  if (
+    hasHours &&
+    (!Number.isFinite(args.hoursWorked) ||
+      (args.hoursWorked as number) < 0 ||
+      (args.hoursWorked as number) > HOURS_WORKED_MAX)
+  ) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'hours_worked', max: HOURS_WORKED_MAX },
+    }
+  }
   const gate = await assertRunDraftForRoster(supabase, args.companyId, args.salaryRunId)
   if (!gate.ok) return gate
 
-  const monthly = roundOre(args.monthlySalary)
-
   const { data: sre, error: sreError } = await supabase
     .from('salary_run_employees')
-    .select('id, employee_id, salary_type, employment_degree, monthly_salary')
+    .select(
+      'id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked, employee:employees(salary_type, employment_type)',
+    )
     .eq('salary_run_id', args.salaryRunId)
     .eq('employee_id', args.employeeId)
     .eq('company_id', args.companyId)
@@ -257,31 +299,134 @@ export async function setRunEmployeeSalary(
     salary_type: string
     employment_degree: number
     monthly_salary: number
+    hours_worked: number | null
+    employee?: { salary_type?: string | null; employment_type?: string | null } | null
+  }
+
+  // The run is a draft (gated above), and the calculation prices the
+  // employee's LIVE pay type: the row's salary_type is only the snapshot
+  // taken when the employee joined the run. Check against the live type, so
+  // an employee moved from hourly to monthly pay since then is not refused
+  // the field that matches how they are paid now (agent feedback seq 869949).
+  const salaryType = row.employee?.salary_type || row.salary_type
+  const snapshotStale = salaryType !== row.salary_type
+
+  // The field must match how the employee is paid: a monthly figure on an
+  // hourly row would be ignored by the engine (hourly gross = rate x hours)
+  // and hours on a monthly row would never price anything.
+  if ((hasMonthly && salaryType !== 'monthly') || (hasHours && salaryType !== 'hourly')) {
+    return {
+      ok: false,
+      code: 'SALARY_RUN_SALARY_FIELD_MISMATCH',
+      details: { salary_type: salaryType },
+    }
+  }
+
+  const monthly = hasMonthly ? roundOre(args.monthlySalary as number) : row.monthly_salary
+  const hours = hasHours ? roundOre(args.hoursWorked as number) : row.hours_worked
+  let hourlyRate: number | null = null
+
+  if (hasHours) {
+    // Calendar days win at calculation time (run-calculation derives
+    // hours_worked from salary_worked_days in the run's avvikelseperiod), so
+    // a per-run override would be silently discarded. Refuse on any calendar
+    // row, even a zero-hour one: once the period is kept in the calendar the
+    // calendar is the source of truth, and the next row entered there would
+    // replace this override without warning.
+    const window = runDeviationWindow(gate.data)
+    const { data: workedDays, error: workedError } = await supabase
+      .from('salary_worked_days')
+      .select('hours')
+      .eq('company_id', args.companyId)
+      .eq('employee_id', args.employeeId)
+      .gte('work_date', window.start)
+      .lte('work_date', window.end)
+    if (workedError) {
+      return { ok: false, code: 'INTERNAL_ERROR', details: { message: workedError.message } }
+    }
+    const calendarRows = (workedDays ?? []) as Array<{ hours: number | string }>
+    if (calendarRows.length > 0) {
+      const calendarHours = calendarRows.reduce((sum, d) => roundOre(sum + Number(d.hours)), 0)
+      return {
+        ok: false,
+        code: 'SALARY_RUN_HOURS_FROM_CALENDAR',
+        details: { calendar_hours: calendarHours, period_start: window.start, period_end: window.end },
+      }
+    }
+
+    const { data: employee, error: empError } = await supabase
+      .from('employees')
+      .select('hourly_rate')
+      .eq('id', args.employeeId)
+      .eq('company_id', args.companyId)
+      .maybeSingle()
+    if (empError) {
+      return { ok: false, code: 'INTERNAL_ERROR', details: { message: empError.message } }
+    }
+    hourlyRate = (employee as { hourly_rate: number | null } | null)?.hourly_rate ?? null
+    // Without a rate the calculation refuses the row anyway; accepting the
+    // hours here would write a zero Timlön line and report success.
+    if (hourlyRate === null || !Number.isFinite(Number(hourlyRate))) {
+      return { ok: false, code: 'SALARY_RUN_HOURLY_RATE_MISSING', details: { employee_id: args.employeeId } }
+    }
   }
 
   const data: SetRunSalaryData = {
     salary_run_employee_id: row.id,
     employee_id: row.employee_id,
-    salary_type: row.salary_type,
+    salary_type: salaryType,
     employment_degree: row.employment_degree,
     previous_monthly_salary: row.monthly_salary,
     monthly_salary: monthly,
+    previous_hours_worked: row.hours_worked,
+    hours_worked: hours,
+    hourly_rate: hourlyRate,
   }
 
   if (args.dryRun) {
     return { ok: true, data }
   }
 
-  // Clearing calculation_breakdown is what makes a stale booking impossible:
-  // both book preflights (MCP gnubok_book_salary_run and the v1/UI path via
-  // advanceAndBookSalaryRun) refuse roster rows without a breakdown, so a
-  // salary change after a calculation forces a recalculation before booking
-  // instead of silently booking gross/tax derived from the old salary.
-  const { error: updError } = await supabase
-    .from('salary_run_employees')
-    .update({ monthly_salary: monthly, calculation_breakdown: null })
-    .eq('id', row.id)
-    .eq('company_id', args.companyId)
+  // This month's salary or hours is an input: approve and book refuse the row
+  // until a calculation has run against it.
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunEmployeeId: row.id })
+  if (invalidated) return invalidated
+
+  // Refresh the stale snapshot and swap the Grundlön/Timlön display line
+  // before the write below prices it.
+  if (snapshotStale) {
+    const { error: refreshError } = await refreshRunEmployeeSalaryType(supabase, {
+      companyId: args.companyId,
+      salaryRunEmployeeId: row.id,
+      salaryType,
+      // A monthly figure is written right below; hourly pay has none.
+      monthlySalary: hasMonthly ? monthly : 0,
+      amount: 0,
+      quantity: null,
+      unitPrice: null,
+    })
+    if (refreshError) {
+      return {
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        details: { message: refreshError.message, code: refreshError.code },
+      }
+    }
+  }
+
+  // Two literal payloads (not one conditional expression) so the
+  // no-phantom-columns scanner can resolve every column statically.
+  const { error: updError } = hasHours
+    ? await supabase
+        .from('salary_run_employees')
+        .update({ hours_worked: hours })
+        .eq('id', row.id)
+        .eq('company_id', args.companyId)
+    : await supabase
+        .from('salary_run_employees')
+        .update({ monthly_salary: monthly })
+        .eq('id', row.id)
+        .eq('company_id', args.companyId)
 
   if (updError) {
     return {
@@ -297,7 +442,7 @@ export async function setRunEmployeeSalary(
   // must not fail the request: the salary write above has already committed,
   // and reporting failure for an applied change is worse than a briefly stale
   // display row (matches the pre-refactor route behavior).
-  if (row.salary_type === 'monthly') {
+  if (hasMonthly) {
     const baseAmount = roundOre(monthly * (row.employment_degree / 100))
     await supabase
       .from('salary_line_items')
@@ -305,9 +450,89 @@ export async function setRunEmployeeSalary(
       .eq('salary_run_employee_id', row.id)
       .eq('company_id', args.companyId)
       .eq('item_type', 'monthly_salary')
+  } else {
+    const baseAmount = roundOre((hourlyRate || 0) * (hours || 0))
+    await supabase
+      .from('salary_line_items')
+      .update({ amount: baseAmount, quantity: hours, unit_price: hourlyRate })
+      .eq('salary_run_employee_id', row.id)
+      .eq('company_id', args.companyId)
+      .eq('item_type', 'hourly_salary')
   }
 
   return { ok: true, data }
+}
+
+/**
+ * Carry a corrected monthly salary from the employee to the DRAFT runs that
+ * still start from the old one (crm#1337). A draft row whose monthly salary
+ * equals the employee's previous salary has had no salary of its own typed
+ * in the run, so it takes the new one; a row with any other figure was set
+ * in the run deliberately (a different month, a nollkörning) and is kept.
+ * Without this the run kept the figure the employee was added with, and
+ * the run and the employee card disagreed until the run row was edited by
+ * hand. Hourly rows are left out: they have no monthly salary, and a row
+ * whose pay type changed takes the employee's at its next calculation.
+ *
+ * Compare-and-set in one statement, so a salary typed in the run meanwhile
+ * is never overwritten. The caller has cleared the calculation
+ * (updateEmployee: invalidate-calculation.ts), as a per-run salary edit
+ * clears it, so booking needs a recalculation first. Approved and booked
+ * runs are never touched.
+ */
+export async function followEmployeeSalaryInDraftRuns(
+  supabase: SupabaseClient,
+  args: {
+    companyId: string
+    employeeId: string
+    previous: { salary_type?: unknown; monthly_salary?: unknown }
+    current: { salary_type?: unknown; monthly_salary?: unknown; employment_degree?: unknown }
+  },
+): Promise<RunEmployeeResult<{ salary_run_employee_ids: string[] }>> {
+  const none = { ok: true as const, data: { salary_run_employee_ids: [] } }
+  if (args.current.salary_type !== 'monthly') return none
+  const previousSalary = roundOre(Number(args.previous.monthly_salary) || 0)
+  const salary = roundOre(Number(args.current.monthly_salary) || 0)
+  if (salary === previousSalary || salary <= 0) return none
+
+  const { data: drafts, error: draftError } = await supabase
+    .from('salary_runs')
+    .select('id')
+    .eq('company_id', args.companyId)
+    .eq('status', 'draft')
+  if (draftError) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: draftError.message } }
+  }
+  const draftRunIds = ((drafts ?? []) as Array<{ id: string }>).map((r) => r.id)
+  if (draftRunIds.length === 0) return none
+
+  const { data: followed, error: followError } = await supabase
+    .from('salary_run_employees')
+    .update({ monthly_salary: salary })
+    .eq('company_id', args.companyId)
+    .eq('employee_id', args.employeeId)
+    .in('salary_run_id', draftRunIds)
+    .eq('salary_type', 'monthly')
+    .eq('monthly_salary', previousSalary)
+    .select('id')
+  if (followError) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: followError.message } }
+  }
+  const ids = ((followed ?? []) as Array<{ id: string }>).map((r) => r.id)
+  if (ids.length === 0) return none
+
+  // The Grundlön display line, as the per-run salary edit keeps it. Display
+  // only (the calculation prices the row's monthly salary and rewrites this
+  // line), so a failure here does not undo the salary that now follows.
+  const degree = args.current.employment_degree == null ? null : Number(args.current.employment_degree)
+  await supabase
+    .from('salary_line_items')
+    .update({ amount: degreeAdjustedMonthlySalary(salary, Number.isFinite(degree) ? degree : null) })
+    .in('salary_run_employee_id', ids)
+    .eq('company_id', args.companyId)
+    .eq('item_type', 'monthly_salary')
+
+  return { ok: true, data: { salary_run_employee_ids: ids } }
 }
 
 export async function removeEmployeeFromRun(
@@ -341,6 +566,10 @@ export async function removeEmployeeFromRun(
   if (args.dryRun) {
     return { ok: true, data: { deleted: true, employee_id: args.employeeId } }
   }
+
+  // The roster is an input: the run's totals still hold this employee.
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, { salaryRunId: args.salaryRunId })
+  if (invalidated) return invalidated
 
   // Cascades to salary_line_items via ON DELETE CASCADE.
   const { error } = await supabase

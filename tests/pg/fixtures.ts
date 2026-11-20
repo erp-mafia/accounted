@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { BankBookingContext } from '@/types'
+import type { BankBookingContext, EntityType } from '@/types'
 import { getPool } from './setup'
 import type { PoolClient } from 'pg'
 
@@ -29,7 +29,7 @@ export async function insertAuthUser(id: string = randomUUID()): Promise<string>
 export async function insertCompany(params: {
   createdBy: string
   name?: string
-  entityType?: 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
+  entityType?: EntityType
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
@@ -43,12 +43,26 @@ export async function insertCompany(params: {
 export async function insertCompanyMember(params: {
   companyId: string
   userId: string
-  role?: 'owner' | 'admin' | 'member' | 'viewer'
+  role?: 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
 }): Promise<void> {
   await getPool().query(
     `INSERT INTO public.company_members (company_id, user_id, role)
      VALUES ($1, $2, $3)`,
     [params.companyId, params.userId, params.role ?? 'owner'],
+  )
+}
+
+/**
+ * Point the user's active company at companyId. RLS reads it through
+ * current_active_company_id(), so inside withUserContext(userId) a policy
+ * scoped to the active company sees this company.
+ */
+export async function setActiveCompany(userId: string, companyId: string): Promise<void> {
+  await getPool().query(
+    `INSERT INTO public.user_preferences (user_id, active_company_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
+    [userId, companyId],
   )
 }
 
@@ -107,7 +121,7 @@ export async function insertCashAccount(params: {
   externalUid?: string | null
   isPrimary?: boolean
   enabled?: boolean
-  source?: 'enable_banking' | 'manual' | 'sie_import'
+  source?: 'enable_banking' | 'open_payments' | 'manual' | 'sie_import'
   bankConnectionId?: string | null
 }): Promise<string> {
   const id = randomUUID()
@@ -357,4 +371,26 @@ export async function insertBalancedLines(
             ($1, '3001', 0, $2)`,
     [journalEntryId, amount],
   )
+}
+
+/**
+ * Runs `fn` with public.stockholm_today() standing on `day`, so a test stands
+ * on a due date, the day after it or a New Year's night whenever it runs. The
+ * stand-in is committed, so every pooled client sees the same day, and the real
+ * definition goes back afterwards; the pg-real files run one at a time.
+ */
+export async function withSwedishToday<T>(day: string, fn: () => Promise<T>): Promise<T> {
+  const pool = getPool()
+  const { rows } = await pool.query<{ def: string }>(
+    `SELECT pg_get_functiondef('public.stockholm_today()'::regprocedure) AS def`,
+  )
+  await pool.query(
+    `CREATE OR REPLACE FUNCTION public.stockholm_today() RETURNS date LANGUAGE sql STABLE
+     AS $function$ SELECT '${day}'::date $function$`,
+  )
+  try {
+    return await fn()
+  } finally {
+    await pool.query(rows[0]!.def)
+  }
 }

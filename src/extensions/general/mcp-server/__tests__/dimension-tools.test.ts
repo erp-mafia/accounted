@@ -9,9 +9,17 @@
  * idempotency) lives in lib/pending-operations/__tests__/.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The filed-momsperiod note (lib/pending-operations/filed-vat-note.ts) reads
+// the filing record at staging: none here, so the stubbed reads stay the
+// tool's own. Its own tests and staging-approval-path.test.ts pin it.
+vi.mock('@/lib/pending-operations/filed-vat-note', () => ({
+  stagedFiledVatNote: async () => null,
+}))
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { tools } from '../server'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import {
   resolveValueInDimension,
   resolveDimensionBags,
@@ -20,6 +28,42 @@ import {
   parseDimensionsArg,
   type DimensionRegistryEntry,
 } from '../dimensions'
+
+// Real detector by default; the bulk-book staging tests stub one "no
+// duplicate" answer per row so their queued mocks stay about dimensions.
+// The momsdeklaration impact has its own tests
+// (src/lib/vat/__tests__/voucher-vat-impact.test.ts); here it is a fixed
+// answer so the queued reads below stay the tool's own.
+// The booking-time voucher warnings have their own tests
+// (lib/bookkeeping/__tests__/voucher-*.test.ts); here they pass, so the
+// queued mock answers stay in step.
+const mockVoucherGuard = vi.hoisted(() => vi.fn())
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the booking.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
+vi.mock('@/lib/bookkeeping/voucher-warnings-guard', () => ({
+  runVoucherWarningsGuard: (...args: unknown[]) => mockVoucherGuard(...args),
+  recordVoucherWarningsAcknowledged: vi.fn(),
+}))
+
+vi.mock('@/lib/vat/voucher-vat-impact', () => ({
+  previewVoucherVatDeclaration: vi.fn().mockResolvedValue({
+    status: 'ok', vat_period: null, counted: true, excluded_as: null, rutor_change: {},
+    summary: 'Påverkar ingen ruta i momsdeklarationen.',
+  }),
+}))
+
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()
+  return { ...actual, detectBookingDuplicate: vi.fn(actual.detectBookingDuplicate) }
+})
+
+function noDuplicateFor(rows: number) {
+  for (let i = 0; i < rows; i++) vi.mocked(detectBookingDuplicate).mockResolvedValueOnce(null)
+}
 
 const listDimensions = tools.find((t) => t.name === 'gnubok_list_dimensions')!
 const listDimensionValues = tools.find((t) => t.name === 'gnubok_list_dimension_values')!
@@ -30,6 +74,8 @@ const categorizeTransaction = tools.find((t) => t.name === 'gnubok_categorize_tr
 const bulkBookTransactions = tools.find((t) => t.name === 'gnubok_bulk_book_transactions')!
 
 beforeEach(() => {
+  mockVoucherGuard.mockReset()
+  mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: [] })
   vi.clearAllMocks()
 })
 
@@ -77,6 +123,7 @@ function makeDim(overrides: Partial<DimensionRegistryEntry> = {}): DimensionRegi
     id: 'dim-6',
     sie_dim_no: 6,
     name: 'Projekt',
+    parent_sie_dim_no: null,
     resets_annually: false,
     is_system: true,
     is_active: true,
@@ -97,8 +144,8 @@ describe('dimension tools registration', () => {
     expect(listDimensions).toBeDefined()
     expect(listDimensionValues).toBeDefined()
     expect(createDimensionValue).toBeDefined()
-    expect(TOOL_SCOPE_MAP.gnubok_list_dimensions).toBe('reports:read')
-    expect(TOOL_SCOPE_MAP.gnubok_list_dimension_values).toBe('reports:read')
+    expect(TOOL_SCOPE_MAP.gnubok_list_dimensions).toBe('dimensions:read')
+    expect(TOOL_SCOPE_MAP.gnubok_list_dimension_values).toBe('dimensions:read')
     expect(TOOL_SCOPE_MAP.gnubok_create_dimension_value).toBe('bookkeeping:write')
   })
 
@@ -151,6 +198,51 @@ describe('gnubok_list_dimensions', () => {
     await expect(
       listDimensions.execute({}, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/rls denied/)
+  })
+
+  it('reads every value past the first 1000 and names the parent of a sub-dimension', async () => {
+    // Regression: the MCP copy of the registry read had no .range() paging,
+    // so PostgREST stopped at 1000 values while the register page (and v1)
+    // listed them all. Five companies have more than 1000.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({
+      data: [
+        { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', parent_sie_dim_no: null, resets_annually: false, is_system: true, is_active: true, sort_order: 20 },
+        { id: 'dim-20', sie_dim_no: 20, name: 'Etapp', parent_sie_dim_no: 6, resets_annually: false, is_system: false, is_active: true, sort_order: 100 },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        id: `v${i}`, dimension_id: 'dim-6', code: `P${String(i).padStart(4, '0')}`, name: `Projekt ${i}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+    enqueue({
+      data: [{ id: 'v-late', dimension_id: 'dim-20', code: 'E1', name: 'Etapp 1', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = (await listDimensions.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      dimensions: Array<Record<string, unknown> & { values: Array<{ code: string; dimension_value_id: string }> }>
+    }
+
+    expect(result.dimensions[0].values).toHaveLength(1000)
+    expect(result.dimensions[1].values.map((v) => v.code)).toEqual(['E1'])
+    expect(result.dimensions[1].values[0].dimension_value_id).toBe('v-late')
+    expect(findCalls('dimension_values', 'range')).toEqual([[0, 999], [1000, 1999]])
+    // parent_sie_dim_no rides only on a sub-dimension.
+    expect(result.dimensions[1].parent_sie_dim_no).toBe(6)
+    expect(result.dimensions[0]).not.toHaveProperty('parent_sie_dim_no')
+  })
+
+  it('declares parent_sie_dim_no and keeps its item schemas open', () => {
+    const items = (listDimensions.outputSchema as {
+      properties: { dimensions: { items: { properties: Record<string, unknown>; additionalProperties?: boolean; } } }
+    }).properties.dimensions.items
+    expect(items.properties.parent_sie_dim_no).toBeDefined()
+    expect(items.additionalProperties).toBeUndefined()
   })
 })
 
@@ -211,6 +303,69 @@ describe('gnubok_list_dimension_values', () => {
 
     expect(result.values[0].code).toBe('P001')
     expect(result.values[0].confidence).toBeGreaterThan(0.5)
+  })
+
+  it('pages the listing with offset and says where the next page starts', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false, is_active: true }, error: null })
+    enqueue({
+      data: ['P001', 'P002', 'P003', 'P004', 'P005'].map((code, i) => ({
+        id: `v${i}`, code, name: `Projekt ${code}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+
+    const result = (await listDimensionValues.execute(
+      { sie_dim_no: 6, limit: 2, offset: 2 },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { values: Array<{ code: string }>; count: number; total_count: number; has_more: boolean; next_offset?: number }
+
+    expect(result.values.map((v) => v.code)).toEqual(['P003', 'P004'])
+    expect(result).toMatchObject({ count: 2, total_count: 5, has_more: true, next_offset: 4 })
+  })
+
+  it('omits next_offset on the last page', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false, is_active: true }, error: null })
+    enqueue({
+      data: [{ id: 'v1', code: 'P001', name: 'Villa', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = (await listDimensionValues.execute({ sie_dim_no: 6 }, 'company-1', 'user-1', supabase as never)) as Record<string, unknown>
+
+    expect(result).toMatchObject({ count: 1, total_count: 1, has_more: false })
+    expect(result).not.toHaveProperty('next_offset')
+  })
+
+  it('finds a value past row 1000: the fuzzy search ranks the whole dimension', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt', resets_annually: false, is_active: true }, error: null })
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        id: `v${i}`, code: `P${String(i).padStart(4, '0')}`, name: `Löpande projekt ${i}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+    enqueue({
+      data: [{ id: 'v-late', code: 'Z9', name: 'Zinkgruvan ombyggnad', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = (await listDimensionValues.execute(
+      { sie_dim_no: 6, query: 'zinkgruvan' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { values: Array<{ code: string; dimension_value_id: string }> }
+
+    expect(result.values[0]).toMatchObject({ code: 'Z9', dimension_value_id: 'v-late' })
+    expect(findCalls('dimension_values', 'range')).toEqual([[0, 999], [1000, 1999]])
   })
 })
 
@@ -448,6 +603,34 @@ describe('resolveDimensionBags', () => {
       resolveDimensionBags(supabase as never, 'company-1', [{ '12': 'X' }]),
     ).rejects.toThrow(/Okänd dimension 12/)
   })
+
+  it('resolves a code that sits past the first 1000 registry values', async () => {
+    // Regression: the unpaged registry read stopped at 1000 values, so a
+    // legitimate code on page two answered "Okänt projekt" to every
+    // dims-bag write (create_voucher, categorize, bulk_book, retag).
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: null, error: null }) // ensure rpc
+    enqueue({
+      data: [{ id: 'dim-6', sie_dim_no: 6, name: 'Projekt', parent_sie_dim_no: null, resets_annually: false, is_system: true, is_active: true, sort_order: 20 }],
+      error: null,
+    })
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({
+        id: `v${i}`, dimension_id: 'dim-6', code: `P${String(i).padStart(4, '0')}`, name: `Projekt ${i}`, is_active: true, start_date: null, end_date: null,
+      })),
+      error: null,
+    })
+    enqueue({
+      data: [{ id: 'v-late', dimension_id: 'dim-6', code: 'P1000', name: 'Projekt 1000', is_active: true, start_date: null, end_date: null }],
+      error: null,
+    })
+
+    const result = await resolveDimensionBags(supabase as never, 'company-1', [{ '6': 'P1000' }])
+
+    expect(result.bags).toEqual([{ '6': 'P1000' }])
+    expect(result.resolutions).toEqual([])
+  })
 })
 
 describe('mergeLineDimensions / parseDimensionsArg', () => {
@@ -637,6 +820,8 @@ describe('gnubok_create_invoice: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
+    // buildStagedInvoice (the dry run of the commit): company_settings
+    enqueue({ data: { vat_registered: true }, error: null })
     // resolvePeriodStatusForDate (auto-extracted from invoice_date): 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -697,6 +882,7 @@ describe('gnubok_create_invoice: dimensions bag', () => {
       data: { id: 'cust-1', name: 'Acme AB', customer_type: 'swedish_business', vat_number_validated: false, default_payment_terms: 30 },
       error: null,
     })
+    enqueue({ data: { vat_registered: true }, error: null }) // buildStagedInvoice: company_settings
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2
     enqueue({ data: { id: 'op-inv-plain' }, error: null })
@@ -730,11 +916,17 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
       cash_account_id: 'cash-1',
     })
     enqueue({ data: tx, error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    enqueue({ data: { ledger_account: '1931' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
-    enqueue({ data: tx, error: null })
+    enqueue({ data: { ledger_account: '1931', currency: 'SEK' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
+    // findUnresolvableAccounts: every account the verifikat posts to is active
+    enqueue({ data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '1931' }, { account_number: '2641' }], error: null })
+    // checkPeriodLock: no company lock date, no covering period
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-settlement' }, error: null })
 
     const result = (await categorizeTransaction.execute(
@@ -761,12 +953,16 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
-    // categorizeTransactionCore: transaction fetch + company_settings
+    // The booking service's dry run: transaction fetch + company_settings
     enqueue({ data: tx, error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    // transaction fetch for the title
-    enqueue({ data: tx, error: null })
+    // findUnresolvableAccounts: every account the verifikat posts to is active
+    enqueue({ data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '1931' }, { account_number: '2641' }], error: null })
+    // checkPeriodLock: no company lock date, no covering period
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
     enqueue({ data: { dimensions_enabled: true }, error: null })
     enqueue({ data: null, error: null })
@@ -776,6 +972,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     // pending_operations insert
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-dims' }, error: null })
 
     const result = (await categorizeTransaction.execute(
@@ -820,11 +1017,17 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const inserts = captureInserts(supabase)
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
     enqueue({ data: tx, error: null })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: tx, error: null })
+    // findUnresolvableAccounts: every account the verifikat posts to is active
+    enqueue({ data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '1931' }, { account_number: '2641' }], error: null })
+    // checkPeriodLock: no company lock date, no covering period
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-cat-plain' }, error: null })
 
     const result = (await categorizeTransaction.execute(
@@ -842,20 +1045,43 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
   })
 })
 
+const BULK_TX_1 = '11111111-1111-4111-8111-111111111111'
+const BULK_TX_2 = '22222222-2222-4222-8222-222222222222'
+const BULK_JE = '33333333-3333-4333-8333-333333333333'
+
+/**
+ * gnubok_bulk_book_transactions is generated from the operation
+ * transactions.bulk-book (input: entry_description + manual_lines, the v1
+ * contract). Names in its dimension bags are resolved at the MCP door
+ * (prepareBulkBookDimensions in ../server.ts) before the operation sees
+ * the input; the operation's dry run then runs the chart check and the
+ * dimension policy and names the accounts on the approval card.
+ */
 describe('gnubok_bulk_book_transactions: dimensions bag', () => {
-  it('merges default_dimensions into per-line bags and drops the default from staged params', async () => {
+  it('puts default_dimensions on the business lines only, never on the bank line (crm#1313), and drops the default from staged params', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    noDuplicateFor(1)
     const inserts = captureInserts(supabase)
-    // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
+    // resolveDimensionBags at the door: settings → ensure rpc → dimensions → dimension_values
     enqueue({ data: { dimensions_enabled: true }, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
-    // transactions fetch
+    // the operation: transactions fetch, then the chart allowlist
     enqueue({
-      data: [{ id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }],
+      data: [{ id: BULK_TX_1, amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null })
+    // the rows' settlement ledger (no cash account: no enabled SEK account, so 1930)
+    enqueue({ data: [], error: null })
+    // enforceBulkBookDimensionPolicy: rules (none) → validateEntryDimensions
+    // (settings → dimensions → dimension_values)
+    enqueue({ data: [], error: null })
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
     // chart_of_accounts name lookup for the preview kontering
     enqueue({
       data: [
@@ -868,19 +1094,18 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     // pending_operations insert
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-dims' }, error: null })
 
     const result = (await bulkBookTransactions.execute(
       {
-        tx_ids: ['tx-1'],
+        tx_ids: [BULK_TX_1],
         default_dimensions: { '6': 'villa almgren tak' },
-        new_entry: {
-          description: 'Samlingsverifikation material',
-          lines: [
-            { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
-            { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
-          ],
-        },
+        entry_description: 'Samlingsverifikation material',
+        manual_lines: [
+          { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
+          { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
+        ],
       },
       'company-1',
       'user-1',
@@ -903,30 +1128,21 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
     expect(result.preview.currency).toBe('SEK')
     expect(result.preview.entry_description).toBe('Samlingsverifikation material')
     expect(result.preview.lines).toEqual([
-      expect.objectContaining({
-        account_number: '4010',
-        account_name: 'Inköp material och varor',
-        debit_amount: 400,
-        credit_amount: 0,
-      }),
-      expect.objectContaining({
-        account_number: '1930',
-        account_name: 'Företagskonto',
-        debit_amount: 0,
-        credit_amount: 400,
-      }),
+      { account_number: '4010', account_name: 'Inköp material och varor', debit_amount: 400, credit_amount: 0, line_description: null },
+      { account_number: '1930', account_name: 'Företagskonto', debit_amount: 0, credit_amount: 400, line_description: null },
     ])
 
-    // Contract: per-line `new_entry.lines[].dimensions` carries the MERGED
-    // (line-over-default) resolved bags; the top-level default is dropped:
-    // the executor's RPC reads per-line dims only.
+    // Contract: per-line `manual_lines[].dimensions` carries the lines as
+    // previewed: the default merged under the line's own bag on the business
+    // line, the bank line (1930) untagged (crm#1313); the top-level default
+    // is dropped: the RPC reads per-line dims only.
     const params = inserts.find((i) => i.table === 'pending_operations')!.payload.params as {
       default_dimensions?: Record<string, string>
-      new_entry: { lines: Array<{ dimensions?: Record<string, string> }> }
+      manual_lines: Array<{ dimensions?: Record<string, string> }>
     }
     expect(params.default_dimensions).toBeUndefined()
-    expect(params.new_entry.lines[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
-    expect(params.new_entry.lines[1].dimensions).toEqual({ '6': 'P001' })
+    expect(params.manual_lines[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(params.manual_lines[1].dimensions).toBeUndefined()
 
     // (d) Non-exact name resolution echoed once in the preview.
     expect(result.preview.dimension_resolutions).toHaveLength(1)
@@ -943,8 +1159,8 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
     await expect(
       bulkBookTransactions.execute(
         {
-          tx_ids: ['tx-1'],
-          existing_journal_entry_id: 'je-1',
+          tx_ids: [BULK_TX_1],
+          existing_journal_entry_id: BULK_JE,
           default_dimensions: { '6': 'P001' },
         },
         'company-1',
@@ -962,6 +1178,7 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
   // phone could not tell what he was authorising.
   it('carries direction, amount, currency, date and the lead counterparty', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    noDuplicateFor(2)
     const inserts = captureInserts(supabase)
     enqueue({ data: { dimensions_enabled: true }, error: null })
     enqueue({ data: null, error: null })
@@ -969,11 +1186,18 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
     enqueue({ data: VALUE_ROWS, error: null })
     enqueue({
       data: [
-        { id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
-        { id: 'tx-2', amount: -600, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+        { id: BULK_TX_1, amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+        { id: BULK_TX_2, amount: -600, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }) // chart allowlist
+    // enforceBulkBookDimensionPolicy: rules (none), then registry validation.
+    enqueue({ data: [], error: null })
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
     enqueue({
       data: [
         { account_number: '4010', account_name: 'Inköp material och varor' },
@@ -983,19 +1207,18 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
     })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
     enqueue({ data: { id: 'op-bulk-title' }, error: null })
 
     await bulkBookTransactions.execute(
       {
-        tx_ids: ['tx-1', 'tx-2'],
+        tx_ids: [BULK_TX_1, BULK_TX_2],
         default_dimensions: { '6': 'villa almgren tak' },
-        new_entry: {
-          description: 'Samlingsverifikation material',
-          lines: [
-            { account_number: '4010', debit_amount: 1000, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
-            { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
-          ],
-        },
+        entry_description: 'Samlingsverifikation material',
+        manual_lines: [
+          { account_number: '4010', debit_amount: 1000, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+        ],
       },
       'company-1',
       'user-1',
@@ -1006,10 +1229,88 @@ describe('gnubok_bulk_book_transactions: approval-queue title', () => {
     expect(staged).toBeDefined()
     const title = staged!.payload.title as string
     expect(title).toContain('Samlingsverifikation')
-    expect(title).toContain('1 000,00 SEK')
+    expect(title).toMatch(/1\s000,00 SEK/)
     expect(title).toMatch(/^Samlingsverifikation -/)
     expect(title).toContain('2026-05-12')
     expect(title).toContain('NORDNET UTTAG')
     expect(title).toContain('(+1 till)')
+  })
+})
+
+/**
+ * The staging dry run is the operation's, so it runs the same dimension
+ * policy as the dashboard and v1 bulk-book doors (enforceBulkBookDimensionPolicy):
+ * account rules applied and asserted, registry validation. The staged lines,
+ * and so the approval card, carry exactly what the approval posts.
+ */
+describe('gnubok_bulk_book_transactions: dimension policy at stage', () => {
+  const untaggedEntry = {
+    entry_description: 'Samlingsverifikation material',
+    manual_lines: [
+      { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
+    ],
+  }
+  const ruleRow = (overrides: Record<string, unknown>) => ({
+    account_number: '4010',
+    rule_type: 'default',
+    dimensions: { sie_dim_no: 6, name: 'Projekt' },
+    dimension_values: { code: 'P001' },
+    ...overrides,
+  })
+  const txRow = { id: BULK_TX_1, amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }
+
+  it('refuses to stage when a required rule is unsatisfied', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    noDuplicateFor(1)
+    const inserts = captureInserts(supabase)
+    // Untagged lines: the resolver makes no query.
+    enqueue({ data: [txRow], error: null }) // transactions
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }) // chart allowlist
+    enqueue({ data: [ruleRow({ rule_type: 'required', dimension_values: null })], error: null }) // rules
+
+    await expect(
+      bulkBookTransactions.execute(
+        { tx_ids: [BULK_TX_1], ...untaggedEntry },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+    ).rejects.toMatchObject({ code: 'MANDATORY_DIMENSION_MISSING' })
+    expect(inserts.find((i) => i.table === 'pending_operations')).toBeUndefined()
+  })
+
+  it('stages the tag a default rule applies, so the approval matches the commit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    noDuplicateFor(1)
+    const inserts = captureInserts(supabase)
+    enqueue({ data: [txRow], error: null }) // transactions
+    enqueue({ data: [], error: null }) // the gate: no posted verifikat booked from the rows (#203)
+    enqueue({ data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }) // chart allowlist
+    enqueue({ data: [ruleRow({})], error: null }) // account_dimension_rules
+    enqueue({ data: { dimensions_enabled: true }, error: null }) // registry validation: settings
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
+    enqueue({ data: [], error: null }) // the row's ledger: no cash account, 1930
+    enqueue({ data: [], error: null }) // chart_of_accounts names
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate
+    enqueue({ data: null, error: null })
+    enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
+    enqueue({ data: { id: 'op-bulk-rule' }, error: null }) // pending_operations insert
+
+    const result = (await bulkBookTransactions.execute(
+      { tx_ids: [BULK_TX_1], ...untaggedEntry },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const params = inserts.find((i) => i.table === 'pending_operations')!.payload.params as {
+      manual_lines: Array<{ account_number: string; dimensions?: Record<string, string> }>
+    }
+    expect(params.manual_lines[0].dimensions).toEqual({ '6': 'P001' })
+    expect(params.manual_lines[1].dimensions).toBeUndefined()
   })
 })

@@ -9,7 +9,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
-import { creditNoteTypeCode } from '../dto';
+import { documentPayment, documentState, type DocumentState } from '../document-state';
 import { readNumber, resolveVatTriple } from '../amounts';
 
 /**
@@ -36,30 +36,53 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
 }
 
 /**
- * Derive an invoice lifecycle status from BL's fields.
- *
- * Sandbox-verified: `status` is an ARRAY of numeric codes. Documented for
+ * BL's `status`. Sandbox-verified: an ARRAY of numeric codes. Documented for
  * customer invoices (supplier invoices observed to follow the same scheme):
  * 0 Unpaid, 1 Overdue, 2 Fully paid, 3 Partially paid, 4 Overpaid,
  * 5 Deleted, 6 Customer loss, 7 Marked for collection, 8 Sent for collection.
  * Codes ≥40 are ROT/RUT, factoring ("Invoier") and e-invoice transport noise:
- * ignored here. The `paid`/`preliminary` booleans are the primary signals;
- * the codes refine terminal states the booleans can't express.
+ * ignored here. A plain string is handled defensively, should BL ever send one.
  */
-function deriveBLInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
-  const codes = Array.isArray(raw['status'])
+function statusCodes(raw: Record<string, unknown>): number[] {
+  return Array.isArray(raw['status'])
     ? (raw['status'] as unknown[]).map(Number).filter(Number.isFinite)
     : [];
-  // Terminal states win over payment flags: a deleted (makulerad) or
-  // written-off (kundförlust) invoice must not be imported as open/paid.
-  if (codes.includes(5) || codes.includes(6)) return 'cancelled';
-  if (raw['paid'] === true) return 'paid';
-  if (raw['preliminary'] === true) return 'draft';
-  if (codes.includes(2) || codes.includes(4)) return 'paid';
+}
+
+function statusText(raw: Record<string, unknown>): string | undefined {
+  return typeof raw['status'] === 'string' ? raw['status'].toLowerCase() : undefined;
+}
+
+/**
+ * What a BL document is. A deleted (makulerad) or written-off (kundförlust)
+ * invoice is voided, and a `preliminary` one was never issued. The
+ * sandbox-verified field list carries no credit flag; a credit invoice arrives
+ * with a negative amount (9 sales and 3 supplier rows in production were
+ * imported as paid invoices, #2789, #2838), so the amount is the signal.
+ */
+function blDocumentState(raw: Record<string, unknown>, total: number): DocumentState {
+  const codes = statusCodes(raw);
+  return documentState({
+    issued: raw['preliminary'] !== true,
+    paymentStated: isBLPaid(raw) || codes.includes(3),
+    cancelled: codes.includes(5) || codes.includes(6) || statusText(raw) === 'cancelled',
+    creditFlag: false,
+    total,
+  });
+}
+
+/** The `paid` flag or a status code saying so, the one reading of BL's two signals. */
+function isBLPaid(raw: Record<string, unknown>): boolean {
+  const codes = statusCodes(raw);
+  return raw['paid'] === true || codes.includes(2) || codes.includes(4);
+}
+
+/** The lifecycle of an issued, ordinary BL invoice; the codes refine what the flags can't express. */
+function deriveBLInvoiceStatus(raw: Record<string, unknown>, paid: boolean): InvoiceStatusCode {
+  if (paid) return 'paid';
+  const codes = statusCodes(raw);
   if (codes.includes(1) || codes.includes(7) || codes.includes(8)) return 'overdue';
-  // Defensive: handle a plain string status should BL ever send one
-  const status = typeof raw['status'] === 'string' ? raw['status'].toLowerCase() : undefined;
-  if (status === 'cancelled') return 'cancelled';
+  const status = statusText(raw);
   if (status === 'credited') return 'credited';
   if (status === 'sent') return 'sent';
   return 'booked';
@@ -76,7 +99,12 @@ export function mapBLToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceD
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['amountInLocalCurrency'] as number) ?? (raw['amount'] as number) ?? 0;
   const paidAmount = (raw['amountPaidInLocalCurrency'] as number) ?? 0;
-  const balance = totalAmount - paidAmount;
+  const doc = blDocumentState(raw, totalAmount);
+  const statedPaid = isBLPaid(raw);
+  const { paid, balance } = documentPayment(doc, totalAmount, {
+    paid: statedPaid,
+    balance: statedPaid ? 0 : totalAmount - paidAmount,
+  });
 
   const customer: PartyDto = {
     name: (raw['customerName'] as string) ?? '',
@@ -97,25 +125,18 @@ export function mapBLToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceD
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: raw['paid'] === true,
+    paid,
     balance: amount(balance, currency),
   };
-
-  const invoiceTypeCode = creditNoteTypeCode(false, totalAmount);
-  const blStatus = deriveBLInvoiceStatus(raw);
 
   return {
     id: String(raw['entityId'] ?? raw['invoiceNumber'] ?? ''),
     invoiceNumber: String(raw['invoiceNumber'] ?? ''),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
-    // The sandbox-verified field list above carries no credit flag; a credit
-    // invoice arrives with a negative amount (9 such rows in production were
-    // imported as paid invoices, #2789), so the amount is the signal.
-    invoiceTypeCode,
+    invoiceTypeCode: doc.invoiceTypeCode,
     currencyCode: currency,
-    status: invoiceTypeCode && blStatus !== 'cancelled' && blStatus !== 'draft' ? 'credited' : blStatus,
+    status: doc.status ?? deriveBLInvoiceStatus(raw, paid),
     supplier: { name: '', identifications: [] },
     customer,
     lines: [], // BL doesn't include line items in list responses
@@ -138,6 +159,12 @@ export function mapBLToSupplierInvoice(raw: Record<string, unknown>): SupplierIn
   const totalAmount = (raw['amountInLocalCurrency'] as number) ?? 0;
   const paidAmount = (raw['amountPaidInLocalCurrency'] as number) ?? 0;
   const remaining = (raw['amountRemainingInLocalCurrency'] as number) ?? (totalAmount - paidAmount);
+  const doc = blDocumentState(raw, totalAmount);
+  const statedPaid = isBLPaid(raw);
+  const { paid, balance } = documentPayment(doc, totalAmount, {
+    paid: statedPaid,
+    balance: statedPaid ? 0 : remaining,
+  });
 
   const supplier: PartyDto = {
     name: (raw['supplierName'] as string) ?? '',
@@ -158,26 +185,20 @@ export function mapBLToSupplierInvoice(raw: Record<string, unknown>): SupplierIn
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: raw['paid'] === true,
-    balance: amount(remaining, currency),
+    paid,
+    balance: amount(balance, currency),
   };
-
-  // 381 for a supplier kreditfaktura: the one signal the importer reads
-  // (dto.ts). The field list above carries no credit flag and no reference to
-  // a credited invoice; a credit invoice arrives with a negative amount (3
-  // such rows in production were imported as paid invoices, #2838), so the
-  // amount is the signal and the credit note lands unpaired.
-  const invoiceTypeCode = creditNoteTypeCode(false, totalAmount);
-  const blStatus = deriveBLInvoiceStatus(raw);
 
   return {
     id: String(raw['entityId'] ?? raw['invoiceNumber'] ?? ''),
     invoiceNumber: String(raw['invoiceNumber'] ?? ''),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
-    invoiceTypeCode,
+    // The field list above names no credited invoice either, so a credit note
+    // lands unpaired.
+    invoiceTypeCode: doc.invoiceTypeCode,
     currencyCode: currency,
-    status: invoiceTypeCode && blStatus !== 'cancelled' ? 'credited' : blStatus,
+    status: doc.status ?? deriveBLInvoiceStatus(raw, paid),
     supplier,
     buyer: { name: '', identifications: [] },
     lines: [], // BL doesn't include line items in list responses

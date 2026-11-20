@@ -60,13 +60,15 @@ describe('MCP company routing', () => {
     expect(projected).not.toBe(inputSchema)
     expect(projected.properties).toEqual({
       invoice_id: { type: 'string' },
-      company_id: expect.objectContaining({ type: 'string', format: 'uuid' }),
+      company_id: expect.objectContaining({ type: 'string' }),
     })
+    // A cmp_ handle is a company id too (handle-args.ts): no uuid format.
+    expect((projected.properties as Record<string, object>).company_id).not.toHaveProperty('format')
     expect(inputSchema.properties).not.toHaveProperty('company_id')
     expect(projected.additionalProperties).toBe(false)
   })
 
-  it.each(['gnubok_search_tools', 'gnubok_load_skill', 'gnubok_list_companies'])(
+  it.each(['gnubok_search_tools', 'gnubok_list_companies'])(
     'keeps the company-independent schema unchanged for %s',
     (name) => {
       const inputSchema = {
@@ -110,12 +112,33 @@ describe('MCP company routing', () => {
       })
     ).resolves.toEqual({
       companyId: OTHER_COMPANY_ID,
+      // No companies embed in this mock: the display name falls back to the id.
+      companyName: OTHER_COMPANY_ID,
       role: 'admin',
       isDefault: false,
+      keyAccess: 'write',
     })
     expect(chain.eq).toHaveBeenCalledWith('user_id', 'user-1')
     expect(chain.eq).toHaveBeenCalledWith('company_id', OTHER_COMPANY_ID)
     expect(chain.is).toHaveBeenCalledWith('companies.archived_at', null)
+  })
+
+  it('marks a company the key may only read as keyAccess read', async () => {
+    const { client } = membershipClient({
+      data: { company_id: OTHER_COMPANY_ID, role: 'owner' },
+      error: null,
+    })
+
+    await expect(
+      resolveMcpCompanyContext({
+        supabase: client as never,
+        userId: 'user-1',
+        defaultCompanyId: DEFAULT_COMPANY_ID,
+        requestedCompanyId: OTHER_COMPANY_ID,
+        allowedCompanyIds: [DEFAULT_COMPANY_ID, OTHER_COMPANY_ID],
+        readOnlyCompanyIds: [OTHER_COMPANY_ID],
+      })
+    ).resolves.toMatchObject({ companyId: OTHER_COMPANY_ID, role: 'owner', keyAccess: 'read' })
   })
 
   it('checks the API key default company when company_id is omitted', async () => {
@@ -132,8 +155,10 @@ describe('MCP company routing', () => {
       })
     ).resolves.toEqual({
       companyId: DEFAULT_COMPANY_ID,
+      companyName: DEFAULT_COMPANY_ID,
       role: 'owner',
       isDefault: true,
+      keyAccess: 'write',
     })
     expect(chain.eq).toHaveBeenCalledWith('company_id', DEFAULT_COMPANY_ID)
   })
@@ -237,7 +262,13 @@ describe('MCP company routing', () => {
   })
 
   it('allows viewer reads but rejects viewer writes, approvals, and management', () => {
-    const context = { companyId: OTHER_COMPANY_ID, role: 'viewer' as const, isDefault: false }
+    const context = {
+      companyId: OTHER_COMPANY_ID,
+      companyName: 'Other AB',
+      role: 'viewer' as const,
+      isDefault: false,
+      keyAccess: 'write' as const,
+    }
 
     expect(() => assertMcpCompanyWriteAccess(context, 'reports:read')).not.toThrow()
     expect(() => assertMcpCompanyWriteAccess(context, undefined)).not.toThrow()
@@ -256,7 +287,13 @@ describe('MCP company routing', () => {
   })
 
   it('names the read-only role and the refused scope in the viewer refusal', () => {
-    const context = { companyId: OTHER_COMPANY_ID, role: 'viewer' as const, isDefault: false }
+    const context = {
+      companyId: OTHER_COMPANY_ID,
+      companyName: 'Other AB',
+      role: 'viewer' as const,
+      isDefault: false,
+      keyAccess: 'write' as const,
+    }
 
     expect(() => assertMcpCompanyWriteAccess(context, 'bookkeeping:write')).toThrow(
       expect.objectContaining({
@@ -267,10 +304,61 @@ describe('MCP company routing', () => {
   })
 
   it.each(['owner', 'admin', 'member'] as const)('lets a %s through on every scope', (role) => {
-    const context = { companyId: OTHER_COMPANY_ID, role, isDefault: false }
+    const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role, isDefault: false, keyAccess: 'write' as const }
     for (const scope of ALL_SCOPES) {
       expect(() => assertMcpCompanyWriteAccess(context, scope)).not.toThrow()
     }
+  })
+
+  it.each(['owner', 'admin', 'member'] as const)(
+    'refuses every write scope for a %s in a company the connection may only read',
+    (role) => {
+      const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role, isDefault: false, keyAccess: 'read' as const }
+      for (const scope of ALL_SCOPES) {
+        if (isTenantWriteScope(scope)) {
+          expect(() => assertMcpCompanyWriteAccess(context, scope)).toThrow(
+            expect.objectContaining({
+              code: 'FORBIDDEN',
+              message: expect.stringMatching(/connection has read-only access to Other AB.*"[a-z_]+:[a-z]+"/),
+            })
+          )
+        } else {
+          expect(() => assertMcpCompanyWriteAccess(context, scope)).not.toThrow()
+        }
+      }
+      expect(() => assertMcpCompanyWriteAccess(context, undefined)).not.toThrow()
+    }
+  )
+
+  it('limits an invoicer to the customer, invoice and article scopes, read or write', () => {
+    const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role: 'invoicer' as const, isDefault: false, keyAccess: 'write' as const }
+    const allowed = ['customers:read', 'customers:write', 'invoices:read', 'invoices:draft', 'invoices:write', 'articles:read', 'articles:write']
+    for (const scope of ALL_SCOPES) {
+      if (allowed.includes(scope)) {
+        expect(() => assertMcpCompanyWriteAccess(context, scope), scope).not.toThrow()
+      } else {
+        expect(() => assertMcpCompanyWriteAccess(context, scope), scope).toThrow(
+          expect.objectContaining({ code: 'FORBIDDEN', message: expect.stringMatching(/Invoicing role/) })
+        )
+      }
+    }
+    expect(() => assertMcpCompanyWriteAccess(context, undefined)).toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN', message: expect.stringMatching(/Invoicing role/) })
+    )
+  })
+
+  it('keeps the viewer refusal first when the role and the connection both say read', () => {
+    const context = {
+      companyId: OTHER_COMPANY_ID,
+      companyName: 'Other AB',
+      role: 'viewer' as const,
+      isDefault: false,
+      keyAccess: 'read' as const,
+    }
+
+    expect(() => assertMcpCompanyWriteAccess(context, 'invoices:write')).toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN', message: expect.stringMatching(/read-only \(viewer\)/) })
+    )
   })
 
   it('classifies every non-:read scope in the catalogue as a tenant write', () => {
@@ -315,10 +403,10 @@ describe('MCP company routing', () => {
 })
 
 describe('optional-company tools (issue #1814)', () => {
-  it('gnubok_list_skills is company-independent but still advertises company_id', () => {
-    expect(isCompanyDependentTool('gnubok_list_skills')).toBe(false)
+  it.each(['gnubok_list_skills', 'gnubok_load_skill'])('%s is company-independent but still advertises company_id', (name) => {
+    expect(isCompanyDependentTool(name)).toBe(false)
     const projected = projectToolInputSchema({
-      name: 'gnubok_list_skills',
+      name,
       inputSchema: { type: 'object', properties: { tag: { type: 'string' } } },
     })
     expect((projected.properties as Record<string, unknown>).company_id).toBeDefined()

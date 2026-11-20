@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   INVALID_STORE_URL_CODE,
+  STORE_FIREWALL_CODE,
   UNSAFE_STORE_URL_CODE,
+  WOO_USER_AGENT,
+  isRevokedCredentialsError,
   listOrderRefunds,
   testConnectionAndFetchStoreInfo,
   wcGet,
@@ -46,6 +49,8 @@ function makeRefunds(startId: number, count: number) {
 const fetchMock = vi.fn()
 
 beforeEach(() => {
+  // wcGet records the working auth mode on the credentials object.
+  delete CREDS.authMode
   fetchMock.mockReset()
   vi.stubGlobal('fetch', fetchMock)
   guard.validateUrl.mockReset()
@@ -138,7 +143,119 @@ describe('wcGet: outbound URL guard', () => {
   })
 })
 
+/** A Cloudflare-style refusal: HTML page, no WooCommerce JSON code. */
+function firewallResponse(headers: Record<string, string> = {}): Response {
+  return new Response(
+    '<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title></head><body>blocked</body></html>',
+    {
+      status: 403,
+      headers: { 'Content-Type': 'text/html; charset=UTF-8', Server: 'cloudflare', 'CF-RAY': '8a1b2c3d4e5f6789-ARN', ...headers },
+    },
+  )
+}
+
+function headersOf(call: unknown[]): Record<string, string> {
+  return (call[1] as RequestInit).headers as Record<string, string>
+}
+
+describe('wcGet: firewalls and header-stripping hosts (crm#1669)', () => {
+  it('sends an identifying User-Agent on every request', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
+    await wcGet(CREDS, '/orders')
+    expect(headersOf(fetchMock.mock.calls[0])['User-Agent']).toBe(WOO_USER_AGENT)
+  })
+
+  it('tags an HTML 403 as a firewall refusal, keeps its diagnostics, and does not resend the keys in a URL', async () => {
+    fetchMock.mockResolvedValueOnce(firewallResponse())
+
+    const error = (await wcGet(CREDS, '/orders').catch((e) => e)) as WooCommerceApiError
+    expect(error).toBeInstanceOf(WooCommerceApiError)
+    expect(error.status).toBe(403)
+    expect(error.wooCode).toBe(STORE_FIREWALL_CODE)
+    expect(error.diagnostics).toMatchObject({
+      bodyKind: 'html',
+      server: 'cloudflare',
+      cfRay: '8a1b2c3d4e5f6789-ARN',
+      htmlTitle: 'Attention Required! | Cloudflare',
+      queryAuth: false,
+    })
+    // No query-string retry: the same wall would only see the keys in a URL.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // Never logged as a revoked key: the keys never reached WooCommerce.
+    expect(isRevokedCredentialsError(error)).toBe(false)
+  })
+
+  it('treats a Cloudflare bot challenge as a firewall refusal even with a JSON-looking body', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('{}', { status: 403, headers: { 'cf-mitigated': 'challenge' } }),
+    )
+    const error = (await wcGet(CREDS, '/orders').catch((e) => e)) as WooCommerceApiError
+    expect(error.wooCode).toBe(STORE_FIREWALL_CODE)
+    expect(error.diagnostics.cfMitigated).toBe('challenge')
+  })
+
+  it('falls back to query-string credentials on 403 woocommerce_rest_cannot_view and remembers it for the run', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'woocommerce_rest_cannot_view', message: 'Sorry, you cannot list resources.' }), { status: 403 }),
+      )
+      .mockResolvedValueOnce(jsonResponse([{ id: 7 }]))
+      .mockResolvedValueOnce(jsonResponse([{ id: 8 }]))
+
+    const creds: WooCredentials = { ...CREDS }
+    await expect(wcGet(creds, '/orders')).resolves.toEqual([{ id: 7 }])
+    expect(creds.authMode).toBe('query')
+    const second = fetchMock.mock.calls[1]
+    expect(new URL(second[0] as string).searchParams.get('consumer_key')).toBe('ck_test')
+    expect(headersOf(second).Authorization).toBeUndefined()
+    expect(headersOf(second)['User-Agent']).toBe(WOO_USER_AGENT)
+
+    // The next call of the same run goes straight to the mode that worked.
+    await expect(wcGet(creds, '/orders', { page: '2' })).resolves.toEqual([{ id: 8 }])
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(new URL(fetchMock.mock.calls[2][0] as string).searchParams.get('consumer_key')).toBe('ck_test')
+  })
+
+  it('still reports a key WooCommerce refuses in both modes as revoked', async () => {
+    const refused = () =>
+      new Response(
+        JSON.stringify({ code: 'woocommerce_rest_authentication_error', message: 'Consumer key is invalid.' }),
+        { status: 401 },
+      )
+    fetchMock.mockResolvedValueOnce(refused()).mockResolvedValueOnce(refused())
+
+    const error = (await wcGet(CREDS, '/orders').catch((e) => e)) as WooCommerceApiError
+    expect(error.status).toBe(401)
+    expect(error.wooCode).toBe('woocommerce_rest_authentication_error')
+    expect(error.message).toBe('WooCommerce API 401: Consumer key is invalid.')
+    expect(error.diagnostics).toMatchObject({ bodyKind: 'json', queryAuth: true })
+    expect(isRevokedCredentialsError(error)).toBe(true)
+  })
+
+  it('never puts the secret into the error it throws', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'woocommerce_rest_cannot_view' }), { status: 401 }))
+      .mockResolvedValueOnce(firewallResponse())
+    const error = (await wcGet(CREDS, '/orders').catch((e) => e)) as WooCommerceApiError
+    expect(JSON.stringify({ m: error.message, d: error.diagnostics })).not.toContain('cs_test')
+  })
+})
+
 describe('testConnectionAndFetchStoreInfo', () => {
+  it('sends the User-Agent on the /wp-json/ title probe too', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse([{ id: 1 }]))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({ name: 'Butiken' }))
+
+    await testConnectionAndFetchStoreInfo(CREDS)
+
+    for (const call of fetchMock.mock.calls) {
+      expect(headersOf(call)['User-Agent']).toBe(WOO_USER_AGENT)
+    }
+  })
+
   it('routes the public /wp-json/ title probe through the guard too', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse([{ id: 1 }])) // /orders probe

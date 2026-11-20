@@ -18,12 +18,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
-import { roundOre } from '@/lib/money'
+import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
+import type { DocumentVatMismatch } from '@/lib/vat/document-vat'
 import { createLogger } from '@/lib/logger'
-import type { EntityType, Invoice } from '@/types'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import type { Invoice } from '@/types'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 const log = createLogger('self-billed-sale')
 
@@ -45,6 +49,11 @@ export interface SelfBilledSaleInput {
   currency: string
   notes?: string | null
   items: SelfBilledSaleItemInput[]
+  /**
+   * The VAT per rate the customer's document states, rates in percent like
+   * the items. Omitted: the VAT on the summed base per rate.
+   */
+  vat_breakdown?: Array<{ vat_rate: number; vat_amount: number }> | null
 }
 
 export type SelfBilledSaleFailure =
@@ -54,6 +63,7 @@ export type SelfBilledSaleFailure =
   | { code: 'insert_failed'; stage?: string; pgCode?: string; pgMessage?: string }
   | { code: 'items_failed'; pgCode?: string; pgMessage?: string }
   | { code: 'no_fiscal_period' }
+  | { code: 'vat_breakdown_mismatch'; details: DocumentVatMismatch['details'] }
 
 interface SelfBilledCustomer {
   id: string
@@ -138,10 +148,7 @@ export async function resolveSelfBilledSaleDraft(
   )
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
-  const items: SelfBilledSaleComputedItem[] = []
-  let vatAmount = 0
-  for (let i = 0; i < input.items.length; i++) {
-    const item = input.items[i]
+  for (const item of input.items) {
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
     if (!allowedRates.has(itemRate)) {
       return {
@@ -154,23 +161,26 @@ export async function resolveSelfBilledSaleDraft(
         },
       }
     }
-    const lineTotal = item.quantity * item.unit_price
-    const lineVat = roundOre((lineTotal * itemRate) / 100)
-    vatAmount += lineVat
-    items.push({
-      sort_order: i,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      line_total: lineTotal,
-      vat_rate: itemRate,
-      vat_amount: lineVat,
-    })
   }
 
-  const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
-  const total = roundOre(subtotal + vatAmount)
+  // Whole-öre line nets, and the customer's document's VAT per rate: on the
+  // summed base, or the figure the document states (vat_breakdown), spread
+  // over the lines. Per-line rounding left the receivable an öre or more off
+  // the document on every multi-line self-bill (crm#1367). The editor's
+  // Summering computes the same figures (lib/invoices/self-billed-amounts.ts).
+  const amounts = selfBilledSaleAmounts(input.items, vatRules.rate, input.vat_breakdown)
+  if (!amounts.ok) {
+    return { ok: false, failure: { code: 'vat_breakdown_mismatch', details: amounts.details } }
+  }
+  const items: SelfBilledSaleComputedItem[] = input.items.map((item, i) => ({
+    sort_order: i,
+    description: item.description,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price: item.unit_price,
+    ...amounts.lines[i],
+  }))
+  const { subtotal, vatAmount, total } = amounts
 
   const uniqueRates = new Set(input.items.map((item) => item.vat_rate ?? vatRules.rate))
   const isMixedRate = uniqueRates.size > 1
@@ -193,9 +203,9 @@ export async function resolveSelfBilledSaleDraft(
     }
     exchangeRate = rateData.rate
     exchangeRateDate = rateData.date
-    subtotalSek = convertToSEK(subtotal, exchangeRate)
-    vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-    totalSek = convertToSEK(total, exchangeRate)
+    subtotalSek = sekOfForeign(subtotal, exchangeRate)
+    vatAmountSek = sekOfForeign(vatAmount, exchangeRate)
+    totalSek = sekOfForeign(total, exchangeRate)
   }
 
   return {
@@ -301,13 +311,24 @@ export async function createSelfBilledSaleInvoice(
     return { ok: false, failure: { code: 'items_failed', pgCode: itemsError.code, pgMessage: itemsError.message } }
   }
 
-  const { data: settings } = await supabase
+  const settingsRead = await supabase
     .from('company_settings')
     .select('accounting_method, entity_type')
     .eq('company_id', companyId)
     .maybeSingle()
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+  // Fail closed (accounted#58): whether the sale is booked now or at payment
+  // follows the method, so an unreadable one rolls the header back instead of
+  // guessing faktureringsmetoden.
+  const method = checkAccountingMethod(settingsRead)
+  if (!method.ok) {
+    await supabase.from('invoices').delete().eq('id', invoice.id)
+    log.error('self-billed invoice refused: accounting method unavailable; rolled back', method.error, {
+      invoiceId: invoice.id,
+    })
+    throw method.error
+  }
+  const { accountingMethod } = method
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
   const { data: completeInvoice } = await supabase
     .from('invoices')
@@ -333,7 +354,13 @@ export async function createSelfBilledSaleInvoice(
         completeInvoice as Invoice,
         entityType,
         draft.customer.name,
-        { descriptionPrefix: 'Självfaktura', numberOverride: input.external_invoice_number },
+        {
+          descriptionPrefix: 'Självfaktura',
+          numberOverride: input.external_invoice_number,
+          // The posting port's event, while POSTING_EVENTS is on: the person
+          // (or the API client) registered the received självfaktura.
+          posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
+        },
       )
       if (!journalEntry) {
         // No open fiscal period: roll back so we never leave an unbooked sale.

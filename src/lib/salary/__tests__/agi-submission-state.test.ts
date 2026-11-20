@@ -336,6 +336,55 @@ describe('resolveRunAgiSubmission: receipt served from agi_declarations', () => 
  * suite (vitest runs in `node`), so the two derivations are mirrored here and
  * pinned against the correction timeline.
  */
+describe('resolveRunAgiSubmission: the period\'s recorded receipts (agi_kvittenser)', () => {
+  // The original filed and was signed on 14 July; the correction for the same
+  // month was signed on 2 August and the period record has moved on to it.
+  const original: AgiFilingRun = { id: 'r1', agi_generated_at: '2026-07-13T09:00:00Z', agi_submitted_at: '2026-07-14T08:30:00+00:00' }
+  const correction: AgiFilingRun = { id: 'r2', agi_generated_at: '2026-08-01T09:00:00Z', agi_submitted_at: '2026-08-02T09:00:00+00:00' }
+  const periodRecord: AgiSubmissionState = {
+    status: 'signed',
+    kvittensnummer: 'K2',
+    signeradAv: '191212121212',
+    signeradTid: '2026-08-02T09:00:00Z',
+    submittedAt: '2026-08-02T09:00:00+00:00',
+    submittedAtEstimated: false,
+    source: 'declaration',
+    receipts: [
+      { kvittensnummer: 'K2', signeradAv: '191212121212', signeradTid: '2026-08-02T09:00:00Z' },
+      { kvittensnummer: 'K1', signeradAv: '197001011234', signeradTid: '2026-07-14T08:30:00Z' },
+    ],
+  }
+
+  it('the original of a corrected month shows its own kvittens, not the correction\'s', () => {
+    expect(resolveRunAgiKvittensnummer(original, periodRecord)).toBe('K1')
+    expect(resolveRunAgiSubmission(original, periodRecord)).toEqual({
+      status: 'signed',
+      kvittensnummer: 'K1',
+      signeradAv: '197001011234',
+      signeradTid: '2026-07-14T08:30:00Z',
+      submittedAt: '2026-07-14T08:30:00Z',
+      submittedAtEstimated: false,
+      source: 'declaration',
+    })
+  })
+
+  it('the correction keeps the period record, without the period\'s receipt list', () => {
+    const own = resolveRunAgiSubmission(correction, periodRecord)
+    expect(own?.kvittensnummer).toBe('K2')
+    expect(own).not.toHaveProperty('receipts')
+  })
+
+  it('a run that has not filed owns no recorded receipt', () => {
+    const unfiled: AgiFilingRun = { id: 'r3', agi_generated_at: '2026-08-05T09:00:00Z', agi_submitted_at: null }
+    expect(resolveRunAgiSubmission(unfiled, { receipts: periodRecord.receipts })).toBeNull()
+  })
+
+  it('a filed run whose signing moment matches no recorded receipt shows no number', () => {
+    const stampedElsewhere: AgiFilingRun = { ...original, agi_submitted_at: '2026-07-20T10:00:00+00:00' }
+    expect(resolveRunAgiKvittensnummer(stampedElsewhere, periodRecord)).toBeNull()
+  })
+})
+
 describe('run page and AGI panel derivations', () => {
   /**
    * Mirrors AGIPanel. The in-flight machine stays PERIOD-scoped because
@@ -359,7 +408,7 @@ describe('run page and AGI panel derivations', () => {
     }
   }
 
-  /** Mirrors RunProgressBar: the kvittens renders only on the signed step. */
+  /** The run's AGI step: a kvittens is attributed only to a signed declaration. */
   function railAgiStep(run: AgiFilingRun, submission: AgiSubmissionState | null) {
     const state = deriveAgiFilingState(run, submission)
     return {

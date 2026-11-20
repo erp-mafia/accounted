@@ -3,24 +3,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { waitForSIEJob } from '@/lib/import/sie-job-client'
+import { formatCurrency } from '@/lib/utils'
+import { SIEJobFailedError, waitForSIEJob } from '@/lib/import/sie-job-client'
+import { formatImportFailure } from '@/lib/import/import-failure'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { BRANCH_PROVIDERS } from '@/lib/onboarding-journey/branch'
 import { SIE_FIRST_PROVIDERS } from '@/lib/onboarding-books/reducer'
 import { defaultOpeningBalanceSeries } from '@/lib/import/opening-balance-defaults'
+import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
+import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
+import { hasSIEFileExtension, lacksFileExtension, SIE_FILE_EXTENSIONS_EN, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 import type { AccountMapping, ImportPreview, SIEAccount, SIEHeader } from '@/lib/import/types'
 import { InkText } from '@/components/onboarding/journey/ink'
 import type { TheaterApi } from '../engines/theater-engine'
 import { Theater, type TheaterLine, type TheaterModelInput } from '../ui/Theater'
 import { Facts, Wait } from '../ui/Verdicts'
 import { InsightPanel } from '../ui/InsightPanel'
-import { OptRow, OptRows, Sentence, Switch } from '../ui/Sentence'
+import { CHANGE_LINK_CLASS, OptRow, OptRows, Sentence, Switch } from '../ui/Sentence'
 import {
-  openProviderWindow, pointWindow, providerAccept, providerConnect, providerMigrate, providerSubmitToken, useProviderMessage,
+  openProviderWindow, pointWindow, providerAccept, providerConnect, providerImportRegisters, providerSubmitToken, useProviderMessage,
 } from '../lib/provider'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 
 const THEATER_MAX_FILE_BYTES = 8 * 1024 * 1024
 
@@ -42,6 +49,14 @@ interface FileEntry {
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
+
+/** The user left the act mid-import: the files not yet sent stay unsent. */
+class ImportStoppedError extends Error {
+  constructor() {
+    super('import stopped: the user left the act')
+    this.name = 'ImportStoppedError'
+  }
+}
 type Reg = null | 'card' | 'connecting' | 'token' | 'running' | 'done' | 'skipped'
 
 function yearsOf(files: FileEntry[]): string[] {
@@ -60,6 +75,7 @@ function yearsOf(files: FileEntry[]): string[] {
  */
 export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  const tNotice = useTranslations('import_notices')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const { state, dispatch, flags, loadFindings } = ctx
   const { settings } = useCompanySettings()
@@ -69,6 +85,9 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const [optsOpen, setOptsOpen] = useState(false)
   const [ibOn, setIbOn] = useState<boolean | null>(null)
   const [namesOn, setNamesOn] = useState(true)
+  // Files whose #ORGNR is not the company's that the user said yes to. By
+  // id, so a file added after the yes needs its own.
+  const [orgConfirmedIds, setOrgConfirmedIds] = useState<string[]>([])
   const [phase, setPhase] = useState<Phase>('drop')
   const [model, setModel] = useState<TheaterModelInput | null>(null)
   const [shown, setShown] = useState(0)
@@ -120,12 +139,17 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     }
   }, [t])
 
+  // The name rule is the one every SIE surface applies (sie-file-extensions.ts):
+  // a file outside it gets its row and the reason at once instead of a parse
+  // round trip, and a file saved without any extension is told to be renamed.
   function addFiles(list: FileList | File[]) {
-    const incoming = Array.from(list).filter((f) => /\.(se|sie)$/i.test(f.name) || f.size > 0)
-    if (incoming.length === 0) return
-    const entries = incoming.map((file) => ({ id: crypto.randomUUID(), file, status: 'parsing' as const }))
+    const extensions = locale === 'en' ? SIE_FILE_EXTENSIONS_EN : SIE_FILE_EXTENSIONS_SV
+    const entries: FileEntry[] = Array.from(list).map((file) => (hasSIEFileExtension(file.name)
+      ? { id: crypto.randomUUID(), file, status: 'parsing' }
+      : { id: crypto.randomUUID(), file, status: 'error', error: t(lacksFileExtension(file.name) ? 'sie_no_extension' : 'sie_wrong_type', { extensions }) }))
+    if (entries.length === 0) return
     setFiles((prev) => [...prev, ...entries])
-    entries.forEach(({ file, id }) => void parseOne(file, id))
+    entries.forEach(({ file, id, status }) => { if (status === 'parsing') void parseOne(file, id) })
   }
 
   async function replaceDup(id: string) {
@@ -148,27 +172,26 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const nYears = yearsOf(ready).length || ready.length
   const totalVouchers = ready.reduce((s, f) => s + (f.parsed?.stats.totalVouchers ?? 0), 0)
   const totalAccounts = ready.reduce((s, f) => s + (f.parsed?.stats.totalAccounts ?? 0), 0)
-  const unmapped = useMemo(() => {
-    const seen = new Set<string>()
-    const out: SIEAccount[] = []
-    for (const f of ready) for (const m of f.parsed!.mappings) {
-      if (!m.targetAccount && !seen.has(m.sourceAccount)) {
-        seen.add(m.sourceAccount)
-        const acc = f.parsed!.accounts.find((a) => a.number === m.sourceAccount)
-        out.push({ number: m.sourceAccount, name: acc?.name ?? m.sourceName })
-      }
+  // Accounts to create (1000-8999 numbers the chart lacks) and accounts no
+  // chart can hold, across every file. The second kind is never created or
+  // mapped onto itself: the job refused that target (#3312).
+  const { unmapped, unresolved } = useMemo(() => {
+    const create = new Map<string, SIEAccount>()
+    const blocked = new Set<string>()
+    for (const f of ready) {
+      const resolved = resolveOnboardingMappings(f.parsed!.mappings, f.parsed!.accounts)
+      for (const account of resolved.create) if (!create.has(account.number)) create.set(account.number, account)
+      for (const number of resolved.unresolved) blocked.add(number)
     }
-    return out
+    return { unmapped: [...create.values()], unresolved: [...blocked].sort() }
   }, [ready])
   // Class 9 accounts with amounts are routed to 2999 OBS-konto by the parse
   // route (sie-preview-mappings.ts); this flow has no mapping page, so say so.
-  const obsAccounts = useMemo(() => {
-    const seen = new Set<string>()
-    for (const f of ready) for (const m of f.parsed!.mappings) {
-      if (m.targetAccount === '2999' && m.matchType === 'class' && /^9\d{3}$/.test(m.sourceAccount)) seen.add(m.sourceAccount)
-    }
-    return Array.from(seen).sort()
-  }, [ready])
+  const obsAccounts = useMemo(() => obsAccountsOf(ready.flatMap((f) => f.parsed!.mappings)), [ready])
+  // Another organisation's file: the server refuses it without a yes
+  // (submitSIEJob), so the import waits for the checkbox below.
+  const orgMismatched = useMemo(() => ready.filter((f) => f.parsed!.preview.orgNumberMismatch === true), [ready])
+  const orgConfirmed = orgMismatched.every((f) => orgConfirmedIds.includes(f.id))
   const hasIb = ready.some((f) => (f.parsed?.preview.openingBalanceTotal ?? 0) > 0)
   const ib = ibOn ?? hasIb
   const ibAmount = ready.reduce((s, f) => s + (f.parsed?.preview.openingBalanceTotal ?? 0), 0)
@@ -181,8 +204,16 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     list.push({ text: t('fact_vouchers', { count: totalVouchers }) })
     list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
     if (obsAccounts.length > 0) list.push({ text: t('fact_obs_to_2999', { accounts: obsAccounts.join(', ') }) })
+    if (unresolved.length > 0) list.push({ text: t('accounts_outside_bas', { count: unresolved.length, accounts: unresolved.join(', ') }), warn: true })
+    const fileOrgs = new Set<string>()
+    for (const f of orgMismatched) {
+      const fileOrg = f.parsed!.preview.orgNumber ?? '?'
+      if (fileOrgs.has(fileOrg)) continue
+      fileOrgs.add(fileOrg)
+      list.push({ text: tNotice('sie_org_mismatch', { fileOrg, companyOrg: f.parsed!.preview.companyOrgNumber ?? '?' }), warn: true })
+    }
     return list
-  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, t])
+  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, unresolved, orgMismatched, t, tNotice])
 
   /* ── import ──────────────────────────────────────────────────────── */
   const lines: TheaterLine[] = [
@@ -230,6 +261,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     at(1400, () => { setShown(2); apiRef.current?.spawnAccounts() })
     const voucherSeries = settings?.default_voucher_series || 'A'
     try {
+      // Nothing is written for a file with an account no chart can hold.
+      if (unresolved.length > 0) {
+        throw new Error(t('accounts_outside_bas', { count: unresolved.length, accounts: unresolved.join(', ') }))
+      }
       // Unmapped accounts get created from the file; the mapping then points them at themselves.
       if (unmapped.length > 0) {
         const res = await fetch('/api/import/sie/create-accounts', {
@@ -251,12 +286,15 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       let writtenSoFar = 0
       const importedAccounts: string[] = []
       for (let i = 0; i < ordered.length; i++) {
+        // The file already sent finishes on the server; the next one is not
+        // started once the user has left the act (lib/onboarding-books/skip).
+        if (ctx.isLeaving()) throw new ImportStoppedError()
         setFileIdx(i)
         setPrepared(0)
         setJobPhase('preparing')
         const f = ordered[i]
         const p = f.parsed!
-        const mappings = p.mappings.map((mp) => (mp.targetAccount ? mp : { ...mp, targetAccount: mp.sourceAccount, targetName: mp.sourceName, matchType: 'exact' as const, confidence: 1, isOverride: true }))
+        const mappings = resolveOnboardingMappings(p.mappings, p.accounts).mappings
         const fd = new FormData()
         fd.append('file', f.file)
         fd.append('mappings', JSON.stringify(mappings))
@@ -268,6 +306,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           voucherSeries,
           openingBalanceSeries: defaultOpeningBalanceSeries([...(p.preview.voucherSeriesInFile ?? []), voucherSeries]),
           markImportedNoDocRequired: true,
+          ...(p.preview.orgNumberMismatch && orgConfirmedIds.includes(f.id) ? { confirmOrgNumberMismatch: true } : {}),
         }))
         const res = await fetch('/api/import/sie/execute', { method: 'POST', body: fd })
         const data = await res.json().catch(() => ({}))
@@ -307,7 +346,13 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       dispatch({ type: 'SET_WORKING', working: false })
       setReg(sieFirst ? 'card' : 'skipped')
     } catch (err) {
-      setImportError(getErrorMessage(err, { locale }))
+      // A job that ended failed or paused carries its own reason and import
+      // reference (SIEJobFailedError): shown as formatted, like ProviderStep does.
+      // Through getErrorMessage any reason not phrased in Swedish became
+      // "Något gick fel. Försök igen.", which hid why the year stopped and
+      // that a paused job is continued or undone under Importhistorik (crm#1653).
+      setImportError(err instanceof ImportStoppedError ? t('progress_failed')
+        : err instanceof SIEJobFailedError ? formatImportFailure(err.failure) : getErrorMessage(err, { locale }))
       setJobPhase(null)
       setShown(5)
       apiRef.current?.settle()
@@ -331,7 +376,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     setRegShown(1)
     dispatch({ type: 'SET_WORKING', working: true })
     try {
-      const results = await providerMigrate(cId, { importCustomers: true, importSuppliers: true, importSalesInvoices: true, importSupplierInvoices: true, importAssets: false }, (_step, progress) => {
+      // The registers go through the background import, as on the provider
+      // step: /migrate refuses them (crm#1436).
+      const results = await providerImportRegisters(cId, ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'], (imported, total) => {
+        const progress = total > 0 ? (imported / total) * 100 : 0
         setRegShown(progress < 20 ? 2 : progress < 40 ? 3 : progress < 90 ? 4 : 5)
       })
       const counts = {
@@ -367,15 +415,18 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     }
   }, [at, dispatch, loadFindings, locale, provName, t])
 
-  useProviderMessage(
-    (cId) => { setConsentId(cId); void runRegisters(cId) },
-    (reason) => { setRegError(getErrorMessage(reason, { locale })); setReg('card') },
+  // Only this step's own registers login counts: a popup left open by the
+  // provider step must not start a registers migration here.
+  const popupRef = useProviderMessage(
+    (cId) => { if (reg !== 'connecting') return; setConsentId(cId); void runRegisters(cId) },
+    (reason) => { if (reg !== 'connecting') return; setRegError(getErrorMessage(reason, { locale })); setReg('card') },
   )
 
   async function connectRegisters(providerId: string) {
     setRegError(null)
     setReg('connecting')
     const popup = openProviderWindow()
+    popupRef.current = popup
     try {
       const r = await providerConnect(providerId)
       setConsentId(r.consentId)
@@ -422,7 +473,8 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
 
       {showDrop ? (
         <>
-          <input ref={inputRef} type="file" accept=".se,.sie" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
+          {/* No accept attribute, as in SIEUploadStep: Safari greys out unregistered extensions like .se/.sie/.si and files without one, so addFiles filters with a visible reason instead. */}
+          <input ref={inputRef} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
           {files.length === 0 ? (
             <button
               type="button"
@@ -444,7 +496,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                   {f.status === 'dup' ? (
                     <span className="bks-f is-warn" style={{ marginLeft: 8 }}>
                       {f.error}{' '}
-                      {f.dupImportId ? <button type="button" className="imp-change" onClick={() => void replaceDup(f.id)}>{t('sie_replace')}</button> : null}
+                      {f.dupImportId ? <Button variant="link" className={CHANGE_LINK_CLASS} onClick={() => void replaceDup(f.id)}>{t('sie_replace')}</Button> : null}
                     </span>
                   ) : null}
                   {f.status === 'error' ? <span className="bks-f is-warn" style={{ marginLeft: 8 }}>{f.error}</span> : null}
@@ -462,7 +514,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                 <OptRows>
                   <OptRow
                     name={t('opt_ib')}
-                    desc={hasIb ? t('opt_ib_desc', { amount: ibAmount.toLocaleString('sv-SE') }) : t('opt_ib_none')}
+                    desc={hasIb ? t('opt_ib_desc', { amount: formatCurrency(ibAmount) }) : t('opt_ib_none')}
                     off={!ib}
                     locked={!hasIb}
                     control={<Switch on={ib} onToggle={() => setIbOn(!ib)} label={t('opt_ib')} locked={!hasIb} />}
@@ -475,17 +527,28 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                   />
                 </OptRows>
               ) : null}
+              {orgMismatched.length > 0 ? (
+                <div className="flex items-start justify-center gap-2" style={{ marginTop: 12 }}>
+                  <Checkbox
+                    id="sie-confirm-org-number"
+                    className="mt-0.5"
+                    checked={orgConfirmed}
+                    onCheckedChange={(checked) => setOrgConfirmedIds(checked === true ? orgMismatched.map((f) => f.id) : [])}
+                  />
+                  <label htmlFor="sie-confirm-org-number" className="text-[13px] leading-5">{tNotice('sie_org_mismatch_confirm')}</label>
+                </div>
+              ) : null}
             </>
           ) : null}
           <div className="jny-qactions">
             {files.length > 0 ? (
               <>
-                <button type="button" className="jny-btn-quiet" onClick={() => { setFiles([]); setOptsOpen(false) }}>{t('sie_other_file')}</button>
-                <button type="button" className="jny-btn-quiet" onClick={() => inputRef.current?.click()}>{t('sie_add_file')}</button>
+                <Button variant="ghost" className="text-muted-foreground" onClick={() => { setFiles([]); setOptsOpen(false) }}>{t('sie_other_file')}</Button>
+                <Button variant="ghost" className="text-muted-foreground" onClick={() => inputRef.current?.click()}>{t('sie_add_file')}</Button>
               </>
             ) : null}
             {ready.length > 0 && !parsing ? (
-              <button type="button" className="jny-btn" onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</button>
+              <Button size="lg" disabled={!orgConfirmed} onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</Button>
             ) : null}
           </div>
         </>
@@ -506,8 +569,6 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
             file: { current: fileIdx + 1, total: ordered.length },
           }}
           onApi={(api) => { apiRef.current = api }}
-          groupLabels={{ tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') }}
-          reviewLabel={t('grp_review')}
         />
       ) : null}
       {phase === 'imported' && !importError && sieFirst && reg === 'card' ? (
@@ -517,7 +578,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
             <p className="s">{t('reg_card_sub')}</p>
           </button>
           {regError ? <p className="bks-err">{regError}</p> : null}
-          <div className="jny-qactions"><button type="button" className="jny-btn-quiet" onClick={() => setReg('skipped')}>{t('reg_skip')}</button></div>
+          <div className="jny-qactions"><Button variant="ghost" className="text-muted-foreground" onClick={() => setReg('skipped')}>{t('reg_skip')}</Button></div>
         </div>
       ) : null}
       {reg === 'connecting' ? <Wait text={t('reg_connecting', { provider: provName ?? '' })} height={96} /> : null}
@@ -527,8 +588,8 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName ?? '' })} autoComplete="off" />
           {regError ? <p className="bks-err">{regError}</p> : null}
           <div className="jny-qactions" style={{ marginTop: 12 }}>
-            <button type="button" className="jny-btn-quiet" onClick={() => setReg('card')}>‹ {t('back')}</button>
-            <button type="button" className="jny-btn" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => setReg('card')}>‹ {t('back')}</Button>
+            <Button size="lg" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
           </div>
         </div>
       ) : null}
@@ -542,15 +603,15 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'imported' ? (
         <div className="jny-qactions">
           {canContinue ? (
-            <button type="button" className="jny-btn" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+            <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
               {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
-            </button>
+            </Button>
           ) : null}
           {importError ? (
             <>
-              <button type="button" className="jny-btn-quiet" onClick={() => { setPhase('drop'); setFiles([]); setModel(null); setShown(0); setTick(0); setImportError(null) }}>{t('sie_other_file')}</button>
+              <Button variant="ghost" className="text-muted-foreground" onClick={() => { setPhase('drop'); setFiles([]); setModel(null); setShown(0); setTick(0); setImportError(null) }}>{t('sie_other_file')}</Button>
               {written > 0 ? (
-                <button type="button" className="jny-btn" onClick={() => { dispatch({ type: 'IMPORTED' }); dispatch({ type: 'TO_INSIGHT' }) }}>{t('to_insight')}</button>
+                <Button size="lg" onClick={() => { dispatch({ type: 'IMPORTED' }); dispatch({ type: 'TO_INSIGHT' }) }}>{t('to_insight')}</Button>
               ) : null}
             </>
           ) : null}

@@ -5,7 +5,7 @@ import { getClient, getPool, withUserContext } from './setup'
 import { seedCompany } from './fixtures'
 
 /**
- * Covers migration 20260923170000_rename_zettle_store:
+ * Covers migration 20261120131355_rename_zettle_store:
  *   1. Renames the active connection and backfills store_label on its Zettle
  *      orders only (other connections and platforms untouched).
  *   2. Returns updated=false when the company has no active connection, and

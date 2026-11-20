@@ -62,6 +62,11 @@ describe('getAllowedFiscalYears (the default selection)', () => {
     expect([...years].sort((a, b) => a - b)).toEqual([2029, 2030, 2031])
   })
 
+  it("rolls with the Swedish year, also on New Year's night", () => {
+    const years = getAllowedFiscalYears(new Date('2026-12-31T23:30:00Z'))
+    expect([...years].sort((a, b) => a - b)).toEqual([2025, 2026, 2027])
+  })
+
   it('defaults to the real current year', () => {
     const years = getAllowedFiscalYears()
     expect(years.has(CY)).toBe(true)
@@ -132,7 +137,6 @@ describe('fetchProviderSieFiles', () => {
 
       // CY-3 is outside the allowed window and must not be fetched
       expect(getAllowedFiscalYears().has(CY - 3)).toBe(false)
-      expect(result.availableYears).toEqual([CY - 2, CY - 1])
       expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 2, CY - 1])
       expect(result.failedYears).toEqual([])
       // Every source year is NAMED with the provider's own bounds and its
@@ -164,7 +168,8 @@ describe('fetchProviderSieFiles', () => {
 
       expect(result.files).toHaveLength(1)
       expect(result.files[0].fiscalYear).toBe(CY - 1)
-      expect(result.availableYears).toEqual([CY - 2, CY - 1])
+      // Every source year is still named for the picker; only the newest is fetched.
+      expect(result.sourceYears.map((fy) => fy.year)).toEqual([CY - 3, CY - 2, CY - 1])
       const sieCalls = fetchSpy.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/sie/'))
       expect(sieCalls).toHaveLength(1)
     })
@@ -180,11 +185,27 @@ describe('fetchProviderSieFiles', () => {
       const result = await fetchProviderSieFiles('briox', 'token', undefined)
 
       expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 1])
-      expect(result.availableYears).toEqual([CY - 2, CY - 1])
       // The failed year must NOT be dropped silently: importing only the
       // surviving years would break IB/UB continuity unnoticed.
       expect(result.failedYears).toEqual([
-        { year: CY - 2, error: expect.stringContaining('404') },
+        { year: CY - 2, error: expect.stringContaining('404'), code: 'PROVIDER_SIE_FETCH_FAILED' },
+      ])
+    })
+
+    it('classifies a refused export as a closed ledger, since the year list already answered on the token (crm#1118)', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        // 403 is non-retryable. Briox says nothing more than the status, so
+        // only the year list that came back first tells this from a dead token.
+        { match: '/sie/', respond: () => new Response('forbidden', { status: 403 }) },
+      ])
+
+      const result = await fetchProviderSieFiles('briox', 'token', undefined)
+
+      expect(result.files).toEqual([])
+      expect(result.failedYears).toEqual([
+        { year: CY - 2, error: expect.stringContaining('403'), code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'permission' },
+        { year: CY - 1, error: expect.stringContaining('403'), code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'permission' },
       ])
     })
   })
@@ -215,7 +236,7 @@ describe('fetchProviderSieFiles', () => {
 
       const result = await fetchProviderSieFiles('fortnox', 'token', undefined)
 
-      expect(result.availableYears).toEqual([CY - 2, CY - 1])
+      expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 2, CY - 1])
       expect(result.files).toHaveLength(2)
       expect(result.failedYears).toEqual([])
       expect(result.files[0].rawContent).toContain('#KONTO 1930 "Företagskonto"')
@@ -285,7 +306,6 @@ describe('fetchProviderSieFiles', () => {
         years: [CY - 1, CY - 4],
       })
 
-      expect(result.availableYears).toEqual([CY - 4, CY - 1])
       expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 4, CY - 1])
       const sieUrls = fetchSpy.mock.calls
         .map((c: unknown[]) => String(c[0]))
@@ -317,6 +337,30 @@ describe('fetchProviderSieFiles', () => {
       expect(result.files).toHaveLength(2)
       expect(result.files[1].rawContent).toContain(`Företagskonto ${CY - 1}`)
       expect(result.files[1].rawContent).not.toContain('�')
+    })
+
+    it('classifies an export Fortnox refuses for a missing licence, with the reason that names the remedy (crm#1118)', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        {
+          match: '/sie/4?financialyear=',
+          respond: () =>
+            new Response(
+              JSON.stringify({
+                ErrorInformation: { error: 1, message: 'Det finns ingen aktiv licens för önskat scope.', code: 2001101 },
+              }),
+              { status: 400 },
+            ),
+        },
+      ])
+
+      const result = await fetchProviderSieFiles('fortnox', 'token', undefined)
+
+      expect(result.files).toEqual([])
+      expect(result.failedYears.map(({ year, code, reason }) => ({ year, code, reason }))).toEqual([
+        { year: CY - 2, code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'license' },
+        { year: CY - 1, code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'license' },
+      ])
     })
   })
 
@@ -496,7 +540,6 @@ describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
     const result = await fetchProviderSieFiles('wint', 'jwt-token', undefined)
 
     expect(result.failedYears).toEqual([])
-    expect(result.availableYears).toEqual([CY - 1, CY])
     expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 1, CY])
     expect(result.omittedYears).toEqual([
       { year: CY - 3, fromDate: `${CY - 3}-01-01`, toDate: `${CY - 3}-12-31`, inDefaultSelection: false },
@@ -519,12 +562,12 @@ describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
     expect(curr).toContain('#ORGNR 556699-0011')
   })
 
-  it('latestOnly renders just the newest year but lists all available years', async () => {
+  it('latestOnly renders just the newest year but still lists every source year', async () => {
     routeWint()
 
     const result = await fetchProviderSieFiles('wint', 'jwt-token', undefined, { latestOnly: true })
 
-    expect(result.availableYears).toEqual([CY - 1, CY])
+    expect(result.sourceYears.map((fy) => fy.year)).toEqual([CY - 3, CY - 1, CY])
     expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
   })
 
@@ -579,7 +622,7 @@ describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
     expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
     expect(result.files[0].rawContent).toContain('#IB 0 1930 1000.00')
     expect(result.failedYears).toEqual([
-      { year: CY - 1, error: expect.stringContaining('404') },
+      { year: CY - 1, error: expect.stringContaining('404'), code: 'PROVIDER_SIE_FETCH_FAILED' },
     ])
   })
 })

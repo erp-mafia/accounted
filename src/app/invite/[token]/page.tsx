@@ -2,15 +2,19 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { Loader2, AlertCircle, Briefcase } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { StandaloneHeading, StandalonePage, StandaloneStack } from '@/components/standalone/StandalonePage'
+import { Skeleton } from '@/components/ui/skeleton'
+import { fetchSessionUser, reloadTo, signOut } from '@/lib/auth/session-client'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
+import { INVITE_TTL_SECONDS } from '@/lib/auth/invite-ttl'
+import { INVITE_TOKEN_HEADER } from '@/lib/auth/invite-token-header'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { inviteGoneReason, type InviteGoneReason } from '@/lib/auth/invite-gone'
 
 const branding = getBranding()
 
@@ -24,25 +28,26 @@ const branding = getBranding()
  * in the database, with no way for the invitee to recover: the cookie is the
  * only copy the browser holds.
  *
- * The value is the invite TTL, `INVITE_TTL_DAYS` in lib/auth/invite-tokens.ts,
- * which is what actually bounds the token: `getInviteExpiry()` stamps
- * `company_invitations.expires_at` 7 days out at issue time and POST
- * /api/team/accept rejects anything past it with 410. `INVITE_TTL_DAYS` is a
- * module-private const in a server-only module (it imports Node's `crypto`),
- * so the number is restated here rather than imported;
- * app/invite/[token]/__tests__/invite-cookie.test.ts reads the real TTL back
- * out of `getInviteExpiry()` and fails if the two drift.
+ * The value is the invitation lifetime itself, `INVITE_TTL_SECONDS` from
+ * lib/auth/invite-ttl.ts (24 hours), which is what actually bounds the token:
+ * `getInviteExpiry()` stamps `expires_at` that far out at issue time and POST
+ * /api/team/accept rejects anything past it with 410. The constant lives in
+ * an import-free module so this client component can read it; it used to be
+ * restated here as a number. app/invite/[token]/__tests__/invite-cookie.test.ts
+ * reads the real lifetime back out of `getInviteExpiry()` and fails if the
+ * cookie and the invitation drift.
  *
- * Widening the cookie does not widen authority. Every acceptance attempt is
+ * A long-lived cookie does not widen authority. Every acceptance attempt is
  * re-authorized server-side by `requireAuth()` plus an email equality check
  * against the invitation, and the `status` transition is single-use, so a
- * surviving cookie confers nothing on its own. If the invitation expires
- * before the cookie does (the invitee sat on the mail for six days), the next
- * attempt gets a 410, which `consumeInviteCookie()` classifies as `spent` and
- * clears. Never set this beyond the invite TTL: a cookie outliving the
- * server-side bound would be lifetime the server does not honour.
+ * surviving cookie confers nothing on its own. The cookie is written when the
+ * invitee clicks, not when the invitation was issued, so it can outlast the
+ * invitation by up to its own lifetime: the next attempt then gets a 410,
+ * which `consumeInviteCookie()` classifies as `spent` and clears. Never set
+ * this beyond the invitation lifetime: that would be lifetime the server
+ * does not honour.
  */
-const INVITE_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+const INVITE_COOKIE_MAX_AGE_SECONDS = INVITE_TTL_SECONDS
 
 /**
  * The single construction site for the invite cookie. Three hops write it
@@ -68,18 +73,42 @@ interface InviteInfo {
   email: string
   expired: boolean
   alreadyHasAccount: boolean
+  /**
+   * The profile the client's byrå prepared for the company (Profiles and
+   * Suggestions): set only when a member of the company's byrå sent the
+   * invitation and picked one. The client makes no choice here.
+   */
+  preparedProfile?: { id: string; name: string; name_sv: string } | null
 }
+
+/**
+ * What the page says for an invitation that can no longer be accepted, per
+ * reason: the heading, the next step, and whether a login link helps (it does
+ * only for someone who is not signed in).
+ */
+const GONE_COPY = {
+  used: { title: 'used_title', body: 'used_description', loginLink: true },
+  used_other_account: { title: 'used_title', body: 'used_other_account_description', loginLink: false },
+  revoked: { title: 'revoked_title', body: 'revoked_description', loginLink: false },
+  expired: { title: 'expired_title', body: 'expired_description', loginLink: false },
+} as const satisfies Record<InviteGoneReason, { title: string; body: string; loginLink: boolean }>
 
 export default function InvitePage() {
   const params = useParams()
   const router = useRouter()
   const { toast } = useToast()
   const t = useTranslations('invite')
+  const locale = useLocale()
   const token = params.token as string
 
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [invite, setInvite] = useState<InviteInfo | null>(null)
+  // The invitation is spent, withdrawn or expired (410 with a reason).
+  const [gone, setGone] = useState<InviteGoneReason | null>(null)
+  // The signed-in person already joined through this invitation: not an
+  // error, they are sent into the app. Holds what they joined.
+  const [joinedName, setJoinedName] = useState<string | null>(null)
   // Email of the currently signed-in user (if any). Used to short-circuit
   // the login redirect for users who are already authenticated.
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
@@ -90,20 +119,30 @@ export default function InvitePage() {
       try {
         // Load invite info and current session in parallel: the page needs
         // both to decide which CTA to render.
-        const supabase = createClient()
-        const [inviteRes, sessionRes] = await Promise.all([
-          fetch(`/api/team/accept?token=${encodeURIComponent(token)}`),
-          supabase.auth.getUser(),
+        const [inviteRes, sessionUser] = await Promise.all([
+          // The token rides in a header, never in the request URL.
+          fetch('/api/team/accept', { headers: { [INVITE_TOKEN_HEADER]: token }, cache: 'no-store' }),
+          fetchSessionUser(),
         ])
 
         const data = await inviteRes.json()
         if (!inviteRes.ok) {
-          setError(data.error || t('invalid_invite'))
+          const reason = inviteGoneReason(data)
+          if (reason) {
+            setGone(reason)
+            return
+          }
+          setError(getErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('invalid_invite') }))
+          return
+        }
+
+        if (data.data?.alreadyMember) {
+          setJoinedName(data.data.companyName ?? '')
           return
         }
 
         setInvite(data.data)
-        setCurrentUserEmail(sessionRes.data.user?.email ?? null)
+        setCurrentUserEmail(sessionUser?.email ?? null)
       } catch {
         setError(t('load_failed'))
       } finally {
@@ -156,7 +195,7 @@ export default function InvitePage() {
       if (!res.ok) {
         toast({
           title: t('join_failed_title'),
-          description: body.error || t('unexpected_error'),
+          description: getErrorMessage(body, { locale: locale as ErrorLocale, fallback: t('unexpected_error') }),
           variant: 'destructive',
         })
         setIsJoining(false)
@@ -184,210 +223,172 @@ export default function InvitePage() {
   }
 
   const handleSignOutAndRetry = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
+    await signOut()
     // Keep the invite cookie alive so the next login/register picks it up.
     document.cookie = buildInviteCookie(token, secureCookieFlag)
-    if (invite?.alreadyHasAccount) {
-      router.push('/login')
-    } else {
-      router.push(`/register?invite=${encodeURIComponent(token)}`)
-    }
+    // Full page load: nothing rendered for the previous session stays in memory.
+    reloadTo(invite?.alreadyHasAccount ? '/login' : `/register?invite=${encodeURIComponent(token)}`)
   }
+
+  // One card for every invitation that can no longer be accepted. A pending
+  // invitation past its date (expired: true on a 200) reads the same as one
+  // already marked expired.
+  const goneCopy = gone ? GONE_COPY[gone] : invite?.expired ? GONE_COPY.expired : null
+
+  // "Din byrå har förberett: <profil>", the same muted line in every card
+  // that names the company.
+  const prepared = invite?.preparedProfile
+  const preparedLine = prepared ? (
+    <p className="text-muted-foreground">
+      {t('prepared_profile', { profile: locale === 'en' ? prepared.name : prepared.name_sv })}
+    </p>
+  ) : null
 
   if (isLoading) {
     return (
-      <div className="min-h-dvh flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
+      <StandalonePage busy>
+        <Skeleton className="h-7 w-56" />
+        <StandaloneStack>
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-11 w-full" />
+        </StandaloneStack>
+      </StandalonePage>
     )
   }
 
-  return (
-    <div className="min-h-dvh flex flex-col bg-background">
-      <header className="relative bg-[#141414] text-white overflow-hidden">
-        <div className="absolute inset-0 pointer-events-none" aria-hidden>
-          <div
-            className="absolute inset-0"
-            style={{
-              background: 'radial-gradient(ellipse at 30% -20%, rgba(255,255,255,0.04) 0%, transparent 50%)',
-            }}
-          />
-        </div>
-        <div className="relative z-10 max-w-2xl mx-auto w-full px-6 md:px-10 pt-5 pb-6 md:pt-6 md:pb-8">
-          <div className="flex items-center gap-2.5 mb-5 md:mb-6">
-            <span className="font-display text-base tracking-tight" style={{ fontWeight: 700 }}>
-              {branding.appName.toLowerCase()}
-            </span>
-          </div>
-          <div className="animate-fade-in">
-            <h1 className="font-display text-2xl md:text-3xl tracking-tight leading-[1.1]">
-              {error ? t('header_invalid') : t('header_invited')}
-            </h1>
-          </div>
-        </div>
-      </header>
-
-      <main className="flex-1">
-        <div className="max-w-lg mx-auto px-6 md:px-10 py-6 md:py-8">
-          <div className="animate-slide-up">
-            {error ? (
-              <Card className="p-6">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-medium">{error}</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {t('contact_inviter')}
-                    </p>
-                    <Link
-                      href="/login"
-                      className="text-sm text-primary hover:underline mt-3 inline-block"
-                    >
-                      {t('go_to_login')}
-                    </Link>
-                  </div>
-                </div>
-              </Card>
-            ) : invite?.expired ? (
-              <Card className="p-6">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-medium">{t('expired_title')}</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {t('expired_description')}
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            ) : isLoggedInAsInvitee ? (
-              // Already signed in as the invitee: one-click join.
-              // Prioritized over alreadyHasAccount to avoid the broken flow
-              // where a false-negative from the email check would send a
-              // logged-in user to /register, which middleware bounces to /.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <Briefcase className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {t.rich('logged_in_as', {
-                          email: currentUserEmail ?? '',
-                          strong: (chunks) => <strong>{chunks}</strong>,
-                        })}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-
-                <Button
-                  size="lg"
-                  className="w-full"
-                  onClick={handleJoinNow}
-                  disabled={isJoining}
-                >
-                  {isJoining ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {t('joining')}
-                    </>
-                  ) : (
-                    <>{t('join_named', { companyName: invite.companyName ?? '' })}</>
-                  )}
-                </Button>
-              </div>
-            ) : isLoggedInAsOther ? (
-              // Signed in as a different user: ask them to sign out first.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <Briefcase className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t.rich('wrong_account', {
-                          invitedEmail: invite.email,
-                          currentEmail: currentUserEmail ?? '',
-                          strong: (chunks) => <strong>{chunks}</strong>,
-                        })}
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {t('signout_then_login')}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-
-                <Button size="lg" className="w-full" onClick={handleSignOutAndRetry}>
-                  {t('signout_and_switch')}
-                </Button>
-              </div>
-            ) : invite?.alreadyHasAccount ? (
-              // Not signed in: email has an existing account, bounce to login.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <Briefcase className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {t.rich('existing_account', {
-                          email: invite.email,
-                          appName: branding.appName.toLowerCase(),
-                          strong: (chunks) => <strong>{chunks}</strong>,
-                        })}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-
-                <Button size="lg" className="w-full" onClick={handleAcceptExistingUser}>
-                  {t('login_and_join')}
-                </Button>
-              </div>
-            ) : invite ? (
-              // Not signed in, no existing account: register.
-              <div className="space-y-6">
-                <Card className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2.5 rounded-lg bg-muted/50">
-                      <Briefcase className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <p className="font-medium">{invite.companyName}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-
-                <Button size="lg" className="w-full" onClick={handleAccept}>
-                  {t('create_account_and_join')}
-                </Button>
-
-                <p className="text-center text-xs text-muted-foreground">
-                  {t('terms_notice')}
-                </p>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </main>
+  // What the invitation is to: the company's name, then the sentences about it.
+  const about = (name: string | null | undefined, lines: React.ReactNode) => (
+    <div data-ph-mask="">
+      <p className="text-[15px] font-medium leading-[22px] text-strong">{name}</p>
+      <div className="mt-0.5 space-y-1 text-sm text-foreground">{lines}</div>
     </div>
+  )
+
+  return (
+    // The standalone frame of the sign-in pages: what happened as the heading,
+    // what to do next under it, one primary.
+    <StandalonePage>
+      <StandaloneHeading
+        title={
+          joinedName !== null
+            ? t('header_already_member')
+            : error
+              ? t('header_invalid')
+              : goneCopy
+                ? t(goneCopy.title)
+                : t('header_invited')
+        }
+      />
+      <StandaloneStack>
+        {error ? (
+          <>
+            <p className="text-sm text-foreground">
+              {error} {t('contact_inviter')}
+            </p>
+            <Button asChild variant="outline" size="lg" className="w-full">
+              <Link href="/login">{t('go_to_login')}</Link>
+            </Button>
+          </>
+        ) : joinedName !== null ? (
+          // Already joined through this invitation: straight into the app.
+          <>
+            {about(joinedName, <p>{t('already_member_description')}</p>)}
+            {/* Full page load, as after a join: the app resolves the company context afresh. */}
+            <Button size="lg" className="w-full" onClick={() => reloadTo('/')}>
+              {t('already_member_open', { appName: branding.appName })}
+            </Button>
+          </>
+        ) : goneCopy ? (
+          <>
+            <p className="text-sm text-foreground">{t(goneCopy.body)}</p>
+            {goneCopy.loginLink && (
+              <Button asChild variant="outline" size="lg" className="w-full">
+                <Link href="/login">{t('go_to_login')}</Link>
+              </Button>
+            )}
+          </>
+        ) : isLoggedInAsInvitee ? (
+          // Already signed in as the invitee: one-click join.
+          // Prioritized over alreadyHasAccount to avoid the broken flow
+          // where a false-negative from the email check would send a
+          // logged-in user to /register, which middleware bounces to /.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>{t('invited_to_company')}</p>
+                <p>
+                  {t.rich('logged_in_as', {
+                    email: currentUserEmail ?? '',
+                    strong: (chunks) => <strong className="font-medium">{chunks}</strong>,
+                  })}
+                </p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleJoinNow} loading={isJoining}>
+              {isJoining ? t('joining') : t('join_named', { companyName: invite.companyName ?? '' })}
+            </Button>
+          </>
+        ) : isLoggedInAsOther ? (
+          // Signed in as a different user: ask them to sign out first.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>
+                  {t.rich('wrong_account', {
+                    invitedEmail: invite.email,
+                    currentEmail: currentUserEmail ?? '',
+                    strong: (chunks) => <strong className="font-medium">{chunks}</strong>,
+                  })}
+                </p>
+                <p>{t('signout_then_login')}</p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleSignOutAndRetry}>
+              {t('signout_and_switch')}
+            </Button>
+          </>
+        ) : invite?.alreadyHasAccount ? (
+          // Not signed in: email has an existing account, bounce to login.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>{t('invited_to_company')}</p>
+                <p>
+                  {t.rich('existing_account', {
+                    email: invite.email,
+                    appName: branding.appName.toLowerCase(),
+                    strong: (chunks) => <strong className="font-medium">{chunks}</strong>,
+                  })}
+                </p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleAcceptExistingUser}>
+              {t('login_and_join')}
+            </Button>
+          </>
+        ) : invite ? (
+          // Not signed in, no existing account: register.
+          <>
+            {about(
+              invite.companyName,
+              <>
+                <p>{t('invited_to_company')}</p>
+                {preparedLine}
+              </>,
+            )}
+            <Button size="lg" className="w-full" onClick={handleAccept}>
+              {t('create_account_and_join')}
+            </Button>
+            <p className="text-xs text-muted-foreground">{t('terms_notice')}</p>
+          </>
+        ) : null}
+      </StandaloneStack>
+    </StandalonePage>
   )
 }

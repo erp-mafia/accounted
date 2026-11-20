@@ -5,18 +5,15 @@ vi.mock('../trial-balance', () => ({
 }))
 
 vi.mock('../imbalance-diagnosis', () => ({
-  findUntransferredResults: vi.fn(),
   buildImbalanceDiagnosis: vi.fn(),
 }))
 
 import { generateBalanceSheet } from '../balance-sheet'
 import { generateTrialBalance } from '../trial-balance'
-import { findUntransferredResults, buildImbalanceDiagnosis } from '../imbalance-diagnosis'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { buildImbalanceDiagnosis } from '../imbalance-diagnosis'
 import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
-const mockFindUntransferred = vi.mocked(findUntransferredResults)
 const mockBuildDiagnosis = vi.mocked(buildImbalanceDiagnosis)
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -210,7 +207,6 @@ describe('generateBalanceSheet', () => {
     const equitySection = report.equity_liability_sections.find(s => s.title === 'Eget kapital')!
     expect(equitySection.subtotal).toBe(105000)
     expect(report.imbalance_diagnosis).toBeUndefined()
-    expect(mockFindUntransferred).not.toHaveBeenCalled()
   })
 
   it('includes rows with null account_class in the period result so they offset a mangled resultatavslut', async () => {
@@ -236,7 +232,6 @@ describe('generateBalanceSheet', () => {
     expect(report.total_equity_liabilities).toBe(105000)
     expect(report.equity_liability_sections.find(s => s.title === 'Årets resultat')).toBeUndefined()
     expect(report.imbalance_diagnosis).toBeUndefined()
-    expect(mockFindUntransferred).not.toHaveBeenCalled()
   })
 
   it('handles negative asset balance (net credit on class 1 account)', async () => {
@@ -283,10 +278,6 @@ describe('generateBalanceSheet', () => {
   })
 
   it('attaches imbalance_diagnosis when the report does not balance', async () => {
-    const q = createQueuedMockSupabase()
-    // Period fetch inside the diagnosis path
-    q.enqueue({ data: { period_start: '2025-03-01' } })
-
     mockTrialBalance.mockResolvedValue({
       rows: [
         makeRow({ account_number: '1930', account_class: 1, closing_debit: 1097 }),
@@ -297,27 +288,13 @@ describe('generateBalanceSheet', () => {
       isBalanced: false,
     })
 
-    const culprit = {
-      fiscal_period_id: 'p2',
-      period_name: 'Räkenskapsår 2024/2025',
-      pl_net: 97,
-    }
-    const diagnosis = {
-      differens: 97,
-      untransferred_results: [culprit],
-      message: 'Differensen beror på att resultatet för Räkenskapsår 2024/2025 …',
-    }
-    mockFindUntransferred.mockResolvedValue([culprit])
+    const diagnosis = { differens: 97, message: 'Balansrapporten balanserar inte (differens 97,00 kr).' }
     mockBuildDiagnosis.mockReturnValue(diagnosis)
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const report = await generateBalanceSheet(q.supabase as any, 'company-1', 'period-3')
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-3')
 
     expect(report.total_assets - report.total_equity_liabilities).toBe(97)
-    expect(mockFindUntransferred).toHaveBeenCalledWith(q.supabase, 'company-1', {
-      beforePeriodStart: '2025-03-01',
-    })
-    expect(mockBuildDiagnosis).toHaveBeenCalledWith([culprit], 97)
+    expect(mockBuildDiagnosis).toHaveBeenCalledWith(97)
     expect(report.imbalance_diagnosis).toEqual(diagnosis)
   })
 
@@ -332,29 +309,12 @@ describe('generateBalanceSheet', () => {
       isBalanced: true,
     })
 
+    mockBuildDiagnosis.mockReturnValue(null)
+
     const report = await generateBalanceSheet(supabase, 'company-1', 'period-1')
 
     expect(report.imbalance_diagnosis).toBeUndefined()
-    expect(mockFindUntransferred).not.toHaveBeenCalled()
-  })
-
-  it('still returns the report when the diagnosis lookup fails', async () => {
-    const q = createQueuedMockSupabase()
-    q.enqueue({ data: { period_start: '2025-03-01' } })
-
-    mockTrialBalance.mockResolvedValue({
-      rows: [makeRow({ account_number: '1930', account_class: 1, closing_debit: 500 })],
-      totalDebit: 500,
-      totalCredit: 0,
-      isBalanced: false,
-    })
-    mockFindUntransferred.mockRejectedValue(new Error('boom'))
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const report = await generateBalanceSheet(q.supabase as any, 'company-1', 'period-1')
-
-    expect(report.total_assets).toBe(500)
-    expect(report.imbalance_diagnosis).toBeUndefined()
+    expect(mockBuildDiagnosis).toHaveBeenCalledWith(0)
   })
 
   it('uses Math.round for monetary precision on subtotals', async () => {

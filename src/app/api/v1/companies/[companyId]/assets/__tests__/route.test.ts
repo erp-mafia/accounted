@@ -30,6 +30,7 @@ vi.mock('@/lib/bokslut/assets/asset-service', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { listAssets, createAsset } from '@/lib/bokslut/assets/asset-service'
 import { GET, POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -90,36 +91,14 @@ function postRequest(url: string, body: unknown, headers: Record<string, string>
 }
 
 type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 function makeSupabase(extra: Record<string, MockResult | MockResult[]> = {}) {
-  return makeFlexibleSupabase({
+  return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     companies: { data: { accounting_framework: 'k2', entity_type: 'aktiebolag' }, error: null },
     depreciation_schedules: { data: [], error: null },
     ...extra,
-  })
+  }).supabase
 }
 
 function withScopes(scopes: string[]) {
@@ -280,6 +259,61 @@ describe('POST /api/v1/companies/{companyId}/assets', () => {
       name: 'MacBook Pro 16"',
       has_posted_depreciation: false,
       bas_asset_account: '1224',
+    })
+  })
+
+  // Migration from another system (desk crm#104): an asset that arrives
+  // partly depreciated. The amount is registered, never posted.
+  describe('opening accumulated depreciation', () => {
+    const migrated = {
+      ...validBody,
+      acquisition_date: '2024-01-01',
+      opening_accumulated_depreciation: 10_666.67,
+      opening_depreciation_date: '2024-12-31',
+    }
+
+    it('returns 400 VALIDATION_ERROR when the opening amount exceeds the cost', async () => {
+      const res = await POST(
+        postRequest(LIST_URL, { ...migrated, opening_accumulated_depreciation: 32_000.01 }),
+        params,
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(JSON.stringify(body)).toContain('opening_accumulated_depreciation')
+      expect(vi.mocked(createAsset)).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 VALIDATION_ERROR when the opening date is in the future', async () => {
+      const res = await POST(
+        postRequest(LIST_URL, { ...migrated, opening_depreciation_date: '2999-01-01' }),
+        params,
+      )
+      expect(res.status).toBe(400)
+      expect(vi.mocked(createAsset)).not.toHaveBeenCalled()
+    })
+
+    it('creates the asset with the opening pair and echoes it in the register row', async () => {
+      vi.mocked(createAsset).mockResolvedValue({
+        ...ASSET,
+        acquisition_date: '2024-01-01',
+        opening_accumulated_depreciation: '10666.67',
+        opening_depreciation_date: '2024-12-31',
+      } as never)
+      const res = await POST(postRequest(LIST_URL, migrated), params)
+      expect(res.status).toBe(201)
+      expect(vi.mocked(createAsset)).toHaveBeenCalledWith(
+        expect.anything(),
+        COMPANY_ID,
+        'user-1',
+        expect.objectContaining({
+          opening_accumulated_depreciation: 10_666.67,
+          opening_depreciation_date: '2024-12-31',
+        }),
+      )
+      const body = await res.json()
+      expect(body.data.opening_accumulated_depreciation).toBe(10_666.67)
+      expect(body.data.opening_depreciation_date).toBe('2024-12-31')
     })
   })
 })

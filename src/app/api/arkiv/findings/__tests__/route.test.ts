@@ -15,15 +15,17 @@ const call = () => GET(new Request('http://localhost/api/arkiv/findings'), { par
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
 
 describe('GET /api/arkiv/findings', () => {
-  it('is 404 outside the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call())).status).toBe(404)
+  it('answers an empty list outside the rollout', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(await call())
+    expect(status).toBe(200)
+    expect(body.data).toEqual([])
   })
 
   it("lists the company's open findings, warnings first", async () => {

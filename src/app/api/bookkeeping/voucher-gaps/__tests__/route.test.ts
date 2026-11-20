@@ -9,7 +9,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn().mockResolvedValue({
     from: (...args: unknown[]) => mockFrom(...args),
     rpc: (...args: unknown[]) => mockRpc(...args),
-    auth: { getUser: () => mockAuth() },
+    auth: { getUser: () => mockAuth(), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
   }),
 }))
 
@@ -69,18 +69,48 @@ describe('GET /api/bookkeeping/voucher-gaps', () => {
     expect(response.status).toBe(400)
   })
 
-  it('returns empty result when no voucher sequences exist', async () => {
+  // A year with vouchers but no voucher_sequences row was reported as having
+  // no gaps without being checked; series A is checked, as at year-end.
+  it('checks series A when the year has no voucher sequence', async () => {
     mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
     mockFrom.mockReturnValue(mockChain({ data: [], error: null }))
+    mockRpc.mockResolvedValue({ data: [{ gap_start: 2, gap_end: 2 }], error: null })
 
     const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
-    const response = await GET(request)
+    const response = await GET(request, undefined as never)
     const body = await parseJson(response)
 
     expect(response.status).toBe(200)
-    expect(body.data.gaps).toEqual([])
-    expect(body.data.totalGaps).toBe(0)
-    expect(body.data.unexplainedGaps).toBe(0)
+    expect(mockRpc).toHaveBeenCalledWith('detect_voucher_gaps', expect.objectContaining({ p_series: 'A' }))
+    expect(body.data.totalGaps).toBe(1)
+    expect(body.data.unexplainedGaps).toBe(1)
+  })
+
+  it('returns 500 when the explanations cannot be read, instead of calling every gap unexplained', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+    let fromCallCount = 0
+    mockFrom.mockImplementation(() => {
+      fromCallCount++
+      if (fromCallCount === 1) return mockChain({ data: [{ voucher_series: 'A' }], error: null })
+      return mockChain({ data: null, error: { message: 'connection reset' } })
+    })
+    mockRpc.mockResolvedValue({ data: [{ gap_start: 5, gap_end: 7 }], error: null })
+
+    const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
+    const response = await GET(request, undefined as never)
+
+    expect(response.status).toBe(500)
+  })
+
+  it('returns 500 when gap detection fails', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+    mockFrom.mockReturnValue(mockChain({ data: [{ voucher_series: 'A' }], error: null }))
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'statement timeout' } })
+
+    const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
+    const response = await GET(request, undefined as never)
+
+    expect(response.status).toBe(500)
   })
 
   it('returns gaps with explanations', async () => {
@@ -225,7 +255,11 @@ describe('POST /api/bookkeeping/voucher-gaps', () => {
   it('returns 403 when user lacks permission', async () => {
     mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
 
-    mockFrom.mockReturnValue(mockChain({ data: null, error: { code: '42501', message: 'permission denied' } }))
+    mockFrom.mockImplementation((table: string) =>
+      table === 'fiscal_periods'
+        ? mockChain({ data: { id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' }, error: null })
+        : mockChain({ data: null, error: { code: '42501', message: 'permission denied' } }),
+    )
 
     const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps', {
       method: 'POST',
@@ -242,5 +276,65 @@ describe('POST /api/bookkeeping/voucher-gaps', () => {
 
     expect(response.status).toBe(403)
     expect(body.error).toContain('owners and admins')
+  })
+
+  // Förklara is write-once (DECISIONS 2026-10-01): the route used to upsert,
+  // overwriting a saved explanation without a trace.
+  it('returns 409 for a gap that already has an explanation, and never upserts', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+    const chains: Array<Record<string, unknown>> = []
+    mockFrom.mockImplementation((table: string) => {
+      const chain =
+        table === 'fiscal_periods'
+          ? mockChain({ data: { id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' }, error: null })
+          : mockChain({ data: null, error: { code: '23505', message: 'duplicate key value' } })
+      chains.push(chain)
+      return chain
+    })
+
+    const response = await POST(
+      makeRequest('http://localhost/api/bookkeeping/voucher-gaps', {
+        method: 'POST',
+        body: JSON.stringify({
+          fiscal_period_id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+          voucher_series: 'A',
+          gap_start: 5,
+          gap_end: 7,
+          explanation: 'A second explanation',
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      undefined as never,
+    )
+    const body = await parseJson(response)
+
+    expect(response.status).toBe(409)
+    expect(body.code).toBe('VOUCHER_GAP_ALREADY_EXPLAINED')
+    expect(chains.some((c) => (c.upsert as ReturnType<typeof vi.fn>).mock.calls.length > 0)).toBe(false)
+  })
+
+  it('returns 400 for a series outside A-Z or a reversed range, before any write', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+    mockFrom.mockReturnValue(mockChain({ data: { id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' }, error: null }))
+
+    for (const patch of [{ voucher_series: 'a1' }, { gap_start: 9, gap_end: 7 }]) {
+      const response = await POST(
+        makeRequest('http://localhost/api/bookkeeping/voucher-gaps', {
+          method: 'POST',
+          body: JSON.stringify({
+            fiscal_period_id: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+            voucher_series: 'A',
+            gap_start: 5,
+            gap_end: 7,
+            explanation: 'Test',
+            ...patch,
+          }),
+          headers: { 'Content-Type': 'application/json' },
+        }),
+        undefined as never,
+      )
+      expect(response.status).toBe(400)
+    }
+    expect(mockFrom).not.toHaveBeenCalledWith('voucher_gap_explanations')
   })
 })

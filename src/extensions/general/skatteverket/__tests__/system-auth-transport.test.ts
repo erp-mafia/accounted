@@ -45,12 +45,16 @@ const ENV_KEYS = [
   'SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL',
   'SKATTEVERKET_SYSTEM_CERT_PEM_B64',
   'SKATTEVERKET_SYSTEM_KEY_PEM_B64',
+  'SKATTEVERKET_SYSTEM_CLIENT_ID',
+  'SKATTEVERKET_SYSTEM_CLIENT_SECRET',
 ]
 let savedEnv: Record<string, string | undefined>
 
 beforeEach(() => {
   vi.clearAllMocks()
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
+  delete process.env.SKATTEVERKET_SYSTEM_CLIENT_ID
+  delete process.env.SKATTEVERKET_SYSTEM_CLIENT_SECRET
   process.env.SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL = 'https://oauth2.test.skatteverket.se/token'
   process.env.SKATTEVERKET_SYSTEM_CERT_PEM_B64 = Buffer.from(
     '-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----'
@@ -106,5 +110,60 @@ describe('mtlsTransport.fetchToken', () => {
     })
 
     await expect(mtlsTransport.fetchToken([])).rejects.toThrow('ECONNREFUSED')
+  })
+
+  it('refuses an http token URL instead of silently upgrading it (accounted#21)', async () => {
+    process.env.SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL = 'http://oauth2.test.skatteverket.se/token'
+
+    await expect(mtlsTransport.fetchToken([])).rejects.toThrow(
+      /SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL must be https/,
+    )
+    expect(mockRequest).not.toHaveBeenCalled()
+  })
+})
+
+// Skatteverket's CCG has two sysorg registrations. "Valfritt certifikat"
+// (Accounted's test application) authenticates the client with client_id and
+// client_secret in the form and takes the org certificate on the handshake;
+// "utpekat certifikat" sends client_id and the certificate, no secret. Live
+// test service, 2026-11-03: the first kind answers 200 only with the secret.
+describe('mtlsTransport.fetchToken: client authentication', () => {
+  function tokenOk() {
+    respondWith(200, (res) => {
+      res.emit('data', Buffer.from('{"access_token":"tok-1","expires_in":3600}'))
+      res.emit('end')
+    })
+  }
+  const sentForm = () => {
+    const req = mockRequest.mock.results[0].value as { write: ReturnType<typeof vi.fn> }
+    return new URLSearchParams(String(req.write.mock.calls[0][0]))
+  }
+
+  it('"valfritt certifikat": client_id and client_secret in the form, the certificate on the handshake', async () => {
+    process.env.SKATTEVERKET_SYSTEM_CLIENT_ID = 'sys-client'
+    process.env.SKATTEVERKET_SYSTEM_CLIENT_SECRET = 'sys-secret'
+    tokenOk()
+
+    await mtlsTransport.fetchToken(['ska', 'momsdeklaration', 'obr'])
+
+    const form = sentForm()
+    expect(form.get('grant_type')).toBe('client_credentials')
+    expect(form.get('client_id')).toBe('sys-client')
+    expect(form.get('client_secret')).toBe('sys-secret')
+    expect(form.get('scope')).toBe('ska momsdeklaration obr')
+    const options = mockRequest.mock.calls[0][0] as { cert: string; key: string }
+    expect(options.cert).toContain('BEGIN CERTIFICATE')
+    expect(options.key).toContain('BEGIN PRIVATE KEY')
+  })
+
+  it('"utpekat certifikat": with no secret configured, none is sent', async () => {
+    process.env.SKATTEVERKET_SYSTEM_CLIENT_ID = 'sys-client'
+    tokenOk()
+
+    await mtlsTransport.fetchToken(['obr'])
+
+    const form = sentForm()
+    expect(form.get('client_id')).toBe('sys-client')
+    expect(form.has('client_secret')).toBe(false)
   })
 })

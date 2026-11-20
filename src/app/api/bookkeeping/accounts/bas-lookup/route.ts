@@ -42,7 +42,7 @@ export const GET = withRouteContext('bookkeeping.accounts.bas-lookup', async (re
   if (numbers.length === 0) {
     return NextResponse.json({ data: [] })
   }
-  // The BAS catalogue is ~1,276 accounts — anything past that is abuse.
+  // The BAS catalogue is ~1,276 accounts - anything past that is abuse.
   if (numbers.length > 2000) {
     return NextResponse.json({ error: 'Too many account numbers' }, { status: 400 })
   }

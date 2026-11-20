@@ -79,6 +79,18 @@ describe('GET /api/salary/tax-tables/kommuner', () => {
     expect(fetchKommunTaxRates).toHaveBeenCalledWith(currentYear)
   })
 
+  it("falls back to the Swedish year on New Year's night", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      const request = new Request('http://localhost/api/salary/tax-tables/kommuner')
+      await GET(request, { params: Promise.resolve({}) })
+      expect(fetchKommunTaxRates).toHaveBeenCalledWith(2027)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('caches per year: a second request for the same year does not refetch', async () => {
     const req1 = new Request('http://localhost/api/salary/tax-tables/kommuner?year=2032')
     await GET(req1, { params: Promise.resolve({}) })

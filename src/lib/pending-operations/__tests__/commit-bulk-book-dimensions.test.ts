@@ -1,0 +1,179 @@
+/**
+ * The approval of a bulk_book_transactions op runs the operation
+ * transactions.bulk-book (lib/transactions/bulk-book.ts), whose shared
+ * dimension policy (enforceBulkBookDimensionPolicy) runs before the RPC.
+ * Staging already ran it, but rules can change and a value can be archived
+ * between staging and approval, and the RPC books in SQL without either
+ * check. The ops here are staged in the hand-written tool's shape
+ * (new_entry), which upgradeParams rewrites into the operation's input.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { eventBus } from '@/lib/events/bus'
+import { createQueuedMockSupabase } from '@/tests/helpers'
+import type { PendingOperation } from '@/types'
+
+import { commitPendingOperation } from '../commit'
+
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+// The duplicate guard and the underlag propagation have their own tests.
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: vi.fn(async () => null),
+}))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: vi.fn(async () => undefined),
+}))
+
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
+const TX = '11111111-1111-4111-8111-111111111111'
+const TX_ROW = { id: TX, amount: -400, currency: 'SEK', description: 'Byggvaror', date: '2026-05-12', journal_entry_id: null }
+
+function makeBulkBookOp(lines: Array<Record<string, unknown>>): PendingOperation {
+  const params: Record<string, unknown> = {
+    tx_ids: [TX],
+    existing_journal_entry_id: null,
+    new_entry: { description: 'Material', lines },
+    allow_duplicate: false,
+  }
+  return {
+    id: 'op-bulk-dims',
+    user_id: 'user-1',
+    company_id: 'company-1',
+    operation_type: 'bulk_book_transactions',
+    status: 'pending',
+    title: 'Samlingsverifikation -400,00 SEK 2026-05-12: Byggvaror',
+    params,
+    preview_data: {},
+    result_data: null,
+    actor_type: 'api_key',
+    actor_id: 'key-1',
+    actor_label: 'agent',
+    risk_level: 'medium',
+    agent_metadata: null,
+    rejection_category: null,
+    rejection_reason: null,
+    created_at: '2026-05-12T00:00:00Z',
+    resolved_at: null,
+    updated_at: '2026-05-12T00:00:00Z',
+  }
+}
+
+const TAGGED = [
+  { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK', dimensions: { '6': 'P001' } },
+  { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
+]
+const POSTED = { id: 'je-1', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 9, lines: [] }
+
+const UNTAGGED = [
+  { account_number: '4010', debit_amount: 400, credit_amount: 0, currency: 'SEK' },
+  { account_number: '1930', debit_amount: 0, credit_amount: 400, currency: 'SEK' },
+]
+
+function ruleRow(overrides: Record<string, unknown> = {}) {
+  return {
+    account_number: '4010',
+    rule_type: 'default',
+    dimensions: { sie_dim_no: 6, name: 'Projekt' },
+    dimension_values: { code: 'P001' },
+    ...overrides,
+  }
+}
+
+describe('commitPendingOperation(bulk_book_transactions): dimension policy at approval', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('refuses a staged tag whose value was archived since staging, before the RPC', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-bulk-dims' }, error: null }, // atomic claim pending -> committing
+      { data: [TX_ROW], error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
+      { data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }, // chart allowlist
+      { data: [], error: null }, // account_dimension_rules
+      { data: { dimensions_enabled: true }, error: null },
+      { data: [{ id: 'dim-proj', sie_dim_no: 6, name: 'Projekt', is_active: true }], error: null },
+      { data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: false }], error: null },
+      { data: null, error: null }, // dispatcher: rejected update
+    ])
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makeBulkBookOp(TAGGED))
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('är arkiverat')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses when a required rule added since staging is unsatisfied, before the RPC', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-bulk-dims' }, error: null },
+      { data: [TX_ROW], error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
+      { data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }, // chart allowlist
+      { data: [ruleRow({ rule_type: 'required', dimension_values: null })], error: null },
+      { data: null, error: null }, // dispatcher: rejected update
+    ])
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makeBulkBookOp(UNTAGGED))
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('Konto 4010 kräver Projekt')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('posts the tag of a default rule added since staging', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-bulk-dims' }, error: null },
+      { data: [TX_ROW], error: null }, // transactions
+      { data: [], error: null }, // the gate: no posted verifikat booked from the rows (#203)
+      { data: [{ account_number: '4010' }, { account_number: '1930' }], error: null }, // chart allowlist
+      { data: [ruleRow()], error: null }, // account_dimension_rules
+      { data: { dimensions_enabled: false }, error: null }, // registry validation: free text
+      { data: { ok: true, journal_entry_id: 'je-1', mode: 'create_new', linked_tx_count: 1 }, error: null }, // RPC
+      { data: POSTED, error: null }, // engine door: reload of the posted samlingsverifikat
+      { data: [], error: null }, // transaction.reconciled: the booked rows re-read
+      { data: null, error: null }, // finalize committed
+    ])
+    const committed: unknown[] = []
+    eventBus.on('journal_entry.committed', async (payload) => {
+      committed.push(payload)
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makeBulkBookOp(UNTAGGED))
+
+    expect(result.status).toBe('committed')
+    // An agent-approved samlingsverifikat is announced like any engine
+    // commit, so webhook subscribers hear about it.
+    expect(committed).toEqual([{ entry: POSTED, userId: 'user-1', companyId: 'company-1' }])
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'bulk_book_transactions',
+      expect.objectContaining({
+        p_new_entry: expect.objectContaining({
+          description: 'Material',
+          lines: [
+            expect.objectContaining({ account_number: '4010', currency: 'SEK', dimensions: { '6': 'P001' } }),
+            expect.objectContaining({ account_number: '1930' }),
+          ],
+        }),
+      })
+    )
+  })
+})

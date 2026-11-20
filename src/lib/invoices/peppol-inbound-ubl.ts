@@ -15,6 +15,7 @@
  */
 
 import { isPeppolScheme, normalizePeppolIdentifier } from '@/lib/invoices/peppol-identifiers'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 
 export type UblJsonNode = Record<string, unknown>
 
@@ -187,10 +188,8 @@ function digitsOnly(value: string | null): string {
 /** Ten-digit Swedish organisation number from an endpoint or legal id, else null. */
 export function swedishOrgNumberFrom(...candidates: Array<string | null | undefined>): string | null {
   for (const candidate of candidates) {
-    const digits = digitsOnly(candidate ?? null)
-    if (digits.length === 10) return digits
-    // Twelve-digit form (16 + orgnr) used by some senders.
-    if (digits.length === 12 && digits.startsWith('16')) return digits.slice(2)
+    const key = orgNumberKey(candidate)
+    if (key) return key
   }
   return null
 }

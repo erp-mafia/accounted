@@ -214,7 +214,7 @@ describe('saveMappings: failures are surfaced, never swallowed', () => {
 
 describe('saveMappings: where user_id comes from', () => {
   it('prefers the explicitly passed userId over the session', async () => {
-    // executeSIEImport and the MCP/API-key paths must win: their client is
+    // The MCP/API-key paths must win: their client is
     // often a cookieless service client whose session would resolve to nobody.
     const { supabase, upserts } = createRecordingSupabase({ sessionUserId: 'session-user' })
 

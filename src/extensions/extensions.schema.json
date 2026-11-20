@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Accounted Extension Configuration",
+  "description": "Configure which extensions are enabled. Run `npm run setup:extensions` after modifying.",
+  "type": "object",
+  "required": [
+    "extensions"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "extensions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "invoice-inbox",
+          "calendar",
+          "enable-banking",
+          "email",
+          "arcim-migration",
+          "tic",
+          "mcp-server",
+          "skatteverket",
+          "cloud-backup",
+          "document-extraction",
+          "whatsapp-inbox",
+          "woocommerce",
+          "stripe",
+          "shopify",
+          "zettle",
+          "mail",
+          "bolagsverket"
+        ]
+      },
+      "description": "Extension IDs to enable. Each ID must match a manifest.json in the extensions/ directory."
+    }
+  },
+  "additionalProperties": false
+}

@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock jwt module before importing api-client
 const mockGenerateJWT = vi.fn().mockReturnValue('test-jwt-token')
+const mockHasSigningCredentials = vi.fn().mockReturnValue(true)
 vi.mock('../jwt', () => ({
   generateJWT: (...args: unknown[]) => mockGenerateJWT(...args),
   getAuthorizationHeader: () => `Bearer ${mockGenerateJWT()}`,
+  hasSigningCredentials: () => mockHasSigningCredentials(),
   _resetTokenCache: vi.fn(),
 }))
 
@@ -15,8 +17,6 @@ import {
   getASPSPs,
   getAccountBalance,
   getAccountBalances,
-  getAccountTransactions,
-  getAllTransactions,
   getAllTransactionsWithRaw,
   AspspUnavailableError,
   parseRetryAfter,
@@ -26,8 +26,10 @@ import {
   probeSessionHealth,
   startAuthorization,
   createSession,
+  BANK_NOT_CONFIGURED_MESSAGE,
   type Transaction,
 } from '../api-client'
+import { isSwedishUserMessage } from '@/lib/errors/get-error-message'
 
 describe('api-client', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
@@ -77,7 +79,7 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: 900.5 })
+      expect(result).toEqual({ amount: 1000, referenceDate: '2026-09-01', type: 'closingBooked', available: 900.5 })
       expect(fetchSpy).toHaveBeenCalledTimes(1)
     })
 
@@ -102,7 +104,7 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: null })
+      expect(result).toEqual({ amount: 1000, referenceDate: '2026-09-01', type: 'closingBooked', available: null })
     })
 
     it('falls back to the first balance for booked, never to an available type by preference', async () => {
@@ -114,7 +116,7 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
+      expect(result).toEqual({ amount: 42, referenceDate: '2026-08-31', type: 'somethingElse', available: null })
     })
 
     it('prefers interimBooked (ITBD) over the generic first-entry fallback', async () => {
@@ -127,6 +129,15 @@ describe('api-client', () => {
 
       const result = await getAccountBalance('acc-1')
       expect(result?.amount).toBe(3)
+    })
+
+    it('dates the balance only with the bank\'s own day, never with today', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([{ balance_type: 'ITBD', balance_amount: { amount: '3.00', currency: 'SEK' } }])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 3, referenceDate: null, type: 'ITBD', available: null })
     })
 
     it('returns null (never a fabricated 0) when the bank reports no balances at all', async () => {
@@ -145,6 +156,54 @@ describe('api-client', () => {
 
       const result = await getAccountBalance('acc-1')
       expect(result?.amount).toBe(2)
+    })
+
+    // crm#1767: a PayPal wallet (account currency 'XXX', stored as SEK)
+    // reports one balance per currency it holds.
+    it('never picks a balance in another currency than the account', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1149.22', currency: 'USD' }, reference_date: '2026-11-09' },
+          { balance_type: 'interimAvailable', balance_amount: { amount: '99.00', currency: 'USD' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '310.40', currency: 'sek' }, reference_date: '2026-11-09' },
+          { balance_type: 'interimAvailable', balance_amount: { amount: '300.00', currency: 'SEK' } },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1', undefined, 'SEK')
+      expect(result).toEqual({ amount: 310.4, referenceDate: '2026-11-09', type: 'closingBooked', available: 300 })
+    })
+
+    it('returns null when every balance is in another currency than the account', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1149.22', currency: 'EUR' } },
+          { balance_type: 'other', balance_amount: { amount: '5.00', currency: 'USD' } },
+        ])
+      )
+
+      expect(await getAccountBalance('acc-1', undefined, 'SEK')).toBeNull()
+    })
+
+    it('keeps a balance without a usable currency code as a candidate', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '7.00', currency: 'XXX' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '8.00', currency: 'EUR' } },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1', undefined, 'SEK')
+      expect(result?.amount).toBe(7)
+    })
+
+    it('does not filter when the account currency is not a usable code', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([{ balance_type: 'closingBooked', balance_amount: { amount: '8.00', currency: 'EUR' } }])
+      )
+
+      const result = await getAccountBalance('acc-1', undefined, 'XXX')
+      expect(result?.amount).toBe(8)
     })
   })
 
@@ -217,7 +276,7 @@ describe('api-client', () => {
         )
       )
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
 
       expect(error).toBeInstanceOf(AspspUnavailableError)
       expect(error).toMatchObject({ status: 429, reason: 'rate-limited', rateLimit: { dailyQuota: true } })
@@ -287,7 +346,7 @@ describe('api-client', () => {
         new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': inTwoHours } })
       )
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
 
       expect(fetchSpy).toHaveBeenCalledTimes(1)
       expect(error).toMatchObject({ reason: 'rate-limited', rateLimit: { dailyQuota: false } })
@@ -302,7 +361,7 @@ describe('api-client', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       fetchSpy.mockResolvedValue(new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': 'soon' } }))
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
 
       expect(error).toMatchObject({ reason: 'rate-limited' })
       expect(error.rateLimit.retryAfterSeconds).toBeUndefined()
@@ -315,8 +374,9 @@ describe('api-client', () => {
       const badRequest = new Response('Bad Request', { status: 400 })
       fetchSpy.mockResolvedValueOnce(badRequest)
 
-      // getAccountTransactions throws on non-ok response
-      await expect(getAccountTransactions('acc-1')).rejects.toThrow('Failed to get transactions')
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await expect(getAllTransactionsWithRaw('acc-1')).rejects.toThrow('Failed to get transactions (400)')
+      errorSpy.mockRestore()
       expect(fetchSpy).toHaveBeenCalledTimes(1)
     })
   })
@@ -341,15 +401,60 @@ describe('api-client', () => {
         )
       })
 
-      const result = await getAllTransactions('acc-1', '2024-01-01', '2024-12-31')
+      const result = await getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
 
       // Should have exactly 100 transactions (1 per page, 100 pages)
-      expect(result).toHaveLength(100)
+      expect(result.transactions).toHaveLength(100)
       expect(fetchSpy).toHaveBeenCalledTimes(100)
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Pagination cap reached')
       )
+      // The bank still had pages: the window is incomplete (PH 195).
+      expect(result.truncated).toBe(true)
 
+      warnSpy.mockRestore()
+    })
+
+    // PH 195: Swedbank through Enable Banking answered a first import with
+    // empty pages that each carried a continuation key, past the cap. An
+    // empty result there is not "the account has no transactions".
+    it('reports empty pages that still carry a continuation key as truncated, not as an empty account', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ transactions: [], continuation_key: 'still-fetching' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        ),
+      )
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2025-10-20', '2026-10-20', 'longest')
+
+      expect(result.transactions).toHaveLength(0)
+      expect(result.rawPages).toHaveLength(100)
+      expect(result.truncated).toBe(true)
+      warnSpy.mockRestore()
+    })
+
+    it('a last page without a continuation key is a complete read, even at the cap', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let call = 0
+      fetchSpy.mockImplementation(() => {
+        call++
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(call < 100 ? { transactions: [], continuation_key: `p${call + 1}` } : { transactions: [] }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      })
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2025-10-20', '2026-10-20')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(100)
+      expect(result.truncated).toBe(false)
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Pagination cap reached'))
       warnSpy.mockRestore()
     })
   })
@@ -381,6 +486,7 @@ describe('api-client', () => {
       expect(result.rawPages).toHaveLength(2)
       expect(JSON.parse(result.rawPages[0])).toEqual(page1)
       expect(JSON.parse(result.rawPages[1])).toEqual(page2)
+      expect(result.truncated).toBe(false)
     })
 
     it('appends strategy=longest to the request URL when supplied', async () => {
@@ -653,28 +759,112 @@ describe('api-client', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2)
         warnSpy.mockRestore()
       })
-
-      it('getAllTransactions applies the same policy', async () => {
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
-
-        const failure = await getAllTransactions('acc-1', '2026-02-07', '2026-06-07', undefined, {
-          acceptedHistoryDays: 120,
-        }).catch((e) => e)
-
-        expect(failure).toBeInstanceOf(AspspUnavailableError)
-        expect(fetchSpy).toHaveBeenCalledTimes(1)
-        warnSpy.mockRestore()
-        errorSpy.mockRestore()
-      })
     })
   })
 
   // -------------------------------------------------------------------------
-  // getAllTransactions: same first-page fallbacks via the paginated path
+  // getAllTransactionsWithRaw: 422 WRONG_TRANSACTIONS_PERIOD
   // -------------------------------------------------------------------------
-  describe('getAllTransactions fallbacks', () => {
+  // On 2026-10-28 Nordea answered a normal 7-day window ending on the UTC
+  // date with this 422 for two hours, then served the same windows again. As
+  // a plain Error it parked every connection in 'error', a state the cron
+  // never selects again.
+  describe('getAllTransactionsWithRaw: 422 WRONG_TRANSACTIONS_PERIOD', () => {
+    const WRONG_PERIOD_BODY =
+      '{"code":422,"message":"Wrong transactions period requested","detail":{"message":"Invalid date range requested"},"error":"WRONG_TRANSACTIONS_PERIOD"}'
+    const wrongPeriod = () => Promise.resolve(new Response(WRONG_PERIOD_BODY, { status: 422 }))
+    const ok = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ transactions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+
+    it('a refused window the account has answered before is the bank being unavailable: one call, warn, no error log', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockImplementation(wrongPeriod)
+
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28', undefined, {
+        acceptedHistoryDays: 7,
+      }).catch((e) => e)
+
+      expect(failure).toBeInstanceOf(AspspUnavailableError)
+      expect(failure).toMatchObject({ status: 422, reason: 'window-already-accepted', dateFrom: '2026-10-21' })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(errorSpy).not.toHaveBeenCalled()
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('treating the bank as unavailable'),
+        expect.objectContaining({ status: 422, dateFrom: '2026-10-21', dateTo: '2026-10-28' })
+      )
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('a refused window wider than the accepted width is narrowed to it', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementationOnce(wrongPeriod).mockImplementationOnce(ok)
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-09-28', '2026-10-28', undefined, {
+        acceptedHistoryDays: 7,
+      })
+
+      expect(result).toMatchObject({ requestedDateFrom: '2026-09-28', effectiveDateFrom: '2026-10-21', narrowed: true })
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[1]).toContain('date_from=2026-10-21')
+      expect(urls[1]).toContain('date_to=2026-10-28')
+      warnSpy.mockRestore()
+    })
+
+    it('without an accepted width, a window no ladder rung narrows stops after one call', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementation(wrongPeriod)
+
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28').catch((e) => e)
+
+      expect(failure).toBeInstanceOf(AspspUnavailableError)
+      expect(failure).toMatchObject({ status: 422, reason: 'ladder-exhausted' })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+    })
+
+    it('drops an unsupported strategy before judging the window', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementationOnce(wrongPeriod).mockImplementationOnce(ok)
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28', 'longest', {
+        acceptedHistoryDays: 7,
+      })
+
+      expect(result.narrowed).toBe(false)
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[0]).toContain('strategy=longest')
+      expect(urls[1]).not.toContain('strategy=')
+      warnSpy.mockRestore()
+    })
+
+    it('any other 422 still fails as before', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockImplementation(() =>
+        Promise.resolve(new Response('{"code":422,"error":"SOMETHING_ELSE"}', { status: 422 }))
+      )
+
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-10-21', '2026-10-28', undefined, {
+        acceptedHistoryDays: 7,
+      }).catch((e) => e)
+
+      expect(failure).not.toBeInstanceOf(AspspUnavailableError)
+      expect(failure.message).toContain('Failed to get transactions (422)')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      errorSpy.mockRestore()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // getAllTransactionsWithRaw: typed 429 and no mid-pagination rewrite
+  // -------------------------------------------------------------------------
+  describe('getAllTransactionsWithRaw fallbacks', () => {
     const ASPSP_ERROR_BODY =
       '{"code":400,"message":"Error interacting with ASPSP","detail":"Unknown error","error":"ASPSP_ERROR"}'
 
@@ -689,7 +879,7 @@ describe('api-client', () => {
         })
       )
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch(e => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch(e => e)
 
       expect(error).toBeInstanceOf(AspspUnavailableError)
       expect(error).toMatchObject({
@@ -698,54 +888,6 @@ describe('api-client', () => {
         rateLimit: { dailyQuota: true, retryAfterSeconds: 120 },
       })
       errorSpy.mockRestore()
-    })
-
-    it('narrows the window when the ASPSP rejects the history range', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      fetchSpy
-        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // full window
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({ transactions: [{ transaction_amount: { amount: '10', currency: 'SEK' } }] }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } }
-          )
-        ) // narrowed to 90 days → success
-
-      const result = await getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
-
-      expect(result).toHaveLength(1)
-      expect(fetchSpy).toHaveBeenCalledTimes(2)
-      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
-      expect(urls[0]).toContain('date_from=2026-02-07')
-      expect(urls[1]).toContain('date_from=2026-03-09') // 90 days before date_to
-
-      warnSpy.mockRestore()
-    })
-
-    it('drops the strategy then narrows the window (Danske flow)', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      fetchSpy
-        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // strategy=longest
-        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // no strategy, full window
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify({ transactions: [] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        ) // narrowed to 90 days → success
-
-      await getAllTransactions('acc-1', '2026-02-07', '2026-06-07', 'longest')
-
-      expect(fetchSpy).toHaveBeenCalledTimes(3)
-      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
-      expect(urls[0]).toContain('strategy=longest')
-      expect(urls[1]).not.toContain('strategy=')
-      expect(urls[1]).toContain('date_from=2026-02-07')
-      expect(urls[2]).toContain('date_from=2026-03-09')
-
-      warnSpy.mockRestore()
     })
 
     it('does not rewrite the query mid-pagination', async () => {
@@ -766,7 +908,7 @@ describe('api-client', () => {
       // A continuation_key is scoped to its window, so page 2 must not narrow:
       // it fails fast instead.
       await expect(
-        getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
+        getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
       ).rejects.toThrow('Failed to get transactions (400)')
       expect(fetchSpy).toHaveBeenCalledTimes(2)
 
@@ -794,6 +936,7 @@ describe('JWT cache', () => {
         jwtCallCount.count++
         return `Bearer cached-token`
       },
+      hasSigningCredentials: () => true,
       _resetTokenCache: vi.fn(),
     }))
 
@@ -812,6 +955,66 @@ describe('convertTransaction', () => {
       ...overrides,
     }
   }
+
+  it('dates a booking or value time with an offset on the Swedish day it fell on', () => {
+    const out = convertTransaction(makeTx({ booking_date: '2026-08-31T22:01:00Z', value_date: '2026-09-01T00:01:00+02:00' }), 'SEK')
+    expect(out).toMatchObject({ date: '2026-09-01', booking_date: '2026-09-01', value_date: '2026-09-01' })
+  })
+
+  // Required<Transaction>: a field added to the type must be added here, and
+  // the toEqual below then says whether convertTransaction keeps it.
+  it('keeps every field of a full transaction that the ledger stores', () => {
+    const tx: Required<Transaction> = {
+      entry_reference: 'ENTRY-1',
+      transaction_id: 'TX-DETAILS-1',
+      // Read raw by the sync to skip entries that are not booked; never stored.
+      status: 'BOOK',
+      booking_date: '2025-03-10',
+      value_date: '2025-03-11',
+      // Read by the sync to date a BOOK entry sent without booking_date (crm#1767); never stored.
+      transaction_date: '2025-03-09',
+      transaction_amount: { amount: '12500.00', currency: 'SEK' },
+      credit_debit_indicator: 'CRDT',
+      creditor_name: 'Vårt Bolag AB',
+      creditor_account: { iban: 'SE3550000000054910000003' },
+      creditor_account_additional_identification: [],
+      creditor: { name: 'Vårt Bolag AB' },
+      debtor_name: 'Kund AB',
+      debtor_account: { iban: 'SE4550000000058398257466' },
+      debtor_account_additional_identification: [],
+      debtor: { name: 'Kund AB' },
+      remittance_information: ['Faktura 1001'],
+      reference_number: ' 1001000000017 ',
+      reference_number_schema: 'SEBG',
+      merchant_category_code: '5411',
+      bank_transaction_code: { description: 'Incoming', code: 'PMNT', sub_code: 'RCDT' },
+      proprietary_bank_transaction_code: 'BG',
+    }
+
+    expect(convertTransaction(tx, 'SEK')).toEqual({
+      id: 'ENTRY-1',
+      date: '2025-03-11',
+      booking_date: '2025-03-10',
+      value_date: '2025-03-11',
+      provider_transaction_id: 'ENTRY-1',
+      amount: 12500,
+      currency: 'SEK',
+      description: 'Faktura 1001',
+      counterparty_name: 'Kund AB',
+      counterparty_account: 'SE4550000000058398257466',
+      reference: '1001000000017',
+      merchant_category_code: '5411',
+      bank_transaction_code: 'PMNT/RCDT',
+      proprietary_bank_transaction_code: 'BG',
+    })
+  })
+
+  it('falls back to transaction_id for the bank id and leaves absent fields unset', () => {
+    const out = convertTransaction(makeTx({ transaction_id: 'TX-ONLY' }), 'SEK')
+    expect(out.provider_transaction_id).toBe('TX-ONLY')
+    expect(out.reference).toBeUndefined()
+    expect(out.value_date).toBeUndefined()
+  })
 
   it('uses remittance_information when present', () => {
     const tx = makeTx({ remittance_information: ['Faktura 123', ' '] })
@@ -1056,9 +1259,9 @@ describe('connector mode', () => {
 
   it('sends prefilled credentials with autosubmit off, and neither field when there is nothing to prefill', async () => {
     fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
-    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '5568098239' })
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '5544556672' })
     const withCredentials = JSON.parse(String(lastCall().init.body))
-    expect(withCredentials.credentials).toEqual({ companyId: '5568098239' })
+    expect(withCredentials.credentials).toEqual({ companyId: '5544556672' })
     expect(withCredentials.credentials_autosubmit).toBe(false)
     expect(withCredentials.auth_method).toBe('BANKID')
 
@@ -1139,6 +1342,69 @@ describe('connector mode', () => {
     expect(url).toContain('enablebanking.com')
     expect(headers['X-Connector-Company']).toBeUndefined()
     expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+
+  it('still routes through the proxy when the instance cannot sign itself', async () => {
+    mockHasSigningCredentials.mockReturnValue(false)
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    expect(lastCall().url).toContain('https://app.test.example/api/connect/bank/aspsps')
+    mockHasSigningCredentials.mockReturnValue(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// No route to Enable Banking at all (no connector key, no own client)
+// ---------------------------------------------------------------------------
+describe('unconfigured bank upstream', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', '')
+    vi.stubEnv('GNUBOK_CONNECT_URL', '')
+    mockHasSigningCredentials.mockReturnValue(false)
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    errorSpy.mockRestore()
+    mockHasSigningCredentials.mockReturnValue(true)
+    vi.unstubAllEnvs()
+  })
+
+  it('refuses at the door with a Swedish message instead of signing', async () => {
+    await expect(startAuthorization('Nordea', 'SE', 'https://instance.test/cb', 'state-1'))
+      .rejects.toThrow(BANK_NOT_CONFIGURED_MESSAGE)
+    // Nothing left the process, and the signer was never asked for a token
+    // it cannot mint: its error names the missing environment variable.
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mockGenerateJWT).not.toHaveBeenCalled()
+  })
+
+  it('refuses a half-set own client even with a connector key', async () => {
+    // One of the id/key variables set takes the instance out of connector
+    // mode, and without the other half it cannot sign either.
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_testsecret')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://app.test.example')
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    await expect(getASPSPs('SE')).rejects.toThrow(BANK_NOT_CONFIGURED_MESSAGE)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('names the missing variables in the log, where the operator reads them', async () => {
+    await expect(getAccountBalances('acc-1')).rejects.toThrow(BANK_NOT_CONFIGURED_MESSAGE)
+    expect(JSON.stringify(errorSpy.mock.calls)).toContain('ENABLE_BANKING_APP_ID')
+  })
+
+  it('names no environment variable: the message is what a user reads', () => {
+    expect(BANK_NOT_CONFIGURED_MESSAGE).not.toMatch(/ENABLE_BANKING|GNUBOK_|environment variable/)
+    // getErrorMessage passes a route's free-text error through only when it
+    // reads as Swedish written for the user; this one has to clear that bar.
+    expect(isSwedishUserMessage(BANK_NOT_CONFIGURED_MESSAGE)).toBe(true)
   })
 })
 
@@ -1234,5 +1500,98 @@ describe('expected-condition log levels', () => {
       expect(parseRetryAfter('999999999', now)).toBeNull()
       expect(parseRetryAfter('Fri, 01 Jan 2100 00:00:00 GMT', now)).toBeNull()
     })
+  })
+})
+
+// -------------------------------------------------------------------------
+// PSU headers: a read a person asked for is not a background read
+// -------------------------------------------------------------------------
+describe('PSU headers', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  const PSU = { 'Psu-Ip-Address': '203.0.113.7', 'Psu-User-Agent': 'Mozilla/5.0 test' }
+  const REFUSED = '{"code":422,"message":"PSU header psuIpAddress is not provided","error":"PSU_HEADER_NOT_PROVIDED"}'
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  const sentHeaders = (call: number) => new Headers((fetchSpy.mock.calls[call][1] as RequestInit).headers)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('sends the person on a transactions read when one is given', async () => {
+    fetchSpy.mockResolvedValueOnce(json({ transactions: [] }))
+
+    await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01', 'longest', { psu: PSU })
+
+    const headers = sentHeaders(0)
+    expect(headers.get('Psu-Ip-Address')).toBe('203.0.113.7')
+    expect(headers.get('Psu-User-Agent')).toBe('Mozilla/5.0 test')
+    expect(headers.get('Authorization')).toBe('Bearer test-jwt-token')
+  })
+
+  it('sends no PSU header on a background read', async () => {
+    fetchSpy.mockResolvedValueOnce(json({ transactions: [] }))
+
+    await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01')
+
+    const headers = sentHeaders(0)
+    expect(headers.get('Psu-Ip-Address')).toBeNull()
+    expect(headers.get('Psu-User-Agent')).toBeNull()
+  })
+
+  it('reads again in the background, same request, when the bank refuses the PSU headers', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(new Response(REFUSED, { status: 422 }))
+      .mockResolvedValueOnce(json({ transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' } }] }))
+
+    const result = await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01', 'longest', { psu: PSU })
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.narrowed).toBe(false)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    // Strategy and window are untouched: the refusal was about the headers.
+    expect(fetchSpy.mock.calls[1][0]).toBe(fetchSpy.mock.calls[0][0])
+    expect(sentHeaders(0).get('Psu-Ip-Address')).toBe('203.0.113.7')
+    expect(sentHeaders(1).get('Psu-Ip-Address')).toBeNull()
+    expect(sentHeaders(1).get('Psu-User-Agent')).toBeNull()
+  })
+
+  it('still answers a bank rate limit as one when the person was sent', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response('{"code":429,"message":"Consent daily limit 4 is exceeded","error":"ASPSP_RATE_LIMIT_EXCEEDED"}', { status: 429 })
+    )
+
+    const error = await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01', undefined, { psu: PSU }).catch((e) => e)
+
+    expect(error).toBeInstanceOf(AspspUnavailableError)
+    expect(error.reason).toBe('rate-limited')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends the person on a balances read and falls back to the background on a refusal', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(new Response('{"code":422,"error":"PSU_HEADER_INVALID"}', { status: 422 }))
+      .mockResolvedValueOnce(json({ balances: [{ balance_type: 'closingBooked', balance_amount: { amount: '1500.00', currency: 'SEK' } }] }))
+
+    const balance = await getAccountBalance('acc-1', PSU)
+
+    expect(balance?.amount).toBe(1500)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(sentHeaders(0).get('Psu-User-Agent')).toBe('Mozilla/5.0 test')
+    expect(sentHeaders(1).get('Psu-User-Agent')).toBeNull()
+  })
+
+  it('sends no PSU header on a background balances read', async () => {
+    fetchSpy.mockResolvedValueOnce(json({ balances: [] }))
+
+    await getAccountBalances('acc-1')
+
+    expect(sentHeaders(0).get('Psu-Ip-Address')).toBeNull()
   })
 })

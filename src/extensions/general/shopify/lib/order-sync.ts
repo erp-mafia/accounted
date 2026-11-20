@@ -4,6 +4,7 @@ import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre as round } from '@/lib/money'
 import { resolveWindowStartMs } from '@/lib/feed-sync/cursor-window'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import {
   createShopifySession,
@@ -32,11 +33,11 @@ const defaultLog = createLogger('shopify/order-sync')
  * unpaid orders for the invoice flow). AUTHORIZED/PENDING orders re-surface
  * via updatedAt once payment captures. Each refund of a paid order is a
  * separate negative row parented to its order. Rows carry the booking
- * underlag the Admin API exposes without touching Shopify's protected
- * customer data program: per-rate VAT, a line-item snapshot, gateway names.
- * Customer fields stay null (deliberate v1 decision): booking works, and
- * "Skapa faktura" starts without a prefilled customer. Nothing here books
- * anything (feed-only doctrine, same as the WooCommerce and Stripe feeds).
+ * underlag the Admin API exposes: per-rate VAT, a line-item snapshot,
+ * gateway names, and the order's country (orderCountryOf). Customer fields
+ * stay null (deliberate v1 decision): booking works, and "Skapa faktura"
+ * starts without a prefilled customer. Nothing here books anything
+ * (feed-only doctrine, same as the WooCommerce and Stripe feeds).
  *
  * The write path is upsertWebshopOrders() (lib/webshop-orders/ingest), which
  * owns FX enrichment, the frozen-row rules for booked orders and the
@@ -122,6 +123,14 @@ export interface ShopifySyncSummary {
   deadlineReached?: boolean
   /** Set when the store reported the credentials revoked (401/403). */
   revoked?: boolean
+  /**
+   * Set when the store withheld addresses from the app (protected customer
+   * data not granted; shipping and billing share the grant), so this run's
+   * rows carry no country. Orders and amounts still synced; the settings
+   * panel tells the merchant which permission to grant. The name predates
+   * the billing fallback and stays: the panel reads it over the wire.
+   */
+  shippingCountryWithheld?: boolean
 }
 
 /**
@@ -140,9 +149,15 @@ export function orderAmountUnparseable(order: Pick<ShopifyOrder, 'totalPriceSet'
   return parseAmount(order.totalPriceSet.shopMoney.amount) === null
 }
 
-/** Date part of an ISO timestamp. */
+/**
+ * The Swedish calendar day of a Shopify timestamp ("2026-10-31T23:30:00Z").
+ * The order date becomes the verifikat date, its VAT period and its FX date:
+ * a sale at 00:30 on 1 November in Stockholm belongs to November, not to the
+ * UTC day before it (#58). An unparseable value keeps its own date part.
+ */
 function isoDateOf(timestamp: string): string {
-  return timestamp.split('T')[0]
+  const ms = Date.parse(timestamp)
+  return Number.isFinite(ms) ? todayIsoStockholm(new Date(ms)) : timestamp.split('T')[0]
 }
 
 /**
@@ -344,6 +359,57 @@ function refundedTotal(order: ShopifyOrder): number {
   return sum
 }
 
+/** ISO 3166-1 alpha-2 code of an address; Shopify's ZZ ("unknown region") and junk are none. */
+function isoCountryOf(address: { countryCodeV2: string | null } | null | undefined): string | null {
+  const code = address?.countryCodeV2?.trim().toUpperCase()
+  if (!code || code === 'ZZ' || !/^[A-Z]{2}$/.test(code)) return null
+  return code
+}
+
+/**
+ * The order's destination country from its shipping address: where the goods
+ * go decides how the sale is taxed (domestic, EU distance sale under OSS,
+ * export). Null when the order ships nowhere (digital goods, local pickup) or
+ * the store withholds the address.
+ */
+export function shippingCountryOf(order: Pick<ShopifyOrder, 'shippingAddress'>): string | null {
+  return isoCountryOf(order.shippingAddress)
+}
+
+/**
+ * Whether nothing on the order is physical: the line-item page is complete
+ * and every line is a variant that needs no shipping (digital products,
+ * services). A truncated page or a line without the flag counts as shipping.
+ * Stored as webshop_orders.ships_nothing on the order and its refunds.
+ */
+function shipsNothing(order: Pick<ShopifyOrder, 'lineItems'>): boolean {
+  const { pageInfo, nodes } = order.lineItems
+  return (
+    !pageInfo.hasNextPage &&
+    nodes.length > 0 &&
+    nodes.every((line) => line.requiresShipping === false)
+  )
+}
+
+/**
+ * The country stored as webshop_orders.customer_country: the country that
+ * decides how the sale is taxed. A goods order takes its shipping
+ * (destination) country (crm#1032). An order with nothing to ship (#98) has
+ * no destination: for electronically supplied services to a consumer the
+ * place of supply is where the customer lives, and the billing address is
+ * one of the listed items of evidence for that (art. 24f(a), Implementing
+ * Regulation (EU) 282/2011), so it takes the billing country. Never billing
+ * for an order with a physical line: billing is not where goods go, and a
+ * local pickup (goods, no shipping address) stays null rather than guessed.
+ */
+export function orderCountryOf(
+  order: Pick<ShopifyOrder, 'shippingAddress' | 'billingAddress' | 'lineItems'>,
+): string | null {
+  const destination = shippingCountryOf(order)
+  if (destination) return destination
+  return shipsNothing(order) ? isoCountryOf(order.billingAddress) : null
+}
+
 /** Row status: the financial status lowercased (paid, partially_refunded, …). */
 function orderStatus(order: ShopifyOrder): string {
   return (order.displayFinancialStatus ?? 'paid').toLowerCase()
@@ -381,14 +447,20 @@ export function mapOrderToWebshopRow(
       total_tax: partTax(order.taxLines),
       vat_breakdown: buildVatBreakdown(order),
       line_items: mapLineItems(order),
-      // Deliberately null (v1): customer fields sit behind Shopify's
-      // protected customer data program. The Orders page shows "–" and
-      // "Skapa faktura" starts without a prefilled customer.
+      // Deliberately null (v1): the feed reads no customer identity (names,
+      // emails, street addresses; all protected customer data in Shopify).
+      // The Orders page shows no customer and "Skapa faktura" starts
+      // without a prefilled one.
       customer_name: null,
       customer_company: null,
       customer_email: null,
       customer_orgnr: null,
-      customer_country: null,
+      // The one address fact read: for Shopify this column holds the
+      // SHIPPING (destination) country (crm#1032), or the billing country
+      // for an order with nothing to ship (#98). Null for a local pickup or
+      // when the store withholds addresses from the app.
+      customer_country: orderCountryOf(order),
+      ships_nothing: shipsNothing(order),
       payment_method: order.paymentGatewayNames[0] ?? null,
       payment_method_title: order.paymentGatewayNames.join(', ') || null,
       gateway_reference: null,
@@ -431,7 +503,11 @@ export function mapRefundToWebshopRow(
       customer_company: null,
       customer_email: null,
       customer_orgnr: null,
-      customer_country: null,
+      // A refund reverses its order's sale, so it takes the order's
+      // country and goods-or-services reading (the Refund object carries no
+      // address of its own).
+      customer_country: orderCountryOf(order),
+      ships_nothing: shipsNothing(order),
       payment_method: order.paymentGatewayNames[0] ?? null,
       payment_method_title: order.paymentGatewayNames.join(', ') || null,
       gateway_reference: null,
@@ -545,6 +621,9 @@ export async function syncShopifyOrders(
   let failureFloorMs = Number.POSITIVE_INFINITY
   // True once the whole window was listed to its end (empty page or last page).
   let windowExhausted = false
+  // Once the store withholds addresses it does so for every order (an
+  // app-level grant), so the rest of the run stops asking.
+  let includeAddresses = true
 
   try {
     // Token exchange happens up front (the token lives ~24h, far longer than
@@ -562,7 +641,21 @@ export async function syncShopifyOrders(
         break
       }
 
-      const page = await listOrdersPage(session, { updatedAtMin, after })
+      const page = await listOrdersPage(session, {
+        updatedAtMin,
+        after,
+        includeAddresses,
+      })
+      if (page.addressesWithheld) {
+        // Not an error: amounts and VAT do not depend on it, and the rows
+        // simply carry no country. The panel tells the merchant which
+        // Shopify permission to grant.
+        summary.shippingCountryWithheld = true
+        includeAddresses = false
+        log.warn('store withholds addresses; order country left empty', {
+          connectionId: connection.id,
+        })
+      }
       if (page.orders.length === 0) {
         windowExhausted = true
         break

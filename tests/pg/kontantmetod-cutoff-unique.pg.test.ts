@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
-import { insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertFiscalPeriod, insertPostedJournalEntry, seedCompany } from './fixtures'
 
 describe('kontantmetod cut-off live marker uniqueness', () => {
   it('allows exactly one of two concurrent live markers', async () => {
@@ -45,6 +45,43 @@ describe('kontantmetod cut-off live marker uniqueness', () => {
     await expect(insertPostedJournalEntry({ ...common, voucherNumber: 22 })).rejects.toThrow(
       /uq_year_end_corporate_tax_per_period/,
     )
+  })
+
+  it('does not catch the per-invoice carry descriptions (#3440)', async () => {
+    // The live-marker index serialises the four legacy aggregate verifikat.
+    // The per-invoice carry posts one year_end verifikat per open invoice in
+    // the same period, so its descriptions must stay outside the index; the
+    // carry is serialised per invoice by record_kontantmetod_cutoff_link.
+    const seeded = await seedCompany()
+    const common = {
+      userId: seeded.userId,
+      companyId: seeded.companyId,
+      fiscalPeriodId: seeded.fiscalPeriodId,
+      entryDate: '2026-12-31',
+      sourceType: 'year_end',
+      sourceId: seeded.fiscalPeriodId,
+    }
+    await insertPostedJournalEntry({
+      ...common,
+      voucherNumber: 31,
+      description: 'Kundfaktura 1001: obetald vid bokslut (kontantmetoden)',
+    })
+    await insertPostedJournalEntry({
+      ...common,
+      voucherNumber: 32,
+      description: 'Kundfaktura 1002: obetald vid bokslut (kontantmetoden)',
+    })
+    await insertPostedJournalEntry({
+      ...common,
+      voucherNumber: 33,
+      description: 'Leverantörsfaktura 77: obetald vid bokslut (kontantmetoden)',
+    })
+    const { rows } = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM public.journal_entries
+        WHERE company_id = $1 AND source_type = 'year_end' AND status = 'posted'`,
+      [seeded.companyId],
+    )
+    expect(rows[0].n).toBe(3)
   })
 })
 
@@ -175,12 +212,12 @@ describe('kontantmetod cut-off markers', () => {
     })
   })
 
-  it('refuses a vändning marker with no mirrored cut-off, and takes it once there is one', async () => {
-    // What binds a marker to the cut-off writer without a shared secret: a
-    // vändning may only be marked when a marked cut-off for the same period is
-    // its exact mirror. Marking an arbitrary VAT-bearing entry therefore means
-    // first posting and marking that entry's mirror, which is COUNTED in the
-    // figure and hands the amount straight back.
+  it('refuses every new vändning marker from a member session, mirrored cut-off or not', async () => {
+    // The vändning is retired (#3440, 20261018131100): the year-end cut-off is
+    // carried per invoice and nothing new may be taken out of a
+    // momsdeklaration. Before, a vändning could be marked once a marked cut-off
+    // for the same period was its exact mirror; now even that real pair is
+    // refused, while the legacy cut-off kind itself stays markable.
     const seeded = await seedCompany()
     const common = {
       userId: seeded.userId,
@@ -200,8 +237,17 @@ describe('kontantmetod cut-off markers', () => {
         { accountNumber: '3001', debitAmount: 0, creditAmount: 1000 },
       ],
     })
+    // The vändning was booked on the next year's first day, in that year.
+    const nextYearId = await insertFiscalPeriod({
+      userId: seeded.userId,
+      companyId: seeded.companyId,
+      name: '2027',
+      periodStart: '2027-01-01',
+      periodEnd: '2027-12-31',
+    })
     const reversalId = await insertPostedJournalEntry({
       ...common,
+      fiscalPeriodId: nextYearId,
       voucherNumber: 161,
       entryDate: '2027-01-01',
       description: 'Vändning',
@@ -211,46 +257,32 @@ describe('kontantmetod cut-off markers', () => {
         { accountNumber: '3001', debitAmount: 1000, creditAmount: 0 },
       ],
     })
-    const unrelatedId = await insertPostedJournalEntry({
-      ...common,
-      voucherNumber: 162,
-      entryDate: '2027-01-01',
-      description: 'Inte en vändning',
-      lines: [
-        { accountNumber: '2611', debitAmount: 500, creditAmount: 0 },
-        { accountNumber: '1930', debitAmount: 0, creditAmount: 500 },
-      ],
-    })
 
     await withUserContext(seeded.userId, async (client) => {
-      // No cut-off marker yet: the vändning cannot be marked at all.
+      // No cut-off marker yet: refused.
       await expect(
         client.query(INSERT_MARKER, [
           seeded.companyId, seeded.fiscalPeriodId, 'receivable_reversal', reversalId,
         ]),
-      ).rejects.toThrow(/requires an already marked cut-off/)
+      ).rejects.toThrow(/vändning markers are retired/)
     })
 
     await withUserContext(seeded.userId, async (client) => {
       await client.query(INSERT_MARKER, [
         seeded.companyId, seeded.fiscalPeriodId, 'receivable', cutoffId,
       ])
-      // Now the mirror exists, so the real vändning goes through ...
-      await client.query(INSERT_MARKER, [
-        seeded.companyId, seeded.fiscalPeriodId, 'receivable_reversal', reversalId,
-      ])
-      // ... but an unrelated year-end entry still cannot ride along on it.
+      // The exact mirror of a marked cut-off: still refused.
       await expect(
         client.query(INSERT_MARKER, [
-          seeded.companyId, seeded.fiscalPeriodId, 'payable_reversal', unrelatedId,
+          seeded.companyId, seeded.fiscalPeriodId, 'receivable_reversal', reversalId,
         ]),
-      ).rejects.toThrow(/requires an already marked cut-off/)
+      ).rejects.toThrow(/vändning markers are retired/)
     })
   })
 
-  it('lets the service role, the MCP commit path, mark a valid pair', async () => {
+  it('lets the service role mark a legacy cut-off, but no vändning', async () => {
     // The guard runs SECURITY INVOKER, so it has to work for a caller that
-    // bypasses RLS as well as for a member session.
+    // bypasses RLS (the MCP commit path) as well as for a member session.
     const seeded = await seedCompany()
     const common = {
       userId: seeded.userId,
@@ -270,8 +302,16 @@ describe('kontantmetod cut-off markers', () => {
         { accountNumber: '5410', debitAmount: 1000, creditAmount: 0 },
       ],
     })
+    const nextYearId = await insertFiscalPeriod({
+      userId: seeded.userId,
+      companyId: seeded.companyId,
+      name: '2027',
+      periodStart: '2027-01-01',
+      periodEnd: '2027-12-31',
+    })
     const reversalId = await insertPostedJournalEntry({
       ...common,
+      fiscalPeriodId: nextYearId,
       voucherNumber: 171,
       entryDate: '2027-01-01',
       description: 'Vändning leverantörsskulder',
@@ -286,9 +326,13 @@ describe('kontantmetod cut-off markers', () => {
       await client.query(INSERT_MARKER, [
         seeded.companyId, seeded.fiscalPeriodId, 'payable', cutoffId,
       ])
-      await client.query(INSERT_MARKER, [
-        seeded.companyId, seeded.fiscalPeriodId, 'payable_reversal', reversalId,
-      ])
+      await client.query('SAVEPOINT reversal')
+      await expect(
+        client.query(INSERT_MARKER, [
+          seeded.companyId, seeded.fiscalPeriodId, 'payable_reversal', reversalId,
+        ]),
+      ).rejects.toThrow(/vändning markers are retired/)
+      await client.query('ROLLBACK TO SAVEPOINT reversal')
       const res = await client.query<{ kind: string }>(
         `SELECT kind FROM public.kontantmetod_cutoff_entries
           WHERE company_id = $1 ORDER BY kind`,
@@ -296,7 +340,7 @@ describe('kontantmetod cut-off markers', () => {
       )
       return res.rows.map((row) => row.kind)
     })
-    expect(marked).toEqual(['payable', 'payable_reversal'])
+    expect(marked).toEqual(['payable'])
   })
 
   it('is append-only: no UPDATE or DELETE for any API role, and anon sees nothing', async () => {

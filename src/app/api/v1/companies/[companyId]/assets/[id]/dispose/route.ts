@@ -19,7 +19,6 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { disposeAsset, previewAssetDisposal } from '@/lib/bokslut/assets/asset-service'
 import {
   AssetViewSchema,
-  DisposalPreviewSchema,
   DisposeAssetSchema,
   assetView,
   disposalPreviewView,
@@ -80,6 +79,8 @@ registerEndpoint({
           bas_accumulated_account: '1229',
           bas_expense_account: '7832',
           k3_components: null,
+          opening_accumulated_depreciation: 0,
+          opening_depreciation_date: null,
           notes: null,
           disposed_at: '2026-09-15',
           disposal_type: 'sale',

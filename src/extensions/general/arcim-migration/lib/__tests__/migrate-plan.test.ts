@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildMigrateRequests, mergeMigrationResults, migrationProvedGrant } from '../migrate-plan'
+import { buildMigrateRequests, mergeMigrationResults } from '../migrate-plan'
 import type { MigrationResults } from '../../types'
 
 /**
@@ -11,15 +11,9 @@ import type { MigrationResults } from '../../types'
 
 describe('buildMigrateRequests', () => {
   it('emits one request per selected step, in run order, with one flag on each', () => {
-    const requests = buildMigrateRequests('consent-1', {
-      importSalesInvoices: true,
-      importCustomers: true,
-      importSupplierInvoices: true,
-    })
+    const requests = buildMigrateRequests('consent-1', { importAssets: true, importCompanyInfo: true })
 
-    expect(requests.map((r) => r.step)).toEqual([
-      'importCustomers', 'importSalesInvoices', 'importSupplierInvoices',
-    ])
+    expect(requests.map((r) => r.step)).toEqual(['importCompanyInfo', 'importAssets'])
     for (const request of requests) {
       const on = Object.entries(request.body)
         .filter(([key, value]) => key.startsWith('import') && value === true)
@@ -30,18 +24,14 @@ describe('buildMigrateRequests', () => {
   })
 
   it('runs reconciliation and party suggestions only in the last request', () => {
-    const requests = buildMigrateRequests('consent-1', {
-      importCustomers: true,
-      importSuppliers: true,
-      importSupplierInvoices: true,
-    })
+    const requests = buildMigrateRequests('consent-1', { importCompanyInfo: true, importAssets: true })
 
-    expect(requests.map((r) => r.body.reconcileVouchers)).toEqual([false, false, true])
-    expect(requests.map((r) => r.body.suggestParties)).toEqual([false, false, true])
+    expect(requests.map((r) => r.body.reconcileVouchers)).toEqual([false, true])
+    expect(requests.map((r) => r.body.suggestParties)).toEqual([false, true])
   })
 
   it('a single selected step is also the last one', () => {
-    const [only, ...rest] = buildMigrateRequests('consent-1', { importSalesInvoices: true })
+    const [only, ...rest] = buildMigrateRequests('consent-1', { importAssets: true })
     expect(rest).toHaveLength(0)
     expect(only.body.reconcileVouchers).toBe(true)
     expect(only.body.suggestParties).toBe(true)
@@ -53,8 +43,8 @@ describe('buildMigrateRequests', () => {
   })
 
   it('carries a Swedish label per step for the progress line', () => {
-    const [request] = buildMigrateRequests('consent-1', { importSalesInvoices: true })
-    expect(request.label).toBe('Importerar kundfakturor...')
+    const [request] = buildMigrateRequests('consent-1', { importAssets: true })
+    expect(request.label).toBe('Importerar anläggningstillgångar...')
   })
 })
 
@@ -88,19 +78,5 @@ describe('mergeMigrationResults', () => {
     const into: MigrationResults = { customers: { total: 1, imported: 1, skipped: 0 } }
     expect(mergeMigrationResults(into, undefined)).toEqual(into)
     expect(mergeMigrationResults(into, null)).toEqual(into)
-  })
-})
-
-describe('migrationProvedGrant', () => {
-  it('is false until some register returned rows', () => {
-    expect(migrationProvedGrant({})).toBe(false)
-    expect(migrationProvedGrant({ customers: { total: 0, imported: 0, skipped: 0 } })).toBe(false)
-    expect(migrationProvedGrant({ companyInfo: { imported: false } })).toBe(false)
-  })
-
-  it('is true once any register answered with rows, imported or skipped', () => {
-    expect(migrationProvedGrant({ customers: { total: 3, imported: 0, skipped: 3 } })).toBe(true)
-    expect(migrationProvedGrant({ suppliers: { total: 1, imported: 1, skipped: 0 } })).toBe(true)
-    expect(migrationProvedGrant({ companyInfo: { imported: true } })).toBe(true)
   })
 })

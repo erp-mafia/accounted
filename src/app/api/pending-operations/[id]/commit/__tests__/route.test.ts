@@ -10,7 +10,21 @@ import {
 import { eventBus } from '@/lib/events/bus'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 
-const { supabase: mockSupabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCalls } = createQueuedMockSupabase()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+// Booking review rules (accounted#130): none in these tests; the queued mock
+// would otherwise hand their read a response queued for the operation.
+vi.mock('@/lib/booking-review/rules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/booking-review/rules')>()),
+  loadActiveBookingReviewRules: vi.fn(async () => []),
+}))
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -52,7 +66,22 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   convertToSEK: vi.fn((amount: number, rate: number) => Math.round(amount * rate * 100) / 100),
 }))
 
+// The categorize service's chart pre-validation and period-lock pre-check
+// have their own tests; open and complete here.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+const mockRecordAppApproval = vi.fn()
+vi.mock('@/lib/pending-operations/record-app-approval', () => ({
+  recordAppApproval: (...args: unknown[]) => mockRecordAppApproval(...args),
+}))
+
 import { POST } from '../route'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 
 describe('POST /api/pending-operations/:id/commit', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -85,6 +114,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
     expect(status).toBe(404)
     expect(body.error).toContain('not found')
+    expect(mockRecordAppApproval).not.toHaveBeenCalled()
   })
 
   it('returns 409 when operation already committed', async () => {
@@ -102,12 +132,19 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
     const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
     const response = await POST(request, routeParams)
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
-    // The executor's English error string maps to the Swedish HTTP-409
-    // fallback: raw English never reaches the toast (issue #337).
-    expect(body.error).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
+    // A second approval of an operation already approved (the row a click
+    // hit before the list dropped it): the registered "already handled"
+    // answer the v1 approve door gives, not the generic conflict text that
+    // read as a failed approval in the toast. Swedish, never raw English.
+    expect(body.error.code).toBe('PENDING_OPERATION_NOT_PENDING')
+    expect(body.error.message).toBe('Åtgärden är redan hanterad och kan inte godkännas eller avvisas igen.')
+    // The attempt is recorded with its outcome, as the MCP and API doors do.
+    expect(mockRecordAppApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ commitMethod: 'user_accept', outcome: 'failed' }),
+    )
   })
 
   describe('categorize_transaction', () => {
@@ -133,6 +170,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: pendingOp },                         // fetch pending op
         { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction
+        { data: [] },                                 // the gate: no posted verifikat booked from the row (#203)
         { data: settings },                           // fetch company settings
         { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period check
@@ -165,6 +203,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: pendingOp },                         // route fetch op
         { data: { id: 'op-1' } },                    // CAS claim (pending -> committing)
         { data: tx },                                 // fetch transaction
+        { data: [] },                                 // the gate: no posted verifikat booked from the row (#203)
         { data: settings },                           // fetch company settings
         { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period exists
@@ -183,6 +222,52 @@ describe('POST /api/pending-operations/:id/commit', () => {
       expect(body.error.account_numbers).toEqual(['2614', '2645'])
     })
 
+    it('answers a possible duplicate with the candidate and keeps the proposal pending', async () => {
+      const candidate = {
+        transaction_id: null,
+        journal_entry_id: '7b1f6f0e-51c4-4a0a-9a1e-0f5e3c1b2a10',
+        voucher_label: 'A2',
+        entry_date: '2026-03-30',
+        description: 'Inbetalning kundfaktura 2026001',
+        amount: -500,
+      }
+      vi.mocked(detectBookingDuplicate).mockResolvedValueOnce(candidate as never)
+      const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+
+      enqueueMany([
+        { data: pendingOp },                         // fetch pending op
+        { data: { id: 'op-1' } },                    // CAS claim
+        { data: tx },                                 // fetch transaction
+        { data: [] },                                 // the gate: no posted verifikat booked from the row
+        { data: null, error: null },                  // dispatcher releases the op back to 'pending'
+      ])
+
+      const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
+      const response = await POST(request, routeParams)
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details: { candidate: { journal_entry_id: string } } }
+      }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+      expect(body.error.details.candidate.journal_entry_id).toBe(candidate.journal_entry_id)
+      // Claimed, then handed back: never rejected.
+      const updates = findCalls('pending_operations', 'update').map(([payload]) => (payload as { status: string }).status)
+      expect(updates).toEqual(['committing', 'pending'])
+      expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 for a book-anyway that names no verifikat id, before reading the operation', async () => {
+      const request = createMockRequest('/api/pending-operations/op-1/commit', {
+        method: 'POST',
+        body: { expected_duplicate_journal_entry_id: 'not-a-uuid' },
+      })
+      const response = await POST(request, routeParams)
+
+      expect(response.status).toBe(400)
+      expect(mockSupabase.from).not.toHaveBeenCalled()
+    })
+
     it('returns 409 when transaction already categorized', async () => {
       const tx = makeTransaction({ id: 'tx-1', journal_entry_id: 'existing-je' })
 
@@ -190,19 +275,24 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: pendingOp },                         // fetch pending op
         { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction (already has JE)
-        { data: { status: 'posted' } },              // hasLiveJournalEntryLink: existing JE is live
+        { data: [{ id: 'existing-je', status: 'posted' }] }, // assertTransactionBookable: existing JE is live
         { data: null, error: null },                  // auto-reject update
       ])
 
       const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
       const response = await POST(request, routeParams)
-      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; message: string; details: { operation_status: string } }
+      }>(response)
 
       expect(status).toBe(409)
-      // Known-pattern translation of the executor's English message (#337).
-      expect(body.error).toBe(
+      // The structured refusal (#206): the code, Swedish for a person (#337),
+      // and that this refusal closed the proposal.
+      expect(body.error.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
+      expect(body.error.message).toBe(
         'Transaktionen är redan bokförd. Ångra kategoriseringen om du vill ändra den.',
       )
+      expect(body.error.details.operation_status).toBe('rejected')
     })
   })
 
@@ -236,6 +326,16 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       expect(status).toBe(200)
       expect(body.data.customer_id).toBe('cust-1')
+      // A person approving in the app leaves the same approval record as
+      // the MCP and API doors, so the approval channel is never unknown.
+      expect(mockRecordAppApproval).toHaveBeenCalledTimes(1)
+      expect(mockRecordAppApproval).toHaveBeenCalledWith({
+        companyId: 'company-1',
+        userId: 'user-1',
+        operation: expect.objectContaining({ id: 'op-1', operation_type: 'create_customer' }),
+        commitMethod: 'user_accept',
+        outcome: 'committed',
+      })
     })
   })
 

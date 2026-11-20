@@ -115,8 +115,8 @@ describe('graph-api', () => {
         body: 'Vilket företag gäller kvittot?',
         template: TEMPLATE.m6CompanyQuestion,
         buttons: [
-          { id: 'company-live', title: 'Capelix AB' },
-          { id: 'company-archived', title: 'Capelix AB' },
+          { id: 'company-live', title: 'Exempelbolaget AB' },
+          { id: 'company-archived', title: 'Exempelbolaget AB' },
         ],
       })
 
@@ -146,8 +146,8 @@ describe('graph-api', () => {
         buttonLabel: 'Välj företag',
         rows: [
           { id: 'c-1', title: 'Bolag A AB' },
-          { id: 'c-2', title: 'Wennberg Fastighetsförvaltning AB' },
-          { id: 'c-3', title: 'Wennberg Fastighetsförvaltning Holding AB' },
+          { id: 'c-2', title: 'Exempel Fastighetsförvaltning AB' },
+          { id: 'c-3', title: 'Exempel Fastighetsförvaltning Holding AB' },
           { id: 'c-4', title: 'Bolag D AB' },
         ],
       })

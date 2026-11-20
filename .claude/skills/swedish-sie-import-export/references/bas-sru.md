@@ -1,5 +1,18 @@
 # BAS Kontoplan and SRU Code Reference for SIE4
 
+<!-- toc -->
+**Contents**
+
+- [Account class hierarchy](#account-class-hierarchy)
+- [Account type (#KTYP) behavior in SIE4](#account-type-ktyp-behavior-in-sie4)
+- [Key accounts for SIE validation](#key-accounts-for-sie-validation)
+- [SRU codes](#sru-codes)
+- [Account class rules for SIE validation](#account-class-rules-for-sie-validation)
+- [Year-end closing and IB/UB flow](#year-end-closing-and-ibub-flow)
+- [BAS version handling in SIE](#bas-version-handling-in-sie)
+
+<!-- /toc -->
+
 ## Account class hierarchy
 
 BAS uses a 4-digit decimal system: first digit = class, first two = group, all four = specific account.
@@ -52,7 +65,7 @@ These accounts appear frequently in SIE files and have special significance:
 
 ### Income statement (3xxx-8xxx)
 - **3010-3099** Försäljning varor/tjänster (sales revenue)
-- **3740** Öres- och kronutjämning (öre equalization, used to balance rounding; BAS has no 3741)
+- **3740** Öres- och kronutjämning (rounding differences, öresutjämning; BAS has no 3741)
 - **4010** Varuinköp (cost of goods purchased)
 - **5010** Lokalhyra (office rent)
 - **6110** Kontorsmaterial (office supplies)
@@ -60,8 +73,10 @@ These accounts appear frequently in SIE files and have special significance:
 - **6230** Datakommunikation (internet/data)
 - **6570** Bankkostnader (bank charges)
 - **7010** Löner (salaries)
-- **7210** Arbetsgivaravgifter (employer contributions)
-- **7510** Avskrivningar maskiner/inventarier (depreciation)
+- **7210** Löner tjänstemän och företagsledare
+- **7510** Arbetsgivaravgifter (employer contributions)
+- **7831** Avskrivningar på maskiner och andra tekniska anläggningar (depreciation, machinery)
+- **7832** Avskrivningar på inventarier, verktyg och installationer (depreciation, equipment)
 - **8310** Ränteintäkter (interest income)
 - **8410** Räntekostnader (interest expenses)
 - **8910** Skatt på årets resultat (income tax on profit, AB)
@@ -121,6 +136,13 @@ SRU mappings change between taxation years. A file with `#TAXAR 2023` uses 2023'
 - Some systems (Visma Bokföring) don't support them
 - May or may not appear in SIE exports depending on system
 - No mandatory #IB/#UB or #RES requirements
+
+## Year-end closing and IB/UB flow
+
+1. Closing entries (J-series) zero out all result accounts (3xxx-8xxx) by transferring net result to account 2099 (Årets resultat)
+2. After closing: UB for result accounts = 0, UB for equity reflects accumulated result
+3. These UB values become IB for next year
+4. #RES records capture what result accounts held during the year before closing
 
 ## BAS version handling in SIE
 

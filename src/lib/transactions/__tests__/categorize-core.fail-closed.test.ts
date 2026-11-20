@@ -49,7 +49,19 @@ vi.mock('@/lib/api/v1/check-period-lock', () => ({
   checkPeriodLock: (...args: unknown[]) => mockCheckPeriodLock(...args),
 }))
 
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { categorizeMatchedTransaction } from '../categorize-core'
+import { TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 
 const TX_ID = '00000000-0000-4000-8000-0000000000aa'
 
@@ -80,11 +92,11 @@ const settingsRow = { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }
  */
 function enqueueUpToEngine(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
   enqueue({ data: txRow() }) // transactions select
+  enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
   enqueue({ data: settingsRow }) // company_settings
   enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
   enqueue({ data: [] }) // ensureFiscalPeriod: no OPEN period covers the date
-  enqueue({ data: [{ period_start: '2024-01-01' }] }) // earliest period start (pre-FY guard passes)
-  enqueue({ data: null }) // ensureFiscalPeriod upsert; its outcome is ignored by the caller
+  enqueue({ data: [{ id: 'fp-2024', period_start: '2024-01-01', period_end: '2024-12-31' }] }) // the recorded year, closed
 }
 
 beforeEach(() => {
@@ -195,5 +207,38 @@ describe('categorizeMatchedTransaction: private marking in a locked period (issu
 
     expect(result.status).toBe(400)
     expect(result.errorCode).toBe('PERIOD_LOCKED')
+  })
+})
+
+// Agent feedback seq 887729: a foreign row with no SEK value used to post the
+// foreign figure as kronor. The engine now refuses it; the core answers with a
+// coded 400 (not a rethrow the approval executor would turn into an uncoded
+// English rejection) and writes nothing.
+describe('categorizeMatchedTransaction: a foreign row without a SEK value', () => {
+  it('refuses with TX_MISSING_SEK_VALUE and writes nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: txRow({ amount: -200, currency: 'CAD', amount_sek: null, exchange_rate: null }) })
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
+    enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no CAD cash account -> 1930
+    enqueue({ data: [{ id: 'fp-2024' }] }) // ensureFiscalPeriod: an open period covers the date
+    mockCreateJE.mockRejectedValue(new TransactionMissingSekValueError(TX_ID, 'CAD', '2024-11-15'))
+    mockCheckPeriodLock.mockResolvedValue({ locked: false })
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'private' },
+    )
+
+    expect(result.status).toBe(400)
+    expect(result.errorCode).toBe('TX_MISSING_SEK_VALUE')
+    expect(result.error).toMatch(/saknar SEK-belopp och växelkurs/)
+    expect(result.data).toBeUndefined()
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(mockUpsertTemplate).not.toHaveBeenCalled()
+    expect(mockReverseOrphanedJE).not.toHaveBeenCalled()
   })
 })

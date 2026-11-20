@@ -23,15 +23,40 @@ const call = (body: unknown) =>
   )
 const settle = (outcome: unknown) => (recordHumanFields as ReturnType<typeof vi.fn>).mockResolvedValue(outcome)
 
+// The resolver reports the caller's role on the facts object it is handed;
+// withRouteContext's write guard reads it from there.
+function asRole(role: string) {
+  ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockImplementation(async (_s: unknown, _u: unknown, resolved?: { role?: string }) => {
+    if (resolved) resolved.role = role
+    return 'company-1'
+  })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
-  ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
+  asRole('member')
 })
 
 describe('POST /api/documents/[id]/extraction/fields', () => {
+  it('answers 401 without a session and records nothing', async () => {
+    ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({
+      error: Response.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    expect((await parseJsonResponse(await call({ fields: { interest_rate: 11.1 } }))).status).toBe(401)
+    expect(recordHumanFields).not.toHaveBeenCalled()
+  })
+
+  it('is 403 for a viewer and records nothing through the service client', async () => {
+    asRole('viewer')
+    enqueue({ data: { id: DOC } })
+    expect((await parseJsonResponse(await call({ fields: { interest_rate: 11.1 } }))).status).toBe(403)
+    expect(recordHumanFields).not.toHaveBeenCalled()
+    expect(enqueueDocumentJob).not.toHaveBeenCalled()
+  })
+
   it('rejects an empty field map and values that are not scalars', async () => {
     expect((await parseJsonResponse(await call({ fields: {} }))).status).toBe(400)
     expect((await parseJsonResponse(await call({ fields: { principal: { nested: true } } }))).status).toBe(400)
@@ -43,7 +68,7 @@ describe('POST /api/documents/[id]/extraction/fields', () => {
     expect(recordHumanFields).not.toHaveBeenCalled()
   })
 
-  it('records the person\'s values on top of the current record', async () => {
+  it('records a member\'s values on top of the current record', async () => {
     enqueue({ data: { id: DOC } })
     settle({ status: 'extracted', extractionId: 'ext-2', schemaType: 'agreement.loan', reviewFields: [] })
     const { status, body } = await parseJsonResponse(await call({ fields: { interest_rate: '11,10', security: null } }))

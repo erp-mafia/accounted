@@ -5,6 +5,7 @@ import {
   type AiProvider,
 } from './provider'
 import type { AiCapabilities, AiPdfMode, AiStatus, AiTier } from './types'
+import { AI_CALL_LIMIT_MS } from './call-limit'
 
 /**
  * Environment parsing for the AI layer. Read on every call (cheap string
@@ -25,6 +26,9 @@ import type { AiCapabilities, AiPdfMode, AiStatus, AiTier } from './types'
  *   AI_STRICT_JSON           OpenAI-compatible only: use response_format json_schema (default false)
  *   AI_PDF_MODE              auto | native | rasterize (auto = native on Claude, rasterize elsewhere)
  *   AI_PDF_MAX_PAGES         pages rasterized per PDF (default 4)
+ *   AI_CALL_TIMEOUT_SECONDS  how long one structured answer or one document reading may take,
+ *                              retries included (default 120; lib/ai/call-limit.ts). A slow local
+ *                              model may need more; a scheduled run still ends its calls at its own stop.
  */
 
 export interface ResolvedAiConfig {
@@ -41,12 +45,16 @@ export interface ResolvedAiConfig {
   strictJson: boolean
   pdfMode: AiPdfMode
   pdfMaxPages: number
+  /** The time limit of one structured answer or document reading whose caller set none (lib/ai/call-limit.ts). */
+  callLimitMs: number
 }
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5'
-// Bedrock knows Haiku 4.5 only by its versioned id; the Anthropic API only by the bare one.
-const DEFAULT_CHEAP_CLAUDE_MODEL = 'claude-haiku-4-5-20251001'
-const DEFAULT_CHEAP_BEDROCK_MODEL = 'claude-haiku-4-5-20251001-v1:0'
+// Reading and classifying (the extraction and cheap tiers) run on Haiku 5.5;
+// conversation and deep reasoning stay on Sonnet. One bare id on both
+// backends: Bedrock serves it as eu.anthropic.claude-haiku-5-5 (toProviderModelId
+// adds the prefix), unlike Haiku 4.5's versioned Bedrock-only id.
+const DEFAULT_READING_CLAUDE_MODEL = 'claude-haiku-5-5'
 const DEFAULT_EXTRACTION_MAX_TOKENS = 8192
 const DEFAULT_PDF_MAX_PAGES = 4
 
@@ -99,7 +107,7 @@ export function resolveTierModel(tier: AiTier, provider: AiProvider = resolveAiP
   const specific = env(TIER_VARS[tier]) ?? env(LEGACY_TIER_VARS[tier]) ?? env('AI_MODEL')
   if (specific) return specific
   if (provider === 'openai-compatible') return null
-  if (tier === 'cheap') return provider === 'bedrock' ? DEFAULT_CHEAP_BEDROCK_MODEL : DEFAULT_CHEAP_CLAUDE_MODEL
+  if (tier === 'cheap' || tier === 'extraction') return DEFAULT_READING_CLAUDE_MODEL
   return DEFAULT_CLAUDE_MODEL
 }
 
@@ -138,7 +146,14 @@ export function readAiConfig(): ResolvedAiConfig {
     strictJson: envBool('AI_STRICT_JSON', false),
     pdfMode,
     pdfMaxPages: envPositiveInt('AI_PDF_MAX_PAGES') ?? DEFAULT_PDF_MAX_PAGES,
+    callLimitMs: aiCallLimitMs(),
   }
+}
+
+/** The configured call limit: AI_CALL_TIMEOUT_SECONDS, else the default. */
+export function aiCallLimitMs(): number {
+  const seconds = envPositiveInt('AI_CALL_TIMEOUT_SECONDS')
+  return seconds === null ? AI_CALL_LIMIT_MS : seconds * 1000
 }
 
 export function capabilitiesFor(cfg: ResolvedAiConfig): AiCapabilities {

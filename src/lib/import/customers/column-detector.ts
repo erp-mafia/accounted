@@ -10,6 +10,13 @@ const NAME_KEYWORDS = [
   'företag', 'foretag', 'company', 'företagsnamn', 'foretagsnamn',
 ]
 
+// Specific forms only: a bare 'nummer' or 'nr' would take Organisationsnummer,
+// Telefonnummer or Postnummer in a file that has no customer number column.
+const CUSTOMER_NUMBER_KEYWORDS = [
+  'kundnummer', 'kundnr', 'kund nr', 'kund id', 'kundid',
+  'customer number', 'customer no', 'customer nr', 'customer id',
+]
+
 const ORG_NUMBER_KEYWORDS = [
   'orgnr', 'org nr', 'orgnummer', 'org nummer', 'organisationsnummer',
   'organisationsnr', 'org', 'personnr', 'personnummer', 'org number',
@@ -19,27 +26,52 @@ const ORG_NUMBER_KEYWORDS = [
   'company registration number',
 ]
 
+/**
+ * A yes/no "is this a private person" column, read as the customer type
+ * (Spiris: IsPrivatePerson, True/False). The parser reads its values as a
+ * flag, not as a type name.
+ */
+export const PRIVATE_PERSON_FLAG_KEYWORDS = [
+  'is private person', 'private person', 'privatperson', 'privat person',
+]
+
 const CUSTOMER_TYPE_KEYWORDS = [
   'kundtyp', 'kund typ', 'typ', 'type', 'customer type', 'customer_type',
+  ...PRIVATE_PERSON_FLAG_KEYWORDS,
 ]
 
 const EMAIL_KEYWORDS = [
-  'epost', 'e post', 'email', 'mail', 'e mail', 'e-post',
+  'epost', 'e post', 'email', 'mail', 'e mail', 'e-post', 'e-postadress',
 ]
 
 const PHONE_KEYWORDS = [
-  'telefon', 'tel', 'phone', 'mobil', 'mobile', 'telefonnummer',
+  'telefon', 'tel', 'phone', 'mobil', 'mobile', 'telefonnummer', 'telephone',
+  'phone number',
+]
+
+// The customer record holds the invoice address: a delivery address column
+// ("DeliveryAddress1", "Leveransadress") never fills it, nor does a web
+// address ("WwwAddress").
+const DELIVERY_ADDRESS_KEYWORDS = [
+  'delivery', 'leverans', 'leveransadress', 'leveransort', 'leveranspostnummer',
+  'leveranspostnr', 'leveransland', 'shipping', 'ship to',
+]
+const ADDRESS_REJECT_KEYWORDS = [
+  ...DELIVERY_ADDRESS_KEYWORDS, 'www', 'web', 'webb', 'url', 'website', 'hemsida',
 ]
 
 const ADDRESS_LINE1_KEYWORDS = [
   'adress', 'address', 'gatuadress', 'street', 'gata',
   'address line 1', 'address1', 'adressrad 1', 'adress 1',
+  'postadress', 'postadress 1', 'fakturaadress', 'fakturaadress 1',
+  'invoice address', 'invoice address 1',
 ]
 
 // 'co' is two characters, so it only matches as a whole word ("C/O", "CO"):
 // as a substring it swallowed "Corporate identity number" and "Country".
 const ADDRESS_LINE2_KEYWORDS = [
   'address line 2', 'address2', 'adressrad 2', 'adress 2', 'c o', 'co',
+  'postadress 2', 'fakturaadress 2', 'invoice address 2',
 ]
 
 const POSTAL_CODE_KEYWORDS = [
@@ -81,6 +113,7 @@ export function detectCustomerColumns(headers: string[]): DetectedCustomerColumn
     reject: EXTERNAL_NUMBER_KEYWORDS,
   })
   const name_col = nameMatch?.index ?? -1
+  const customer_number_col = findColumn(headers, CUSTOMER_NUMBER_KEYWORDS, taken)
   const org_number_col = findColumn(headers, ORG_NUMBER_KEYWORDS, taken)
   const customer_type_col = findColumn(headers, CUSTOMER_TYPE_KEYWORDS, taken)
   const email_col = findColumn(headers, EMAIL_KEYWORDS, taken)
@@ -88,11 +121,12 @@ export function detectCustomerColumns(headers: string[]): DetectedCustomerColumn
   // Line 2 before line 1: "Address line 2" also contains the whole word
   // "address", so a file that has line 2 but no line 1 would otherwise hand it
   // to line 1.
-  const address_line2_col = findColumn(headers, ADDRESS_LINE2_KEYWORDS, taken)
-  const address_line1_col = findColumn(headers, ADDRESS_LINE1_KEYWORDS, taken)
-  const postal_code_col = findColumn(headers, POSTAL_CODE_KEYWORDS, taken)
-  const city_col = findColumn(headers, CITY_KEYWORDS, taken)
-  const country_col = findColumn(headers, COUNTRY_KEYWORDS, taken)
+  const address_line2_col = findColumn(headers, ADDRESS_LINE2_KEYWORDS, taken, { reject: ADDRESS_REJECT_KEYWORDS })
+  const address_line1_col = findColumn(headers, ADDRESS_LINE1_KEYWORDS, taken, { reject: ADDRESS_REJECT_KEYWORDS })
+  const delivery = { reject: DELIVERY_ADDRESS_KEYWORDS }
+  const postal_code_col = findColumn(headers, POSTAL_CODE_KEYWORDS, taken, delivery)
+  const city_col = findColumn(headers, CITY_KEYWORDS, taken, delivery)
+  const country_col = findColumn(headers, COUNTRY_KEYWORDS, taken, delivery)
   const vat_number_col = findColumn(headers, VAT_NUMBER_KEYWORDS, taken)
   const payment_terms_col = findColumn(headers, PAYMENT_TERMS_KEYWORDS, taken)
   const notes_col = findColumn(headers, NOTES_KEYWORDS, taken)
@@ -115,6 +149,7 @@ export function detectCustomerColumns(headers: string[]): DetectedCustomerColumn
     // -1 when no header looked like a name: confidence is then 0, so the
     // mapping step is shown instead of silently importing column 0 as the name.
     name_col,
+    customer_number_col,
     org_number_col,
     customer_type_col,
     email_col,

@@ -21,6 +21,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
+import { claimInboxItemForEntry } from '@/lib/documents/inbox-item-claim'
 
 const Body = z
   .object({
@@ -50,11 +51,11 @@ registerEndpoint({
     'Stamping with a different journal_entry_id than the one already set returns CONFLICT: the item is already resolved.',
   ],
   example: {
-    request: { journal_entry_id: 'dcccb3c5-b44a-4536-82fa-f0b9bb77f900' },
+    request: { journal_entry_id: '0d1d0000-0000-4000-8000-000000000004' },
     response: {
       data: {
         id: '4d2fcdbb-13b3-4ff3-911f-a4cc82f1f6db',
-        created_journal_entry_id: 'dcccb3c5-b44a-4536-82fa-f0b9bb77f900',
+        created_journal_entry_id: '0d1d0000-0000-4000-8000-000000000004',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -154,20 +155,42 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    const { error: updateErr } = await ctx.supabase
-      .from('invoice_inbox_items')
-      .update({ created_journal_entry_id: body.journal_entry_id })
-      .eq('id', itemId)
-      .eq('company_id', ctx.companyId!)
+    // Compare-and-set on the empty pointer the read above saw (accounted#14):
+    // two stamps racing past that read both answered 200 and the later one
+    // silently re-pointed the item. Only the first lands; the other is
+    // answered from what the row holds now, exactly as if it had come second.
+    const claim = await claimInboxItemForEntry(ctx.supabase, ctx.companyId!, itemId, body.journal_entry_id, {
+      ignoreSupplierInvoice: true,
+    })
 
-    if (updateErr) {
-      ctx.log.error('inbox-items.stamp update failed', updateErr as Error, {
+    if (claim.status === 'failed') {
+      ctx.log.error('inbox-items.stamp update failed', claim.error as Error, {
         itemId,
         journalEntryId: body.journal_entry_id,
       })
       return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { step: 'stamp_update' },
+      })
+    }
+
+    if (claim.status === 'taken') {
+      const { data: current } = await ctx.supabase
+        .from('invoice_inbox_items')
+        .select('created_journal_entry_id')
+        .eq('id', itemId)
+        .eq('company_id', ctx.companyId!)
+        .maybeSingle()
+      const currentEntryId = (current?.created_journal_entry_id as string | null | undefined) ?? null
+      if (currentEntryId === body.journal_entry_id) {
+        return ok({ id: itemId, created_journal_entry_id: currentEntryId }, { requestId: ctx.requestId })
+      }
+      return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: 'inbox_item_already_stamped',
+          current_journal_entry_id: currentEntryId,
+        },
       })
     }
 

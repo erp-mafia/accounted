@@ -1,4 +1,4 @@
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import {
   Document,
   Page,
@@ -8,10 +8,13 @@ import {
 } from '@react-pdf/renderer'
 import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
 import type {
+  BudgetComparison,
   CompanySettings,
+  DimensionCrossReport,
   LatestVoucherPerSeries,
   ResultatrapportReport,
   BalansrapportReport,
+  BalansrapportSection,
 } from '@/types'
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from './latest-vouchers'
 
@@ -137,6 +140,41 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     color: '#444',
   },
+  // Balansrapport ÅRL headings: a heading (Anläggningstillgångar), its
+  // sections (Materiella anläggningstillgångar) and their Summa lines.
+  sectionHeading: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    marginTop: 8,
+    marginBottom: 2,
+  },
+  subsectionHeading: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#444',
+    marginTop: 6,
+    marginBottom: 2,
+    paddingLeft: 12,
+  },
+  sectionNote: {
+    fontSize: 8,
+    color: '#666',
+    marginBottom: 3,
+  },
+  sectionTotalRow: {
+    flexDirection: 'row',
+    paddingVertical: 2,
+    marginBottom: 2,
+    borderTopWidth: 0.5,
+    borderTopColor: '#bbb',
+  },
+  classTotalLabel: {
+    flex: 1,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+    paddingLeft: 48,
+  },
   summary: {
     marginTop: 18,
     paddingTop: 10,
@@ -225,7 +263,33 @@ const styles = StyleSheet.create({
     fontSize: 8,
     color: '#888',
   },
+  // The Balansrapport's four amount columns: narrower and a point smaller
+  // than the other reports' three, so an account name keeps room on A4
+  // portrait and a 15-character amount (-123 456 789,00) still fits.
+  balansrapportAmount: {
+    width: 84,
+    fontSize: 9,
+  },
 })
+
+/** A deviation in percent, one decimal: "12,5 %"; blank without a budget. */
+function formatPercent(percent: number | null | undefined): string {
+  if (percent === null || percent === undefined) return ''
+  return pdfNumberText(
+    `${new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(percent)} %`,
+  )
+}
+
+/** The Budget, Avvikelse and Avvikelse % cells of one row. */
+function BudgetCells({ figures, style }: { figures: BudgetComparison | undefined; style: (typeof styles)[keyof typeof styles] }) {
+  return (
+    <>
+      <Text style={style}>{figures ? formatAmount(figures.budget) : ''}</Text>
+      <Text style={style}>{figures ? formatAmount(figures.deviation) : ''}</Text>
+      <Text style={[style, { width: 60 }]}>{formatPercent(figures?.deviation_percent)}</Text>
+    </>
+  )
+}
 
 function formatAmount(amount: number): string {
   // pdfNumberText: Intl emits U+2212 (true minus), which the bundled
@@ -244,11 +308,13 @@ interface CommonHeaderProps {
   period: { start: string; end: string }
   /** Partial-view disclosure (dimension-filtered exports, BFNAR 2013:2). */
   filterNote?: string
+  /** Which budget the Budget columns read (accounted#134). */
+  budgetNote?: string
   /** Highest posted voucher per series in the window. Reconciliation aid (#1267). */
   latestVouchers?: LatestVoucherPerSeries[]
 }
 
-function HeaderBlock({ title, company, period, filterNote, latestVouchers }: CommonHeaderProps) {
+function HeaderBlock({ title, company, period, filterNote, budgetNote, latestVouchers }: CommonHeaderProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
     ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
@@ -270,6 +336,9 @@ function HeaderBlock({ title, company, period, filterNote, latestVouchers }: Com
         {filterNote && (
           <Text style={styles.period}>{filterNote}</Text>
         )}
+        {budgetNote && (
+          <Text style={styles.period}>{budgetNote}</Text>
+        )}
       </View>
       <View style={styles.companyInfo}>
         {company.company_name && (
@@ -277,7 +346,7 @@ function HeaderBlock({ title, company, period, filterNote, latestVouchers }: Com
         )}
         {company.org_number && (
           <Text style={styles.companyMeta}>
-            Org.nr: {formatOrgNumber(company.org_number)}
+            Org.nr: {formatOrgNumberDisplay(company.org_number)}
           </Text>
         )}
         {company.vat_number && (
@@ -294,7 +363,7 @@ function FooterBlock({ company, generatedAt }: { company: CompanySettings; gener
     <View style={styles.footer} fixed>
       <Text style={styles.footerText}>
         {companyDisplayName}
-        {company.org_number ? ` · ${formatOrgNumber(company.org_number)}` : ''}
+        {company.org_number ? ` · ${formatOrgNumberDisplay(company.org_number)}` : ''}
       </Text>
       <Text
         style={styles.footerText}
@@ -310,19 +379,24 @@ interface ResultatrapportPDFProps {
   generatedAt: string
   /** Partial-view disclosure line (dimension-filtered exports). */
   filterNote?: string
+  /** Which budget the Budget columns read, or why there are none. */
+  budgetNote?: string
 }
 
-export function ResultatrapportPDF({ report, company, generatedAt, filterNote }: ResultatrapportPDFProps) {
+export function ResultatrapportPDF({ report, company, generatedAt, filterNote, budgetNote }: ResultatrapportPDFProps) {
   const hasPrior = report.prior_period !== null
+  // Budget, Avvikelse and Avvikelse % need the width of a landscape page.
+  const hasBudget = report.budget?.applied === true
 
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
+      <Page size="A4" orientation={hasBudget ? 'landscape' : 'portrait'} style={styles.page}>
         <HeaderBlock
           title="Resultatrapport"
           company={company}
           period={report.period}
           filterNote={filterNote}
+          budgetNote={budgetNote}
           latestVouchers={report.latest_vouchers}
         />
 
@@ -330,6 +404,13 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
           <Text style={[styles.tableHeaderText, styles.colName]}>Kontonamn</Text>
           <Text style={[styles.tableHeaderText, styles.colAmount]}>Innevarande</Text>
+          {hasBudget && (
+            <>
+              <Text style={[styles.tableHeaderText, styles.colAmount]}>Budget</Text>
+              <Text style={[styles.tableHeaderText, styles.colAmount]}>Avvikelse</Text>
+              <Text style={[styles.tableHeaderText, styles.colAmount, { width: 60 }]}>Avv. %</Text>
+            </>
+          )}
           {hasPrior && (
             <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Föregående</Text>
           )}
@@ -346,6 +427,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
                 <Text style={styles.colAmount}>{formatAmount(row.current_period)}</Text>
+                {hasBudget && <BudgetCells figures={row.budget} style={styles.colAmount} />}
                 {hasPrior && (
                   <Text style={styles.colAmountMuted}>{formatAmount(row.prior_period)}</Text>
                 )}
@@ -354,6 +436,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
             <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
               <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_current)}</Text>
+              {hasBudget && <BudgetCells figures={group.subtotal_budget} style={styles.subtotalAmount} />}
               {hasPrior && (
                 <Text style={[styles.subtotalAmount, { color: '#666' }]}>
                   {formatAmount(group.subtotal_prior)}
@@ -369,6 +452,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
             <Text style={styles.summaryAmountEmphasis}>
               {formatAmount(report.net_result_current)}
             </Text>
+            {hasBudget && <BudgetCells figures={report.net_result_budget} style={styles.summaryAmountEmphasis} />}
             {hasPrior && (
               <Text style={[styles.summaryAmountEmphasis, { color: '#666' }]}>
                 {formatAmount(report.net_result_prior)}
@@ -379,6 +463,74 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
 
         <FooterBlock company={company} generatedAt={generatedAt} />
       </Page>
+    </Document>
+  )
+}
+
+/** Value columns per page of the cross report: the width of a landscape A4 page. */
+const CROSS_COLUMNS_PER_PAGE = 7
+const UNTAGGED_LABEL = '(Utan dimension)'
+
+interface DimensionCrossPDFProps {
+  report: DimensionCrossReport
+  company: CompanySettings
+  generatedAt: string
+  /** What the cells sum: the result, or a range of accounts. */
+  measureNote: string
+}
+
+/**
+ * Resultat across two dimensions (accounted#133): dimension A down, B
+ * across. Columns beyond a page's width continue on the next page with the
+ * row labels repeated; Totalt is the last column, and the Totalt row closes
+ * every page.
+ */
+export function DimensionCrossPDF({ report, company, generatedAt, measureNote }: DimensionCrossPDFProps) {
+  const label = (v: { code: string | null; name: string | null }) =>
+    v.code === null ? UNTAGGED_LABEL : v.name ? `${v.code} ${v.name}` : v.code
+  const columns = [...report.columns.map(label), 'Totalt']
+  const rows = report.rows.map((row, i) => ({ label: label(row), values: [...report.cells[i], report.row_totals[i]] }))
+  const footer = [...report.column_totals, report.total]
+  const chunks: number[][] = []
+  for (let start = 0; start < columns.length; start += CROSS_COLUMNS_PER_PAGE) {
+    chunks.push(columns.slice(start, start + CROSS_COLUMNS_PER_PAGE).map((_, k) => start + k))
+  }
+
+  return (
+    <Document>
+      {chunks.map((chunk, page) => (
+        <Page key={page} size="A4" orientation="landscape" style={styles.page}>
+          <HeaderBlock
+            title={`Resultat per ${report.dim_a.name} och ${report.dim_b.name}`}
+            company={company}
+            period={report.period}
+            filterNote={measureNote}
+          />
+          <View style={styles.tableHeader}>
+            <Text style={[styles.tableHeaderText, styles.colName]}>
+              {report.dim_a.name} / {report.dim_b.name}
+            </Text>
+            {chunk.map((j) => (
+              <Text key={j} style={[styles.tableHeaderText, styles.colAmount]}>{columns[j]}</Text>
+            ))}
+          </View>
+          {rows.map((row, i) => (
+            <View key={i} style={styles.row} wrap={false}>
+              <Text style={styles.colName}>{row.label}</Text>
+              {chunk.map((j) => (
+                <Text key={j} style={styles.colAmount}>{formatAmount(row.values[j])}</Text>
+              ))}
+            </View>
+          ))}
+          <View style={styles.subtotalRow} wrap={false}>
+            <Text style={[styles.colName, { fontWeight: 'bold' }]}>Totalt</Text>
+            {chunk.map((j) => (
+              <Text key={j} style={[styles.colAmount, { fontWeight: 'bold' }]}>{formatAmount(footer[j])}</Text>
+            ))}
+          </View>
+          <FooterBlock company={company} generatedAt={generatedAt} />
+        </Page>
+      ))}
     </Document>
   )
 }
@@ -403,9 +555,10 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
           <Text style={[styles.tableHeaderText, styles.colName]}>Kontonamn</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Ingående</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Förändring</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmount]}>Utgående</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted, styles.balansrapportAmount]}>Ing. balans</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted, styles.balansrapportAmount]}>Ing. saldo</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted, styles.balansrapportAmount]}>Förändring</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmount, styles.balansrapportAmount]}>Utg. balans</Text>
         </View>
 
         {report.groups.map((group) => (
@@ -413,22 +566,15 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
           // flow across pages instead of being clipped.
           <View key={group.class}>
             <Text style={styles.groupHeading}>{group.class_label}</Text>
-            {group.rows.map((row) => (
-              <View key={row.account_number} style={styles.row} wrap={false}>
-                <Text style={styles.colAccount}>{row.account_number}</Text>
-                <Text style={styles.colName}>{row.account_name}</Text>
-                <Text style={styles.colAmountMuted}>{formatAmount(row.ib)}</Text>
-                <Text style={styles.colAmountMuted}>{formatAmount(row.period_change)}</Text>
-                <Text style={styles.colAmount}>{formatAmount(row.ub)}</Text>
-              </View>
+            {group.sections.map((section) => (
+              <BalansrapportSectionPDF key={section.key} section={section} depth={0} />
             ))}
             <View style={styles.subtotalRow} wrap={false}>
-              <Text style={styles.subtotalLabel}>Summa</Text>
-              <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
-              <Text style={[styles.subtotalAmount, { color: '#666' }]}>
-                {formatAmount(group.subtotal_ub - group.subtotal_ib)}
-              </Text>
-              <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_ub)}</Text>
+              <Text style={styles.classTotalLabel}>Summa {group.class_label}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(group.subtotal_year_ib)}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(group.subtotal_change)}</Text>
+              <Text style={[styles.subtotalAmount, styles.balansrapportAmount]}>{formatAmount(group.subtotal_ub)}</Text>
             </View>
           </View>
         ))}
@@ -446,6 +592,12 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
             <Text style={styles.summaryLabel}>Beräknat resultat (ej bokslutsjusterat)</Text>
             <Text style={styles.summaryAmount}>{formatAmount(report.beraknat_resultat)}</Text>
           </View>
+          {report.differens !== 0 && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Differens</Text>
+              <Text style={styles.summaryAmount}>{formatAmount(report.differens)}</Text>
+            </View>
+          )}
           <View
             style={[
               styles.balanceVerdict,
@@ -473,5 +625,40 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
         <FooterBlock company={company} generatedAt={generatedAt} />
       </Page>
     </Document>
+  )
+}
+
+/**
+ * One ÅRL heading: label, then its subsections or account rows, then its
+ * Summa line. minPresenceAhead keeps a heading from ending a page alone.
+ */
+function BalansrapportSectionPDF({ section, depth }: { section: BalansrapportSection; depth: 0 | 1 }) {
+  return (
+    <View>
+      <Text style={depth === 0 ? styles.sectionHeading : styles.subsectionHeading} minPresenceAhead={30}>
+        {section.label}
+      </Text>
+      {section.note && <Text style={styles.sectionNote}>{section.note}</Text>}
+      {section.sections.map((child) => (
+        <BalansrapportSectionPDF key={child.key} section={child} depth={1} />
+      ))}
+      {section.rows.map((row) => (
+        <View key={row.account_number} style={styles.row} wrap={false}>
+          <Text style={styles.colAccount}>{row.account_number}</Text>
+          <Text style={styles.colName}>{row.account_name}</Text>
+          <Text style={[styles.colAmountMuted, styles.balansrapportAmount]}>{formatAmount(row.year_ib)}</Text>
+          <Text style={[styles.colAmountMuted, styles.balansrapportAmount]}>{formatAmount(row.ib)}</Text>
+          <Text style={[styles.colAmountMuted, styles.balansrapportAmount]}>{formatAmount(row.period_change)}</Text>
+          <Text style={[styles.colAmount, styles.balansrapportAmount]}>{formatAmount(row.ub)}</Text>
+        </View>
+      ))}
+      <View style={depth === 0 && section.sections.length > 0 ? styles.subtotalRow : styles.sectionTotalRow} wrap={false}>
+        <Text style={styles.subtotalLabel}>{section.total_label}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(section.subtotal_year_ib)}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(section.subtotal_ib)}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount, { color: '#666' }]}>{formatAmount(section.subtotal_change)}</Text>
+        <Text style={[styles.subtotalAmount, styles.balansrapportAmount]}>{formatAmount(section.subtotal_ub)}</Text>
+      </View>
+    </View>
   )
 }

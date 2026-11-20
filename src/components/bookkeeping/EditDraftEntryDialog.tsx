@@ -55,13 +55,13 @@ export default function EditDraftEntryDialog({ entry, open, onOpenChange, onUpda
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
-        // Same guard as Ny verifikat: an accidental outside-click must not
-        // discard in-progress edits.
-        onPointerDownOutside={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()}
-      >
+      <DialogContent size="wide"
+
+ // Same guard as Ny verifikat: an accidental outside-click must not
+ // discard in-progress edits.
+ onPointerDownOutside={(e) => e.preventDefault()}
+ onInteractOutside={(e) => e.preventDefault()}
+>
         <DialogHeader>
           <DialogTitle>{t('edit_draft_dialog_title')}</DialogTitle>
         </DialogHeader>

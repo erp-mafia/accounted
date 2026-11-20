@@ -123,6 +123,8 @@ describe('POST /api/reconciliation/bank/link', () => {
 
     expect(status).toBe(200)
     expect(body.data.success).toBe(true)
+    // The person picked the verifikat (Matcha mot verifikat, the duplicate
+    // guard's match), so the row's underlag goes onto it (crm#1101).
     expect(manualLinkMock).toHaveBeenCalledWith(
       supabase,
       'company-1',
@@ -130,6 +132,7 @@ describe('POST /api/reconciliation/bank/link', () => {
       JE_ID,
       'user-1',
       '1930',
+      { anchorUnderlag: true, linkBasis: { basis: 'user_confirmed' } },
     )
   })
 

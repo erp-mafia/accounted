@@ -54,13 +54,44 @@ export type WooCommerceConnectionStatus = Pick<
   | 'last_order_synced_at'
 >
 
+/**
+ * An order the sync skipped because its currency could not be resolved,
+ * kept until a later sync imports it (lib/skipped-orders).
+ */
+export interface SkippedCurrencyOrder {
+  /** wc/v3 order id. */
+  order_id: number
+  /** Display order number (plugins can renumber). */
+  order_number: string
+  /** Order creation date (YYYY-MM-DD, UTC), null when the store sent none. */
+  order_date: string | null
+  /** The currency value exactly as the store sent it, truncated. */
+  currency: string
+  first_seen_at: string
+  last_seen_at: string
+}
+
+/** The skipped list as GET /status hands it to the panel. */
+export interface SkippedOrdersStatus {
+  /** Exact number of skipped orders still missing. */
+  count: number
+  /** The oldest of them, bounded (SKIPPED_ORDERS_STATUS_LIMIT). */
+  orders: SkippedCurrencyOrder[]
+}
+
+/** A connection as GET /status returns it. */
+export type WooCommerceConnectionStatusView = WooCommerceConnectionStatus & {
+  /** Present only while the store has orders that never imported. */
+  skipped_currency_orders?: SkippedOrdersStatus
+}
+
 /** Status payload returned by GET /api/extensions/ext/woocommerce/status. */
 export interface WooCommerceStatusResponse {
   configured: boolean
   /** First entry of `connections`; kept for the old single-store shape. */
-  connection: WooCommerceConnectionStatus | null
+  connection: WooCommerceConnectionStatusView | null
   /** Multi-store: every active connection (or the latest inactive row). */
-  connections: WooCommerceConnectionStatus[]
+  connections: WooCommerceConnectionStatusView[]
 }
 
 /**

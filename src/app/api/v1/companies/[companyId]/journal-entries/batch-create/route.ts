@@ -22,14 +22,20 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
-import { CreateJournalEntrySchema } from '@/lib/api/schemas'
-import { createDraftEntry } from '@/lib/bookkeeping/engine'
+import { CreateApiJournalEntrySchema } from '@/lib/api/schemas'
+import { validateBalance } from '@/lib/bookkeeping/engine'
+import { manualVoucherBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { postingPort } from '@/lib/posting/port'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { chartAccountNamesLoader, chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { expandVoucherLineVatCodes, type ExpandedVoucherLines } from '@/lib/bookkeeping/voucher-line-vat-code'
 import type { Logger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BulkRequest = z.object({
-  journal_entries: z.array(CreateJournalEntrySchema).min(1).max(50),
+  // Same caller-authorable source_type labels as the single POST.
+  journal_entries: z.array(CreateApiJournalEntrySchema).min(1).max(50),
   all_or_nothing: z.boolean().optional().default(false),
 })
 
@@ -57,13 +63,15 @@ registerEndpoint({
   description:
     'Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create. Each entry is validated and inserted independently: per-item failures do not roll back items that succeeded. Returns DRAFTS only; commit each separately. Idempotent over the whole batch. Dry-runnable.',
   useWhen:
-    'You\'re replaying historical bookkeeping from another system, or batching a set of manual verifikationer from a spreadsheet. Use dry-run first to validate the batch.',
+    'You\'re batching a set of manual verifikationer, e.g. from a spreadsheet. Use dry-run first to validate the batch.',
   doNotUseFor:
-    'Committing posted entries: use POST /{id}/commit per entry. Transactional all-or-nothing imports: passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
+    'Committing posted entries: use POST /{id}/commit per entry. Replaying a whole history from another system: export it as SIE4 and use POST /imports/sie (one batch with its own provenance and undo). Transactional all-or-nothing imports: passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
   pitfalls: [
     'Idempotency-Key is mandatory and covers the WHOLE batch.',
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
     'Each entry must balance independently. Per-item JOURNAL_ENTRY_NOT_BALANCED appears in the results array.',
+    'source_type follows the single POST: "manual" by default, or a business source type. An engine-owned, rule-exempt type (e.g. opening_balance, storno, accrual, system) or "import" (only the SIE import writes import vouchers: use POST /imports/sie) fails the whole batch with 400 VALIDATION_ERROR.',
+    'lines[].vat_code (omvänd moms) works as on the single POST: the server adds the reverse-charge lines under the line, and the dry-run preview shows them. A vat_code its account or the voucher cannot take (the single POST\'s lines.N.vat_code refusals) fails only its own entry, with VALIDATION_ERROR and details.issues in the results array. A malformed vat_code (unknown kind, a rate other than 0.25, 0.12 or 0.06) is a schema error and fails the whole batch with 400, its field under journal_entries.i.lines.N.vat_code.',
   ],
   example: {
     request: {
@@ -106,7 +114,7 @@ async function createOne(
   companyId: string,
   userId: string,
   index: number,
-  input: z.infer<typeof CreateJournalEntrySchema>,
+  input: z.infer<typeof CreateApiJournalEntrySchema>,
   dryRun: boolean,
   log: Logger,
 ): Promise<ResultItem> {
@@ -128,7 +136,16 @@ async function createOne(
     }
   }
   try {
-    const entry = await createDraftEntry(supabase, companyId, userId, input)
+    // Posting port (step 2i): each draft through the port with its own event,
+    // as the single POST; its commit records nothing.
+    const entry = await postingPort.draftJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      event: () =>
+        manualVoucherBusinessEvent({ sourceType: input.source_type, entryDate: input.entry_date, linkBasis: linkBasisColumns('user_created') }),
+      input,
+    })
     return {
       ok: true,
       request_index: index,
@@ -188,9 +205,38 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       }
     }
 
+    // Each entry's vat_code lines expand as on the single POST (crm#1096),
+    // all before the first draft and with one chart read for the batch: a
+    // failed read writes nothing, and a refused code fails only its entry.
+    // As there, balance comes first: an entry that does not balance as sent
+    // goes on unexpanded, so the engine refuses it with the totals the caller
+    // sent, not totals that include lines the server would have added.
+    const loadChart = chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!)
+    const loadNames = chartAccountNamesLoader(ctx.supabase, ctx.companyId!)
+    const expanded = await Promise.all(
+      body.journal_entries.map((entry): ExpandedVoucherLines | Promise<ExpandedVoucherLines> =>
+        validateBalance(entry.lines).valid
+          ? expandVoucherLineVatCodes(entry.lines, loadChart, loadNames)
+          : { ok: true, lines: entry.lines },
+      ),
+    )
+
     const results: ResultItem[] = []
     for (let i = 0; i < body.journal_entries.length; i++) {
-      results.push(await createOne(ctx.supabase, ctx.companyId!, ctx.userId, i, body.journal_entries[i], ctx.dryRun, ctx.log))
+      const expansion = expanded[i]
+      results.push(
+        expansion.ok
+          ? await createOne(ctx.supabase, ctx.companyId!, ctx.userId, i, { ...body.journal_entries[i], lines: expansion.lines }, ctx.dryRun, ctx.log)
+          : {
+              ok: false,
+              request_index: i,
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: expansion.refusals.map(({ sv }) => sv).join(' '),
+                details: { issues: expansion.refusals.map(({ field, sv, en }) => ({ field, message: sv, message_en: en })) },
+              },
+            },
+      )
     }
     const summary = {
       total: results.length,

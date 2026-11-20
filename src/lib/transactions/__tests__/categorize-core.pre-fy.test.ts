@@ -21,6 +21,14 @@ import type { CreateJournalEntryInput } from '@/types'
 // path) and the side-channel helpers are stubbed.
 const mockFindFiscalPeriod = vi.fn()
 const mockCreateJournalEntry = vi.fn()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
   createJournalEntry: (
@@ -44,6 +52,20 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
 }))
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
+}))
+
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
 }))
 
 import { categorizeMatchedTransaction, ensureFiscalPeriod } from '../categorize-core'
@@ -108,25 +130,29 @@ describe('ensureFiscalPeriod: pre-FY guard', () => {
   it('still creates the next-year period for a date after the latest period', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [] })
-    enqueue({ data: [{ period_start: '2026-05-12' }] }) // earliest, before the date
-    enqueue({ data: null }) // upsert
+    enqueue({ data: [{ id: 'first', period_start: '2026-05-12', period_end: '2026-12-31' }] }) // before the date
+    enqueue({ data: [] }) // nothing overlaps
+    enqueue({ data: { id: 'next' } }) // insert
+    enqueue({ data: [] }) // no year after it
 
     const ok = await ensureFiscalPeriod(supabase as never, 'user-1', 'company-1', '2027-03-10', 1)
 
     expect(ok).toBe(true)
-    expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(1)
+    expect(findCalls('fiscal_periods', 'insert')).toHaveLength(1)
   })
 
   it('still creates a period when the company has none at all', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [] })
-    enqueue({ data: [] }) // no earliest period: brand-new company
-    enqueue({ data: null }) // upsert
+    enqueue({ data: [] }) // no recorded year: brand-new company
+    enqueue({ data: [] }) // nothing overlaps
+    enqueue({ data: { id: 'first' } }) // insert
+    enqueue({ data: [] }) // no year after it
 
     const ok = await ensureFiscalPeriod(supabase as never, 'user-1', 'company-1', '2026-03-10', 1)
 
     expect(ok).toBe(true)
-    expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(1)
+    expect(findCalls('fiscal_periods', 'insert')).toHaveLength(1)
   })
 })
 
@@ -134,13 +160,11 @@ describe('categorizeMatchedTransaction: pre-FY transaction gets a journal entry'
   it('books via the clamp: journal_entry_id set, entry on the first day of the first period', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
+    enqueue({ data: [] }) // the gate: no posted verifikat booked from the row (#203)
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // settings
     enqueue({ data: [] }) // ensureFiscalPeriod: no covering open period
     enqueue({ data: [{ period_start: '2026-05-12' }] }) // ensureFiscalPeriod: earliest
-    // Issue #1661: a private marking runs checkPeriodLock before the engine.
-    // A pre-FY date has no covering period, which is not a lock.
-    enqueue({ data: { bookkeeping_locked_through: null } })
-    enqueue({ data: null })
+    // checkPeriodLock is mocked: a pre-FY date has no covering period, which is not a lock.
     // createTransactionJournalEntry clamp: earliest full row (open, unlocked)
     enqueue({
       data: [{ id: 'period-first', period_start: '2026-05-12', is_closed: false, locked_at: null }],

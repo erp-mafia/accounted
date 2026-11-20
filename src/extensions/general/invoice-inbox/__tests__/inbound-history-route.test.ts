@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 vi.mock('@/lib/rate-limits/inbox', () => ({
   checkInboxUploadRateLimit: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-const route = invoiceInboxExtension.apiRoutes!.find(
+const route = testRoutes(invoiceInboxExtension).find(
   (r) => r.method === 'GET' && r.path === '/inbound-history'
 )!
 
@@ -19,7 +19,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as unknown as ExtensionContext
@@ -48,11 +47,6 @@ const EVENT_ROW = {
 
 describe('GET /inbound-history (#2181)', () => {
   beforeEach(() => vi.clearAllMocks())
-
-  it('returns 401 without context', async () => {
-    const res = await route.handler(createMockRequest('/inbound-history'), undefined)
-    expect(res.status).toBe(401)
-  })
 
   it.each(['0', '-1', '366', 'abc', '1.5'])('returns 400 for days=%s', async (days) => {
     const { supabase } = createQueuedMockSupabase()

@@ -1,9 +1,65 @@
 import { describe, it, expect } from 'vitest'
 import {
+  isKronorCurrency,
   resolveSekAmount,
   resolveSekAmountOrNull,
   buildCurrencyMetadata,
+  isLedgerCurrency,
+  sekOfForeign,
 } from '../currency-utils'
+
+describe('sekOfForeign', () => {
+  it('converts an amount and handles zero', () => {
+    expect(sekOfForeign(100, 11.42)).toBe(1142)
+    expect(sekOfForeign(0, 11.42)).toBe(0)
+  })
+
+  // The *_sek twins are stored in unscaled numeric columns and read back by
+  // header-fallback booking builders: a raw product stores (and books) a
+  // fraction of an öre.
+  it('rounds the product to whole öre', () => {
+    expect(sekOfForeign(1000.1, 11.2345)).toBe(11235.62)
+    expect(sekOfForeign(0.1, 3)).toBe(0.3)
+  })
+
+  it('rounds an exact half öre away from zero, on the decimals and not the binary', () => {
+    expect(sekOfForeign(1.005, 1)).toBe(1.01)
+    expect(sekOfForeign(10.075, 1)).toBe(10.08)
+    expect(sekOfForeign(30, 10.9455)).toBe(328.37)
+    expect(sekOfForeign(33.33, 11.5)).toBe(383.3)
+  })
+
+  it('keeps the sign outside the magnitude: minus an amount is minus its SEK', () => {
+    expect(sekOfForeign(-56650, 11.1465)).toBe(-631449.23)
+    expect(sekOfForeign(-1.005, 1)).toBe(-1.01)
+  })
+
+  it('a negative under half an öre is a plain 0, never -0', () => {
+    expect(Object.is(sekOfForeign(-0.001, 1), 0)).toBe(true)
+  })
+
+  it('stays NaN on a value it cannot read', () => {
+    expect(sekOfForeign(Number.NaN, 11.3)).toBeNaN()
+    expect(sekOfForeign(10, Number.POSITIVE_INFINITY)).toBeNaN()
+  })
+})
+
+describe('isKronorCurrency', () => {
+  it('kronor is SEK in any case, or no code at all', () => {
+    expect(isKronorCurrency('SEK')).toBe(true)
+    expect(isKronorCurrency('sek')).toBe(true)
+    expect(isKronorCurrency(null)).toBe(true)
+    expect(isKronorCurrency(undefined)).toBe(true)
+    expect(isKronorCurrency('')).toBe(true)
+    expect(isKronorCurrency('EUR')).toBe(false)
+  })
+
+  it('agrees with the first step of the conversion ladder', () => {
+    for (const code of ['SEK', null, 'EUR', 'USD']) {
+      expect(isKronorCurrency(code)).toBe(resolveSekAmountOrNull(10, null, code, null) === 10)
+    }
+  })
+})
 
 /**
  * The strict ladder. Booking code must use this one: it answers "no SEK value
@@ -202,5 +258,15 @@ describe('buildCurrencyMetadata', () => {
       currency: 'EUR',
       amount_in_currency: 100,
     })
+  })
+})
+
+describe('isLedgerCurrency', () => {
+  it('kronor, or no currency at all, is the ledger currency; anything else is foreign', () => {
+    expect(isLedgerCurrency('SEK')).toBe(true)
+    expect(isLedgerCurrency(null)).toBe(true)
+    expect(isLedgerCurrency(undefined)).toBe(true)
+    expect(isLedgerCurrency('EUR')).toBe(false)
+    expect(isLedgerCurrency('USD')).toBe(false)
   })
 })

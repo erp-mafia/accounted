@@ -106,13 +106,19 @@ export async function listPurchasesPage(
     }
 
     const body = (await response.json().catch(() => null)) as {
-      purchases?: ZettlePurchase[]
-      lastPurchaseHash?: string | null
+      purchases?: unknown
+      lastPurchaseHash?: unknown
     } | null
 
-    const purchases = Array.isArray(body?.purchases) ? body!.purchases! : []
+    // An empty page is how the caller learns the window is exhausted (it then
+    // moves the cursor to the run start), so a body that cannot be read as a
+    // page must fail the run, never pass for an empty one (accounted#115).
+    if (!body || typeof body !== 'object' || !Array.isArray(body.purchases)) {
+      throw new ZettleApiError('Zettle API returned an unreadable purchases page', response.status, 'invalid_body')
+    }
+    const purchases = body.purchases as ZettlePurchase[]
     const lastPurchaseHash =
-      typeof body?.lastPurchaseHash === 'string' && body.lastPurchaseHash
+      typeof body.lastPurchaseHash === 'string' && body.lastPurchaseHash
         ? body.lastPurchaseHash
         : null
     return {

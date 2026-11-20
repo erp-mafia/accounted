@@ -15,22 +15,20 @@
  * mean a migration on a core tenancy table for zero functional gain
  * (see DECISIONS.md 2026-08-25).
  *
- * Both functions are best-effort and never throw: a failed lookup logs and
+ * The lookup is best-effort and never throws: a failed lookup logs and
  * resolves to "no recipient", because notification delivery must never fail
  * the sync/cron/reconciliation that triggered it. Logging alone is not the
  * safety net (the embed bug WAS logged by one caller and nobody read it):
  * callers verify delivery end to end after deploy.
  *
- * SERVICE-ROLE CLIENT REQUIRED. Under an RLS user client these lookups
- * silently degrade: company_members is readable company-wide, but the
- * profiles SELECT policy is own-row-only, so resolveMemberEmails would
- * return at most the caller's own email and resolveMemberEmail(other user)
- * always null. Every current caller is a service-role cron path; keep it
- * that way or widen the profiles policy first.
+ * SERVICE-ROLE CLIENT REQUIRED. Under an RLS user client this lookup
+ * silently degrades: company_members is readable company-wide, but the
+ * profiles SELECT policy is own-row-only, so resolveMemberEmail(other user)
+ * would always be null. Every current caller is a service-role cron path;
+ * keep it that way or widen the profiles policy first.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 const log = createLogger('member-email')
 
@@ -77,63 +75,74 @@ export async function resolveMemberEmail(
 }
 
 /**
- * Resolve every active member's email for a company, as a map of
- * user_id → email. Used by senders that route to a configured contact
- * address but must verify it against the member allowlist (skattekonto
- * drift alert). Returns an empty map (never throws) on any query failure,
- * which callers treat as "no authorised recipient".
+ * The emails of a company's owners and admins who are still active members:
+ * the recipients of company-wide notification mail (the bank switch
+ * campaign). Same two-query shape and the same service-role requirement as
+ * resolveMemberEmail. Profiles of deleted accounts (profiles.deleted_at set)
+ * and members without a profile email are left out; duplicates collapse.
+ * Best-effort: a failed read logs and resolves to no recipients.
  */
-export async function resolveMemberEmails(
-  supabase: SupabaseClient,
-  companyId: string
-): Promise<Map<string, string>> {
+export async function resolveCompanyAdminEmails(supabase: SupabaseClient, companyId: string): Promise<string[]> {
+  const { data: members, error: memberError } = await supabase
+    .from('company_members')
+    .select('user_id, role')
+    .eq('company_id', companyId)
+    .in('role', ['owner', 'admin'])
+  if (memberError) {
+    log.warn('could not read company members for notification recipients', { companyId, error: memberError.message })
+    return []
+  }
+  const userIds = [...new Set(((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id))]
+  if (userIds.length === 0) return []
+
+  const { data: profiles, error: profileError } = await supabase
+    .from('profiles')
+    .select('id, email, deleted_at')
+    .in('id', userIds)
+  if (profileError) {
+    log.warn('could not read profile emails for notification recipients', { companyId, error: profileError.message })
+    return []
+  }
+  const emails = new Set<string>()
+  for (const profile of (profiles ?? []) as Array<{ id: string; email: string | null; deleted_at: string | null }>) {
+    if (profile.deleted_at) continue
+    const email = profile.email?.trim().toLowerCase()
+    if (email) emails.add(email)
+  }
+  return [...emails]
+}
+
+/**
+ * The emails of several people, each only while an active member of the
+ * company: resolveMemberEmail for a batch (the payment failed mail tells
+ * everyone behind one payment). Keyed by user id; someone who is not a
+ * member, whose account is deleted or who has no profile email is left out.
+ * Same two-query shape and service-role requirement. Best-effort: a failed
+ * read logs and resolves to nobody.
+ */
+export async function resolveMemberEmails(supabase: SupabaseClient, companyId: string, userIds: readonly string[]): Promise<Map<string, string>> {
   const emails = new Map<string, string>()
-
-  // fetchAllRows with stable ordering: PostgREST silently caps unpaged
-  // reads at 1000 rows, which would drop members from the allowlist.
-  let members: Array<{ user_id: string | null }>
-  try {
-    members = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('company_members')
-        .select('user_id')
-        .eq('company_id', companyId)
-        .order('user_id', { ascending: true })
-        .range(from, to)
-    )
-  } catch (err) {
-    log.warn('could not read company members for notification allowlist', {
-      companyId,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return emails
-  }
-
-  const userIds = members
-    .map((m) => m.user_id)
-    .filter((id): id is string => typeof id === 'string')
   if (userIds.length === 0) return emails
-
-  let profiles: Array<{ id: string; email: string | null }>
-  try {
-    profiles = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('profiles')
-        .select('id, email')
-        .in('id', userIds)
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
-  } catch (err) {
-    log.warn('could not read member emails for notification allowlist', {
-      companyId,
-      error: err instanceof Error ? err.message : String(err),
-    })
+  const { data: members, error: memberError } = await supabase
+    .from('company_members')
+    .select('user_id')
+    .eq('company_id', companyId)
+    .in('user_id', [...userIds])
+  if (memberError) {
+    log.warn('could not read company members for notification recipients', { companyId, error: memberError.message })
     return emails
   }
+  const memberIds = [...new Set(((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id))]
+  if (memberIds.length === 0) return emails
 
-  for (const row of profiles) {
-    if (row.email) emails.set(row.id, row.email)
+  const { data: profiles, error: profileError } = await supabase.from('profiles').select('id, email, deleted_at').in('id', memberIds)
+  if (profileError) {
+    log.warn('could not read profile emails for notification recipients', { companyId, error: profileError.message })
+    return emails
+  }
+  for (const profile of (profiles ?? []) as Array<{ id: string; email: string | null; deleted_at: string | null }>) {
+    const email = profile.email?.trim()
+    if (!profile.deleted_at && email) emails.set(profile.id, email)
   }
   return emails
 }

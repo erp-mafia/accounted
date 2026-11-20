@@ -27,7 +27,7 @@ const user = { id: 'user-1', email: 'owner@example.test' }
 const enabledAccess = {
   company_id: 'company-1', status: 'enabled', max_sends: 50, receive_enabled: true,
   requested_at: null, requested_by: null, request_note: null,
-  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'jakob', disabled_at: null, note: null,
+  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'anna', disabled_at: null, note: null,
   created_at: '2026-08-21T16:00:00.000Z', updated_at: '2026-08-21T16:00:00.000Z',
 }
 const companySettings = { org_number: '559538-6219', company_name: 'Arcim Technology AB', vat_number: 'SE559538621901', city: 'Stockholm', country: 'SE' }
@@ -55,6 +55,7 @@ const registeredRow = {
 function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTransport {
   return {
     provider: 'qvalia',
+    tenantId: 'SE5595386219',
     lookupRecipient: vi.fn(),
     submit: vi.fn(),
     verifyWebhook: vi.fn(),
@@ -100,7 +101,7 @@ describe('/api/settings/peppol', () => {
     delete process.env.PEPPOL_TRANSPORT_PROVIDER
   })
 
-  it('gives the connector call room to finish: the route outlives the 60 s transport timeout', () => {
+  it('gives the connector call room to finish: the route outlives the 50 s transport timeout', () => {
     expect(maxDuration).toBeGreaterThanOrEqual(90)
   })
 
@@ -188,7 +189,8 @@ describe('/api/settings/peppol', () => {
     enqueue({ data: [registeredRow], error: null })
     enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
     const response = await get()
-    expect(response.status).toBe(500)
+    // A statement timeout is transient: 503 TRANSIENT_ERROR, still never a success.
+    expect(response.status).toBe(503)
     const body = await response.json()
     expect(body.error.code).toBeDefined()
     expect(body.data).toBeUndefined()

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
+import type { PaletteNavGate } from './CommandPalette'
 
 const CommandPalette = dynamic(() => import('./CommandPalette'), { ssr: false })
 
@@ -12,7 +13,7 @@ const CommandPalette = dynamic(() => import('./CommandPalette'), { ssr: false })
  * Once mounted, the palette's own global key listener takes over toggling;
  * this wrapper's listener only fires the first time.
  */
-export default function LazyCommandPalette() {
+export default function LazyCommandPalette({ navGate = null }: { navGate?: PaletteNavGate | null }) {
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -27,5 +28,5 @@ export default function LazyCommandPalette() {
     return () => document.removeEventListener('keydown', onKey)
   }, [mounted])
 
-  return mounted ? <CommandPalette initialOpen /> : null
+  return mounted ? <CommandPalette initialOpen navGate={navGate} /> : null
 }

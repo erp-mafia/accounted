@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl'
 import Question from '@/components/onboarding/journey/Question'
 import { InsightPanel } from '../ui/InsightPanel'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 /**
  * Genomlysningen on its own: only reached from the source step's shortcut
@@ -21,9 +22,9 @@ export function InsightStep({ ctx }: { ctx: BooksCtx }) {
     >
       <InsightPanel ctx={ctx} />
       <div className="jny-qactions">
-        <button type="button" className="jny-btn" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+        <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
           {next}
-        </button>
+        </Button>
       </div>
     </Question>
   )

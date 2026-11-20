@@ -26,12 +26,15 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 vi.mock('@/lib/invoices/duplicate-payment-candidates', () => ({
+  findDuplicatePaymentCandidatesForInvoice: mockDetector,
   findDuplicatePaymentCandidatesForSupplierInvoice: mockDetector,
 }))
 
 import {
   GUARD_BYPASSED_ACTION,
+  INVOICE_DUPLICATE_PAYMENT_GUARD,
   SUPPLIER_INVOICE_DUPLICATE_PAYMENT_GUARD,
+  recordInvoiceDuplicateGuardBypass,
   recordSupplierInvoiceDuplicateGuardBypass,
 } from '@/lib/invoices/duplicate-guard-history'
 
@@ -216,5 +219,55 @@ describe('recordSupplierInvoiceDuplicateGuardBypass', () => {
     await expect(
       recordSupplierInvoiceDuplicateGuardBypass(readClient, input()),
     ).resolves.toBeUndefined()
+  })
+})
+
+describe('recordInvoiceDuplicateGuardBypass', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockInsert.mockResolvedValue({ error: null })
+  })
+
+  it('writes the same record on the customer side, naming the invoice and the voucher', async () => {
+    mockDetector.mockResolvedValue([
+      { id: 'tx-9', date: '2026-03-26', amount: 1250, match_reason: 'ocr_exact', match_confidence: 0.99 },
+    ])
+
+    await recordInvoiceDuplicateGuardBypass(readClient, {
+      companyId: 'company-1',
+      invoice: {
+        id: 'inv-1',
+        invoice_number: 'F-1',
+        customer_name: 'Kund AB',
+        currency: 'SEK',
+        total: 1250,
+        total_sek: 1250,
+        exchange_rate: null,
+      },
+      paymentAmount: 1250,
+      paymentDate: '2026-03-30',
+      paymentAccount: '1930',
+      journalEntryId: 'je-1',
+      actor: { user_id: 'user-1', actor_type: 'user' },
+    })
+
+    expect(mockFrom).toHaveBeenCalledWith('audit_log')
+    const row = mockInsert.mock.calls[0][0]
+    expect(row).toMatchObject({
+      action: GUARD_BYPASSED_ACTION,
+      table_name: 'invoices',
+      record_id: 'inv-1',
+      company_id: 'company-1',
+    })
+    expect(row.new_state).toMatchObject({
+      guard: INVOICE_DUPLICATE_PAYMENT_GUARD,
+      invoice_id: 'inv-1',
+      invoice_number: 'F-1',
+      journal_entry_id: 'je-1',
+      candidate_count: 1,
+      candidates: [expect.objectContaining({ transaction_id: 'tx-9', match_reason: 'ocr_exact' })],
+    })
+    // PII-safe: the record names ids and amounts, never the customer.
+    expect(JSON.stringify(row)).not.toContain('Kund AB')
   })
 })

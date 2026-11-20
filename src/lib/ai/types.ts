@@ -1,3 +1,4 @@
+import type { AiMeter } from './meter'
 // Job-shaped AI service interface.
 //
 // Call sites describe WHAT they need (a text answer, a schema-shaped object,
@@ -80,6 +81,8 @@ export interface AiChatTurn {
 
 export interface GenerateTextRequest {
   tier: AiTier
+  /** Who is calling, for ai_usage_events. */
+  meter?: AiMeter
   system?: string
   prompt: string
   maxTokens: number
@@ -99,18 +102,74 @@ export interface GenerateTextRequest {
    * alone (so a snapshot in the prompt is the fallback grounding).
    */
   tools?: AiToolDef[]
-  /** Max model turns in the tool loop (default 4). Ignored when `tools` is absent. */
+  /**
+   * Max model turns in the tool loop (default 4). Ignored when `tools` is
+   * absent. A loop that ends without a text answer (budget spent, or a turn
+   * with no visible text) gets one more turn that may not call tools.
+   */
   maxSteps?: number
+  /** Ends the call when it fires: every model turn of it is aborted and not retried. */
+  signal?: AbortSignal
+  /**
+   * Reasoning depth, for a backend that takes one (the Anthropic family:
+   * output_config.effort). Absent leaves the model's own default, and the
+   * request exactly as it was. Ignored by the other backends.
+   */
+  effort?: AiEffort
+  /**
+   * Mark the prompt for the backend's prompt cache (the Anthropic family):
+   * the tool definitions and the system prompt as one prefix every caller
+   * with the same ones shares, and the conversation so far on each turn of a
+   * tool loop, so a later turn reads at the cached price what an earlier turn
+   * sent. Absent leaves the request exactly as it was. Ignored by the other
+   * backends.
+   */
+  cachePrompt?: boolean
+  /**
+   * Told what happens while the answer is produced, for a caller that shows
+   * it as it comes. A backend that cannot stream never calls it: the result
+   * is the answer either way, and the caller must not depend on the events.
+   */
+  onProgress?: (event: AiProgressEvent) => void
 }
+
+export type AiEffort = 'low' | 'medium' | 'high'
+
+export type AiProgressEvent =
+  /** Visible answer text, as it is generated. */
+  | { type: 'text'; delta: string }
+  /**
+   * The model turn ended in tool calls. Text received since the last such
+   * event was a remark before the calls ("Jag hämtar..."), not the answer:
+   * the result never contains it, so a caller showing text drops it here.
+   */
+  | { type: 'tools'; names: string[] }
 
 export interface GenerateTextResult {
   text: string
   model: string
   usage: AiUsage
+  /**
+   * The last model turn hit the output ceiling (max_tokens): `text` is cut
+   * off, or empty when the whole budget went to reasoning. Absent when the
+   * answer ended on its own.
+   */
+  truncated?: true
+  /** The provider's raw stop reason for the last model turn. Diagnostics (logs) only. */
+  stopReason?: string
+  /**
+   * Set when the tool loop had to ask for the answer in a final no-tools turn:
+   * 'step_limit' when the step budget ran out, 'no_text' when a turn ended
+   * without visible text (an empty end_turn, or max_tokens spent on reasoning
+   * or on a tool call that was cut off).
+   */
+  forcedFinal?: 'step_limit' | 'no_text'
 }
 
 export interface GenerateStructuredRequest {
   tier: AiTier
+  /** Who is calling, for ai_usage_events. */
+  meter?: AiMeter
   system?: string
   prompt: string
   maxTokens: number
@@ -119,7 +178,22 @@ export interface GenerateStructuredRequest {
     description?: string
     /** JSON Schema (draft-07 subset) for the expected object. Hand-maintained by the caller. */
     jsonSchema: Record<string, unknown>
+    /**
+     * Grammar-constrained tool input on the Anthropic family (strict tool
+     * use): the answer follows jsonSchema, a refusal or a cut-off answer
+     * aside, though an enum value may still differ in case. The schema must
+     * then stay inside the structured-outputs subset (additionalProperties
+     * false on every object, no minimum/maximum or length constraints), or
+     * the request is refused. The OpenAI-compatible service ignores it and
+     * follows AI_STRICT_JSON.
+     */
+    strict?: boolean
   }
+  /**
+   * Ends the call when it fires: the request is aborted and not retried. A
+   * caller that sets none gets the service's own limit (lib/ai/call-limit.ts).
+   */
+  signal?: AbortSignal
 }
 
 export interface GenerateStructuredResult {
@@ -131,6 +205,8 @@ export interface GenerateStructuredResult {
 
 export interface ExtractFromDocumentRequest {
   document: AiDocumentInput
+  /** Who is calling, for ai_usage_events. */
+  meter?: AiMeter
   /** Byte-stable system prompt. The Anthropic-family service marks it as a prompt-cache breakpoint. */
   system: string
   /** Trailing user instruction placed after the document part(s). */
@@ -144,11 +220,20 @@ export interface ExtractFromDocumentRequest {
   jsonSchema?: Record<string, unknown>
   /** Which model reads the document; the extraction tier unless the caller has a cheaper job (Arkiv reads history with the cheap tier). */
   tier?: AiTier
+  /**
+   * Ends the call when it fires: the request is aborted and not retried. For a
+   * caller with a deadline of its own, e.g. work that runs after the response
+   * inside a route's 300 s. A caller that sets none gets the service's own
+   * limit (lib/ai/call-limit.ts).
+   */
+  signal?: AbortSignal
 }
 
 export type ExtractionSkipReason =
   | 'ai_unconfigured'
   | 'ai_no_vision'
+  /** The company switched AI off (lib/ai/meter.ts refuses before the model is called). */
+  | 'ai_switched_off'
   | 'pdf_rasterizer_missing'
   | 'pdf_rasterize_failed'
 

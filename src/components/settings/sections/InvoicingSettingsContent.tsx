@@ -1,28 +1,33 @@
 'use client'
 
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
+import { Button } from '@/components/ui/button'
+import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoiceTypesSettings } from '@/components/settings/InvoiceTypesSettings'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
-import { PeppolReceiveSettings } from '@/components/settings/PeppolReceiveSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
-import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
-import { ReminderEmailTextsSettings } from '@/components/settings/ReminderEmailTextsSettings'
-import { InvoiceEmailRecipientsSettings } from '@/components/settings/InvoiceEmailRecipientsSettings'
-import { InvoiceSenderDomainSettings } from '@/components/settings/InvoiceSenderDomainSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
+import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
+import { SelfBillingSettings, selfBillingSettingsUpdates } from '@/components/settings/SelfBillingSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
-import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSectionHeader, SettingsViewerScope } from '@/components/settings/SettingsRows'
+import { SwedbankFileIdsSettings, swedbankFileIdUpdates } from '@/components/settings/SwedbankFileIdsSettings'
+import { NordeaSignerIdSettings, nordeaSignerIdUpdates } from '@/components/settings/NordeaSignerIdSettings'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
 export function InvoicingSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tCollections = useTranslations('settings_collections')
+  const tConnections = useTranslations('settings_connections')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
+  const collections = useCollectionsAvailability()
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
@@ -35,13 +40,9 @@ export function InvoicingSettingsContent() {
       invoice_default_days: parseInt(formData.get('invoice_default_days') as string) || 30,
       invoice_default_notes: (formData.get('invoice_default_notes') as string) || null,
       default_our_reference: (formData.get('default_our_reference') as string) || null,
-      reminder_days_level_1:
-        Number.parseInt(formData.get('reminder_days_level_1') as string) || 15,
-      reminder_days_level_2:
-        Number.parseInt(formData.get('reminder_days_level_2') as string) || 30,
-      reminder_days_level_3:
-        Number.parseInt(formData.get('reminder_days_level_3') as string) || 45,
-      send_invoice_reminders: formData.get('send_invoice_reminders') === 'true',
+      ...(settings ? swedbankFileIdUpdates(formData, settings) : {}),
+      ...(settings ? nordeaSignerIdUpdates(formData, settings) : {}),
+      ...selfBillingSettingsUpdates(formData),
     }
     return {
       updates,
@@ -63,33 +64,53 @@ export function InvoicingSettingsContent() {
       <InvoicePaymentAccountsSettings settings={settings} onUpdate={updateSettings} />
 
       <SettingsFormWrapper onSave={handleSave}>
+        {/* Swedbank's ids and Nordea's Signer ID for payment files, next to
+            the bank details above: owner/admin of a company at that bank
+            only, saved with this form. */}
+        <SwedbankFileIdsSettings settings={settings} />
+        <NordeaSignerIdSettings settings={settings} />
         <InvoiceSettingsForm
           settings={settings}
           // Invoice kinds on/off, right after Fakturainställningar: each
-          // switch saves itself, independent of the form's Spara.
-          afterInvoiceSettings={<InvoiceTypesSettings />}
+          // switch saves itself, independent of the form's Spara. Kundorder
+          // sits beside them: its menu row lives under Fakturering, where
+          // people look for the switch (crm#1513).
+          afterInvoiceSettings={
+            <>
+              <InvoiceTypesSettings />
+              <SettingsGroup>
+                <NavGateToggle setting="sales_orders_enabled" namespace="sales_orders" href="/sales-orders" />
+              </SettingsGroup>
+            </>
+          }
         />
+        {/* Självfakturor on the purchase side, saved with this form (crm#1367). */}
+        <SelfBillingSettings settings={settings} />
       </SettingsFormWrapper>
 
       {/* Payment link opt-in: saves individually via toggle switch */}
-      <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
-
-      {/* Peppol receiving: one switch that publishes the company's Peppol id */}
-      <PeppolReceiveSettings />
+      <SettingsViewerScope>
+        <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
+      </SettingsViewerScope>
 
       {/* PDF settings: saves individually via toggle switches */}
-      <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
+      <SettingsViewerScope>
+        <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
+      </SettingsViewerScope>
 
-      {/* Fixed invoice email recipients: explicit save (owner/admin only) */}
-      <InvoiceEmailRecipientsSettings settings={settings} onUpdate={updateSettings} />
-
-      <InvoiceSenderDomainSettings companyName={settings.company_name ?? null} />
-
-      {/* Invoice email texts: autosaves on blur */}
-      <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
-
-      {/* Reminder email texts per level: autosaves on blur */}
-      <ReminderEmailTextsSettings settings={settings} onUpdate={updateSettings} />
+      {/* Påminnelser och inkasso lives under Kopplingar; linked here only
+          where the installation offers it or a connection exists. */}
+      {collectionsEntryShown(collections) ? (
+        <SettingsGroup>
+          <SettingsRow label={tCollections('title')} help={tConnections('collections_help')}>
+            <SettingsRowEnd>
+              <Button variant="outline" asChild>
+                <Link href="/settings/collections">{tConnections('open')}</Link>
+              </Button>
+            </SettingsRowEnd>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
     </div>
   )
 }

@@ -6,13 +6,14 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FormSubmitRow } from '@/components/common/FormSubmitRow'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, CheckCircle, XCircle, Lock } from 'lucide-react'
+import { CheckCircleIcon, XCircleIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
@@ -25,7 +26,10 @@ import {
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   isMaskedPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
-import { isPersonalNumberOrgNumberDisallowed } from '@/lib/customers/personal-number-shape'
+import {
+  isOrgNumberRefusedOnIndividual,
+  isPersonalNumberOrgNumberDisallowed,
+} from '@/lib/invariants/personal-number-shape'
 import { registryFormFill, type RegistryFormField } from '@/lib/parties/registry-form-fill'
 import { useRegistryAutofill } from '@/components/parties/use-registry-autofill'
 import { RegistryAutofillNote } from '@/components/parties/RegistryAutofillNote'
@@ -35,7 +39,9 @@ import {
   getCountryOptions,
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
+import { addressHasState } from '@/lib/invoices/postal-address'
 import type { CreateCustomerInput } from '@/types'
+import { CONSUMER_INVOICE_MAX_DAYS } from '@/lib/invoices/consumer-credit'
 
 /**
  * What the register may fill on a Swedish company's org number. No VAT
@@ -49,12 +55,15 @@ interface CustomerFormProps {
   onSubmit: (data: CreateCustomerInput) => Promise<void>
   isLoading: boolean
   initialData?: Partial<CreateCustomerInput>
+  /** Set by a host that owns the primary (a drawer's fixed footer): the form takes this id and renders no submit row of its own; the host's button submits it through the `form` attribute. */
+  formId?: string
 }
 
 export default function CustomerForm({
   onSubmit,
   isLoading,
   initialData,
+  formId,
 }: CustomerFormProps) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -80,6 +89,7 @@ export default function CustomerForm({
     address_line2: z.string().optional(),
     postal_code: z.string().optional(),
     city: z.string().optional(),
+    address_state: z.string().optional(),
     // ISO 3166-1 alpha-2. A row from before 2026-09 can still carry a name
     // the backfill could not map; it is shown as-is in the picker and has to
     // be replaced before the form saves.
@@ -105,8 +115,19 @@ export default function CustomerForm({
       .int(t('payment_terms_invalid'))
       .min(0, t('payment_terms_invalid'))
       .max(365, t('payment_terms_invalid')),
+    invoice_reference: z.string().max(200, t('invoice_reference_too_long')).optional(),
+    invoice_marking: z.string().max(200, t('invoice_marking_too_long')).optional(),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
+    // Konsumentkreditlagen (2026:1011): an invoice to a private person is
+    // due within 50 days, so the card cannot ask for more.
+    if (customer.customer_type === 'individual' && customer.default_payment_terms > CONSUMER_INVOICE_MAX_DAYS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['default_payment_terms'],
+        message: t('payment_terms_private_max', { days: CONSUMER_INVOICE_MAX_DAYS }),
+      })
+    }
     // Country vs customer type vs VAT prefix (#2025): an EU customer with
     // land Sverige got reverse charge and nothing objected until the
     // periodisk sammanställning, after the invoice was sent. The API refuses
@@ -183,6 +204,7 @@ export default function CustomerForm({
       address_line2: initialData?.address_line2 || '',
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
+      address_state: initialData?.address_state || '',
       country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
       org_number: initialData?.org_number || '',
       vat_number: initialData?.vat_number || '',
@@ -190,6 +212,8 @@ export default function CustomerForm({
       language: initialData?.language || 'sv',
       // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
       default_payment_terms: initialData?.default_payment_terms ?? 30,
+      invoice_reference: initialData?.invoice_reference ?? '',
+      invoice_marking: initialData?.invoice_marking ?? '',
       notes: initialData?.notes || '',
     },
   })
@@ -234,6 +258,8 @@ export default function CustomerForm({
   // would look empty while holding something.
   const countryValueUnlisted =
     countryValue && !countryOptions.some((option) => option.code === countryValue)
+  // A US or Canadian address names its state or province (lib/invoices/postal-address.ts).
+  const showAddressState = addressHasState(countryValue)
   // The stored value could not be decrypted. The field is editable (typing a
   // fresh personnummer replaces it); say so, because the placeholder on its own
   // reads like a rendering fault.
@@ -289,7 +315,7 @@ export default function CustomerForm({
       } else if (!result.valid) {
         toast({
           title: t('vat_failed_title'),
-          description: result.error || t('vat_failed_default'),
+          description: getErrorMessage(result, { locale: locale, fallback: t('vat_failed_default') }),
           variant: 'destructive',
         })
       }
@@ -311,11 +337,18 @@ export default function CustomerForm({
     } = data
     const isEditing = initialData !== undefined
     const payload: CreateCustomerInput = {
+      // email goes as typed: the API schemas read '' as "no email" on create
+      // and as a clear on update.
       ...customerData,
       // NULL means never configured and lets a migration enrich the row.
       // Empty values on an existing row are explicit clears and survive sync.
       contact_person: data.contact_person?.trim() || (isEditing ? '' : null),
-      email: data.email || undefined,
+      // Blank is none; on an edit, null clears a stored value.
+      invoice_reference: data.invoice_reference?.trim() || null,
+      invoice_marking: data.invoice_marking?.trim() || null,
+      // Asked for only in a country that has states; a value left over from
+      // one is cleared, like the org number below. Blank is none.
+      address_state: addressHasState(data.country) ? data.address_state?.trim() ?? '' : '',
       personal_number: data.personal_number || null,
       invoice_email_cc_addresses: ccText
         ? parseInvoiceRecipientText(ccText)
@@ -330,11 +363,18 @@ export default function CustomerForm({
     if (isMaskedPersonalNumber(data.personal_number)) {
       delete payload.personal_number
     }
+    // The org number field is hidden for a privatperson, so a value left over
+    // from a business type is not the user's input and is cleared, not sent
+    // to be refused. A personnummer there is sent: the API moves it into
+    // personal_number.
+    if (isOrgNumberRefusedOnIndividual(data.customer_type, data.org_number)) {
+      payload.org_number = ''
+    }
     onSubmit(payload)
   }
 
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
+    <form id={formId} onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
       {/* Customer Type */}
       <div className="space-y-2">
         <Label>{t('type_label')}</Label>
@@ -406,14 +446,13 @@ export default function CustomerForm({
                     type="button"
                     variant="outline"
                     onClick={handleValidateVat}
-                    disabled={!vatNumber || isValidatingVat}
+                    disabled={!vatNumber}
+                    loading={isValidatingVat}
                   >
-                    {isValidatingVat ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : vatValidationResult?.valid ? (
-                      <CheckCircle className="h-4 w-4 text-success" />
+                    {isValidatingVat ? null : vatValidationResult?.valid ? (
+                      <CheckCircleIcon className="h-4 w-4 text-success" />
                     ) : vatValidationResult?.valid === false ? (
-                      <XCircle className="h-4 w-4 text-destructive" />
+                      <XCircleIcon className="h-4 w-4 text-destructive" />
                     ) : (
                       t('vat_verify')
                     )}
@@ -445,7 +484,7 @@ export default function CustomerForm({
 
       {/* Customer number */}
       <div className="space-y-2">
-        <Label htmlFor="customer_number">{t('customer_number_label')}</Label>
+        <Label htmlFor="customer_number" optional>{t('customer_number_label')}</Label>
         <Input
           id="customer_number"
           placeholder={t('customer_number_placeholder')}
@@ -461,7 +500,7 @@ export default function CustomerForm({
       {/* Contact */}
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="contact_person">{t('contact_person_label')}</Label>
+          <Label htmlFor="contact_person" optional>{t('contact_person_label')}</Label>
           <Input
             id="contact_person"
             placeholder={t('contact_person_placeholder')}
@@ -473,7 +512,7 @@ export default function CustomerForm({
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="email">{t('email_label')}</Label>
+            <Label htmlFor="email" optional>{t('email_label')}</Label>
             <Input
               id="email"
               type="email"
@@ -485,7 +524,7 @@ export default function CustomerForm({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="phone">{t('phone_label')}</Label>
+            <Label htmlFor="phone" optional>{t('phone_label')}</Label>
             <Input
               id="phone"
               placeholder={t('phone_placeholder')}
@@ -500,7 +539,7 @@ export default function CustomerForm({
         <h3 className="text-sm">{t('invoice_email_section')}</h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="invoice_email_cc_addresses">{t('invoice_email_cc_label')}</Label>
+            <Label htmlFor="invoice_email_cc_addresses" optional>{t('invoice_email_cc_label')}</Label>
             <Textarea
               id="invoice_email_cc_addresses"
               rows={3}
@@ -512,7 +551,7 @@ export default function CustomerForm({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="invoice_email_bcc_addresses">{t('invoice_email_bcc_label')}</Label>
+            <Label htmlFor="invoice_email_bcc_addresses" optional>{t('invoice_email_bcc_label')}</Label>
             <Textarea
               id="invoice_email_bcc_addresses"
               rows={3}
@@ -531,7 +570,7 @@ export default function CustomerForm({
       <div className="space-y-4">
         <h3>{t('address_section')}</h3>
         <div className="space-y-2">
-          <Label htmlFor="address_line1">{t('street_label')}</Label>
+          <Label htmlFor="address_line1" optional>{t('street_label')}</Label>
           <Input
             id="address_line1"
             placeholder={t('street_placeholder')}
@@ -539,7 +578,7 @@ export default function CustomerForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="address_line2">{t('address_line2_label')}</Label>
+          <Label htmlFor="address_line2" optional>{t('address_line2_label')}</Label>
           <Input
             id="address_line2"
             placeholder={t('address_line2_placeholder')}
@@ -548,7 +587,7 @@ export default function CustomerForm({
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="postal_code">{t('postal_label')}</Label>
+            <Label htmlFor="postal_code" optional>{t('postal_label')}</Label>
             <Input
               id="postal_code"
               placeholder={t('postal_placeholder')}
@@ -556,7 +595,7 @@ export default function CustomerForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="city">{t('city_label')}</Label>
+            <Label htmlFor="city" optional>{t('city_label')}</Label>
             <Input
               id="city"
               placeholder={t('city_placeholder')}
@@ -595,6 +634,21 @@ export default function CustomerForm({
             )}
           </div>
         </div>
+        {showAddressState && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="address_state" optional>
+                {normalizeCountryCode(countryValue) === 'CA' ? t('address_province_label') : t('address_state_label')}
+              </Label>
+              <Input
+                id="address_state"
+                maxLength={100}
+                placeholder={normalizeCountryCode(countryValue) === 'CA' ? 'ON' : 'WA'}
+                {...register('address_state')}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Payment terms */}
@@ -611,6 +665,36 @@ export default function CustomerForm({
         <p className="text-xs text-muted-foreground">{t('payment_terms_help')}</p>
         {errors.default_payment_terms && (
           <p className="text-sm text-destructive">{errors.default_payment_terms.message}</p>
+        )}
+      </div>
+
+      {/* Fakturareferens: Er referens on new invoices (crm#1200) */}
+      <div className="space-y-2">
+        <Label htmlFor="invoice_reference" optional>{t('invoice_reference_label')}</Label>
+        <Input
+          id="invoice_reference"
+          placeholder={t('invoice_reference_placeholder')}
+          {...register('invoice_reference')}
+        />
+        {errors.invoice_reference ? (
+          <p className="text-sm text-destructive">{errors.invoice_reference.message}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('invoice_reference_hint')}</p>
+        )}
+      </div>
+
+      {/* Märkning: Märkning on new invoices (crm#1477) */}
+      <div className="space-y-2">
+        <Label htmlFor="invoice_marking" optional>{t('invoice_marking_label')}</Label>
+        <Input
+          id="invoice_marking"
+          placeholder={t('invoice_marking_placeholder')}
+          {...register('invoice_marking')}
+        />
+        {errors.invoice_marking ? (
+          <p className="text-sm text-destructive">{errors.invoice_marking.message}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('invoice_marking_hint')}</p>
         )}
       </div>
 
@@ -637,7 +721,7 @@ export default function CustomerForm({
 
       {/* Notes */}
       <div className="space-y-2">
-        <Label htmlFor="notes">{t('notes_label')}</Label>
+        <Label htmlFor="notes" optional>{t('notes_label')}</Label>
         <Textarea
           id="notes"
           placeholder={t('notes_placeholder')}
@@ -645,28 +729,16 @@ export default function CustomerForm({
         />
       </div>
 
-      {/* Submit */}
-      <div className="flex justify-end gap-2">
-        <Button
-          type="submit"
-          disabled={isLoading || !canWrite}
-          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-        >
-          {isLoading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t('submit_saving')}
-            </>
-          ) : !canWrite ? (
-            <>
-              <Lock className="mr-2 h-4 w-4" />
-              {t('submit_save')}
-            </>
-          ) : (
-            t('submit_save')
-          )}
-        </Button>
-      </div>
+      {/* Submit: the host's footer carries it when the form has an id. */}
+      {!formId && (
+        <FormSubmitRow
+          canWrite={canWrite}
+          isLoading={isLoading}
+          label={t('submit_save')}
+          savingLabel={t('submit_saving')}
+          viewerTitle={t('viewer_disabled_tooltip')}
+        />
+      )}
     </form>
   )
 }

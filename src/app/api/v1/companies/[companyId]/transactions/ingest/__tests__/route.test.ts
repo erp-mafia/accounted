@@ -10,6 +10,14 @@ beforeAll(() => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
 })
 
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/auth/api-keys', async () => {
   const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
   return { ...actual, validateApiKey: vi.fn(), createServiceClientNoCookies: vi.fn() }
@@ -38,7 +46,10 @@ const { ingestMock, createTxJE, findMissingAccountsMock } = vi.hoisted(() => ({
   findMissingAccountsMock: vi.fn().mockResolvedValue([]),
 }))
 
-vi.mock('@/lib/transactions/ingest', () => ({
+// Only the commit is stubbed. The dry-run runs the pipeline's real dedup
+// decision (lib/transactions/dedup-preview.ts) against the scripted tables.
+vi.mock('@/lib/transactions/ingest', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/ingest')>()),
   ingestTransactions: ingestMock,
 }))
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
@@ -53,6 +64,15 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
     findMissingActiveAccounts: findMissingAccountsMock,
   }
 })
+
+// batch-categorize runs the booking-time duplicate guard per item. Its
+// detector reads `transactions`, which this file scripts as an ordered queue
+// for the fetch / CAS sequence, so stub it to "no duplicate" (the detection
+// queries are unit-tested in lib/transactions/__tests__/booking-duplicate-detection.test.ts).
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: vi.fn().mockResolvedValue(null),
+}))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as ingestPOST } from '../route'
@@ -158,6 +178,124 @@ describe('POST /transactions/ingest', () => {
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(ingestMock).not.toHaveBeenCalled()
   })
+
+  it('returns 401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    const res = await ingestPOST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/ingest`, {
+        transactions: [SAMPLE_TX],
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(401)
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  // A skipped row is named, never only counted: the caller can tell a content
+  // match (a judgement call) from an exact external_id match.
+  it('returns every skipped row with its reason and the stored row it matched', async () => {
+    const skipped = [
+      {
+        external_id: 'csv-line-43',
+        reason: 'content_match_unbooked',
+        matched_external_id: 'stored-9',
+        matched_transaction_id: '33333333-3333-4333-8333-333333333333',
+      },
+    ]
+    ingestMock.mockResolvedValueOnce({
+      imported: 1,
+      duplicates: 1,
+      duplicates_by_reason: { external_id_match: 0, content_match_booked: 0, content_match_unbooked: 1 },
+      skipped,
+      reconciled: 0,
+      auto_categorized: 0,
+      auto_matched_invoices: 0,
+      errors: 0,
+      transaction_ids: ['11111111-1111-4111-8111-111111111111'],
+    })
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const res = await ingestPOST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/ingest`, {
+        transactions: [SAMPLE_TX, { ...SAMPLE_TX, external_id: 'csv-line-43' }],
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.duplicates).toBe(1)
+    expect(body.data.duplicates_by_reason).toEqual({
+      external_id_match: 0,
+      content_match_booked: 0,
+      content_match_unbooked: 1,
+    })
+    expect(body.data.skipped).toEqual(skipped)
+  })
+
+  it('passes stable_external_ids to the pipeline', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const tx = { ...SAMPLE_TX, import_source: 'my_bank_feed' }
+    const res = await ingestPOST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/ingest`, {
+        transactions: [tx, { ...tx, external_id: 'ref-2' }],
+        stable_external_ids: true,
+        settlement_account: '1930',
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    expect(ingestMock.mock.calls[0][4]).toMatchObject({ stableExternalIds: true, settlementAccount: '1930' })
+    // The mocked pipeline result predates the per-row fields: the response
+    // still carries them, empty, so a client can rely on their presence.
+    const body = await res.json()
+    expect(body.data.skipped).toEqual([])
+    expect(body.data.duplicates_by_reason).toEqual({
+      external_id_match: 0,
+      content_match_booked: 0,
+      content_match_unbooked: 0,
+    })
+  })
+
+  // The feed label is the id namespace. Without one the statement could not
+  // tell "the same feed" from rows typed in by hand, so it is refused instead
+  // of silently doing nothing.
+  it.each([
+    ['no import_source', [SAMPLE_TX]],
+    ['a hand-entered label', [{ ...SAMPLE_TX, import_source: 'mcp' }]],
+    [
+      'two different labels',
+      [
+        { ...SAMPLE_TX, import_source: 'feed_a' },
+        { ...SAMPLE_TX, external_id: 'ref-2', import_source: 'feed_b' },
+      ],
+    ],
+  ])('rejects stable_external_ids with %s', async (_name, transactions) => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const res = await ingestPOST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/ingest`, {
+        transactions,
+        stable_external_ids: true,
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(400)
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  // What the dry-run says, row by row, is tested end to end against the real
+  // pipeline in dry-run-agreement.test.ts.
 
   it('rejects > 500 items', async () => {
     mockServiceClient.mockReturnValue(

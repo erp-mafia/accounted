@@ -16,6 +16,7 @@ import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
 import { resolveMemberEmail } from '@/lib/notifications/member-email'
 import { escapeHtml } from '@/lib/email/user-text'
+import type { CloudReauthReason } from '../types'
 
 const log = createLogger('cloud-backup-alert')
 
@@ -58,6 +59,12 @@ export interface BackupAlertInput {
    * Drive for callers written before the second provider existed.
    */
   providerLabel?: string
+  /**
+   * Why a `needs_reauth` connection is paused. `missing_scope` gets its own
+   * wording: reconnecting fixes it only if the person also ticks the storage
+   * box this time. Absent reads as `token_revoked`.
+   */
+  reauthReason?: CloudReauthReason | null
 }
 
 export async function sendBackupFailureAlert(
@@ -65,7 +72,7 @@ export async function sendBackupFailureAlert(
   input: BackupAlertInput
 ): Promise<{ sent: boolean; reason?: string }> {
   try {
-    const email = getEmailService()
+    const email = await getEmailService()
     if (!email.isConfigured()) return { sent: false, reason: 'email_not_configured' }
 
     const recipient = await resolveMemberEmail(supabase, input.companyId, input.userId)
@@ -80,7 +87,13 @@ export async function sendBackupFailureAlert(
 
     let subject: string
     let paragraphs: string[]
-    if (input.kind === 'needs_reauth') {
+    if (input.kind === 'needs_reauth' && input.reauthReason === 'missing_scope') {
+      subject = `Säkerhetskopieringen till ${providerLabel} är pausad`
+      paragraphs = [
+        `Den automatiska säkerhetskopieringen för ${companyName} är pausad: vi har ingen behörighet att spara filer i ditt ${providerLabel}, eftersom rutan för ${providerLabel} inte var ikryssad när kontot kopplades.`,
+        `Koppla om ${providerLabel} och kryssa i rutan för ${providerLabel} när Google frågar.`,
+      ]
+    } else if (input.kind === 'needs_reauth') {
       subject = `Säkerhetskopieringen till ${providerLabel} är pausad`
       paragraphs = [
         `Den automatiska säkerhetskopieringen för ${companyName} är pausad: åtkomsten till ditt ${providerLabel}-konto har gått ut eller återkallats.`,

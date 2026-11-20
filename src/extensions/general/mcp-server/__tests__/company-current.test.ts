@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { companyCurrentResource } from '../resources/company-current'
+
+// The inbox address is read only where an inbound mail domain exists
+// (lib/documents/inbox-address.ts); set one so the company_inboxes query is
+// issued and its columns stay under the schema check below.
+beforeAll(() => {
+  process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
+})
+afterAll(() => {
+  delete process.env.RESEND_INBOUND_DOMAIN
+})
 
 /**
  * The shared mock Supabase harness is a permissive proxy: it accepts any
@@ -94,7 +104,7 @@ const EXPECTED_QUERIES: { table: string; columns: string[] }[] = [
   { table: 'suppliers', columns: ['id'] },
   { table: 'invoices', columns: ['id'] },
   { table: 'supplier_invoices', columns: ['id'] },
-  { table: 'transactions', columns: ['id'] },
+  { table: 'open_bank_rows', columns: ['id'] },
   {
     table: 'voucher_sequences',
     columns: [
@@ -108,6 +118,9 @@ const EXPECTED_QUERIES: { table: string; columns: string[] }[] = [
   { table: 'deadlines', columns: ['id', 'title', 'due_date', 'deadline_type', 'priority', 'status'] },
   { table: 'company_inboxes', columns: ['local_part'] },
   { table: 'arkiv_usage_daily', columns: ['activity', 'units'] },
+  // countUnbookedBankTransactions' business leg, issued after its untriaged
+  // head count (the `open_bank_rows` entry above) resolves.
+  { table: 'open_bank_rows', columns: ['id'] },
 ]
 
 /** One empty result per query, so the resource can run end to end. */
@@ -176,6 +189,16 @@ describe('Accounted://company/current query shape', () => {
     expect(argsOf(delivery, 'order')).toContainEqual(['sent_at', { ascending: false }])
   })
 
+  it('lists open deadlines only: neither completed nor dismissed (crm#1848, #207)', async () => {
+    const { supabase, calls } = createRecordingSupabase(emptyResults())
+
+    await companyCurrentResource.read(ctx(supabase))
+
+    const [deadlines] = findCall(calls, 'deadlines')
+    expect(argsOf(deadlines, 'eq')).toContainEqual(['is_completed', false])
+    expect(argsOf(deadlines, 'is')).toEqual([['dismissed_at', null]])
+  })
+
   it('filters categorizations on a source_type the engine actually writes', async () => {
     const { supabase, calls } = createRecordingSupabase(emptyResults())
 
@@ -196,6 +219,66 @@ describe('Accounted://company/current query shape', () => {
     const [invoices] = findCall(calls, 'invoices')
     expect(invoices).toBeDefined()
     expect(argsOf(invoices, 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
+
+  // It counted drafts and left a part paid invoice out: what is owed has one
+  // population (filterOwedInvoices), the count an agent reads included.
+  it('counts what customers owe: a part paid invoice in, a draft and a credit note out', async () => {
+    const { supabase, calls } = createRecordingSupabase(emptyResults())
+
+    await companyCurrentResource.read(ctx(supabase))
+
+    const [invoices] = findCall(calls, 'invoices')
+    expect(argsOf(invoices, 'in')).toEqual([['status', ['sent', 'overdue', 'partially_paid']]])
+    expect(argsOf(invoices, 'is')).toContainEqual(['credited_invoice_id', null])
+    expect(argsOf(invoices, 'gte')).toContainEqual(['total', 0])
+    expect(argsOf(invoices, 'gt')).toContainEqual(['remaining_amount', 0])
+  })
+})
+
+describe('Accounted://company/current intake', () => {
+  it('composes the forwarding address from the active inbox (crm#1174)', async () => {
+    const results = emptyResults()
+    const inboxIndex = EXPECTED_QUERIES.findIndex((q) => q.table === 'company_inboxes')
+    results[inboxIndex] = { data: { local_part: 'acme-7f3k' } }
+    const { supabase, calls } = createRecordingSupabase(results)
+
+    const result = (await companyCurrentResource.read(ctx(supabase))) as { intake: { email: string | null } }
+
+    expect(result.intake.email).toBe('acme-7f3k@in.example.test')
+    const [inbox] = findCall(calls, 'company_inboxes')
+    expect(argsOf(inbox, 'eq')).toEqual([['company_id', 'company-1'], ['status', 'active']])
+  })
+})
+
+describe('Accounted://company/current unbooked count', () => {
+  it('counts unbooked transactions with the shared definition, not journal_entry_id IS NULL alone', async () => {
+    const results = emptyResults()
+    results[8] = { count: 3 } // untriaged head count
+    results[16] = { count: 1 } // business head count
+    const { supabase, calls } = createRecordingSupabase(results)
+
+    const result = (await companyCurrentResource.read(ctx(supabase))) as {
+      counts: { uncategorized_transactions: number | null }
+    }
+
+    const [untriaged, business] = findCall(calls, 'open_bank_rows')
+    expect(argsOf(untriaged, 'is')).toContainEqual(['is_business', null])
+    expect(argsOf(business, 'eq')).toContainEqual(['is_business', true])
+    // 3 untriaged + 1 business row anchored nowhere.
+    expect(result.counts.uncategorized_transactions).toBe(4)
+  })
+
+  it('reports null, not zero, when the count fails', async () => {
+    const results = emptyResults()
+    results[8] = { error: { message: 'statement timeout' } }
+    const { supabase } = createRecordingSupabase(results)
+
+    const result = (await companyCurrentResource.read(ctx(supabase))) as {
+      counts: { uncategorized_transactions: number | null }
+    }
+
+    expect(result.counts.uncategorized_transactions).toBeNull()
   })
 })
 

@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 
 /**
- * The journey's particle orb, ported from the founder-approved concept.
+ * The journey's particle orb, ported from the approved concept.
  * A 320-particle sphere rides the journey band: it stretches into a comet
  * while traveling, morphs into a checkmark when the company is created,
  * and can re-morph into the company's serif initial (the monogram finale).

@@ -1,3 +1,191 @@
 'use client'
 
-export { ResultatrapportView as default } from '../views'
+import React from 'react'
+import Link from 'next/link'
+import { useTranslations } from 'next-intl'
+import { Card, CardContent } from '@/components/ui/card'
+import { AttnLine } from '@/components/ui/attn-line'
+import { AccountNumber } from '@/components/ui/account-number'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { accountDrilldownClick, type AccountDrilldown } from '@/components/reports/drilldown-click'
+import {
+  ReportEmptyState,
+  ReportErrorCard,
+  ReportLoadingCard,
+  reportQuery,
+} from '@/components/reports/report-view-shared'
+import { useReportData } from '@/lib/hooks/use-report-data'
+import { formatAmount } from '@/lib/utils'
+import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
+import type { DateRangeValue } from '@/components/common/ReportDateRange'
+import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
+import type { BudgetComparison, ResultatrapportReport } from '@/types'
+
+/** A deviation's percent, one decimal ("12,5 %"); blank without a budget. */
+function formatPercent(percent: number | null): string {
+  if (percent === null) return ''
+  return `${new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(percent)} %`
+}
+
+/** Budget, Avvikelse (kr) and Avvikelse (%): a positive deviation is a better result. */
+function BudgetCells({ figures }: { figures: BudgetComparison | undefined }) {
+  const tone = !figures || figures.deviation === 0 ? '' : figures.deviation > 0 ? 'text-success' : 'text-destructive'
+  return (
+    <>
+      <td className="px-4 py-1.5 text-right tabular-nums">{figures ? formatAmount(figures.budget) : ''}</td>
+      <td className={`px-4 py-1.5 text-right tabular-nums ${tone}`}>{figures ? formatAmount(figures.deviation) : ''}</td>
+      <td className={`px-4 py-1.5 text-right tabular-nums ${tone}`}>{figures ? formatPercent(figures.deviation_percent) : ''}</td>
+    </>
+  )
+}
+
+export default function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, budgetId = null, drilldown }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; budgetId?: string | null; drilldown: AccountDrilldown }) {
+  const t = useTranslations('reports')
+  // The budget rides in the same query, so the PDF and xlsx carry it too.
+  const reportQs = `${reportQuery(periodId, dateRange, dimensionFilter)}${budgetId ? `&budget_id=${budgetId}` : ''}`
+  const { data, loading, error, refetch } = useReportData<ResultatrapportReport>(
+    `/api/reports/resultatrapport?${reportQs}`,
+    'Kunde inte hämta resultatrapport',
+  )
+  const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
+
+  if (loading) {
+    return <ReportLoadingCard />
+  }
+
+  if (error) {
+    return <ReportErrorCard message={error} onRetry={refetch} />
+  }
+
+  if (!data || data.groups.length === 0) {
+    return (
+      <ReportEmptyState
+        title="Inga intäkter eller kostnader"
+        description="Det finns inga bokförda intäkter eller kostnader i den valda perioden."
+      />
+    )
+  }
+
+  const hasPrior = data.prior_period !== null
+  const hasBudget = data.budget?.applied === true
+  const colCount = hasBudget ? 7 : 4
+
+  return (
+    <div className="space-y-4">
+      {/* The export menu and the latest-voucher line share one row. */}
+      {data.budget && !hasBudget && <AttnLine>{t('budget_partial_month')}</AttnLine>}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {latestVouchers && (
+          <p className="text-sm text-muted-foreground">
+            {t('latest_posted_vouchers')}: {latestVouchers}
+          </p>
+        )}
+        <ReportExportMenu
+          items={[
+          { format: 'pdf', href: `/api/reports/resultatrapport/pdf?${reportQs}` },
+          { format: 'xlsx', href: `/api/reports/resultatrapport/xlsx?${reportQs}` },
+          ]}
+        />
+      </div>
+
+      <Card>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-xs text-muted-foreground">
+                  <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
+                  <th className="text-left font-medium px-4 py-2">Kontonamn</th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={`${data.period.start} till ${data.period.end}`}
+                  >
+                    Innevarande
+                  </th>
+                  {hasBudget && (
+                    <>
+                      <th
+                        className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                        title={`${data.budget!.name}: ${data.budget!.from_month} - ${data.budget!.to_month}`}
+                      >
+                        {t('budget_column')}
+                      </th>
+                      <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">{t('deviation_column')}</th>
+                      <th className="text-right font-medium px-4 py-2 w-24 tabular-nums">{t('deviation_percent_column')}</th>
+                    </>
+                  )}
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={hasPrior ? `${data.prior_period!.start} till ${data.prior_period!.end}` : undefined}
+                  >
+                    Föregående
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.groups.map((group) => (
+                  <React.Fragment key={group.class}>
+                    <tr className="bg-muted/30">
+                      <td colSpan={colCount} className="px-4 py-2 text-xs font-semibold text-muted-foreground">
+                        {group.class_label}
+                      </td>
+                    </tr>
+                    {group.rows.map((row) => (
+                      <tr
+                        key={row.account_number}
+                        className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
+                        onClick={accountDrilldownClick(drilldown, row.account_number)}
+                      >
+                        <td className="px-4 py-1.5">
+                          <AccountNumber number={row.account_number} name={row.account_name} />
+                        </td>
+                        <td className="px-4 py-1.5"><Link href={drilldown.href(row.account_number)} className="block">{row.account_name}</Link></td>
+                        <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.current_period)}</td>
+                        {hasBudget && <BudgetCells figures={row.budget} />}
+                        <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
+                          {hasPrior ? formatAmount(row.prior_period) : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="border-b font-medium">
+                      <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
+                        Summa
+                      </td>
+                      <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_current)}</td>
+                      {hasBudget && <BudgetCells figures={group.subtotal_budget} />}
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {hasPrior ? formatAmount(group.subtotal_prior) : '-'}
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <div className={`grid gap-x-3 sm:gap-x-6 items-baseline ${hasBudget ? 'grid-cols-[1fr_auto_auto_auto]' : 'grid-cols-[1fr_auto_auto]'}`}>
+            <span className="text-sm font-medium">Beräknat resultat</span>
+            <span className={`font-display text-xl tabular-nums sm:w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
+              {formatAmount(data.net_result_current)} kr
+            </span>
+            {hasBudget && data.net_result_budget && (
+              <span className="tabular-nums text-sm text-right" title={t('budget_column')}>
+                {t('budget_result_line', {
+                  budget: formatAmount(data.net_result_budget.budget),
+                  deviation: formatAmount(data.net_result_budget.deviation),
+                })}
+              </span>
+            )}
+            <span className="tabular-nums text-sm text-muted-foreground sm:w-32 text-right">
+              {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '-'}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

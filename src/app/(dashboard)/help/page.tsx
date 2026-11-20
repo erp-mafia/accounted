@@ -2,27 +2,19 @@
 
 import { useState, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { HelpLink } from '@/components/ui/info-tooltip'
 import { PageHeader } from '@/components/ui/page-header'
-import { EmptyState } from '@/components/ui/empty-state'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { Button } from '@/components/ui/button'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import {
-  Search,
-  BookOpen,
-  Receipt,
-  Calculator,
-  FileText,
-  FileDown,
-  ExternalLink,
-  ChevronDown,
-  ChevronUp,
-  Briefcase,
-  Landmark,
-} from 'lucide-react'
+  ArrowTopRightOnSquareIcon,
+  ChevronDownIcon,
+  DocumentArrowDownIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { SupportLink } from '@/components/ui/support-link'
-import { Mail } from 'lucide-react'
 
 interface GlossaryTerm {
   term: string
@@ -202,94 +194,89 @@ const glossaryTerms: GlossaryTerm[] = [
   },
   {
     term: 'Eget utlägg',
-    simpleTerm: 'Betalat privat för bolagets räkning',
+    simpleTerm: 'Kvitto du betalat med egna pengar',
+    // The path names the buttons as they read today (inkorg.action_expense,
+    // inbox_workspace.payer_*, supplier_invoices.register_invoice, nav.*):
+    // __tests__/help-utlagg-path.test.ts pins each one, so a renamed button
+    // fails a test instead of leaving a dead instruction here (PH 201).
     definition:
-      'När du som ägare lägger ut pengar privat för en kostnad som bolaget ska stå för. Registrera under Leverantörsfakturor → Ny, kryssa i "Jag har betalat detta privat". Verifikatet bokförs då direkt mot skuld till ägare (2893 för AB, 2018 för EF) istället för via leverantörsskuld. När bolaget senare ersätter dig kategoriserar du den utgående banktransaktionen mot samma konto.',
+      'När du betalar en kostnad för företaget med egna pengar, till exempel med ditt privata kort. Ladda upp kvittot i Inkorgen och öppna det. Under Vem betalade? väljer du Privat, som utlägg och sedan Jag, privat (eller En anställd). Är det en faktura du har betalat privat: Inköp → Leverantörsfakturor → Registrera faktura, och välj Jag, privat under Vem betalade?. I ett aktiebolag bokförs kostnaden och momsen mot företagets skuld till dig (2893), och utbetalningen väntar i Att göra. I en enskild firma är det en egen insättning (2018): du och firman är samma person, så det finns inget att betala ut. När företaget betalar tillbaka väljer du Matcha mot utlägg på den utgående transaktionen. Sidan Utlägg under Inköp visas när det första utlägget finns.',
     category: 'bokföring',
     relatedTerms: ['Aktiebolag', 'Enskild firma'],
   },
 ]
 
 const categoryConfig = {
-  skatt: { labelKey: 'category_skatt', icon: Calculator, color: 'bg-secondary text-muted-foreground' },
-  moms: { labelKey: 'category_moms', icon: Receipt, color: 'bg-secondary text-muted-foreground' },
-  faktura: { labelKey: 'category_faktura', icon: FileText, color: 'bg-secondary text-muted-foreground' },
-  bokföring: { labelKey: 'category_bokforing', icon: BookOpen, color: 'bg-secondary text-muted-foreground' },
-  bank: { labelKey: 'category_bank', icon: Landmark, color: 'bg-secondary text-muted-foreground' },
-  företag: { labelKey: 'category_foretag', icon: Briefcase, color: 'bg-secondary text-muted-foreground' },
+  skatt: { labelKey: 'category_skatt' },
+  moms: { labelKey: 'category_moms' },
+  faktura: { labelKey: 'category_faktura' },
+  bokföring: { labelKey: 'category_bokforing' },
+  bank: { labelKey: 'category_bank' },
+  företag: { labelKey: 'category_foretag' },
 }
 
-function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpanded: boolean; onToggle: () => void }) {
+// One hairline row per term (convention 4): the term and its everyday name
+// on one line, the definition, related terms and the Skatteverket link in the
+// expanded fold. The category shows as the filter above, not as an icon tile
+// on every row.
+function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpanded: boolean; onToggle: () => void }) {
   const t = useTranslations('help')
-  const config = categoryConfig[term.category]
-  const CategoryIcon = config.icon
 
   return (
-    <Card className={cn('transition-colors', isExpanded && 'ring-2 ring-primary/20')}>
-      <CardContent className="pt-4">
-        <button
-          onClick={onToggle}
-          className="w-full text-left"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div className={cn('p-2 rounded-lg', config.color)}>
-                <CategoryIcon className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3>{term.term}</h3>
-                  {term.simpleTerm && (
-                    <span className="text-sm text-muted-foreground font-normal">
-                      {term.simpleTerm}
-                    </span>
-                  )}
-                </div>
-                {!isExpanded && (
-                  <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
-                    {term.definition}
-                  </p>
-                )}
-              </div>
-            </div>
-            {isExpanded ? (
-              <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-1" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-1" />
-            )}
-          </div>
-        </button>
+    <div className="border-b-hairline">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isExpanded}
+        className="flex w-full items-center justify-between gap-4 px-1 py-3 text-left transition-colors duration-150 hover:bg-secondary/35"
+      >
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 text-sm font-medium">{term.term}</span>
+          {term.simpleTerm && (
+            <span className="truncate text-[13px] text-muted-foreground">{term.simpleTerm}</span>
+          )}
+        </span>
+        <ChevronDownIcon
+          className={cn(
+            'h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150',
+            isExpanded && 'rotate-180',
+          )}
+          aria-hidden="true"
+        />
+      </button>
 
-        {isExpanded && (
-          <div className="mt-4 pl-11 space-y-3 animate-fade-in">
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              {term.definition}
+      {isExpanded && (
+        <div className="space-y-3 px-1 pb-4 animate-fade-in">
+          <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
+            {term.definition}
+          </p>
+
+          {term.relatedTerms && term.relatedTerms.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t('related_label')} {term.relatedTerms.join(', ')}
             </p>
+          )}
 
-            {term.relatedTerms && term.relatedTerms.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs text-muted-foreground">{t('related_label')}</span>
-                <span className="text-xs text-muted-foreground">
-                  {term.relatedTerms.join(', ')}
-                </span>
-              </div>
-            )}
-
-            {term.skatteverketUrl && (
-              <HelpLink href={term.skatteverketUrl}>
-                {t('read_more_skv')}
-                <ExternalLink className="h-3 w-3" />
-              </HelpLink>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          {term.skatteverketUrl && (
+            <HelpLink href={term.skatteverketUrl}>
+              {t('read_more_skv')}
+              <ArrowTopRightOnSquareIcon className="h-3 w-3" />
+            </HelpLink>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
+// Quiet link row for the resources below the glossary: title with the muted
+// description on the same line, hairline between rows.
+const LINK_ROW_CLASS =
+  'flex items-baseline gap-3 border-b-hairline px-1 py-3 text-sm text-foreground transition-colors duration-150 hover:bg-secondary/35 hover:text-foreground hover:no-underline'
+
 export default function HelpPage() {
   const t = useTranslations('help')
+  const tCommon = useTranslations('common')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [expandedTerms, setExpandedTerms] = useState<Set<string>>(new Set())
@@ -328,162 +315,114 @@ export default function HelpPage() {
     })
   }
 
+  const categoryOptions = [
+    { value: 'all', label: t('filter_all') },
+    ...Object.entries(categoryConfig).map(([key, config]) => ({ value: key, label: t(config.labelKey) })),
+  ]
+
   return (
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
-        description={t('subtitle')}
+        help={
+          <HelpPopover>
+            <p>{t('subtitle')}</p>
+          </HelpPopover>
+        }
       />
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          type="search"
+      {/* Toolbar: the category segments first, search at the right end (V7 list toolbars) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="max-w-full overflow-x-auto">
+          <SegmentedControl
+            value={selectedCategory ?? 'all'}
+            onChange={(value) => setSelectedCategory(value === 'all' ? null : value)}
+            options={categoryOptions}
+            aria-label={t('category_filter_label')}
+          />
+        </div>
+        <ToolbarSearch
           placeholder={t('search_placeholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
+          aria-label={t('search_placeholder')}
+          containerClassName={TOOLBAR_SEARCH_END_CLASS}
         />
       </div>
 
-      {/* Category filters */}
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => setSelectedCategory(null)}
-          className={cn(
-            'rounded-full px-4 py-[7px] text-[13px] transition-colors duration-150',
-            selectedCategory === null
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground'
-          )}
-        >
-          {t('filter_all')}
-        </button>
-        {Object.entries(categoryConfig).map(([key, config]) => (
-          <button
-            key={key}
-            onClick={() => setSelectedCategory(selectedCategory === key ? null : key)}
-            className={cn(
-              'rounded-full px-4 py-[7px] text-[13px] transition-colors duration-150',
-              selectedCategory === key
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground'
-            )}
-          >
-            {t(config.labelKey)}
-          </button>
-        ))}
-      </div>
-
       {/* Terms list */}
-      <div className="space-y-4">
+      <div>
         {filteredTerms.length === 0 ? (
-          <EmptyState
-            icon={Search}
-            title={t('no_results_title')}
-            description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
-          />
+          // No hits: one muted line in the list, not a block.
+          <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+            <span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>
+            {searchQuery && (
+              <Button variant="link" onClick={() => setSearchQuery('')}>
+                {tCommon('clear_search')}
+              </Button>
+            )}
+          </div>
         ) : (
-          filteredTerms.map((term) => (
-            <TermCard
-              key={term.term}
-              term={term}
-              isExpanded={expandedTerms.has(term.term)}
-              onToggle={() => toggleTerm(term.term)}
-            />
-          ))
+          <div className="stagger-enter">
+            {filteredTerms.map((term) => (
+              <TermRow
+                key={term.term}
+                term={term}
+                isExpanded={expandedTerms.has(term.term)}
+                onToggle={() => toggleTerm(term.term)}
+              />
+            ))}
+          </div>
         )}
       </div>
 
       {/* Document templates */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('templates_title')}</CardTitle>
-          <CardDescription>{t('templates_subtitle')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <a
-              href="/docs/arkivplan-mall.md"
-              download
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <FileDown className="h-4 w-4" />
-                <span className="font-medium">Arkivplan</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
-              </p>
-            </a>
-            <a
-              href="/docs/systemdokumentation-mall.md"
-              download
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <FileDown className="h-4 w-4" />
-                <span className="font-medium">Systemdokumentation</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
-              </p>
-            </a>
-          </div>
-        </CardContent>
-      </Card>
+      <section>
+        <h2 className="flex items-center gap-2 px-1 pb-2 text-sm font-medium text-muted-foreground">
+          {t('templates_title')}
+          <HelpPopover className="shrink-0">{t('templates_subtitle')}</HelpPopover>
+        </h2>
+        <a href="/docs/arkivplan-mall.md" download className={LINK_ROW_CLASS}>
+          <DocumentArrowDownIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Arkivplan</span>
+          <span className="truncate text-xs text-muted-foreground">
+            Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
+          </span>
+        </a>
+        <a href="/docs/systemdokumentation-mall.md" download className={LINK_ROW_CLASS}>
+          <DocumentArrowDownIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Systemdokumentation</span>
+          <span className="truncate text-xs text-muted-foreground">
+            Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
+          </span>
+        </a>
+      </section>
 
       {/* External resources */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('external_resources_title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <HelpLink
-              href="https://www.skatteverket.se/foretag/foretagarguiden.4.361dc8c15312eff6fd1f87f.html"
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <ExternalLink className="h-4 w-4" />
-                <span>Skatteverkets företagarguide</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Omfattande guide för nya företagare
-              </p>
-            </HelpLink>
-            <HelpLink
-              href="https://www.verksamt.se/"
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <ExternalLink className="h-4 w-4" />
-                <span>Verksamt.se</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Starta och driva företag i Sverige
-              </p>
-            </HelpLink>
-          </div>
-        </CardContent>
-      </Card>
+      <section>
+        <h2 className="px-1 pb-2 text-sm font-medium text-muted-foreground">
+          {t('external_resources_title')}
+        </h2>
+        <HelpLink
+          href="https://www.skatteverket.se/foretag/foretagarguiden.4.361dc8c15312eff6fd1f87f.html"
+          className={LINK_ROW_CLASS}
+        >
+          <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Skatteverkets företagarguide</span>
+          <span className="truncate text-xs text-muted-foreground">Omfattande guide för nya företagare</span>
+        </HelpLink>
+        <HelpLink href="https://www.verksamt.se/" className={LINK_ROW_CLASS}>
+          <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Verksamt.se</span>
+          <span className="truncate text-xs text-muted-foreground">Starta och driva företag i Sverige</span>
+        </HelpLink>
+      </section>
 
-      {/* Support section */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Mail className="h-5 w-5 text-muted-foreground" />
-            <CardTitle>{t('support_title')}</CardTitle>
-          </div>
-          <CardDescription>
-            {t('support_subtitle')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <SupportLink variant="inline" subject="Fråga från hjälpsidan" />
-        </CardContent>
-      </Card>
+      {/* Support: one quiet line */}
+      <section className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-sm">
+        <span className="text-muted-foreground">{t('support_subtitle')}</span>
+        <SupportLink variant="inline" subject="Fråga från hjälpsidan" />
+      </section>
     </div>
   )
 }

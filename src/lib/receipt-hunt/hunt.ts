@@ -14,13 +14,23 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
+import { getMailSearchService } from '@/lib/mail-search/service'
+import { ingestMailCandidate } from './ingest'
+import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
+import { whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { adjudicate } from './adjudicate'
 import { attachSekTotals } from './fx'
+import { extractMailDocuments } from './mail-intelligence'
 import {
   CERTAIN_CONFIDENCE,
   MAX_PROPOSALS_PER_RUN,
   UNCERTAIN_FLOOR,
+  canHaveEmailReceipt,
+  receiptIdentity,
+  worthFetching,
   pairKey,
   selectProposals,
   type HuntPoolItem,
@@ -38,11 +48,82 @@ import {
  */
 export const MIN_AMOUNT_SEK = 100
 
+/**
+ * The floor in kronor, as a PostgREST filter: a row's kronor are `amount_sek`
+ * when it carries one, and its own `amount` when it does not.
+ *
+ * On a USD or EUR cash account `amount` is in that currency, so holding it
+ * against 100 skipped a USD 50 card charge (some 500 kr) and let a JPY 150 one
+ * (some 10 kr) through (crm#1785). `amount_sek` is set at ingest on foreign
+ * rows and signed like `amount`; a SEK row leaves it null or holds the same
+ * number, so a SEK row is weighed exactly as before, and a foreign row without
+ * one keeps its old comparison rather than dropping out. The same pick the
+ * agent worklist ranks by (`amount_sek ?? amount`).
+ *
+ * A filter rather than a pass over fetched rows, so the rows under the floor
+ * never leave the database and fetchAllRows pages the set it returns.
+ */
+const SEK_FLOOR_FILTER =
+  `amount_sek.lte.${-MIN_AMOUNT_SEK},and(amount_sek.is.null,amount.lte.${-MIN_AMOUNT_SEK})`
+
 /** How far back a purchase may be and still be hunted. */
 export const LOOKBACK_MONTHS = 12
 
 /** Actor label shown wherever a staged operation names its origin. */
 export const HUNT_ACTOR_LABEL = 'Kvittojakten'
+
+/**
+ * Purchases to search the mailboxes for in one run.
+ *
+ * Each search is a provider round-trip per connected mailbox, so this bounds
+ * both latency and API quota. Largest amounts go first, and the rest wait for
+ * tomorrow night rather than being dropped.
+ */
+export const MAX_MAIL_SEARCHES_PER_RUN = 15
+
+/**
+ * Hits pulled per merchant before the model is asked to choose.
+ *
+ * Deliberately generous. The lesson from production email search is that recall
+ * is won by loosening retrieval and letting the model filter, not by tightening
+ * the query: a hit that never gets retrieved cannot be recovered downstream,
+ * while an irrelevant one is cheap to reject.
+ */
+export const MAX_CANDIDATES_PER_MERCHANT = 25
+
+/**
+ * Receipts fetched in one run.
+ *
+ * A cap on how much of a mailbox can land in Underlag on any one night, not a
+ * judgement about what is worth having: a company that pays the same supplier
+ * monthly genuinely has twelve receipts, and the rest wait for tomorrow.
+ */
+export const MAX_RECEIPTS_PER_RUN = (() => {
+  const parsed = Number(process.env.RECEIPT_HUNT_MAX_RECEIPTS)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 25
+})()
+
+/**
+ * Mails read by the model in one run.
+ *
+ * The searches are deliberately broad and overlap heavily, so this is the real
+ * cost boundary: one call carrying this many mail bodies, rather than a call
+ * per mail.
+ */
+export const MAX_MAILS_READ_PER_RUN = (() => {
+  const parsed = Number(process.env.RECEIPT_HUNT_MAX_MAILS)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 40
+})()
+
+/**
+ * Mails per extraction call.
+ *
+ * The model reads bodies, so a single call carrying 150 of them would be both
+ * enormous and fragile: one malformed reply loses the whole sweep. Chunking
+ * keeps each call small enough to be reliable and lets a backfill read a whole
+ * mailbox, which a first run on an existing company needs.
+ */
+export const MAILS_PER_EXTRACTION_CALL = 25
 
 const OPERATION_TYPE = 'attach_document_to_transaction'
 
@@ -57,10 +138,70 @@ export interface HuntCompanyResult {
   skippedNoOwner?: boolean
   /** Populated on a dry run so the pairings can be inspected before trusting them. */
   proposals?: HuntProposal[]
+  /** What the mailbox search found, when a mail connection exists. */
+  mail?: MailHuntSummary
+}
+
+export interface MailHuntSummary {
+  /**
+   * Purchases the mailbox search can look for at all: not a salary or tax
+   * run (canHaveEmailReceipt), with an amount and a date. What is left after
+   * a pass is this minus `searched`, never the raw candidate count.
+   */
+  searchable: number
+  /** Purchases whose merchant we searched the mailboxes for. */
+  searched: number
+  /** Documents the model judged to be an underlag. */
+  withCandidates: number
+  /** Receipts actually fetched and filed, ready for the amount match. */
+  ingested: number
+  /**
+   * Connections that refused a search during this run.
+   *
+   * Non-zero means "we could not read a mailbox", which is not the same as
+   * "the mailbox held nothing". The caller must not report the second when the
+   * first happened, and must not treat the run as finished.
+   */
+  searchFailures: number
+  candidates: Array<{
+    /** Merchant the model resolved the bank descriptor to. */
+    merchant: string
+    mailbox: string
+    subject: string | null
+    from: string | null
+    receivedAt: string | null
+    /** The attachment chosen as the underlag. */
+    fileName: string | null
+    /** What the model says the document is. */
+    reason: string
+  }>
 }
 
 export interface HuntOptions {
   limit?: number
+  /**
+   * Also search connected mailboxes for the purchases nothing in Underlag
+   * could explain. Off by default so the nightly sweep's cost stays opt-in
+   * while the connector is piloted.
+   */
+  searchMail?: boolean
+  /** How many unexplained purchases to search mail for in one run. */
+  mailSearchLimit?: number
+  /**
+   * Mails read in one run, overriding the environment default.
+   *
+   * The cap is what bounds cost, and it interacts with the largest-first
+   * ordering: a low cap spends the whole budget on the biggest purchases,
+   * which on a real ledger are the least likely to have a findable receipt.
+   */
+  maxMails?: number
+  /**
+   * Receipts fetched in one run, overriding the environment default.
+   *
+   * A person pressing a button wants a pass that ends, reports, and can be
+   * repeated. The nightly default is a different budget from a manual one.
+   */
+  maxReceipts?: number
   /**
    * Score and decide, but write nothing.
    *
@@ -73,31 +214,28 @@ export interface HuntOptions {
 }
 
 /**
- * Purchases with no receipt that nobody has booked yet. Exported for the
- * agent worklist (agent-worklist.ts), so both engines share one predicate.
+ * Purchases with no receipt that nobody has booked yet, from MIN_AMOUNT_SEK up
+ * in kronor (SEK_FLOOR_FILTER), whatever the row's own currency.
+ * The agent worklist (agent-worklist.ts) does not read this: its mail search
+ * runs in the user's own agent, so it takes every purchase without underlag
+ * (purchases-without-underlag.ts) and this floor stays the
+ * nightly hunt's own cost bound (crm#1785).
  */
 export async function fetchCandidateTransactions(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<HuntTransaction[]> {
-  const since = new Date()
-  since.setMonth(since.getMonth() - LOOKBACK_MONTHS)
-  const sinceDate = since.toISOString().slice(0, 10)
+  const sinceDate = addMonthsIso(todayIsoStockholm(), -LOOKBACK_MONTHS)
 
   const rows = await fetchAllRows<HuntTransaction>((range) =>
     supabase
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id, company_id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate')
       .eq('company_id', companyId)
-      .is('journal_entry_id', null)
       .is('document_id', null)
-      .eq('is_ignored', false)
-      // is_business IS DISTINCT FROM false: NULL is untriaged and true is
-      // "business, not yet booked". Only an explicit false means the user
-      // called it private, and a private purchase needs no underlag.
-      .not('is_business', 'is', false)
-      // Outflows only, and amount <= -MIN covers the floor in one filter.
-      .lte('amount', -MIN_AMOUNT_SEK)
+      // Outflows only, then the floor in kronor.
+      .lt('amount', 0)
+      .or(SEK_FLOOR_FILTER)
       .gte('date', sinceDate)
       .order('id', { ascending: true })
       .range(range.from, range.to),
@@ -133,14 +271,13 @@ async function fetchPool(
   for (const a of attachments) fileNames.set(a.id, a.file_name ?? 'underlag')
 
   const items = await fetchAllRows<HuntPoolItem>((range) =>
-    supabase
-      .from('invoice_inbox_items')
-      .select('id, document_id, extracted_data, channel_context')
-      .eq('company_id', companyId)
-      .is('matched_transaction_id', null)
-      .is('created_journal_entry_id', null)
-      .is('created_supplier_invoice_id', null)
-      .not('document_id', 'is', null)
+    whereInboxItemOpen(
+      supabase
+        .from('invoice_inbox_items')
+        .select('id, document_id, extracted_data, channel_context')
+        .eq('company_id', companyId)
+        .not('document_id', 'is', null),
+    )
       .order('id', { ascending: true })
       .range(range.from, range.to),
   )
@@ -267,6 +404,10 @@ export async function huntCompany(
   const {
     limit = MAX_PROPOSALS_PER_RUN,
     dryRun = false,
+    searchMail = false,
+    mailSearchLimit = MAX_MAIL_SEARCHES_PER_RUN,
+    maxReceipts = MAX_RECEIPTS_PER_RUN,
+    maxMails = MAX_MAILS_READ_PER_RUN,
   } = options
 
   const [transactions, suppression] = await Promise.all([
@@ -279,6 +420,35 @@ export async function huntCompany(
 
   // Ingesting a receipt needs an owner to attribute the document to.
   const userId = await resolveOwnerUserId(supabase, companyId)
+
+  // Mail is harvested BEFORE the pool is read, so a receipt fetched tonight is
+  // paired tonight rather than a night later.
+  //
+  // The mailbox leg only finds documents; it does not decide what they belong
+  // to. That question needs the amount, and the amount is inside the PDF, not
+  // in a Gmail preview. So the receipt is filed, the extraction that already
+  // runs on upload reads its amount, and the pairing below is the same
+  // deterministic amount-and-merchant match used for every other underlag.
+  let mail: MailHuntSummary | undefined
+  if (searchMail) {
+    try {
+      mail = await harvestReceiptsFromMail(
+        supabase,
+        companyId,
+        userId,
+        transactions.filter((t) => !suppression.claimedTransactionIds.has(t.id)),
+        mailSearchLimit,
+        dryRun,
+        maxReceipts,
+        maxMails,
+      )
+    } finally {
+      // Cached messages carry their bodies. A body is read to extract fields
+      // and must not outlive the run that read it, including when the run
+      // fails partway.
+      ;(await getMailSearchService()).releaseCache?.()
+    }
+  }
 
   const { pool: rawPool, fileNames } = await fetchPool(supabase, companyId)
 
@@ -293,6 +463,7 @@ export async function huntCompany(
     candidates: transactions.length,
     poolSize: pool.length,
     proposed: 0,
+    mail,
   }
   if (pool.length === 0) return base
 
@@ -353,9 +524,10 @@ export async function huntCompany(
   const byId = new Map(transactions.map((t) => [t.id, t]))
   const riskLevel = getRiskLevel(OPERATION_TYPE)
 
-  const rows = proposals.map((proposal) => {
+  const rowsWith = (traceId: string | null) => proposals.map((proposal) => {
     const tx = byId.get(proposal.transaction_id) as HuntTransaction
     const fileName = fileNames.get(proposal.document_id) ?? 'underlag'
+    const hunted = proposal.mailProvenance != null
     return {
       company_id: companyId,
       user_id: userId,
@@ -367,12 +539,20 @@ export async function huntCompany(
       },
       preview_data: {
         ...buildPreview(proposal, fileName, tx),
+        // Where it came from, when the hunt fetched it out of a mailbox. The
+        // reviewer should be able to see that this document was not uploaded
+        // by a human without having to go looking.
+        mail_mailbox: proposal.mailProvenance?.mailbox,
+        mail_subject: proposal.mailProvenance?.subject,
+        mail_from: proposal.mailProvenance?.from,
       },
       actor_type: 'cron',
       actor_label: HUNT_ACTOR_LABEL,
       risk_level: riskLevel,
+      // The request (usually the cron run) that staged them.
+      ...traceIdColumn(traceId),
       agent_metadata: {
-        source: 'receipt_hunt',
+        source: hunted ? 'receipt_hunt_mail' : 'receipt_hunt',
         run_id: runId,
         inbox_item_id: proposal.inbox_item_id,
         confidence: proposal.confidence,
@@ -384,10 +564,216 @@ export async function huntCompany(
     }
   })
 
-  const { error } = await supabase.from('pending_operations').insert(rows)
+  const { error } = await writeWithTraceId((traceId) => supabase.from('pending_operations').insert(rowsWith(traceId)))
   if (error) throw new Error(`Failed to stage receipt-hunt proposals: ${error.message}`)
 
-  return { ...base, proposed: rows.length }
+  return { ...base, proposed: proposals.length }
+}
+
+/**
+ * Ask the connected mailboxes about purchases nothing in Underlag explained.
+ *
+ * Read-only and bounded: the largest amounts first, capped per run, and the
+ * whole thing degrades to an empty summary when no mail extension is loaded or
+ * no mailbox is connected. Finding a candidate is NOT the same as having the
+ * receipt: ingesting it is the next step and stays behind human approval.
+ */
+/**
+ * Vendor and total of every receipt the hunt has already filed.
+ *
+ * The per-run key only stops duplicates inside one pass. Across passes the
+ * check was the message and attachment, which does not recognise the same
+ * purchase arriving as an invoice in one mail and a receipt in another: those
+ * have different file keys and were fetched twice, filling the pool with
+ * identical candidates the matcher then refuses to choose between.
+ */
+async function fetchAlreadyHeld(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Set<string>> {
+  const rows = await fetchAllRows<{ extracted_data: unknown; channel_context: unknown }>((range) =>
+    supabase
+      .from('invoice_inbox_items')
+      .select('extracted_data, channel_context')
+      .eq('company_id', companyId)
+      .eq('source', 'mail_hunt')
+      .order('id', { ascending: true })
+      .range(range.from, range.to),
+  )
+
+  const held = new Set<string>()
+  for (const row of rows) {
+    const data = row.extracted_data as
+      | {
+          supplier?: { name?: string }
+          invoice?: { currency?: string; invoiceDate?: string | null }
+          totals?: { total?: number }
+        }
+      | null
+    // Prefer the identity written when the receipt was filed: it came from the
+    // same reading that the incoming candidate's does, so the two compare
+    // exactly. Rows filed before that was stored fall back to the extraction,
+    // which is weaker but better than nothing.
+    const stored = row.channel_context as { receipt_identity?: string } | null
+    if (stored?.receipt_identity) {
+      held.add(stored.receipt_identity)
+      continue
+    }
+    const key = receiptIdentity({
+      vendor: data?.supplier?.name ?? null,
+      amount: data?.totals?.total ?? null,
+      currency: data?.invoice?.currency ?? null,
+      date: data?.invoice?.invoiceDate ?? null,
+    })
+    if (key.includes('::file::')) continue
+    held.add(key)
+  }
+  return held
+}
+
+async function harvestReceiptsFromMail(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string | null,
+  purchases: readonly HuntTransaction[],
+  limit: number,
+  dryRun: boolean,
+  maxReceipts: number,
+  maxMails: number,
+): Promise<MailHuntSummary> {
+  const service = await getMailSearchService()
+  const summary: MailHuntSummary = {
+    searchable: 0,
+    searched: 0,
+    withCandidates: 0,
+    ingested: 0,
+    searchFailures: 0,
+    candidates: [],
+  }
+  if (!service.isConfigured() || purchases.length === 0) return summary
+
+  // Salary and tax runs are a company's largest outgoing rows, so without this
+  // they eat the whole search budget hunting receipts that cannot exist.
+  const eligible = [...purchases]
+    .filter((t) => canHaveEmailReceipt(t.merchant_name || t.description))
+    .filter((t): t is HuntTransaction & { amount: number; date: string } =>
+      t.amount != null && Boolean(t.date),
+    )
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
+  summary.searchable = eligible.length
+  const searchable = eligible.slice(0, limit)
+  if (searchable.length === 0) return summary
+  summary.searched = searchable.length
+
+  // Retrieval is deterministic: amount in every format a receipt might write
+  // it, OR the merchant tokens left after the bank's noise is stripped. No
+  // model is involved in deciding what to search for, because a wrong guess
+  // here is invisible and a broad query is cheap.
+  const byMessage = new Map<string, Awaited<ReturnType<typeof service.search>>[number]>()
+  // Which purchase's search turned each mail up. The query was that purchase's
+  // amount or its merchant tokens, so the hit is itself a signal, and it is the
+  // only one that survives a supplier the bank and the invoice name differently.
+  const retrievedBy = new Map<string, HuntTransaction[]>()
+  for (const tx of searchable) {
+    const found = await service.search(companyId, {
+      merchant: normalizeForMatch(tx.merchant_name || tx.description || ''),
+      amount: Math.abs(tx.amount),
+      currency: tx.currency ?? 'SEK',
+      date: tx.date,
+      useDateWindow: false,
+      limit: MAX_CANDIDATES_PER_MERCHANT,
+    })
+    // Accumulated across every merchant searched in this run: one refusal is
+    // enough to make "found nothing" a lie.
+    summary.searchFailures += service.searchFailureCount?.() ?? 0
+    // The same mail answers several purchases from one supplier; it is read once.
+    for (const c of found) {
+      if (!byMessage.has(c.messageId)) byMessage.set(c.messageId, c)
+      const already = retrievedBy.get(c.messageId)
+      if (already) already.push(tx)
+      else retrievedBy.set(c.messageId, [tx])
+    }
+  }
+  if (byMessage.size === 0) return summary
+
+  const mails = [...byMessage.values()].slice(0, maxMails)
+  // Everything read from here on is released in the finally below: mail bodies
+  // are read to extract fields and must not outlive this run.
+  const toReview = mails.map((c) => ({
+    messageId: c.messageId,
+    mailbox: c.mailbox,
+    subject: c.subject,
+    from: c.from,
+    receivedAt: c.receivedAt,
+    bodyText: c.bodyText ?? null,
+    attachmentNames: c.attachmentNames ?? [],
+  }))
+
+  // Read in chunks so a sweep over a whole mailbox stays within one model call's
+  // useful size, and so one bad reply costs a chunk rather than the run.
+  const documents: Awaited<ReturnType<typeof extractMailDocuments>> = []
+  for (let i = 0; i < toReview.length; i += MAILS_PER_EXTRACTION_CALL) {
+    documents.push(
+      ...(await extractMailDocuments(toReview.slice(i, i + MAILS_PER_EXTRACTION_CALL), companyId)),
+    )
+  }
+  if (documents.length === 0) return summary
+
+  // The gate before spending a download: the amount when the body stated it,
+  // otherwise the vendor and the date. This is not the match. The real amount
+  // comes out of the PDF once it is fetched, and the ordinary matcher pairs it
+  // on the next few lines of huntCompany like any other underlag.
+  const wanted = documents.filter((doc) =>
+    worthFetching(doc, searchable, retrievedBy.get(doc.messageId) ?? []),
+  )
+
+  // Seeded with what is already filed, so a press spends its budget on
+  // documents the company does not have rather than refetching its own.
+  const claimedFiles = await fetchAlreadyHeld(supabase, companyId)
+  for (const doc of wanted) {
+    const candidate = byMessage.get(doc.messageId)
+    if (!candidate) continue
+
+    // One underlag per purchase: see receiptIdentity for why neither the
+    // filename nor the message identifies anything here.
+    const fileKey = receiptIdentity(doc)
+    if (claimedFiles.has(fileKey)) continue
+    claimedFiles.add(fileKey)
+    summary.withCandidates++
+
+    summary.candidates.push({
+      merchant: doc.vendor ?? '(okänd)',
+      mailbox: candidate.mailbox,
+      subject: candidate.subject,
+      from: candidate.from,
+      receivedAt: candidate.receivedAt,
+      fileName: doc.attachmentName,
+      reason: `${doc.amount ?? '?'} ${doc.currency ?? ''} ${doc.date ?? 'utan datum'}`,
+    })
+
+    // A dry run reports what it decided and fetches nothing: the point of a
+    // provkörning is that no mailbox content is copied anywhere.
+    if (dryRun || !userId) continue
+    if (candidate.attachmentIds.length === 0) continue
+    if (summary.ingested >= maxReceipts) break
+
+    const names = candidate.attachmentNames ?? []
+    const at = doc.attachmentName ? names.indexOf(doc.attachmentName) : 0
+    const index = at >= 0 ? at : 0
+    const ingested = await ingestMailCandidate(
+      supabase,
+      companyId,
+      userId,
+      {
+        ...candidate,
+        attachmentIds: [candidate.attachmentIds[index] ?? candidate.attachmentIds[0]],
+        attachmentNames: [names[index] ?? names[0] ?? ''],
+      },
+      fileKey,
+    )
+    if (ingested) summary.ingested++
+  }
+  return summary
 }
 
 /**

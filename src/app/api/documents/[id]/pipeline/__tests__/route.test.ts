@@ -13,6 +13,7 @@ import { GET } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { runDocumentJobFor } from '@/lib/documents/jobs/queue'
+import { currentAiDeadline } from '@/lib/ai/call-limit'
 
 const DOC = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const call = (query = '') => GET(new Request(`http://localhost/api/documents/${DOC}/pipeline${query}`), { params: Promise.resolve({ id: DOC }) } as never)
@@ -21,16 +22,13 @@ const document = (over: Record<string, unknown> = {}) => ({ id: DOC, file_name: 
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
 
 describe('GET /api/documents/[id]/pipeline', () => {
-  it("is 404 outside the rollout and for another company's document", async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call())).status).toBe(404)
-    process.env.ARKIV_COMPANY_IDS = 'company-1'
+  it("is 404 for another company's document", async () => {
     enqueue({ data: null })
     expect((await parseJsonResponse(await call())).status).toBe(404)
   })
@@ -66,7 +64,65 @@ describe('GET /api/documents/[id]/pipeline', () => {
     expect(body).toMatchObject({ data: { stage: 'landing', title: 'Kvitto Balzac', landed: { kind: 'underlag', href: '/e/general/invoice-inbox', matched: true } } })
   })
 
-  it('says an agreement landed on its own page, and a document nobody could read failed', async () => {
+  it('ends the model calls of an advanced step before the function is killed: one call\'s own limit is twice the minute this route has', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    let modelStop: number | undefined
+    ;(runDocumentJobFor as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      modelStop = currentAiDeadline()
+      return null
+    })
+    enqueue({ data: { id: DOC } })
+    enqueue({ data: document() })
+    enqueue({ data: [{ kind: 'read', status: 'failed', attempts: 1, max_attempts: 5, last_error: "reader_unavailable: Request timed out: the run's time was up 44 s into the model call" }] })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    try {
+      const { status, body } = await parseJsonResponse(await call('?advance=1'))
+      expect(status).toBe(200)
+      // A step cut by the clock with attempts left is still on its way: the worker has it.
+      expect(body).toMatchObject({ data: { stage: 'reading', steps: { read: 'queued' } } })
+    } finally {
+      clock.mockRestore()
+    }
+    // 45 s into a 60 s function.
+    expect(modelStop).toBe(1_045_000)
+  })
+
+  it('outside the brain, an untyped document and an agreement land on the document page, where the type is set', async () => {
+    enqueue({ data: { id: DOC } })
+    enqueue({ data: document({ doc_type: 'other' }) })
+    enqueue({
+      data: [
+        { kind: 'read', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+        { kind: 'classify', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+      ],
+    })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    expect((await parseJsonResponse(await call())).body).toMatchObject({
+      data: { stage: 'landed', landed: { kind: 'review', href: `/arkiv/dokument/${DOC}` } },
+    })
+
+    enqueue({ data: { id: DOC } })
+    enqueue({ data: document({ doc_type: 'agreement.loan' }) })
+    enqueue({
+      data: [
+        { kind: 'read', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+        { kind: 'classify', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+      ],
+    })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    expect((await parseJsonResponse(await call())).body).toMatchObject({
+      data: { stage: 'landed', landed: { kind: 'document', href: `/arkiv/dokument/${DOC}` } },
+    })
+  })
+
+  it('in the brain, says an agreement landed on its own page, and a document nobody could read failed', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
     enqueue({ data: { id: DOC } })
     enqueue({ data: document({ doc_type: 'agreement.loan' }) })
     enqueue({

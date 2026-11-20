@@ -2,13 +2,19 @@ import type { PayrollConfig } from './payroll-config'
 import type { TaxTableRate } from './tax-tables'
 import { lookupTaxAmount, calculateJamkningTax, calculateSidoinkomstTax } from './tax-tables'
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
+import { avgiftAgeTier } from './avgift-tier'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import { resolveVacationPayRate } from './vacation-pay-rate'
+import { sammaloneVariablePay } from './variable-vacation-pay'
+import { roundOre } from '@/lib/money'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
 import { isBenefitItemType, resolveTaxableBenefits } from './benefit-payments'
 import { degreeAdjustedMonthlySalary } from './work-schedule'
+import { isVaxaStodRefundMonth, VAXA_STOD_CONFIGURED_CAP_FROM, VAXA_STOD_REFUND_STEP_LABEL } from './vaxa-stod'
+import { computeExtraTax, type StatutoryTaxBranch } from './extra-tax'
 import type { SalaryLineItemType } from '@/types'
+import { isBaseSalaryDisplayLine, lineTypesWithRole } from './line-item-roles'
 
 // ============================================================
 // Types
@@ -31,6 +37,13 @@ export interface SalaryCalculationInput {
   jamkningValidFrom: string | null
   jamkningValidTo: string | null
   fSkattStatus: string
+  /**
+   * Förhöjt skatteavdrag the employee asked for (lib/salary/extra-tax.ts):
+   * whole kronor per run, or a requested total percentage of the taxable
+   * income. At most one is set. Omitted = none.
+   */
+  extraTaxAmount?: number | null
+  extraTaxPercentage?: number | null
 
   /** Age (from personnummer) */
   personnummer: string // encrypted, will be decrypted for age calc
@@ -41,9 +54,19 @@ export interface SalaryCalculationInput {
   vacationDaysPerYear: number
   semestertillaggRate: number
   /** Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %), or
-   *  null/undefined for the statutory 12 % (14.4 % at 30 days). Read only
-   *  under procentregeln and semesterersättning (lib/salary/vacation-pay-rate). */
+   *  null/undefined for the statutory 12 % (14.4 % at 30 days). Read under
+   *  procentregeln and semesterersättning, and under sammalöneregeln for the
+   *  rörliga lönedelar only (lib/salary/vacation-pay-rate). */
   vacationPayRate?: number | null
+  /**
+   * Hourly pay only: the hours of semesterlönegrundande frånvaro in the
+   * period (sick days, VAB and parental leave within the cap), from
+   * derive-absence-line-items. The procentregeln and semesterersättning base
+   * adds timlön × these hours, the income the employee would have had
+   * (Semesterlagen 16 b § tredje stycket). Omitted = none. A monthly salary
+   * already holds that pay, so the field is ignored for monthly pay.
+   */
+  qualifyingAbsenceHours?: number
   /** Work-schedule daily-rate divisor (arbetsschema-lite). Defaults to the
    *  legacy 21 (5-day week); callers with a part-time schedule pass
    *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. Feeds the
@@ -52,7 +75,7 @@ export interface SalaryCalculationInput {
    *  day and does not vary with workdays per week. */
   dailyDivisor?: number
 
-  /** Växa-stöd */
+  /** Växa-stöd window: never lowers the avgifter, only notes the refund (lib/salary/vaxa-stod.ts). */
   vaxaStodEligible: boolean
   vaxaStodStart: string | null
   vaxaStodEnd: string | null
@@ -89,10 +112,21 @@ export interface SalaryCalculationInput {
   employmentEnd?: string | null
 }
 
+/**
+ * Line types summed into gross pay as additions (Step 2) when taxable and
+ * not a gross or net deduction (line-item-roles.ts: 'addition', plus the
+ * Grundlön/Timlön type that is not the payslip's own, whose own row
+ * calculateSalary drops before any step). Exported so the payslip line
+ * commands can tell which lines the avgiftsunderlag always includes.
+ * Traktamente and milersättning above Skatteverket's schablon are taxed as
+ * salary with full arbetsgivaravgifter (travel-expenses.md); left out, they
+ * reached neither gross, tax nor payout, and the booking took them off the
+ * base salary debit.
+ */
+export const ADDITION_ITEM_TYPES: readonly SalaryLineItemType[] = lineTypesWithRole('addition', 'base_salary')
+
 /** Row types Step 3 consumes as signed absence; Step 4 must never see them again. */
-const ABSENCE_ITEM_TYPES: ReadonlySet<string> = new Set([
-  'sick_karens', 'sick_day2_14', 'sick_day15_plus', 'vab', 'parental_leave', 'unpaid_leave', 'vacation',
-])
+const ABSENCE_ITEM_TYPES: ReadonlySet<string> = new Set(lineTypesWithRole('absence'))
 
 export interface CalculationLineItem {
   itemType: SalaryLineItemType
@@ -108,6 +142,8 @@ export interface CalculationLineItem {
    * regular taxation. Only meaningful on positive taxable additions.
    */
   oneOffTaxPercent?: number | null
+  /** On a net_deduction_benefit_payment row: the benefit it pays for (benefit-payments.ts). */
+  benefitType?: string | null
 }
 
 export interface CalculationStep {
@@ -129,7 +165,10 @@ export interface SalaryCalculationResult {
    */
   benefitValues: number
   taxableIncome: number
+  /** Total preliminary tax, the extra included: what 2710 and AGI field 001 carry. */
   taxWithheld: number
+  /** The part of taxWithheld that is the requested förhöjt skatteavdrag. */
+  extraTaxWithheld: number
   netDeductions: number
   /**
    * Kostnadsersättning paid out with the salary (utlägg, skattefritt
@@ -149,14 +188,27 @@ export interface SalaryCalculationResult {
   /** Semesterersättning paid out directly (vacation_rule = 'semesterersattning'). 0 otherwise. */
   vacationCompensation: number
   totalEmployerCost: number
+  /** Växa-stöd refund to apply for on this payment, null outside a växa-stöd month. */
+  vaxaStodRefund: VaxaStodRefund | null
   steps: CalculationStep[]
+}
+
+/**
+ * Information only (lib/salary/vaxa-stod.ts): nothing in the calculation, the
+ * booking or the AGI depends on it. amount is null when the refund cannot be
+ * stated reliably from the payslip.
+ */
+export interface VaxaStodRefund {
+  amount: number | null
 }
 
 export interface AvgifterCalculation {
   rate: number
   amount: number
   basis: number
-  category: 'standard' | 'reduced_65plus' | 'youth' | 'vaxa_stod' | 'exempt'
+  // Never 'vaxa_stod': växa-stöd is a refund, not a sats (lib/salary/vaxa-stod.ts).
+  // Rows stored before that keep the value in salary_run_employees.avgifter_category.
+  category: 'standard' | 'reduced_65plus' | 'youth' | 'exempt'
   steps: CalculationStep[]
 }
 
@@ -170,19 +222,43 @@ function r(x: number): number {
 
 /**
  * Sum vacation-basis line items that ADD to base salary (overtime, bonus,
- * etc). Excludes monthly_salary/hourly_salary because those line items mirror
- * the engine's own baseSalary computation: counting them would double the
- * vacation basis. Excludes semesterersattning too: semesterlön is not
- * semesterlönegrundande (SemL 16 §), so a manually entered semesterersättning
- * payout must neither accrue vacation pay nor earn semesterersättning on
- * itself.
+ * extra hours at timlön, etc). The payslip's own Grundlön/Timlön row is not
+ * here: calculateSalary drops it before any step, because it mirrors the
+ * engine's own baseSalary and would double the vacation basis. Excludes
+ * semesterersattning: semesterlön is not semesterlönegrundande (SemL 16 §),
+ * so a manually entered semesterersättning payout must neither accrue
+ * vacation pay nor earn semesterersättning on itself.
  */
 function vacationBasisAdditions(lineItems: CalculationLineItem[]): number {
   return lineItems
     .filter(li => li.isVacationBasis)
-    .filter(li => li.itemType !== 'monthly_salary' && li.itemType !== 'hourly_salary')
     .filter(li => li.itemType !== 'semesterersattning')
     .reduce((sum, li) => sum + li.amount, 0)
+}
+
+/**
+ * Semesterlönegrundande frånvaro for hourly pay (Semesterlagen 16 b § tredje
+ * stycket): for each day of absence that 17-17 b §§ make
+ * semesterlönegrundande the base gets the income the employee would have had
+ * working, here timlön × the hours they would have worked. The sick pay for
+ * those days is not in the base (its row is not vacation basis). null when
+ * there is nothing to add, which leaves the base and the breakdown exactly as
+ * they were. Monthly pay never gets a step: the deduction rows of qualifying
+ * absence stay out of the base, so the monthly salary is the income the
+ * employee would have had.
+ */
+function absenceVacationBasisStep(input: SalaryCalculationInput): CalculationStep | null {
+  if (input.salaryType !== 'hourly') return null
+  const hours = input.qualifyingAbsenceHours ?? 0
+  const rate = input.hourlyRate || 0
+  const amount = roundOre(rate * hours)
+  if (!(amount > 0)) return null
+  return {
+    label: 'Semesterlönegrundande frånvaro (Semesterlagen 16 b §)',
+    formula: 'timlön × timmar den anställde skulle ha arbetat (sjukdom, VAB och föräldraledighet inom taket)',
+    input: { hourly_rate: rate, hours },
+    output: amount,
+  }
 }
 
 /**
@@ -361,10 +437,18 @@ export function monthlyBaseSalary(input: MonthlyBaseInput): number {
  *  10. Avgifter on vacation accrual
  */
 export function calculateSalary(
-  input: SalaryCalculationInput,
+  given: SalaryCalculationInput,
   config: PayrollConfig,
   taxRates: TaxTableRate[]
 ): SalaryCalculationResult {
+  // The payslip's own Grundlön or Timlön row shows Step 1 and is never an
+  // input: Step 1 prices the base from the pay type. A base-salary row of the
+  // other type is pay on top (extra hours at timlön on a monthly payslip) and
+  // stays, a Step 2 addition (line-item-roles.ts, crm#1331).
+  const input: SalaryCalculationInput = {
+    ...given,
+    lineItems: given.lineItems.filter(li => !isBaseSalaryDisplayLine(li.itemType, [given.salaryType])),
+  }
   const steps: CalculationStep[] = []
 
   // ─── Step 1: Base salary ───
@@ -429,14 +513,10 @@ export function calculateSalary(
   // deductions belong to Steps 4 and 7 and rows that are not taxable are
   // not wages; neither is an addition. The engine-derived semesterersättning
   // row never reaches this list (run-calculation filters it by provenance).
-  const ADDITION_TYPES: SalaryLineItemType[] = [
-    'overtime', 'overtime_50', 'overtime_100',
-    'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
-    'bonus', 'commission',
-    'other', 'correction', 'semesterersattning',
-  ]
+  // Neither does the payslip's own Grundlön/Timlön row (dropped above); a
+  // Timlön row on a monthly payslip is extra hours and is summed here.
   const additions = input.lineItems.filter(
-    li => ADDITION_TYPES.includes(li.itemType) && li.isTaxable && !li.isGrossDeduction && !li.isNetDeduction
+    li => ADDITION_ITEM_TYPES.includes(li.itemType) && li.isTaxable && !li.isGrossDeduction && !li.isNetDeduction
   )
   const totalAdditions = r(additions.reduce((sum, li) => sum + li.amount, 0))
   if (totalAdditions !== 0) {
@@ -464,13 +544,14 @@ export function calculateSalary(
   // Absence rows are signed and already consumed in Step 3. The derived
   // sick/VAB/parental rows also carry is_gross_deduction (it drives the
   // booking split), so they must be excluded here or the same day is
-  // deducted twice: 31 500 kr with one VAB day gave 28 500 instead of 30 000
-  // (reported by Frey, 2026-09-18).
+  // deducted twice: 31 500 kr with one VAB day gave 28 500 instead of 30 000.
+  // Signed, as the booking reads the row (line-item-roles.ts payslipLineSign):
+  // an absolute value turned a positive row into a deduction.
   const grossDeductionItems = input.lineItems.filter(
     li => li.isGrossDeduction && !ABSENCE_ITEM_TYPES.has(li.itemType),
   )
-  const totalGrossDeductions = r(Math.abs(grossDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
-  if (totalGrossDeductions > 0) {
+  const totalGrossDeductions = r(0 - grossDeductionItems.reduce((sum, li) => sum + li.amount, 0))
+  if (totalGrossDeductions !== 0) {
     steps.push({
       label: 'Bruttolöneavdrag',
       formula: 'summa bruttoavdrag',
@@ -484,10 +565,15 @@ export function calculateSalary(
   // for 30+ days, or the kollektivavtal rate) on top of each paycheck instead
   // of accruing semesterlöneskuld. It's part of bruttolön and counts for both
   // tax and avgifter basis.
+  // Hourly pay's semesterlönegrundande frånvaro, added to the base under both
+  // rules that pay a percentage of it (Step 4b and Step 9).
+  const absenceBasisStep = absenceVacationBasisStep(input)
+  const absenceBasis = absenceBasisStep?.output ?? 0
   let vacationCompensation = 0
   if (input.vacationRule === 'semesterersattning') {
     const rate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
-    const compensationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
+    if (absenceBasisStep) steps.push(absenceBasisStep)
+    const compensationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems) + absenceBasis)
     vacationCompensation = r(compensationBasis * rate)
     steps.push({
       label: `Semesterersättning (${fmtPct(rate)})`,
@@ -571,10 +657,12 @@ export function calculateSalary(
   const regularTaxableIncome = oneOffByRate.size > 0 ? Math.max(0, r(taxableIncome - oneOffBasis)) : taxableIncome
 
   let taxWithheld: number
+  let taxBranch: StatutoryTaxBranch
   const paymentYear = parseInt(input.paymentDate.split('-')[0])
 
   if (input.fSkattStatus === 'f_skatt') {
     // F-skatt holder: no withholding
+    taxBranch = 'f_skatt'
     taxWithheld = 0
     steps.push({
       label: 'Skatteavdrag (F-skatt)',
@@ -584,6 +672,7 @@ export function calculateSalary(
     })
   } else if (input.fSkattStatus === 'not_verified') {
     // Unverified: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxBranch = 'not_verified'
     taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (ej verifierad)',
@@ -593,6 +682,7 @@ export function calculateSalary(
     })
   } else if (input.isSidoinkomst) {
     // Sidoinkomst: flat 30%
+    taxBranch = 'sidoinkomst'
     taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (sidoinkomst 30 %)',
@@ -602,6 +692,7 @@ export function calculateSalary(
     })
   } else if (input.jamkningPercentage !== null && isJamkningValid(input.jamkningValidFrom, input.jamkningValidTo, input.paymentDate)) {
     // Jämkning
+    taxBranch = 'jamkning'
     taxWithheld = calculateJamkningTax(taxableIncome, input.jamkningPercentage)
     steps.push({
       label: `Skatteavdrag (jämkning ${input.jamkningPercentage} %)`,
@@ -612,6 +703,7 @@ export function calculateSalary(
   } else if (input.taxTableNumber) {
     // Normal tax table lookup on the regular part of the income; one-off
     // bases are taxed per rate group below.
+    taxBranch = 'table'
     taxWithheld = lookupTaxAmount(input.taxTableNumber, input.taxColumn, regularTaxableIncome, taxRates)
     steps.push({
       label: `Skatteavdrag (tabell ${input.taxTableNumber}, kolumn ${input.taxColumn})`,
@@ -634,6 +726,7 @@ export function calculateSalary(
     }
   } else {
     // Fallback: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxBranch = 'fallback'
     taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (30 % schablon)',
@@ -643,10 +736,30 @@ export function calculateSalary(
     })
   }
 
-  // ─── Step 7: Net salary ───
+  // Signed, as the booking and the förmån resolver read the rows: a positive
+  // row repays the employee (line-item-roles.ts payslipLineSign).
   const netDeductionItems = input.lineItems.filter(li => li.isNetDeduction)
-  const totalNetDeductions = r(Math.abs(netDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
+  const totalNetDeductions = r(0 - netDeductionItems.reduce((sum, li) => sum + li.amount, 0))
 
+  // ─── Step 6b: Förhöjt skatteavdrag (SFL 11 kap. 22 §) ───
+  // The extra the employee asked for, on top of the statutory tax above, in
+  // the table and jämkning branches only, capped at the cash pay left after
+  // that tax and the net deductions (lib/salary/extra-tax.ts). No row at all
+  // when nothing is requested, so such a payslip's breakdown is unchanged.
+  const extraTax = computeExtraTax({
+    amount: input.extraTaxAmount,
+    percentage: input.extraTaxPercentage,
+    branch: taxBranch,
+    taxableIncome,
+    grossSalary,
+    netDeductions: totalNetDeductions,
+    statutoryTax: taxWithheld,
+  })
+  if (extraTax.step) steps.push(extraTax.step)
+  const extraTaxWithheld = extraTax.extra
+  taxWithheld += extraTaxWithheld
+
+  // ─── Step 7: Net salary ───
   let netSalary = r(grossSalary - taxWithheld - totalNetDeductions)
   steps.push({
     label: 'Nettolön',
@@ -661,11 +774,9 @@ export function calculateSalary(
   // no semesterunderlag, not in the AGI gross (travel-expenses.md). They ride
   // on the payout only, after tax and net deductions and before the
   // öresavrundning of the final amount.
-  const reimbursementItems = input.lineItems.filter(
-    li => TAX_FREE_REIMBURSEMENT_TYPES.includes(li.itemType) && li.amount > 0
-  )
+  const reimbursementItems = input.lineItems.filter(li => TAX_FREE_REIMBURSEMENT_TYPES.includes(li.itemType))
   const taxFreeReimbursements = r(reimbursementItems.reduce((sum, li) => sum + li.amount, 0))
-  if (taxFreeReimbursements > 0) {
+  if (taxFreeReimbursements !== 0) {
     netSalary = r(netSalary + taxFreeReimbursements)
     steps.push({
       label: 'Kostnadsersättning (skattefri)',
@@ -704,8 +815,8 @@ export function calculateSalary(
   const avgifterCalc = calculateAvgifterRate(input, config, paymentYear)
   const avgifterBasis = input.fSkattStatus === 'f_skatt' ? 0 : r(grossSalary + totalBenefits)
 
-  // Handle salary caps for youth and växa-stöd:
-  // Reduced rate applies only up to the cap, standard rate on the rest
+  // Salary cap for the youth rate: the reduced rate applies only up to the
+  // cap, the standard rate on the rest.
   let avgifterAmount: number
   if (avgifterCalc.category === 'youth' && config.avgifterYouthSalaryCap && avgifterBasis > config.avgifterYouthSalaryCap) {
     const reducedPart = r(config.avgifterYouthSalaryCap * avgifterCalc.rate)
@@ -716,17 +827,6 @@ export function calculateSalary(
       label: 'Arbetsgivaravgifter (ungdomsrabatt med tak)',
       formula: `${fmtKr(config.avgifterYouthSalaryCap)} × ${fmtPct(avgifterCalc.rate)} + ${fmtKr(avgifterBasis - config.avgifterYouthSalaryCap)} × ${fmtPct(config.avgifterTotal)}`,
       input: { cap: config.avgifterYouthSalaryCap, reduced: reducedPart, standard: standardPart },
-      output: avgifterAmount,
-    })
-  } else if (avgifterCalc.category === 'vaxa_stod' && config.avgifterVaxaStodCap && avgifterBasis > config.avgifterVaxaStodCap) {
-    const reducedPart = r(config.avgifterVaxaStodCap * avgifterCalc.rate)
-    const standardPart = r((avgifterBasis - config.avgifterVaxaStodCap) * config.avgifterTotal)
-    avgifterAmount = r(reducedPart + standardPart)
-    steps.push(...avgifterCalc.steps)
-    steps.push({
-      label: 'Arbetsgivaravgifter (växa-stöd med tak)',
-      formula: `${fmtKr(config.avgifterVaxaStodCap)} × ${fmtPct(avgifterCalc.rate)} + ${fmtKr(avgifterBasis - config.avgifterVaxaStodCap)} × ${fmtPct(config.avgifterTotal)}`,
-      input: { cap: config.avgifterVaxaStodCap, reduced: reducedPart, standard: standardPart },
       output: avgifterAmount,
     })
   } else {
@@ -740,12 +840,17 @@ export function calculateSalary(
     })
   }
 
+  // ─── Step 8b: Växa-stöd refund (information only) ───
+  const vaxaStod = vaxaStodRefundNotice(input, config, avgifterCalc.category, avgifterBasis)
+  if (vaxaStod) steps.push(vaxaStod.step)
+
   // ─── Step 9: Vacation accrual ───
   // Vacation basis = baseSalary (computed at the top) + any *additional*
-  // vacation-basis line items (overtime, bonus, etc). We must NOT add
-  // monthly_salary/hourly_salary line items here: those are auto-created at
-  // employee-add time and represent the same baseSalary already accounted for.
-  const vacationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
+  // vacation-basis line items (overtime, bonus, extra hours at timlön, etc).
+  // The payslip's own Grundlön/Timlön row was dropped at the top: it is
+  // created at employee-add time and represents the same baseSalary.
+  // Hourly pay adds its semesterlönegrundande frånvaro (absenceBasis above).
+  const vacationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems) + absenceBasis)
   let vacationAccrual: number
   if (input.vacationRule === 'none') {
     vacationAccrual = 0
@@ -765,6 +870,7 @@ export function calculateSalary(
     })
   } else if (input.vacationRule === 'procentregeln') {
     const rate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
+    if (absenceBasisStep) steps.push(absenceBasisStep)
     vacationAccrual = r(vacationBasis * rate)
     steps.push({
       label: `Semesteravsättning (procentregeln ${fmtPct(rate)})`,
@@ -775,14 +881,15 @@ export function calculateSalary(
   } else {
     // Sammalöneregeln (§16a): employee keeps regular salary during vacation
     // + semestertillägg per vacation day (min 0.43%, often 0.8% per CBA)
-    // Accrual = tillägg only (salary cost is already in normal monthly expense)
-    // The liability (2920) for sammalöneregeln is the tillägg portion,
-    // since the base salary is expensed monthly regardless of vacation.
+    // Accrual = tillägg (salary cost is already in normal monthly expense),
+    // plus the semesterlön of the rörliga lönedelar below. The liability
+    // (2920) for sammalöneregeln is those two portions, since the base salary
+    // is expensed monthly regardless of vacation.
     //
     // The tillägg is a share of the MONTHLY salary per vacation day, never of
     // the dagslön. Valuing it off a daily rate under-provisioned 2920 by the
-    // whole divisor, while absence-calculator.ts relieves that same 2920 at
-    // the correct monthly base when a day is taken, so the liability drifted
+    // whole divisor, while a taken day's tillägg is valued at the monthly
+    // base (dayValueSek in semesterberedning.ts), so the liability drifted
     // further negative with every taken day.
     //
     // Only the month's earned share accrues. The full annual entitlement used
@@ -806,6 +913,26 @@ export function calculateSalary(
       },
       output: vacationAccrual,
     })
+
+    // Rörliga lönedelar (Semesterlagen 16 a § tredje stycket): OB, övertid,
+    // bonus and provision are not in the monthly salary that runs through
+    // the vacation, so they earn their own semesterlön, the semesterlön
+    // percentage of the variable pay (lib/salary/variable-vacation-pay.ts).
+    // It is paid after the semesterår ends, so until then it is a liability:
+    // it accrues here with the tillägg and books on 2920/2940 like it. A run
+    // without variable pay accrues exactly what it did before.
+    const variablePay = sammaloneVariablePay(input.lineItems)
+    if (variablePay !== 0) {
+      const variableRate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
+      const variablePart = roundOre(variablePay * variableRate)
+      vacationAccrual = roundOre(tillagg + variablePart)
+      steps.push({
+        label: `Semesteravsättning rörliga lönedelar (sammalöneregeln ${fmtPct(variableRate)})`,
+        formula: `rörlig lön (OB, övertid, bonus, provision) × ${fmtPct(variableRate)}`,
+        input: { variable_pay: variablePay, rate: variableRate },
+        output: variablePart,
+      })
+    }
   }
 
   // ─── Step 10: Avgifter on vacation accrual ───
@@ -837,6 +964,7 @@ export function calculateSalary(
     benefitValues: totalBenefits,
     taxableIncome,
     taxWithheld,
+    extraTaxWithheld,
     netDeductions: totalNetDeductions,
     taxFreeReimbursements,
     netSalary,
@@ -849,7 +977,66 @@ export function calculateSalary(
     vacationAccrualAvgifter,
     vacationCompensation,
     totalEmployerCost,
+    vaxaStodRefund: vaxaStod?.refund ?? null,
     steps,
+  }
+}
+
+/**
+ * Växa-stöd no longer lowers the avgifter (Lag 2025:1334,
+ * lib/salary/vaxa-stod.ts): the sats stays whatever age decides, and the
+ * company applies for the refund after filing. This notes the expected
+ * refund: the avgifter except ålderspensionsavgiften on the underlag up to
+ * the monthly cap, which leaves the employer the 10,21 % the reduced sats
+ * used to charge (swedish-payroll social-charges.md).
+ *
+ * The amount is stated only where that is unambiguous: an employee on the
+ * full sats whose employment started on or after 2024-05-01 (the configured
+ * cap). With ungdomsrabatt the paid avgift is already reduced and how the two
+ * combine is not defined here, and an earlier employment has a lower cap the
+ * payroll config does not carry: both get the notice without an amount.
+ * Reduced 67+ and exempt rows pay nothing beyond ålderspensionsavgiften, so
+ * there is nothing to refund and no notice.
+ */
+function vaxaStodRefundNotice(
+  input: SalaryCalculationInput,
+  config: PayrollConfig,
+  category: AvgifterCalculation['category'],
+  avgifterBasis: number,
+): { refund: VaxaStodRefund; step: CalculationStep } | null {
+  const vaxaWindow = { eligible: input.vaxaStodEligible, start: input.vaxaStodStart, end: input.vaxaStodEnd }
+  if (!isVaxaStodRefundMonth(vaxaWindow, input.paymentDate)) return null
+  if (avgifterBasis <= 0 || (category !== 'standard' && category !== 'youth')) return null
+
+  const label = VAXA_STOD_REFUND_STEP_LABEL
+  const windowInput = { vaxa_start: input.vaxaStodStart ?? '', vaxa_end: input.vaxaStodEnd ?? '' }
+  const withoutAmount = (reason: string) => ({
+    refund: { amount: null },
+    step: { label, formula: `växa-stöd sänker inte avgiften; ${reason}`, input: windowInput, output: null },
+  })
+
+  if (category === 'youth') {
+    return withoutAmount('beloppet beräknas inte här när ungdomsrabatt tillämpas')
+  }
+  const cap = config.avgifterVaxaStodCap
+  if (cap === null || cap <= 0 || !input.employmentStart) {
+    return withoutAmount('beloppet beräknas inte här')
+  }
+  if (input.employmentStart < VAXA_STOD_CONFIGURED_CAP_FROM) {
+    return withoutAmount(`beloppet beräknas inte här för anställningar före ${VAXA_STOD_CONFIGURED_CAP_FROM}`)
+  }
+
+  const refundRate = Math.round((config.avgifterTotal - config.avgifterAlderspension) * 10000) / 10000
+  const refundBasis = Math.min(avgifterBasis, cap)
+  const amount = r(refundBasis * refundRate)
+  return {
+    refund: { amount },
+    step: {
+      label,
+      formula: `växa-stöd sänker inte avgiften; förväntad återbetalning ${fmtKr(refundBasis)} × ${fmtPct(refundRate)} (avgifter utom ålderspensionsavgift, tak ${fmtKr(cap)}/mån)`,
+      input: { ...windowInput, refund_basis: refundBasis, refund_rate: refundRate, cap },
+      output: amount,
+    },
   }
 }
 
@@ -858,7 +1045,9 @@ export function calculateSalary(
 // ============================================================
 
 /**
- * Determine arbetsgivaravgifter rate based on employee age, växa-stöd, etc.
+ * Determine the arbetsgivaravgifter rate from F-skatt status and age.
+ * Växa-stöd plays no part: since Lag (2025:1334) it is a refund applied for
+ * after filing, never a reduced sats (vaxaStodRefundNotice).
  */
 export function calculateAvgifterRate(
   input: SalaryCalculationInput,
@@ -898,10 +1087,12 @@ export function calculateAvgifterRate(
   }
 
   const ageAtYearStart = calculateAgeAtYearStart(pnr, paymentYear)
+  // The age tier the vacation year close shares (avgift-tier.ts).
+  const tier = avgiftAgeTier(pnr, paymentYear, config.reducedAvgiftAge)
 
   // Born ≤1937: 0%
   const birthYear = parseInt(pnr.slice(0, 4))
-  if (birthYear <= 1937) {
+  if (tier === 'exempt') {
     steps.push({
       label: 'Avgiftskategori',
       formula: 'Född 1937 eller tidigare: inga arbetsgivaravgifter',
@@ -912,7 +1103,7 @@ export function calculateAvgifterRate(
   }
 
   // 67+ at year start (reduced: only ålderspension)
-  if (ageAtYearStart >= config.reducedAvgiftAge) {
+  if (tier === 'reduced') {
     steps.push({
       label: 'Avgiftskategori',
       formula: `Ålder ${ageAtYearStart} år: reducerad avgift ${fmtPct(config.avgifterReduced65plus)} (endast ålderspensionsavgift)`,
@@ -920,20 +1111,6 @@ export function calculateAvgifterRate(
       output: null,
     })
     return { rate: config.avgifterReduced65plus, amount: 0, basis: 0, category: 'reduced_65plus', steps }
-  }
-
-  // Växa-stöd eligible
-  if (input.vaxaStodEligible && input.vaxaStodStart && input.vaxaStodEnd) {
-    const payDate = input.paymentDate
-    if (payDate >= input.vaxaStodStart && payDate <= input.vaxaStodEnd && config.avgifterVaxaStodRate !== null) {
-      steps.push({
-        label: 'Avgiftskategori',
-        formula: `Växa-stöd ${fmtPct(config.avgifterVaxaStodRate ?? 0)} på första ${fmtKr(config.avgifterVaxaStodCap ?? 0)}`,
-        input: { vaxa_cap: config.avgifterVaxaStodCap ?? 0 },
-        output: null,
-      })
-      return { rate: config.avgifterVaxaStodRate ?? config.avgifterTotal, amount: 0, basis: 0, category: 'vaxa_stod', steps }
-    }
   }
 
   // Youth rate (ungdomsrabatt 2026-2027, Prop. 2025/26:66):
@@ -969,133 +1146,6 @@ export function calculateAvgifterRate(
     output: null,
   })
   return { rate: config.avgifterTotal, amount: 0, basis: 0, category: 'standard', steps }
-}
-
-// ============================================================
-// Sjuklön helpers
-// ============================================================
-
-/**
- * Calculate karensavdrag (sick leave deduction day 1).
- * Formula: 20% × (monthly_salary × 12 / 52 × sjuklön_rate)
- */
-export function calculateKarensavdrag(monthlySalary: number, config: PayrollConfig): number {
-  const weeklySjuklon = r(monthlySalary * 12 / 52 * config.sjuklonRate)
-  return r(weeklySjuklon * config.karensavdragFactor)
-}
-
-/**
- * Calculate sjuklön for days 2-14.
- * Formula: 80% × daily_rate × (sick_days - 1)
- */
-export function calculateSjuklon(
-  monthlySalary: number,
-  sickDays: number,
-  config: PayrollConfig,
-  // Arbetsschema-lite: legacy 21 unless the employee's schedule differs.
-  dailyDivisor: number = 21
-): { karensavdrag: number; sjuklon: number; totalDeduction: number; steps: CalculationStep[] } {
-  const steps: CalculationStep[] = []
-  const dailyRate = r(monthlySalary / dailyDivisor)
-
-  // Karensavdrag
-  const karensavdrag = calculateKarensavdrag(monthlySalary, config)
-  steps.push({
-    label: 'Karensavdrag',
-    formula: `20 % × (månadslön × 12/52 × ${fmtPct(config.sjuklonRate)})`,
-    input: { monthly_salary: monthlySalary },
-    output: karensavdrag,
-  })
-
-  // Sjuklön day 2-14
-  const sjuklonDays = Math.min(Math.max(sickDays - 1, 0), 13)
-  const sjuklon = r(dailyRate * config.sjuklonRate * sjuklonDays)
-  steps.push({
-    label: 'Sjuklön dag 2-14',
-    formula: `dagslön × ${fmtPct(config.sjuklonRate)} × (sjukdagar − 1)`,
-    input: { daily_rate: dailyRate, sjuklon_rate: config.sjuklonRate, days: sjuklonDays },
-    output: sjuklon,
-  })
-
-  // Total deduction from pay = salary they would have earned - sjuklön they get
-  const fullPayForPeriod = r(dailyRate * sickDays)
-  const totalDeduction = r(-(fullPayForPeriod - sjuklon + karensavdrag))
-  steps.push({
-    label: 'Netto sjukavdrag',
-    formula: '−(full lön − sjuklön + karensavdrag)',
-    input: { full_pay: fullPayForPeriod, sjuklon, karensavdrag },
-    output: totalDeduction,
-  })
-
-  return { karensavdrag, sjuklon, totalDeduction, steps }
-}
-
-/**
- * Calculate vacation accrual.
- */
-export function calculateVacationAccrual(params: {
-  monthlySalary: number
-  vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
-  vacationDaysPerYear: number
-  semestertillaggRate: number
-  /** Kollektivavtal rate override; see SalaryCalculationInput.vacationPayRate. */
-  vacationPayRate?: number | null
-  vacationBasis: number
-}): { accrual: number; steps: CalculationStep[] } {
-  const steps: CalculationStep[] = []
-
-  if (params.vacationRule === 'none') {
-    steps.push({
-      label: 'Semesteravsättning (avstängd)',
-      formula: 'ingen semesteravsättning',
-      input: {},
-      output: 0,
-    })
-    return { accrual: 0, steps }
-  }
-
-  if (params.vacationRule === 'semesterersattning') {
-    steps.push({
-      label: 'Semesteravsättning (semesterersättning betald direkt)',
-      formula: `ingen avsättning: ${fmtPct(resolveVacationPayRate(params.vacationDaysPerYear, params.vacationPayRate))} betalas ut på varje lön`,
-      input: {},
-      output: 0,
-    })
-    return { accrual: 0, steps }
-  }
-
-  if (params.vacationRule === 'procentregeln') {
-    const rate = resolveVacationPayRate(params.vacationDaysPerYear, params.vacationPayRate)
-    const accrual = r(params.vacationBasis * rate)
-    steps.push({
-      label: `Semesteravsättning (procentregeln ${fmtPct(rate)})`,
-      formula: `semesterunderlag × ${fmtPct(rate)}`,
-      input: { vacation_basis: params.vacationBasis, rate },
-      output: accrual,
-    })
-    return { accrual, steps }
-  } else {
-    // Sammalöneregeln: tillägg per vacation day, valued on the MONTHLY salary
-    // and accrued one month's earned share at a time. See the mirrored branch
-    // in calculateSalary for why neither a dagslön base nor the full annual
-    // entitlement belongs here. Use vacationBasis as the degree-adjusted
-    // reference: callers must pass the part-time-adjusted monthly amount,
-    // never the raw full-time monthlySalary.
-    const daysEarnedThisMonth = params.vacationDaysPerYear / 12
-    const accrual = r(params.vacationBasis * params.semestertillaggRate * daysEarnedThisMonth)
-    steps.push({
-      label: `Semesteravsättning (sammalöneregeln ${fmtPct(params.semestertillaggRate)})`,
-      formula: `månadslön × ${fmtPct(params.semestertillaggRate)} × semesterdagar / 12`,
-      input: {
-        monthly_base: params.vacationBasis,
-        rate: params.semestertillaggRate,
-        vacation_days_per_year: params.vacationDaysPerYear,
-        days_earned_this_month: r(daysEarnedThisMonth),
-      },
-      output: accrual,
-    })
-    return { accrual, steps }
-  }
 }
 
 // ============================================================

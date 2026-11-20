@@ -11,7 +11,10 @@
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isPersonPayer, type PayerChoice } from '@/lib/expenses/payer'
 import { supplierInvoiceEditorAmounts } from './editor-amounts'
-import type { VatTreatment } from '@/types'
+import { bookLimitedDeduction, limitedDeductionApplies } from './limited-deduction'
+import { reverseChargeRateOf } from './reverse-charge-rate'
+import type { StatedRateVat } from '@/lib/vat/document-vat'
+import type { SupplierInvoiceReverseChargeKind, VatTreatment } from '@/types'
 
 export interface SupplierInvoiceLineItem {
   description: string
@@ -34,6 +37,13 @@ export interface SupplierInvoiceLineItem {
   // 7533 D / 2514 K pair at 24.26 % of the line amount. Only offered on 741x
   // pension-premium accounts; never changes the invoice total.
   apply_slp?: boolean
+  // Begränsat momsavdrag: the share of the row's moms the person deducts,
+  // when it is less than all of it (personbil, representation). Present only
+  // while the row's panel is open; bookLimitedDeduction turns it into the
+  // booked row (lib/supplier-invoices/limited-deduction.ts).
+  vat_deduction_share?: number
+  // The ingående moms the row books, set only by bookLimitedDeduction.
+  vat_amount?: number
 }
 
 export interface SupplierInvoiceFormData {
@@ -45,6 +55,11 @@ export interface SupplierInvoiceFormData {
   currency: string
   exchange_rate: string
   reverse_charge: boolean
+  /**
+   * Goods or services, asked only under reverse charge from an EU supplier.
+   * Empty until answered: there is no silent default (crm#1323).
+   */
+  reverse_charge_kind: SupplierInvoiceReverseChargeKind | ''
   payment_reference: string
   notes: string
   /** Vem betalade? Decides the endpoint, the primary action and the credit account. */
@@ -53,11 +68,29 @@ export interface SupplierInvoiceFormData {
   claimant_name: string
   /** employees.id for payer 'employee'. */
   employee_id: string
+  /**
+   * Självfaktura (crm#1367): the company issues the invoice in the
+   * supplier's name; the number comes from the company's series, so
+   * supplier_invoice_number is not sent. Optional: older callers omit it.
+   */
+  is_self_billed?: boolean
   items: SupplierInvoiceLineItem[]
 }
 
+/**
+ * An EU supplier's reverse-charge invoice still waits for goods or services.
+ * One predicate for the editor's next-step line and its submit check, so
+ * the two always agree.
+ */
+export function reverseChargeKindMissing(
+  data: Pick<SupplierInvoiceFormData, 'reverse_charge' | 'reverse_charge_kind'>,
+  euSupplier: boolean,
+): boolean {
+  return data.reverse_charge && euSupplier && !data.reverse_charge_kind
+}
+
 export function inferVatTreatment(
-  items: SupplierInvoiceLineItem[],
+  items: ReadonlyArray<Pick<SupplierInvoiceLineItem, 'vat_rate'>>,
   reverseCharge: boolean,
 ): VatTreatment {
   if (reverseCharge) return 'reverse_charge'
@@ -99,33 +132,71 @@ export interface BuildSupplierInvoicePayloadOptions {
   defaultDims: Record<string, string>
   /** Whether the flow supports periodisering (accrual method, not privately paid, not RC). */
   canUseAccrual: boolean
+  /** The supplier is in another EU country: its reverse charge says goods or services. */
+  euSupplier: boolean
+  /**
+   * The invoice's own moms (the Moms field) as its VAT per rate
+   * (statedVatFromInvoiceField). Sent as vat_breakdown when the lines take
+   * it, so the registration books the moms the invoice states (crm#1367).
+   */
+  statedVat?: StatedRateVat[] | null
+}
+
+/**
+ * The Moms field as the invoice's VAT per rate: only when every line that
+ * charges moms charges the same rate, so the one figure belongs to one rate.
+ * Null under reverse charge (no moms is invoiced) and without a figure.
+ */
+export function statedVatFromInvoiceField(
+  items: ReadonlyArray<Pick<SupplierInvoiceLineItem, 'vat_rate' | 'amount'>>,
+  vat: number | null,
+  reverseCharge: boolean,
+): StatedRateVat[] | null {
+  if (reverseCharge || vat == null) return null
+  const rates = new Set(items.filter((item) => (item.amount || 0) !== 0 && item.vat_rate > 0).map((item) => item.vat_rate))
+  if (rates.size !== 1) return null
+  return [{ rate: rates.values().next().value!, vatAmount: vat }]
 }
 
 export function buildSupplierInvoicePayload(
   data: SupplierInvoiceFormData,
   opts: BuildSupplierInvoicePayloadOptions,
 ) {
-  const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual } = opts
+  const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual, euSupplier } = opts
+  // A row with begränsat momsavdrag books its non-deductible moms as cost.
+  const bookedItems = bookLimitedDeduction(data.items, limitedDeductionApplies(data)).items
+  // The treatment is the invoice's, from its own rows: a row with no
+  // deductible moms books at 0 %, but the supplier still charged moms.
   const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
-  const { roundingItem } = supplierInvoiceEditorAmounts(data.items, data.currency, data.reverse_charge, oreRounding)
-  const items: SupplierInvoiceLineItem[] = roundingItem ? [...data.items, roundingItem] : data.items
+  const statedVat = data.reverse_charge ? null : opts.statedVat ?? null
+  const { roundingItem, statedVatAccepted } = supplierInvoiceEditorAmounts(
+    bookedItems, data.currency, data.reverse_charge, oreRounding, statedVat,
+  )
+  const items: SupplierInvoiceLineItem[] = roundingItem ? [...bookedItems, roundingItem] : bookedItems
   const paidByPerson = isPersonPayer(data.payer)
   // When paid privately, due_date is irrelevant: but the API still requires
   // a YYYY-MM-DD value. Default to invoice_date so the field passes validation.
   const dueDate = paidByPerson && !data.due_date
     ? data.invoice_date
     : data.due_date
+  const selfBilled = data.is_self_billed === true
   return {
     supplier_id: data.supplier_id,
-    ...(!inboxItemId && uploadedDocumentId ? { document_id: uploadedDocumentId } : {}),
-    supplier_invoice_number: data.supplier_invoice_number,
+    // A self-billing invoice is our own document: no upload, and its number
+    // is drawn from the company's series at registration.
+    ...(!inboxItemId && uploadedDocumentId && !selfBilled ? { document_id: uploadedDocumentId } : {}),
+    ...(selfBilled ? { is_self_billed: true as const } : { supplier_invoice_number: data.supplier_invoice_number }),
     invoice_date: data.invoice_date,
-    due_date: dueDate,
+    // Empty: the server takes invoice_date + the supplier's payment terms.
+    due_date: dueDate || undefined,
     delivery_date: data.delivery_date || undefined,
     currency: data.currency,
     exchange_rate: data.exchange_rate ? parseFloat(data.exchange_rate) : undefined,
     vat_treatment: vatTreatment,
     reverse_charge: data.reverse_charge,
+    // Goods (ruta 20) or services (ruta 21): only an EU supplier's reverse
+    // charge has the choice, and the API refuses it anywhere else.
+    ...(data.reverse_charge && euSupplier && data.reverse_charge_kind ? { reverse_charge_kind: data.reverse_charge_kind } : {}),
     payment_reference: data.payment_reference || undefined,
     notes: data.notes || undefined,
     paid_with_private_funds: paidByPerson,
@@ -138,17 +209,27 @@ export function buildSupplierInvoicePayload(
     // on 2440 only): see supplierInvoiceCreateUrl.
     ...(paidByPerson && inboxItemId ? { inbox_item_id: inboxItemId } : {}),
     ore_rounding: oreRounding,
-    // Invoice-level default dimensions (kostnadsställe/projekt): only sent
-    // when the user actually picked something.
-    ...(Object.keys(defaultDims).length > 0 ? { default_dimensions: defaultDims } : {}),
+    // Invoice-level dimensions (kostnadsställe/projekt), always sent: the
+    // editor starts them from the supplier's default and shows them, so {}
+    // is the user clearing that default, not "use the supplier's"
+    // (lib/suppliers/default-dimensions.ts).
+    default_dimensions: defaultDims,
+    // The moms the invoice states, when the lines take it (the editor showed
+    // it as the booked moms); otherwise the server books the VAT on the sum.
+    ...(statedVat && statedVatAccepted
+      ? { vat_breakdown: statedVat.map((entry) => ({ vat_rate: entry.rate, vat_amount: entry.vatAmount })) }
+      : {}),
     items: items.map((item) => ({
       description: item.description,
       amount: item.amount,
       account_number: item.account_number,
       // Reverse charge: the supplier charges no VAT, so the line rate is 0 and
-      // the self-assessed rate travels on reverse_charge_rate (25% default).
+      // the self-assessed rate travels on reverse_charge_rate (never one the
+      // API refuses: a row without a valid one sends its default).
       vat_rate: data.reverse_charge ? 0 : item.vat_rate,
-      reverse_charge_rate: data.reverse_charge ? (item.reverse_charge_rate ?? 0.25) : undefined,
+      reverse_charge_rate: data.reverse_charge ? reverseChargeRateOf(item) : undefined,
+      // The deductible part of the row's moms (begränsat momsavdrag).
+      ...(!data.reverse_charge && item.vat_amount != null ? { vat_amount: item.vat_amount } : {}),
       // Periodisering: only sent when the row has a complete period AND the
       // flow supports it (kontantmetod/eget utlägg would be rejected by the
       // API: an AI prefill must never block those submits).

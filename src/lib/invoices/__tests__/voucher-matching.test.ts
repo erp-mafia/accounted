@@ -1,4 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
 import {
   findMatchingVouchersForInvoice,
   validateVoucherForInvoiceLink,
@@ -9,6 +19,11 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
+
+// invoice_settlement_side rows (supabase.rpc consumes a queue slot like a
+// table read). The rule itself is pinned in invoice-settlement-side tests.
+const AR_CREDIT_ROW = { settlement_side: 'ar_credit', account_prefix: '151', entry_side: 'credit' }
+const BANK_DEBIT_ROW = { settlement_side: 'bank_debit', account_prefix: '19', entry_side: 'debit' }
 
 // Issue #1259: settling the invoice retires the suggestion pointers at it.
 // Mocked so it consumes no slot in the queued Supabase mock; the helper's own
@@ -24,6 +39,14 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
 const { mockAnchorCustomerDoc } = vi.hoisted(() => ({ mockAnchorCustomerDoc: vi.fn() }))
 vi.mock('@/lib/core/documents/customer-invoice-underlag', () => ({
   anchorCustomerInvoiceDocument: mockAnchorCustomerDoc,
+}))
+
+// The befarad kundförlust reserve release after a payment: mocked so it takes
+// no slot in the queued Supabase mock; its own behaviour is pinned by
+// lib/customer-loss/__tests__/services.test.ts.
+const { mockReleaseReserve } = vi.hoisted(() => ({ mockReleaseReserve: vi.fn() }))
+vi.mock('@/lib/customer-loss/doubtful', () => ({
+  releaseDoubtfulReserveAfterChange: mockReleaseReserve,
 }))
 
 // ============================================================
@@ -55,10 +78,30 @@ describe('validateVoucherForInvoiceLink', () => {
     if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_INVOICE_FULLY_PAID')
   })
 
+  // What an invoice still owes is the stored remaining_amount, read as the RPC
+  // and the supplier validator read it: a stored 0 is paid, never total minus
+  // paid_amount (a paid ROT invoice owes no deduction, drift owes no öre).
+  it.each([
+    ['a paid ROT invoice: paid 17 500 of 25 000, the rest is Skatteverket\'s share', { total: 25000, paid_amount: 17500, remaining_amount: 0 }],
+    ['rounding drift across payments', { total: 1000, paid_amount: 999.99, remaining_amount: 0 }],
+  ])('rejects %s', async (_label, amounts) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: AR_CREDIT_ROW })
+    enqueue({ data: null, error: null })
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeInvoice({ ...amounts, currency: 'SEK' }) as never,
+      'je-1',
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_INVOICE_FULLY_PAID')
+  })
+
   it('rejects when the voucher is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({ data: null, error: null }) // journal_entries.maybeSingle → null
     const result = await validateVoucherForInvoiceLink(
       supabase as never,
@@ -73,7 +116,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher is not posted', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -100,7 +143,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher has no AR credit (accrual)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -135,7 +178,7 @@ describe('validateVoucherForInvoiceLink', () => {
     // the matcher keys on the bank/cash debit instead of an AR credit.
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'cash' } }) // resolveAccountingMethod
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -170,10 +213,150 @@ describe('validateVoucherForInvoiceLink', () => {
     }
   })
 
+  it('cash method: accepts a sale the customer paid to the owner privately (Dr 2013, crm#1580)', async () => {
+    // An enskild firma whose customer paid a private account or wallet books
+    // the sale Dr 2013 / Cr 30xx: the same booking a 1930 receipt is.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const invoice = setup()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({
+      data: {
+        id: 'je-1',
+        voucher_series: 'A',
+        voucher_number: 21,
+        entry_date: '2026-10-29',
+        description: '',
+        status: 'posted',
+        source_type: 'manual',
+        fiscal_period_id: 'fp-1',
+        company_id: 'company-1',
+      },
+    })
+    enqueue({
+      data: [
+        { account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3308', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_payments already-linked lookup
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      invoice as never,
+      'je-1',
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.arCreditAmount).toBe(1000)
+      expect(result.isFullyPaid).toBe(true)
+    }
+  })
+
+  // #146: on the 19xx side the verifikat must book the invoice's sale or its
+  // receivable; the rule is voucherBooksSale (invoice-settlement-side.ts).
+  function bankDebitVoucher() {
+    return {
+      id: 'je-1',
+      voucher_series: 'A',
+      voucher_number: 9,
+      entry_date: '2026-05-01',
+      description: '',
+      status: 'posted',
+      source_type: 'manual',
+      fiscal_period_id: 'fp-1',
+      company_id: 'company-1',
+    }
+  }
+
+  it.each([
+    ['a private withdrawal', [
+      { account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+    ]],
+    ['an owner deposit', [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      { account_number: '2018', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+    ]],
+  ])('cash method: refuses %s as the payment (LINK_VOUCHER_NO_SALE)', async (_label, lines) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({ data: lines })
+    enqueue({ data: [{ id: 'it-1', revenue_account: null }] }) // invoice_items: no line account
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toEqual({ ok: false, code: 'LINK_VOUCHER_NO_SALE' })
+  })
+
+  it('cash method: refuses a sale next to a withdrawal from the bank (the 2013 debit is not the customer\'s)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3001', debit_amount: 0, credit_amount: 800, currency: 'SEK' },
+        { account_number: '1930', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_items: no line account
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toEqual({ ok: false, code: 'LINK_VOUCHER_NO_SALE' })
+  })
+
+  it('cash method: accepts a receivable booked elsewhere (Dr 1930 / Cr 1510) and reads no invoice lines', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '1510', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_payments
+    enqueue({ data: [] }) // already-linked lookup
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toMatchObject({ ok: true, paymentAmount: 1000, isFullyPaid: true })
+    expect(findCalls('invoice_items', 'select')).toEqual([])
+  })
+
+  it('cash method: accepts an outlay credited to the account the invoice line posts to', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '3740', debit_amount: 0.4, credit_amount: 0, currency: 'SEK' },
+        { account_number: '1680', debit_amount: 0, credit_amount: 1000.4, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [{ id: 'it-1', revenue_account: '1680' }] }) // invoice_items
+    enqueue({ data: [] }) // invoice_payments
+    enqueue({ data: [] }) // already-linked lookup
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toMatchObject({ ok: true, paymentAmount: 1000 })
+  })
+
+  it('cash method: answers LINK_VOUCHER_DB_ERROR when the invoice lines cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueue({ data: bankDebitVoucher() })
+    enqueue({
+      data: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '2420', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: null, error: { message: 'boom' } }) // invoice_items
+    const result = await validateVoucherForInvoiceLink(supabase as never, 'company-1', setup() as never, 'je-1')
+    expect(result).toMatchObject({ ok: false, code: 'LINK_VOUCHER_DB_ERROR' })
+  })
+
   it('cash method: rejects when the voucher has no bank/cash debit', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'cash' } }) // resolveAccountingMethod
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -208,7 +391,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher amount exceeds the remaining', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -241,7 +424,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the line currency does not match the invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup(makeInvoice({ remaining_amount: 1000, total: 1000, currency: 'EUR' }))
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -273,7 +456,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('rejects when the voucher is already linked to this invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -292,6 +475,8 @@ describe('validateVoucherForInvoiceLink', () => {
         { account_number: '1510', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
       ],
     })
+    // The rows on the voucher: only this invoice's own (capacity skips it).
+    enqueue({ data: [{ invoice_id: invoice.id, amount: 1000, currency: 'SEK' }] })
     enqueue({ data: [{ id: 'pmt-1' }] })
     const result = await validateVoucherForInvoiceLink(
       supabase as never,
@@ -306,7 +491,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('returns ok=true with full-pay flag when amount equals remaining', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup()
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -345,7 +530,7 @@ describe('validateVoucherForInvoiceLink', () => {
   it('returns ok=true with partial-pay flag when amount is less than remaining', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = setup(makeInvoice({ remaining_amount: 1000, total: 1000, currency: 'SEK' }))
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({
       data: {
         id: 'je-1',
@@ -384,6 +569,23 @@ describe('validateVoucherForInvoiceLink', () => {
 // findMatchingVouchersForInvoice: empty + ranking smoke test
 // ============================================================
 
+/**
+ * Enqueue the two pages the shared voucher search reads through the two-step
+ * entry-lines fetch (lib/bookkeeping/entry-lines.ts): the parent entries
+ * first, then their bare lines keyed by journal_entry_id. Fixtures stay
+ * embed-shaped for readability.
+ */
+function enqueueVouchers(
+  enqueue: (r: { data?: unknown; error?: unknown }) => void,
+  vouchers: Array<Record<string, unknown> & { id: string; journal_entry_lines: Array<Record<string, unknown>> }>,
+) {
+  enqueue({ data: vouchers.map(({ journal_entry_lines: _lines, ...entry }) => entry) })
+  if (vouchers.length === 0) return
+  enqueue({
+    data: vouchers.flatMap((v) => v.journal_entry_lines.map((line) => ({ ...line, journal_entry_id: v.id }))),
+  })
+}
+
 describe('findMatchingVouchersForInvoice', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -407,7 +609,7 @@ describe('findMatchingVouchersForInvoice', () => {
       total: 1000,
       due_date: '2026-05-01',
     })
-    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
     enqueue({ data: null, error: { message: 'db error' } })
     const result = await findMatchingVouchersForInvoice(
       supabase as never,
@@ -426,10 +628,9 @@ describe('findMatchingVouchersForInvoice', () => {
       due_date: '2026-05-01',
       invoice_number: 'F-1',
     })
-    enqueue({ data: { accounting_method: 'cash' } }) // resolveAccountingMethod
-    // journal_entries query with embedded lines (kontantmetoden: 19xx debit > 0)
-    enqueue({
-      data: [
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    // the voucher search (kontantmetoden: 19xx debit > 0)
+    enqueueVouchers(enqueue, [
         {
           id: 'je-1',
           voucher_series: 'A',
@@ -448,10 +649,17 @@ describe('findMatchingVouchersForInvoice', () => {
               credit_amount: 0,
               currency: 'SEK',
             },
+            {
+              id: 'l2',
+              account_number: '3001',
+              debit_amount: 0,
+              credit_amount: 1000,
+              currency: 'SEK',
+            },
           ],
         },
-      ],
-    })
+    ])
+    enqueue({ data: [{ journal_entry_id: 'je-1', account_number: '3001', debit_amount: 0, credit_amount: 1000 }] })
     enqueue({ data: [] }) // invoice_payments already-linked lookup
     enqueue({ data: [] }) // fiscal_periods lock lookup
     const result = await findMatchingVouchersForInvoice(
@@ -462,6 +670,67 @@ describe('findMatchingVouchersForInvoice', () => {
     expect(result).toHaveLength(1)
     expect(result[0].journal_entry_id).toBe('je-1')
     expect(result[0].ar_credit_amount).toBe(1000)
+  })
+
+  it('cash method: offers no private withdrawal or owner deposit that fits the amount (#146)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const invoice = makeInvoice({
+      remaining_amount: 1000,
+      total: 1000,
+      currency: 'SEK',
+      due_date: '2026-05-01',
+      invoice_number: 'F-1',
+    })
+    const voucherRow = (id: string, number: number) => ({
+      id,
+      voucher_series: 'A',
+      voucher_number: number,
+      entry_date: '2026-05-01',
+      description: 'Överföring',
+      status: 'posted',
+      source_type: 'manual',
+      fiscal_period_id: 'fp-1',
+      company_id: 'company-1',
+    })
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueueVouchers(enqueue, [
+      { ...voucherRow('je-sale', 7), journal_entry_lines: [
+        { id: 'l1', account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      ] },
+      { ...voucherRow('je-deposit', 8), journal_entry_lines: [
+        { id: 'l2', account_number: '1930', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      ] },
+      { ...voucherRow('je-withdrawal', 9), journal_entry_lines: [
+        { id: 'l3', account_number: '2013', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+      ] },
+    ])
+    // Every line of the candidates (vouchersBookingSale).
+    enqueue({
+      data: [
+        { id: 'l1', journal_entry_id: 'je-sale', account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { id: 'l1b', journal_entry_id: 'je-sale', account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+        { id: 'l2', journal_entry_id: 'je-deposit', account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { id: 'l2b', journal_entry_id: 'je-deposit', account_number: '2018', debit_amount: 0, credit_amount: 1000 },
+        { id: 'l3', journal_entry_id: 'je-withdrawal', account_number: '2013', debit_amount: 1000, credit_amount: 0 },
+        { id: 'l3b', journal_entry_id: 'je-withdrawal', account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_items: no line account
+    enqueue({ data: [] }) // invoice_payments already-linked lookup
+    enqueue({ data: [] }) // fiscal_periods lock lookup
+
+    const result = await findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)
+
+    expect(result.map((c) => c.journal_entry_id)).toEqual(['je-sale'])
+  })
+
+  it('cash method: offers nothing when the sale guard cannot read the lines', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const invoice = makeInvoice({ remaining_amount: 1000, total: 1000, currency: 'SEK', due_date: '2026-05-01' })
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueueVouchers(enqueue, [cashVoucher('Betalning', 1000)])
+    enqueue({ data: null, error: { message: 'boom' } })
+    expect(await findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)).toEqual([])
   })
 
   // Reference matching follows the supplier side (desk crm#64): the invoice
@@ -480,6 +749,7 @@ describe('findMatchingVouchersForInvoice', () => {
       company_id: 'company-1',
       journal_entry_lines: [
         { id: 'l1', account_number: '1930', debit_amount: debit, credit_amount: 0, currency: 'SEK' },
+        { id: 'l2', account_number: '3001', debit_amount: 0, credit_amount: debit, currency: 'SEK' },
       ],
     }
   }
@@ -492,8 +762,9 @@ describe('findMatchingVouchersForInvoice', () => {
       due_date: '2026-05-01',
       invoice_number: 'F-1',
     })
-    enqueue({ data: { accounting_method: 'cash' } })
-    enqueue({ data: [cashVoucher(description, debit)] })
+    enqueue({ data: BANK_DEBIT_ROW }) // invoice_settlement_side
+    enqueueVouchers(enqueue, [cashVoucher(description, debit)])
+    enqueue({ data: [{ journal_entry_id: 'je-1', account_number: '3001', debit_amount: 0, credit_amount: debit }] })
     enqueue({ data: [] })
     enqueue({ data: [] })
     return findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)
@@ -562,9 +833,8 @@ function enqueueSingleAccrualCandidate(
   enqueue: (r: QueuedResult) => void,
   periodLookup: QueuedResult,
 ) {
-  enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
-  enqueue({
-    data: [
+  enqueue({ data: AR_CREDIT_ROW }) // invoice_settlement_side
+  enqueueVouchers(enqueue, [
       {
         id: 'je-1',
         voucher_series: 'A',
@@ -585,8 +855,7 @@ function enqueueSingleAccrualCandidate(
           },
         ],
       },
-    ],
-  })
+  ])
   enqueue({ data: [] }) // invoice_payments already-linked lookup
   enqueue(periodLookup) // fiscal_periods lock lookup
 }
@@ -799,5 +1068,138 @@ describe('linkInvoiceToVoucher', () => {
 
     expect(result.ok).toBe(true)
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+  })
+
+  it('emits invoice.paid once when the link settles the invoice in full', async () => {
+    const paid = vi.fn()
+    eventBus.on('invoice.paid', paid)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'pay-1',
+        invoice_status: 'paid',
+        paid_amount: 1000,
+        remaining_amount: 0,
+        payment_amount: 1000,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
+        payment_date: '2026-06-01',
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'inv-1', status: 'paid', remaining_amount: 0 }, error: null }) // post-link re-fetch
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(paid).toHaveBeenCalledTimes(1)
+    // A befarad kundförlust reserve the payment made unnecessary comes back,
+    // dated at the payment.
+    expect(mockReleaseReserve).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
+      invoiceId: 'inv-1',
+      entryDate: '2026-06-01',
+      trigger: 'payment',
+    })
+    expect(paid).toHaveBeenCalledWith({
+      invoice: expect.objectContaining({ id: 'inv-1', status: 'paid' }),
+      paymentAmount: 1000,
+      paymentDate: '2026-06-01',
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+  })
+
+  // The link posts nothing of its own, except the kursdifferens verifikat
+  // (3960/7960) a foreign invoice settled at another rate needs. That one is
+  // posted in SQL, so the engine door announces it.
+  it('announces the kursdifferens verifikat the link posts with journal_entry.committed', async () => {
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
+    const fxEntry = { id: 'je-fx', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 31, lines: [] }
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'pay-1',
+        invoice_status: 'paid',
+        paid_amount: 100,
+        remaining_amount: 0,
+        payment_amount: 100,
+        journal_entry_id: 'je-1',
+        currency: 'EUR',
+        payment_date: '2026-06-01',
+        fx_settled_sek: 1150,
+        fx_residual_sek: -12.5,
+        fx_journal_entry_id: 'je-fx',
+        fx_voucher_number: 31,
+      },
+      error: null,
+    })
+    enqueue({ data: fxEntry, error: null }) // the engine door reloads the kursdifferens verifikat
+    enqueue({ data: null, error: null }) // post-link invoice re-fetch
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(committed).toHaveBeenCalledTimes(1)
+    expect(committed).toHaveBeenCalledWith({ entry: fxEntry, userId: 'user-1', companyId: 'company-1' })
+    // The first journal_entries read is the door's reload, scoped to the
+    // company; later ones belong to the bank-feed reconcile.
+    expect(findCalls('journal_entries', 'eq').slice(0, 2)).toEqual([
+      ['id', 'je-fx'],
+      ['company_id', 'company-1'],
+    ])
+  })
+
+  it('announces nothing when the link posts no kursdifferens: the linked voucher was announced when posted', async () => {
+    const committed = vi.fn()
+    eventBus.on('journal_entry.committed', committed)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueRpcOk(enqueue, 'paid')
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(committed).not.toHaveBeenCalled()
+    expect(findCalls('journal_entries', 'select')).not.toContainEqual(['*, lines:journal_entry_lines(*)'])
+  })
+
+  it('does not emit invoice.paid when the link only pays part of the invoice', async () => {
+    const paid = vi.fn()
+    eventBus.on('invoice.paid', paid)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'pay-1',
+        invoice_status: 'partially_paid',
+        paid_amount: 400,
+        remaining_amount: 600,
+        payment_amount: 400,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
+        payment_date: '2026-06-01',
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'inv-1', status: 'partially_paid', remaining_amount: 600 }, error: null })
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(paid).not.toHaveBeenCalled()
   })
 })

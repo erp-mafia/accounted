@@ -22,8 +22,7 @@ import {
   type SettleRotRutPayoutErrorCode,
   type SettledRotRutPayoutRequest,
 } from '@/lib/invoices/rot-rut-settle'
-import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import { bankRowRefusalCode, decideBankRowRebooking, type GatedBankRow } from '@/lib/transactions/is-booked'
 
 export type MatchRotRutPayoutErrorCode =
   | SettleRotRutPayoutErrorCode
@@ -31,6 +30,8 @@ export type MatchRotRutPayoutErrorCode =
   | 'ROT_RUT_MATCH_NOT_INCOME'
   | 'ROT_RUT_MATCH_CURRENCY'
   | 'ROT_RUT_MATCH_TX_ALREADY_LINKED'
+  | 'BANK_ROW_IGNORED'
+  | 'BANK_ROW_READ_FAILED'
 
 export type MatchRotRutPayoutOutcome =
   | {
@@ -70,7 +71,7 @@ export async function matchTransactionToRotRutPayout(
   const { data: transactionRow, error: fetchTxError } = await supabase
     .from('transactions')
     .select(
-      'id, date, amount, currency, journal_entry_id, cash_account_id, transaction_voucher_links(journal_entry_id, role)',
+      'id, date, amount, currency, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(journal_entry_id, role)',
     )
     .eq('id', params.transactionId)
     .eq('company_id', companyId)
@@ -79,14 +80,11 @@ export async function matchTransactionToRotRutPayout(
   if (fetchTxError || !transactionRow) {
     return { ok: false, kind: 'code', code: 'TX_CATEGORIZE_TX_NOT_FOUND' }
   }
-  const { transaction_voucher_links: junctionLinks, ...transaction } = transactionRow as {
-    id: string
+  const transaction = transactionRow as GatedBankRow & {
     date: string
     amount: number
     currency: string | null
-    journal_entry_id: string | null
     cash_account_id: string | null
-    transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
   }
 
   if (!(transaction.amount > 0)) {
@@ -107,18 +105,16 @@ export async function matchTransactionToRotRutPayout(
     }
   }
 
-  // Only a LIVE (posted) pointer or a bank_line junction row blocks: a
-  // pointer left behind by a storno reads as "utan koppling" in the UI and
-  // must stay matchable (same predicate as link-journal-entry, issue #988).
-  if (
-    hasBankLineJunctionRow(junctionLinks) ||
-    (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
-  ) {
+  // The gate every booking door asks: a posted pointer or bank_line link
+  // refuses, a pointer left behind by a storno does not (issue #988), and an
+  // ignored row is refused before the voucher posts: its link could not land.
+  const rebooking = await decideBankRowRebooking(supabase, companyId, transaction, { replace: false })
+  if (rebooking.outcome === 'refuse') {
     return {
       ok: false,
       kind: 'code',
-      code: 'ROT_RUT_MATCH_TX_ALREADY_LINKED',
-      details: { existingJournalEntryId: transaction.journal_entry_id },
+      code: bankRowRefusalCode(rebooking, 'ROT_RUT_MATCH_TX_ALREADY_LINKED') as MatchRotRutPayoutErrorCode,
+      details: { existingJournalEntryId: rebooking.journalEntryId },
     }
   }
 

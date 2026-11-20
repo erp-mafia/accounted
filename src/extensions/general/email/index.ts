@@ -6,7 +6,7 @@ import { registerEmailService } from '@/lib/email/service'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { requireCapability } from '@/lib/entitlements/has-capability'
+import { hasCapability, requireCapability } from '@/lib/entitlements/has-capability'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createEmailService } from './lib/email-provider'
 import {
@@ -14,8 +14,12 @@ import {
   isDeliveryWebhookConfigured,
   toDeliveryReport,
   verifyDeliveryWebhook,
-  type ProviderDeliveryReport,
 } from './lib/delivery-webhook'
+import {
+  applyDeliveryReport,
+  type AppliedDeliveryReport,
+  type ProviderDeliveryReport,
+} from '@/lib/email/delivery-reports'
 import {
   annotateUnmatchedReportDetail,
   isDestructiveDeliveryStatus,
@@ -114,17 +118,16 @@ async function isCompanyAdmin(
 }
 
 /**
- * Shared preamble for the sending-domain routes: auth context, the opt-in
- * capability grant (403 capability_blocked when missing: the UI hides the
- * section on that), and for writes the owner/admin role plus the sandbox
+ * Shared preamble for the sending-domain writes: auth context, the opt-in
+ * capability grant (403 capability_blocked when missing; the read answers
+ * `available: false` instead), and for writes the owner/admin role plus the sandbox
  * block (anonymous demo accounts must not register domains in our Resend
  * account). Returns the response to send, or null to proceed.
  */
 async function guardSendingDomainRoute(
-  ctx: ExtensionContext | undefined,
+  ctx: ExtensionContext,
   opts: { write: boolean },
 ): Promise<NextResponse | null> {
-  if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const blocked = await requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.custom_sender_domain)
   if (blocked) return blocked
   if (!opts.write) return null
@@ -137,6 +140,18 @@ async function guardSendingDomainRoute(
   return null
 }
 
+/**
+ * A refused sending-domain request: the helper's Swedish sentence, plus its
+ * structured-errors `code` when it has one (a provider failure, crm#1288), so
+ * the page and agents can tell an outage at the provider from a mistake.
+ */
+function sendingDomainRefusal(result: { status: number; error: string; code?: string }): NextResponse {
+  return NextResponse.json(
+    { error: result.error, ...(result.code ? { code: result.code } : {}) },
+    { status: result.status },
+  )
+}
+
 export const emailExtension: Extension = {
   id: 'email',
   name: 'E-post',
@@ -147,13 +162,20 @@ export const emailExtension: Extension = {
     {
       method: 'GET',
       path: '/sending-domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        const denied = await guardSendingDomainRoute(ctx, { write: false })
-        if (denied) return denied
+      handler: async (_request: Request, ctx: ExtensionContext) => {
+        // The settings page asks this on every visit to learn whether to
+        // show the section at all, and the grant is opt-in, so "no" is the
+        // answer for nearly every company. It is a 200 that says so, not a
+        // refusal: the 403 it used to be was 106 failed requests a week
+        // (2026-11) for a page that had done nothing wrong. The writes below
+        // still refuse without the grant.
+        if (!(await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.custom_sender_domain))) {
+          return NextResponse.json({ data: null, available: false })
+        }
         try {
           // null when the company has no sending domain: the UI renders the
           // claim form in that case.
-          const row = await getSendingDomain(ctx!.supabase, ctx!.companyId)
+          const row = await getSendingDomain(ctx.supabase, ctx.companyId)
           return NextResponse.json({ data: row })
         } catch (err) {
           return NextResponse.json(
@@ -168,7 +190,7 @@ export const emailExtension: Extension = {
     {
       method: 'POST',
       path: '/sending-domain',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
@@ -185,12 +207,12 @@ export const emailExtension: Extension = {
         // Verification state is service-role only (tenant guard trigger);
         // the user client still does the insert, so RLS proves membership.
         const result = await claimSendingDomain(
-          ctx!.supabase,
+          ctx.supabase,
           createServiceClientNoCookies(),
-          ctx!.companyId,
+          ctx.companyId,
           body.domain,
         )
-        if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+        if (!result.ok) return sendingDomainRefusal(result)
         return NextResponse.json({ data: result.data })
       },
     },
@@ -199,16 +221,16 @@ export const emailExtension: Extension = {
     {
       method: 'POST',
       path: '/sending-domain/verify',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
         const result = await checkSendingDomainVerification(
-          ctx!.supabase,
+          ctx.supabase,
           createServiceClientNoCookies(),
-          ctx!.companyId,
+          ctx.companyId,
         )
-        if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+        if (!result.ok) return sendingDomainRefusal(result)
         return NextResponse.json({ data: result.data })
       },
     },
@@ -217,7 +239,7 @@ export const emailExtension: Extension = {
     {
       method: 'PATCH',
       path: '/sending-domain',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
@@ -231,7 +253,7 @@ export const emailExtension: Extension = {
           )
         }
 
-        const result = await updateSendingDomainSettings(ctx!.supabase, ctx!.companyId, body)
+        const result = await updateSendingDomainSettings(ctx.supabase, ctx.companyId, body)
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
         return NextResponse.json({ data: result.data })
       },
@@ -241,12 +263,12 @@ export const emailExtension: Extension = {
     {
       method: 'DELETE',
       path: '/sending-domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
-        const result = await removeSendingDomain(ctx!.supabase, ctx!.companyId)
-        if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+        const result = await removeSendingDomain(ctx.supabase, ctx.companyId)
+        if (!result.ok) return sendingDomainRefusal(result)
         return NextResponse.json({ data: result.data })
       },
     },
@@ -309,31 +331,24 @@ export const emailExtension: Extension = {
         const service = createServiceClientNoCookies()
         const detail = await detailWithUnmatchedRecipients(service, report)
 
-        const { data, error } = await service.rpc(
-          'apply_invoice_delivery_provider_event',
-          {
-            p_provider: 'resend',
-            p_provider_message_id: report.providerMessageId,
-            p_status: report.status,
-            p_occurred_at: report.occurredAt,
-            p_detail: detail,
-            p_recipient_addresses: report.recipients,
-          },
-        )
-
-        // A failed apply must not be acknowledged: Svix retries non-2xx with
-        // backoff, which is exactly the recovery wanted for a transient
-        // database error.
-        if (error) {
+        // The invoice delivery or the reminder that carries the message id
+        // (lib/email/delivery-reports.ts, provider-neutral).
+        let applied: AppliedDeliveryReport
+        try {
+          applied = await applyDeliveryReport(service, 'resend', report, detail)
+        } catch (error) {
+          // A failed apply must not be acknowledged: Svix retries non-2xx
+          // with backoff, which is exactly the recovery wanted for a
+          // transient database error.
           log.error('failed to apply delivery status', error, { status: report.status })
           return NextResponse.json({ error: 'Failed to record delivery status' }, { status: 500 })
         }
 
-        if (!data) {
+        if (applied.applied === null) {
           return NextResponse.json({ data: { applied: false, reason: 'no_matching_delivery' } })
         }
 
-        log.info('delivery status applied', { deliveryId: data, status: report.status })
+        log.info('delivery status applied', { target: applied.applied, id: applied.id, status: report.status })
         return NextResponse.json({ data: { applied: true } })
       },
     },

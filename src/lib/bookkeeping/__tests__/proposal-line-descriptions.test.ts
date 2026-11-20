@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeProposalLines, proposalLinesToFormLines } from '../proposal-lines'
+import { proposalLinesToFormLines, type ProposalLine } from '../proposal-lines'
 
 /**
  * "Ändra rader" opens the manual form on the lines the review showed. The
@@ -8,13 +8,12 @@ import { computeProposalLines, proposalLinesToFormLines } from '../proposal-line
  * accounts and stay empty.
  */
 describe('proposalLinesToFormLines: the business line says what it was for', () => {
-  const lines = computeProposalLines({
-    amount: -45,
-    amountSek: -45,
-    category: 'expense_representation',
-    accountOverride: '7631',
-    vatTreatment: 'reduced_12',
-  })
+  // Intern representation at 12 %, as the preview answers it.
+  const lines: ProposalLine[] = [
+    { side: 'debet', account: '2641', amount: 4.82 },
+    { side: 'debet', account: '7631', amount: 40.18 },
+    { side: 'kredit', account: '1930', amount: 45, settlement: true },
+  ]
 
   it('fills the business line and leaves the moms and money legs alone', () => {
     const form = proposalLinesToFormLines(lines, { businessLineDescription: 'Intern representation' })
@@ -29,14 +28,14 @@ describe('proposalLinesToFormLines: the business line says what it was for', () 
   })
 
   it('keeps a reverse-charge basis leg out of the business lines', () => {
-    const rc = computeProposalLines({
-      amount: -100,
-      amountSek: -100,
-      templateDebitAccount: '6570',
-      templateCreditAccount: '1930',
-      templateVatTreatment: 'reverse_charge',
-      templateVatRate: 0.25,
-    })
+    const rc: ProposalLine[] = [
+      { side: 'debet', account: '2645', amount: 25 },
+      { side: 'kredit', account: '2614', amount: 25 },
+      { side: 'debet', account: '4535', amount: 100 },
+      { side: 'kredit', account: '4598', amount: 100 },
+      { side: 'debet', account: '6570', amount: 100 },
+      { side: 'kredit', account: '1930', amount: 100, settlement: true },
+    ]
     const form = proposalLinesToFormLines(rc, { businessLineDescription: 'Stripe-avgifter' })
     const described = form.filter((l) => l.line_description !== '').map((l) => l.account_number)
     expect(described).toEqual(['6570'])

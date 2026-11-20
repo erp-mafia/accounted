@@ -2,7 +2,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   HOSTED_MAX_UPLOAD_BYTES,
   HOSTED_REQUEST_BODY_LIMIT_BYTES,
+  DOCUMENT_MAX_UPLOAD_BYTES,
   INBOX_MAX_UPLOAD_BYTES,
+  documentTooLargeMessage,
   exceedsHostedUploadLimit,
   exceedsInboxUploadLimit,
   formatMegabytes,
@@ -10,10 +12,11 @@ import {
   isShrinkableImage,
   tooLargeMessage,
 } from '../upload-size'
-import { shrinkImageForUpload } from '../shrink-image'
+import { prepareDocumentUpload, shrinkImageForUpload } from '../shrink-image'
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('upload size limits', () => {
@@ -92,5 +95,60 @@ describe('shrinkImageForUpload', () => {
   it('returns the original where the browser cannot decode it', async () => {
     const file = fakeFile(9 * 1024 * 1024, 'image/heic')
     expect(await shrinkImageForUpload(file)).toBe(file)
+  })
+})
+
+// crm#203: a phone photo sent as a new version of a voucher's underlag died as
+// a platform 413 and surfaced as a bare "network error". Every document upload
+// goes through this gate first; a file over the platform ceiling then goes
+// straight to Storage (postDocumentForm), so only the archive's own ceiling
+// refuses.
+describe('prepareDocumentUpload', () => {
+  function fakeFile(size: number, type: string): File {
+    return { size, type, name: 'kvitto.jpg', lastModified: 0 } as File
+  }
+
+  it('passes a file that fits through untouched', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const file = fakeFile(1024, 'application/pdf')
+    expect(await prepareDocumentUpload(file)).toEqual({ ok: true, file })
+  })
+
+  it('still shrinks an oversized phone photo on hosted', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 4000, height: 3000, close: () => {} }))
+    vi.stubGlobal('document', {
+      createElement: () => ({
+        getContext: () => ({ drawImage: () => {} }),
+        toBlob: (resolve: (b: Blob) => void) => resolve(new Blob([new Uint8Array(1024)], { type: 'image/jpeg' })),
+      }),
+    })
+    const result = await prepareDocumentUpload(fakeFile(8 * 1024 * 1024, 'image/jpeg'))
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.file.size).toBeLessThanOrEqual(HOSTED_MAX_UPLOAD_BYTES)
+      expect(result.file.type).toBe('image/jpeg')
+    }
+  })
+
+  it('lets a PDF over the platform ceiling through: it goes straight to Storage', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const file = fakeFile(6 * 1024 * 1024, 'application/pdf')
+    expect(await prepareDocumentUpload(file)).toEqual({ ok: true, file })
+  })
+
+  it('refuses a file over the archive ceiling with its size, on any deployment', async () => {
+    for (const selfHosted of ['', 'true']) {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', selfHosted)
+      const size = DOCUMENT_MAX_UPLOAD_BYTES + 1
+      const result = await prepareDocumentUpload(fakeFile(size, 'application/pdf'))
+      expect(result).toEqual({ ok: false, message: documentTooLargeMessage(size) })
+    }
+  })
+
+  it('names both the size and the archive ceiling', () => {
+    const message = documentTooLargeMessage(12 * 1024 * 1024)
+    expect(message).toContain('12,0 MB')
+    expect(message).toContain(formatMegabytes(DOCUMENT_MAX_UPLOAD_BYTES))
   })
 })

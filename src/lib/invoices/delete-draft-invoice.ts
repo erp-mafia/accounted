@@ -14,6 +14,10 @@
  *    'cancelled', keeping the F-series gap-free per ML 17 kap 24 paragraf /
  *    BFNAR 2013:2.
  *
+ * Either way, a draft that a recurring schedule's latest run spawned gives
+ * that schedule its period back (lib/invoices/recurring-draft-period.ts), so
+ * the removed draft's period is billed by the next run instead of skipped.
+ *
  * Only drafts may be removed either way. Sent / paid invoices are immutable
  * per BFL and must be reversed via a credit note instead. Posted journal
  * entries and documents linked to them are never touched here: a draft has
@@ -27,6 +31,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
+import {
+  restoreSchedulePeriodForRemovedDraft,
+  spawningScheduleOf,
+} from '@/lib/invoices/recurring-draft-period'
 
 export type DeleteDraftInvoiceResult =
   /** Unnumbered draft hard-deleted; invoice.draft_deleted event emitted. */
@@ -72,7 +80,8 @@ export async function deleteDraftInvoice(
 
   const { data: invoice, error: fetchError } = await supabase
     .from('invoices')
-    .select('id, status, invoice_number, user_id, credited_invoice_id, journal_entry_id')
+    // spawned_by: the schedule whose latest run made this draft (one FK, last_invoice_id).
+    .select('id, status, invoice_number, user_id, credited_invoice_id, journal_entry_id, spawned_by:recurring_invoice_schedules!last_invoice_id(id, period_start, interval_months)')
     .eq('id', invoiceId)
     .eq('company_id', companyId)
     .single()
@@ -96,6 +105,13 @@ export async function deleteDraftInvoice(
   if (expectedInvoiceNumber !== undefined && currentNumber !== expectedInvoiceNumber) {
     return { ok: false, code: 'INVOICE_CANCEL_RACE', currentInvoiceNumber: currentNumber }
   }
+
+  // The recurring schedule whose latest run spawned this draft, read now:
+  // the hard delete below nulls its last_invoice_id. Either way the draft
+  // billed nothing, so the schedule's period steps back (crm#1285).
+  const spawningSchedule = spawningScheduleOf(
+    (invoice as { spawned_by?: unknown }).spawned_by,
+  )
 
   // Unnumbered drafts (saved via "Spara som utkast", never finalized) are not
   // yet issued invoices (no F-series number was consumed) so they can be hard
@@ -127,6 +143,12 @@ export async function deleteDraftInvoice(
       // Finalized between fetch and delete: refuse rather than fall through to
       // makulering of a now-issued invoice.
       return { ok: false, code: 'INVOICE_CANCEL_RACE' }
+    }
+
+    if (spawningSchedule) {
+      await restoreSchedulePeriodForRemovedDraft({
+        supabase, companyId, invoiceId, schedule: spawningSchedule, outcome: 'deleted', log,
+      })
     }
 
     // The row is gone, so there's no journal trace of the removal. Emit an
@@ -166,6 +188,12 @@ export async function deleteDraftInvoice(
 
   if (!updated || updated.length === 0) {
     return { ok: false, code: 'INVOICE_CANCEL_RACE' }
+  }
+
+  if (spawningSchedule) {
+    await restoreSchedulePeriodForRemovedDraft({
+      supabase, companyId, invoiceId, schedule: spawningSchedule, outcome: 'cancelled', log,
+    })
   }
 
   // A webshop order that produced this draft is released by the database in

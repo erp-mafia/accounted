@@ -3,6 +3,7 @@ import { documentDate, documentTitle } from '@/lib/arkiv/documents/title'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * The map (phase 8): a few kilobytes an agent reads before it searches,
@@ -18,6 +19,7 @@ export interface ArkivMap {
     latest: Array<{
       record_ref: string
       title: string
+      file_name: string
       type: string | null
       date: string | null
     }>
@@ -98,25 +100,44 @@ const group = (type: string | null): keyof ArkivMap['documents']['by_group'] =>
             ? 'statements'
             : 'other'
 
-export async function buildArkivMap(supabase: SupabaseClient, companyId: string): Promise<ArkivMap> {
+/**
+ * `brain: false` (every company outside ARKIV_BRAIN_COMPANY_IDS) draws the raw
+ * map only: the company, the documents by group and the latest ones by file
+ * name and type. No agreements, facts or findings, and no title or date read
+ * out of a document by a model: an agent starts from what is archived, then
+ * reads the text (seen 2026-09-24: the map handed agents a stale loan date and
+ * a round's total filed as one investor's amount).
+ */
+export async function buildArkivMap(supabase: SupabaseClient, companyId: string, opts: { brain?: boolean } = {}): Promise<ArkivMap> {
+  const brain = opts.brain ?? true
+  const none = Promise.resolve({ data: [], error: null, count: 0 })
   const [company, docs, agreements, facts, questions, findings] = await Promise.all([
     supabase.from('companies').select('name, org_number').eq('id', companyId).maybeSingle(),
-    supabase
-      .from('document_attachments')
-      .select('id, file_name, doc_type, created_at')
-      .eq('company_id', companyId)
-      .eq('admission_state', 'admitted')
-      .or(NOT_STRUCTURED_MIME_FILTER)
-      .order('created_at', { ascending: false })
-      .limit(2000),
-    supabase
+    // Every admitted document, paged: the total and the counts per group are the map's answer to
+    // "what is archived", and PostgREST cuts a single read at 1000 rows without saying so.
+    fetchAllRows<{ id: string; file_name: string; doc_type: string | null; created_at: string }>((range) =>
+      supabase
+        .from('document_attachments')
+        .select('id, file_name, doc_type, created_at')
+        .eq('company_id', companyId)
+        .eq('admission_state', 'admitted')
+        .or(NOT_STRUCTURED_MIME_FILTER)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(range.from, range.to),
+    ),
+    !brain
+      ? none
+      : supabase
       .from('agreements')
       .select('id, title, kind, counterparty_name, amount, period, ends_on')
       .eq('company_id', companyId)
       .eq('status', 'active')
       .order('ends_on', { ascending: true, nullsFirst: false })
       .limit(AGREEMENTS),
-    supabase
+    !brain
+      ? none
+      : supabase
       .from('company_facts')
       .select('predicate, value, value_text, valid_from')
       .eq('company_id', companyId)
@@ -126,17 +147,12 @@ export async function buildArkivMap(supabase: SupabaseClient, companyId: string)
       .is('sys_to', null)
       .neq('rank', 'deprecated')
       .limit(200),
-    supabase.from('document_extractions').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('is_current', true).not('review_fields', 'eq', '{}'),
-    supabase.from('arkiv_findings').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'open'),
+    !brain ? none : supabase.from('document_extractions').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('is_current', true).not('review_fields', 'eq', '{}'),
+    !brain ? none : supabase.from('arkiv_findings').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'open'),
   ])
-  for (const r of [company, docs, agreements, facts, questions, findings]) if (r.error) throw new Error(`map read failed: ${r.error.message}`)
+  for (const r of [company, agreements, facts, questions, findings]) if (r.error) throw new Error(`map read failed: ${r.error.message}`)
 
-  const documents = (docs.data ?? []) as Array<{
-    id: string
-    file_name: string
-    doc_type: string | null
-    created_at: string
-  }>
+  const documents = docs
   const by_group: ArkivMap['documents']['by_group'] = {
     agreements: 0,
     authority: 0,
@@ -148,7 +164,7 @@ export async function buildArkivMap(supabase: SupabaseClient, companyId: string)
   for (const d of documents) by_group[group(d.doc_type)]++
   const latestIds = documents.slice(0, LATEST).map((d) => d.id)
   const payloads = new Map<string, Payload>()
-  if (latestIds.length) {
+  if (brain && latestIds.length) {
     const { data, error } = await supabase.from('document_extractions').select('document_id, payload').in('document_id', latestIds).eq('is_current', true)
     if (error) throw new Error(`map read failed: ${error.message}`)
     for (const e of (data ?? []) as Array<{
@@ -211,8 +227,9 @@ export async function buildArkivMap(supabase: SupabaseClient, companyId: string)
           fileName: d.file_name,
           payload: payloads.get(d.id) ?? null,
         }),
+        file_name: d.file_name,
         type: d.doc_type,
-        date: documentDate(d.doc_type, payloads.get(d.id) ?? null) ?? d.created_at.slice(0, 10),
+        date: (brain ? documentDate(d.doc_type, payloads.get(d.id) ?? null) : null) ?? d.created_at.slice(0, 10),
       })),
     },
     agreements: agreementRows.map((a) => ({
@@ -237,12 +254,20 @@ export async function buildArkivMap(supabase: SupabaseClient, companyId: string)
       }))
     }),
     waiting: { questions: questions.count ?? 0, findings: findings.count ?? 0 },
-    how_to: [
+    how_to: !brain
+      ? [
+          'Gather: gnubok_list_records lists every document of a type or upload period, complete and paginated; duplicate_of marks a later copy of the same text.',
+          'Find: gnubok_search_records finds pages by their words and returns record_refs with the page.',
+          'Read: gnubok_read_document returns the text, up to 20 pages per call; gnubok_get_source one page with a link to the file.',
+          'Ask: gnubok_ask_document answers one question about one document with page and a verified quote.',
+          'Answer only from text you read, citing file and page. Nothing here is pre-extracted: dates and amounts are in the text.',
+        ]
+      : [
       'Find: gnubok_search_records (document text, agreements, facts) returns record_refs.',
       'Open: gnubok_get_record on a record_ref; gnubok_get_source for the full text of a page; gnubok_get_record_links for what it is tied to.',
       'Ask: gnubok_ask_document answers one question from the document text with page and quote; nothing is pre-extracted for it.',
       'Time: gnubok_get_fact_history shows when a value held and when it was believed.',
       'Write: only gnubok_propose_fact, which a person approves.',
-    ],
+        ],
   }
 }

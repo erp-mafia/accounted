@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { manualLink, ledgerLineAmountIn } from './bank-reconciliation'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from './cash-account-scope'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 
 /**
  * Confirm / reject persisted journal-entry match suggestions
@@ -10,7 +12,9 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
  * Confirming is a reconciliation LINK, never a booking. Revalidated per pair
  * at click time, in this order: row still exists and is unlinked, suggestion
  * still present, suggested verifikat not already settled by another
- * transaction, the voucher's net movement on the settlement account still
+ * transaction on the row's account in its direction (a pointer or a
+ * bank_line slice, lib/transactions/voucher-bank-leg.ts), the voucher's net
+ * movement on the settlement account still
  * agrees with the transaction's amount and direction (a suggestion computed
  * before an inline rattelse re-priced the bank leg must die here, not link),
  * and finally manualLink's own checks (entry posted, line on the settlement
@@ -84,7 +88,7 @@ async function resolveSettlementAccount(
   const { data } = cashAccountId
     ? await query.eq('id', cashAccountId).maybeSingle()
     : await query.eq('is_primary', true).maybeSingle()
-  return (data?.ledger_account as string | undefined) ?? '1930'
+  return (data?.ledger_account as string | undefined) ?? DEFAULT_SETTLEMENT_ACCOUNT
 }
 
 /** Fuzzy band tolerance: the widest amount slack any persisted suggestion was
@@ -159,15 +163,26 @@ export async function confirmJournalEntrySuggestions(
 
     // Explicit consumption check on top of the invalidation trigger: a
     // verifikat another transaction already settles is not offered twice.
-    // (manualLink deliberately allows N:1 for the manual instalments case;
-    // bulk-confirming a suggestion is not that case.)
-    const { data: consumers } = await supabase
-      .from('transactions')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('journal_entry_id', tx.potential_journal_entry_id)
-      .limit(1)
-    if (consumers && consumers.length > 0) {
+    // A suggestion is one row for the voucher's whole bank movement, so any
+    // other row holding it on this account in this direction, by its pointer
+    // or by a bank_line slice (a bulk-booked samlingsverifikat, a 1:N split),
+    // leaves no room for it. The pointer alone missed the slices (GitHub
+    // #3507); manualLink's room check backs this up for N:1 links.
+    const held = await readBankLegHolders(supabase, companyId, [tx.potential_journal_entry_id], [transactionId])
+    if (!held.ok) {
+      result.skipped.push({
+        transactionId,
+        reason: 'link_failed',
+        message: 'Kunde inte läsa verifikationens befintliga kopplingar. Försök igen.',
+      })
+      continue
+    }
+    const txSign = Math.sign(Number(tx.amount))
+    const consumed = holdersOnAccount(held.holders.get(tx.potential_journal_entry_id) ?? [], {
+      cashAccountId: tx.cash_account_id,
+      currency: tx.currency || 'SEK',
+    }).some((holder) => Math.sign(holder.amount) === txSign)
+    if (consumed) {
       result.skipped.push({ transactionId, reason: 'voucher_consumed' })
       continue
     }
@@ -191,11 +206,25 @@ export async function confirmJournalEntrySuggestions(
       tx.potential_journal_entry_id,
       userId,
       accountNumber,
+      {
+        // A person confirmed the matcher's suggestion: the matcher and its
+        // score are the evidence, the confirmation is the basis.
+        linkBasis: {
+          basis: 'user_confirmed',
+          evidence: {
+            ...(tx.potential_match_method ? { rule_id: tx.potential_match_method } : {}),
+            ...(tx.potential_match_confidence !== null && tx.potential_match_confidence !== undefined
+              ? { score: Number(tx.potential_match_confidence) }
+              : {}),
+          },
+        },
+      },
     )
     if (!linkResult.success) {
       result.skipped.push({
         transactionId,
-        reason: 'link_failed',
+        // Another row took the bank leg between the check above and the link.
+        reason: linkResult.code === 'VOUCHER_BANK_LEG_CONSUMED' ? 'voucher_consumed' : 'link_failed',
         message: linkResult.error,
       })
       continue

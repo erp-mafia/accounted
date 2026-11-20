@@ -39,10 +39,11 @@ const REAL_COLUMNS: Record<string, Set<string>> = {
   ),
 }
 
-type TableResult = { data?: unknown; error?: { message: string } }
+type TableResult = { data?: unknown; count?: number; error?: { message: string } }
 
 function createRecordingSupabase(results: Record<string, TableResult> = {}) {
   const selects: Record<string, string> = {}
+  const inFilters: Record<string, unknown[]> = {}
 
   const supabase = {
     from(table: string) {
@@ -54,16 +55,19 @@ function createRecordingSupabase(results: Record<string, TableResult> = {}) {
         return chain
       }
       chain.eq = passthrough
-      chain.in = passthrough
+      chain.in = (...args: unknown[]) => {
+        inFilters[table] = args
+        return chain
+      }
       chain.order = passthrough
       chain.limit = passthrough
       chain.then = (resolve: (v: unknown) => void) =>
-        resolve({ data: result.data ?? null, error: result.error ?? null })
+        resolve({ data: result.data ?? null, count: result.count ?? null, error: result.error ?? null })
       return chain
     },
   }
 
-  return { supabase, selects }
+  return { supabase, selects, inFilters }
 }
 
 const ctx = (supabase: unknown, query?: URLSearchParams) => ({
@@ -113,6 +117,7 @@ describe('Accounted://recent-activity', () => {
           { id: 't-2', journal_entry_id: null },
         ],
       },
+      open_bank_rows: { count: 1 },
     })
 
     const result = (await recentActivityResource.read(
@@ -131,8 +136,8 @@ describe('Accounted://recent-activity', () => {
     expect(result.uncategorized_transaction_count).toBe(1)
   })
 
-  it('does not count a pointer-null row anchored through transaction_voucher_links (bulk-book, 1:N split)', async () => {
-    const { supabase, selects } = createRecordingSupabase({
+  it('counts what open_bank_rows answers for the recent rows, as lib/transactions/unbooked.ts does', async () => {
+    const { supabase, selects, inFilters } = createRecordingSupabase({
       transactions: {
         data: [
           { id: 't-1', journal_entry_id: 'je-1' },
@@ -140,14 +145,16 @@ describe('Accounted://recent-activity', () => {
           { id: 't-open', journal_entry_id: null },
         ],
       },
-      transaction_voucher_links: { data: [{ transaction_id: 't-split' }] },
+      open_bank_rows: { count: 1 },
     })
 
     const result = (await recentActivityResource.read(ctx(supabase))) as {
       uncategorized_transaction_count: number
     }
 
-    expect(selects.transaction_voucher_links).toBe('transaction_id')
+    expect(selects.open_bank_rows).toBe('id')
+    expect(inFilters.open_bank_rows).toEqual(['id', ['t-1', 't-split', 't-open']])
+    expect(selects.transaction_voucher_links).toBeUndefined()
     expect(result.uncategorized_transaction_count).toBe(1)
   })
 
@@ -174,6 +181,14 @@ describe('Accounted://recent-activity', () => {
     })
     await expect(recentActivityResource.read(ctx(txFail.supabase))).rejects.toThrow(
       /Failed to read recent transactions/
+    )
+
+    const countFail = createRecordingSupabase({
+      transactions: { data: [{ id: 't-1' }] },
+      open_bank_rows: { error: { message: 'boom' } },
+    })
+    await expect(recentActivityResource.read(ctx(countFail.supabase))).rejects.toThrow(
+      /Failed to count recent unbooked transactions/
     )
   })
 })

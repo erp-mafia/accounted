@@ -49,9 +49,10 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 // `.or(z.literal(''))` on the real schema's personnummer field, matching how
 // clearing_number, account_number, bankgiro and tax_contact_email are already
 // written in lib/api/schemas.ts.
-vi.mock('@/lib/api/schemas', async () => {
+vi.mock('@/lib/api/schemas', async (importOriginal) => {
   const { z } = await import('zod')
   return {
+    ...(await importOriginal<typeof import('@/lib/api/schemas')>()),
     UpdateEmployeeSchema: z.object({
       first_name: z.string().min(1).max(200).optional(),
       personnummer: z.string().nullable().optional(),

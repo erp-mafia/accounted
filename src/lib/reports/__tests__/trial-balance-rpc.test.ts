@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// generateTrialBalance on the default path (issue #2470): period activity
-// comes from the get_trial_balance_aggregates RPC. Same table-keyed FIFO
-// mock as trial-balance.test.ts for the reads that stay in JS (period row,
-// chart of accounts, opening balances), plus an rpc mock keyed by function
-// name so the RPC arguments and the bucket folding are assertable.
+// generateTrialBalance (issue #2470): period activity comes from the
+// get_trial_balance_aggregates RPC. A table-keyed FIFO mock serves the reads
+// that stay in JS (period row, chart of accounts, opening balances), plus an
+// rpc mock keyed by function name so the RPC arguments and the bucket
+// folding are assertable.
 // ============================================================
 
 type MockResult = { data?: unknown; error?: unknown }
@@ -39,21 +39,14 @@ function makeClient() {
   } as any
 }
 
-import { generateTrialBalance } from '../trial-balance'
+import { generateTrialBalance, generateTrialBalanceWithYearOpening } from '../trial-balance'
 
 let supabase: ReturnType<typeof makeClient>
-const savedFlag = process.env.REPORTS_TB_RPC
 
 beforeEach(() => {
   vi.clearAllMocks()
   mockResults = {}
   supabase = makeClient()
-  delete process.env.REPORTS_TB_RPC
-})
-
-afterEach(() => {
-  if (savedFlag === undefined) delete process.env.REPORTS_TB_RPC
-  else process.env.REPORTS_TB_RPC = savedFlag
 })
 
 const CHART = {
@@ -105,8 +98,10 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     expect(result.totalCredit).toBe(700)
     expect(result.isBalanced).toBe(false)
 
+    // The one journal read is the lookup of an unlinked IB verifikat (the
+    // period has no opening_balance_entry_id); no lines are read.
     const tables = supabase.from.mock.calls.map((c: unknown[]) => c[0])
-    expect(tables).not.toContain('journal_entries')
+    expect(tables.filter((t: unknown) => t === 'journal_entries')).toHaveLength(1)
     expect(tables).not.toContain('journal_entry_lines')
     expect(rpcArgs()).toEqual({
       p_company_id: 'company-1',
@@ -158,6 +153,51 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     // IB from the OB entry survives an empty activity result.
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0]).toMatchObject({ account_number: '1930', opening_debit: 100, closing_debit: 100 })
+  })
+
+  it('counts an unlinked IB verifikat once when earlier years exist (crm#1845)', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      // The lookup of the year's posted IB verifikat: entries, then lines.
+      journal_entries: [{ data: [{ id: 'ib-unlinked' }], error: null }],
+      journal_entry_lines: [
+        {
+          data: [
+            { id: 'l1', journal_entry_id: 'ib-unlinked', account_number: '1930', debit_amount: 400, credit_amount: 0, dimensions: null },
+            { id: 'l2', journal_entry_id: 'ib-unlinked', account_number: '2081', debit_amount: 0, credit_amount: 400, dimensions: null },
+          ],
+          error: null,
+        },
+      ],
+      // The same balances carried in from the earlier years.
+      'rpc:compute_prior_opening_balances': [
+        {
+          data: [
+            { account_number: '1930', debit: 400, credit: 0 },
+            { account_number: '2081', debit: 0, credit: 400 },
+          ],
+          error: null,
+        },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        { data: [{ bucket: 'period', account_number: '1930', debit: 50, credit: 0 }], error: null },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
+
+    // The verifikat is the IB, so the period movement leaves it out.
+    expect(rpcArgs()).toMatchObject({ p_exclude_entry_id: 'ib-unlinked' })
+    const bank = result.rows.find((r) => r.account_number === '1930')
+    expect(bank).toMatchObject({ opening_debit: 400, period_debit: 50, closing_debit: 450 })
+    const equity = result.rows.find((r) => r.account_number === '2081')
+    expect(equity).toMatchObject({ opening_credit: 400, closing_credit: 400 })
+    // Read once, by generateTrialBalance; getOpeningBalances is handed the result.
+    const tables = supabase.from.mock.calls.map((c: unknown[]) => c[0])
+    expect(tables.filter((t: unknown) => t === 'journal_entries')).toHaveLength(1)
   })
 
   it('folds the rollforward bucket into IB and keeps the period bucket as activity', async () => {
@@ -223,6 +263,11 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     })
 
     expect(rpcArgs()).toMatchObject({ p_from_date: '2024-07-01', p_to_date: null })
+    // Unfiltered: the IB fallback call is exactly what it always was.
+    expect(supabase.rpc).toHaveBeenCalledWith('compute_prior_opening_balances', {
+      p_company_id: 'company-1',
+      p_period_start: '2024-01-01',
+    })
     expect(result.rows[0]).toMatchObject({
       opening_debit: 1250,
       period_credit: 50,
@@ -231,13 +276,64 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     })
   })
 
-  it('sends the dimension filter and drops company-wide IB for the filtered view', async () => {
+  it('keeps the year\'s IB apart from the ingående saldo the rollforward builds', async () => {
     mockResults = {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
       'rpc:compute_prior_opening_balances': [
-        { data: [{ account_number: '1930', debit: 9000, credit: 0 }], error: null },
+        { data: [{ account_number: '1930', debit: 1000, credit: 0 }], error: null },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        {
+          data: [
+            { bucket: 'rollforward', account_number: '1930', debit: 250, credit: 0 },
+            // Arose after the year started: in the ingående saldo, not the IB.
+            { bucket: 'rollforward', account_number: '1510', debit: 300, credit: 0 },
+            { bucket: 'period', account_number: '1930', debit: 0, credit: 50 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalanceWithYearOpening(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
+      fromDate: '2024-07-01',
+    })
+
+    expect(result.yearOpening).toEqual(new Map([['1930', { debit: 1000, credit: 0 }]]))
+    expect(result.rows.find((r) => r.account_number === '1930')).toMatchObject({ opening_debit: 1250, closing_debit: 1250 })
+    expect(result.rows.find((r) => r.account_number === '1510')).toMatchObject({ opening_debit: 300, closing_debit: 300 })
+  })
+
+  it('leaves yearOpening off generateTrialBalance: the Saldobalans route, the v1 API and MCP serialize it whole', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      'rpc:compute_prior_opening_balances': [
+        { data: [{ account_number: '1930', debit: 1000, credit: 0 }], error: null },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
+
+    expect(Object.keys(result).sort()).toEqual(['isBalanced', 'rows', 'totalCredit', 'totalDebit'])
+  })
+
+  it('sends the dimension filter to both RPCs: the filtered view opens at the object\'s IB (#3313)', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      // The registry: projekt accumulates across years.
+      dimensions: [{ data: [{ sie_dim_no: 6 }], error: null }],
+      // The derived IB, scoped by p_dimensions to the object's tagged lines.
+      'rpc:compute_prior_opening_balances': [
+        { data: [{ account_number: '1930', debit: 1200, credit: 0 }], error: null },
       ],
       'rpc:get_trial_balance_aggregates': [
         { data: [{ bucket: 'period', account_number: '1930', debit: 500, credit: 0 }], error: null },
@@ -254,7 +350,12 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
       p_closing_mode: 'exclude-all-year-end',
       p_dimensions: { '6': 'P001' },
     })
-    expect(result.rows[0]).toMatchObject({ opening_debit: 0, period_debit: 500, closing_debit: 500 })
+    expect(supabase.rpc).toHaveBeenCalledWith('compute_prior_opening_balances', {
+      p_company_id: 'company-1',
+      p_period_start: '2024-01-01',
+      p_dimensions: { '6': 'P001' },
+    })
+    expect(result.rows[0]).toMatchObject({ opening_debit: 1200, period_debit: 500, closing_debit: 1700 })
   })
 
   it('treats an empty dimension object as no filter', async () => {
@@ -280,8 +381,10 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'exclude-all-year-end' })
 
+    // Only the unlinked IB lookup reads journal_entries.
     const tables = supabase.from.mock.calls.map((c: unknown[]) => c[0])
-    expect(tables).not.toContain('journal_entries')
+    expect(tables.filter((t: unknown) => t === 'journal_entries')).toHaveLength(1)
+    expect(tables).not.toContain('journal_entry_lines')
     expect(rpcArgs()).toMatchObject({ p_closing_mode: 'exclude-all-year-end' })
   })
 
@@ -334,22 +437,127 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     expect(result).toEqual({ rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true })
   })
 
-  it('REPORTS_TB_RPC=off selects the entry-lines path', async () => {
-    process.env.REPORTS_TB_RPC = 'off'
+  it('sends a sub-range and a dimension filter in the same RPC call', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      dimensions: [{ data: [{ sie_dim_no: 1 }], error: null }],
+      chart_of_accounts: [CHART],
+    }
+
+    await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
+      fromDate: '2026-06-01',
+      dimensions: { '1': 'KS01' },
+    })
+
+    // One call carries both: the roll-forward bucket is filtered too.
+    expect(rpcArgs()).toMatchObject({ p_from_date: '2026-06-01', p_dimensions: { '1': 'KS01' } })
+  })
+
+  it('adds period activity to the IB from the opening-balance entry, per account', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-1' }, error: null },
+      ],
+      journal_entries: [{ data: [{ id: 'ob-1' }], error: null }],
+      journal_entry_lines: [
+        {
+          data: [
+            { id: 'l1', account_number: '1930', debit_amount: 8000, credit_amount: 0 },
+            { id: 'l2', account_number: '2099', debit_amount: 0, credit_amount: 8000 },
+          ],
+          error: null,
+        },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        {
+          data: [
+            { bucket: 'period', account_number: '1930', debit: 1000, credit: 0 },
+            { bucket: 'period', account_number: '3001', debit: 0, credit: 1000 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-2', { closingEntry: 'include' })
+
+    expect(result.rows.map((r) => r.account_number)).toEqual(['1930', '2099', '3001'])
+    expect(result.rows[0]).toMatchObject({ opening_debit: 8000, period_debit: 1000, closing_debit: 9000, closing_credit: 0 })
+    expect(result.rows[1]).toMatchObject({ opening_credit: 8000, period_credit: 0, closing_credit: 8000 })
+    expect(result.rows[2]).toMatchObject({ opening_debit: 0, opening_credit: 0, closing_credit: 1000 })
+  })
+
+  it('labels an account missing from the chart "Konto {number}" with the class from its first digit', async () => {
     mockResults = {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
-      journal_entries: [{ data: [{ id: 'entry-1' }], error: null }],
-      journal_entry_lines: [
-        { data: [{ id: 'l1', account_number: '1930', debit_amount: 42, credit_amount: 0 }], error: null },
+      'rpc:get_trial_balance_aggregates': [
+        { data: [{ bucket: 'period', account_number: '5410', debit: 200, credit: 0 }], error: null },
+      ],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
+
+    expect(result.rows[0]).toMatchObject({ account_name: 'Konto 5410', account_class: 5 })
+  })
+
+  it('rounds folded amounts to öre', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        {
+          data: [
+            // 33.33 + 33.33 + 33.34 is not exactly 100 in floating point.
+            { bucket: 'period', account_number: '1930', debit: 33.33, credit: 0 },
+            { bucket: 'period', account_number: '1930', debit: 33.33, credit: 0 },
+            { bucket: 'period', account_number: '1930', debit: 33.34, credit: 0 },
+            { bucket: 'period', account_number: '3001', debit: 0, credit: 100 },
+          ],
+          error: null,
+        },
       ],
       chart_of_accounts: [CHART],
     }
 
     const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
-    expect(supabase.rpc).not.toHaveBeenCalledWith('get_trial_balance_aggregates', expect.anything())
-    expect(result.rows[0]).toMatchObject({ account_number: '1930', period_debit: 42 })
+    expect(result.rows[0].closing_debit).toBe(100)
+    expect(result.totalDebit).toBe(100)
+    expect(result.totalCredit).toBe(100)
+    expect(result.isBalanced).toBe(true)
+  })
+
+  it('does not fail closed for a period klarmarkerad in a previous system (closed_externally)', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: {
+            period_start: '2024-01-01',
+            period_end: '2024-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: null,
+            is_closed: true,
+            closed_externally: true,
+          },
+          error: null,
+        },
+      ],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    // The closing verifikat lives in the old software: nothing to strip, the
+    // booked balances are the statutory pre-closing balances.
+    await expect(
+      generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'exclude-final' }),
+    ).resolves.toMatchObject({ isBalanced: true })
+    expect(rpcArgs()).toMatchObject({ p_closing_mode: 'exclude-final' })
   })
 })

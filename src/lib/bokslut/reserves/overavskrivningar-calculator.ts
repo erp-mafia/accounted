@@ -11,12 +11,9 @@ import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { roundOre } from '@/lib/money'
 import type { Asset, AssetCategory } from '@/types'
 import type { ProposedDisposition } from '../types'
-import {
-  compute20RuleForFiscalPeriods,
-  compute30Rule,
-  pickLowerResidual,
-  proposeOveravskrivningar,
-} from './overavskrivningar-service'
+import { proposeOveravskrivningar } from './overavskrivningar-service'
+import { computeTaxDepreciation, fiscalPeriodMonths } from '@/lib/bokslut/assets/tax-depreciation'
+import { loadTaxDepreciationView } from '@/lib/bokslut/assets/tax-depreciation-service'
 
 const MACHINERY_RESERVE_ACCOUNT = '2153'
 const RECONCILIATION_TOLERANCE = 0.01
@@ -223,16 +220,9 @@ export async function calculateOveravskrivningar(
   )
 
   const openingTaxValue = Math.max(0, roundMoney(openingBookValue - openingReserve))
-  const rule30 = compute30Rule({
-    openingBookValue: openingTaxValue,
-    additions,
-    disposals,
-    fiscalPeriodMonths: countFiscalMonths(
-      fiscalPeriod.period_start,
-      fiscalPeriod.period_end,
-    ),
-  })
 
+  // The 20-rule's cohorts: acquisition cost per fiscal period, with the
+  // months elapsed from the start of that period to the end of this one.
   const acquisitionCostByCohort = fiscalPeriods.map(() => 0)
   for (const asset of activeAtEnd) {
     const cohortIndex = fiscalPeriods.findIndex(
@@ -253,12 +243,64 @@ export async function calculateOveravskrivningar(
       )
     }
   }
+  const cohorts = fiscalPeriods.flatMap((period, index) =>
+    acquisitionCostByCohort[index] > 0
+      ? [{
+          label: period.id,
+          acquisitionCost: acquisitionCostByCohort[index],
+          elapsedMonths: fiscalPeriods.slice(0, index + 1).reduce((sum, p) => sum + p.months, 0),
+        }]
+      : [],
+  )
 
-  const rule20 = compute20RuleForFiscalPeriods({
-    acquisitionCostByPeriod: acquisitionCostByCohort,
-    fiscalPeriodMonths: fiscalPeriods.map((period) => period.months),
+  // IL 18 kap. 13-17 §§ through the one implementation, computeTaxDepreciation
+  // (lib/bokslut/assets/tax-depreciation.ts): it answers both räkenskapsenliga
+  // alternatives, the 30-rule on the opening tax value and the 20-rule on the
+  // cohorts.
+  const taxDepreciation = computeTaxDepreciation({
+    method: 'rakenskapsenlig',
+    selectedRule: 'huvudregel_30',
+    openingTaxValue,
+    additions,
+    disposals,
+    periodMonths: fiscalPeriodMonths(fiscalPeriod.period_start, fiscalPeriod.period_end),
+    cohorts,
   })
-  const selected = pickLowerResidual(rule30, rule20)
+  const closingFor = (rule: 'huvudregel_30' | 'kompletteringsregel_20') =>
+    taxDepreciation.alternatives.find((alternative) => alternative.rule === rule)!.closingTaxValue
+  const rule30Residual = closingFor('huvudregel_30')
+  const rule20Residual = closingFor('kompletteringsregel_20')
+
+  // The tax value: the company's saved election when it has one, since
+  // räkenskapsenlig avskrivning requires the tax deduction to equal what the
+  // books show (book value net of 2153 = the elected closing tax value);
+  // otherwise the more favourable rule, the lowest permitted residual.
+  const election = await loadTaxDepreciationView(supabase, companyId, fiscalPeriod.id)
+  let selected: { residual: number; rule: '30-regeln' | '20-regeln' }
+  if (election.snapshot) {
+    if (election.snapshot.method === 'restvarde') {
+      return blocked(
+        currentReserve,
+        currentPeriodChange,
+        'Den valda skattemässiga metoden är restvärdeavskrivning (IL 18 kap. 13 § st. 3), som inte kräver överensstämmelse med bokföringen. Överavskrivningen beräknas därför inte automatiskt.',
+      )
+    }
+    if (election.isStale || election.status !== 'ready') {
+      return blocked(
+        currentReserve,
+        currentPeriodChange,
+        'Den sparade skattemässiga avskrivningen stämmer inte längre mot underlaget. Spara om valet under Skattemässig avskrivning innan överavskrivningen beräknas.',
+      )
+    }
+    selected = {
+      residual: election.snapshot.closingTaxValue,
+      rule: election.snapshot.selectedRule === 'kompletteringsregel_20' ? '20-regeln' : '30-regeln',
+    }
+  } else {
+    selected = rule20Residual < rule30Residual
+      ? { residual: rule20Residual, rule: '20-regeln' }
+      : { residual: rule30Residual, rule: '30-regeln' }
+  }
   const targetReserve = Math.max(
     0,
     Math.min(closingBookValue, roundMoney(closingBookValue - selected.residual)),
@@ -276,8 +318,9 @@ export async function calculateOveravskrivningar(
       additions,
       disposals,
       closingBookValue,
-      rule30Residual: rule30.minimumResidual,
-      rule20Residual: rule20.minimumResidual,
+      rule30Residual,
+      rule20Residual,
+      elected: Boolean(election.snapshot),
       taxResidual: selected.residual,
       selectedRule: selected.rule,
       targetReserve,
@@ -376,7 +419,7 @@ async function loadFiscalPeriodCohorts(
 
   return periods.slice(0, 5).map((period) => ({
     ...period,
-    months: countFiscalMonths(period.period_start, period.period_end),
+    months: fiscalPeriodMonths(period.period_start, period.period_end),
   }))
 }
 
@@ -393,18 +436,6 @@ function isEligibleAcquisitionAccount(account: string): boolean {
   if (numeric >= 1280 && numeric <= 1289) return false
   if (account === '1291') return false
   return !account.endsWith('8') && !account.endsWith('9')
-}
-
-export function countFiscalMonths(periodStart: string, periodEnd: string): number {
-  const start = new Date(`${periodStart}T00:00:00Z`)
-  const end = new Date(`${periodEnd}T00:00:00Z`)
-  return Math.max(
-    1,
-    (end.getUTCFullYear() - start.getUTCFullYear()) * 12
-      + end.getUTCMonth()
-      - start.getUTCMonth()
-      + 1,
-  )
 }
 
 function monthsBetween(startDate: string, endDate: string): number {

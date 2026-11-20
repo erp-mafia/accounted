@@ -4,9 +4,9 @@ import { cn } from '@/lib/utils'
  * Register-detail document grammar (customers, suppliers, articles).
  *
  * A detail page is one flowing document, not a pile of cards: each group of
- * facts is introduced by an uppercase hairline kicker and set as aligned
- * label/value rows. The kicker's hairline is the only rule; groups are
- * separated by whitespace, never borders (Living Paper, design.md).
+ * facts is introduced by a 12px kicker over a hairline and set as aligned
+ * label/value rows (Stil v3). The kicker's hairline is the only rule;
+ * groups are separated by whitespace, never borders.
  */
 
 export function DetailSection({
@@ -26,9 +26,9 @@ export function DetailSection({
 }) {
   return (
     <section className={className}>
-      <div className="flex items-baseline justify-between gap-4 border-b border-border pb-2">
+      <div className="flex items-baseline justify-between gap-4 border-b-hairline pb-2">
         {/* data-ph-unmask: kickers are static i18n chrome in session replays. */}
-        <h2 data-ph-unmask="" className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 data-ph-unmask="" className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           {kicker}
           {help}
         </h2>
@@ -51,7 +51,7 @@ export function DefRow({
   return (
     <div
       className={cn(
-        'grid grid-cols-[8rem_1fr] gap-x-6 py-2 text-sm sm:grid-cols-[10rem_1fr]',
+        'grid min-h-9 grid-cols-[8rem_1fr] items-baseline gap-x-6 py-2 text-sm sm:grid-cols-[10rem_1fr]',
         className,
       )}
     >

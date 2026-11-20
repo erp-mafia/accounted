@@ -13,10 +13,24 @@
  * the caller posts through the engine and links the returned journal entry IDs.
  */
 
-import { SALARY_ACCOUNTS } from '@/lib/salary/account-mapping'
+import {
+  SALARY_ACCOUNTS,
+  lineItemAccount,
+  vacationLiabilityChangeAccount,
+} from '@/lib/salary/account-mapping'
 
 /** Money rounding, per the project rule: never toFixed(). */
 const ore = (n: number) => Math.round(n * 100) / 100
+
+/**
+ * The net pay's bank account. The real booking resolves it per company
+ * (resolvePrimaryBankAccount); the sandbox books every bank leg on 1930
+ * Företagskonto, which the seed route puts in the chart itself.
+ */
+const SANDBOX_BANK_ACCOUNT = '1930'
+
+/** The sandbox's employees are tjänstemän: their wages book on 72xx. */
+const SANDBOX_EMPLOYEE = { employmentType: 'employee', personnelCategory: 'tjansteman' }
 
 /**
  * Every account these vouchers can touch, for the seed's chart-of-accounts
@@ -24,13 +38,16 @@ const ore = (n: number) => Math.round(n * 100) / 100
  * aktiebolag, and the sandbox company is an enskild firma, so all of these are
  * missing until the seed creates them.
  *
- * Derived from SALARY_ACCOUNTS rather than listed, so it cannot fall behind the
- * account map. SICK_PAY and VACATION_PAY are in the map but unused by this
- * seed; including them is harmless (the account simply exists in the chart) and
- * keeps the list free of a hand-maintained subset.
+ * Derived from SALARY_ACCOUNTS and the resolver rather than listed, so it
+ * cannot fall behind the account map. Some SALARY_ACCOUNTS entries (pension,
+ * SLP) are unused by this seed; including them is harmless (the account simply
+ * exists in the chart) and keeps the list free of a hand-maintained subset.
  */
-export const SANDBOX_SALARY_ACCOUNT_NUMBERS: readonly string[] =
-  Object.values(SALARY_ACCOUNTS)
+export const SANDBOX_SALARY_ACCOUNT_NUMBERS: readonly string[] = [
+  lineItemAccount('monthly_salary', SANDBOX_EMPLOYEE),
+  vacationLiabilityChangeAccount(SANDBOX_EMPLOYEE),
+  ...Object.values(SALARY_ACCOUNTS),
+]
 
 export interface SalaryVoucherTotals {
   /** Sum of gross_salary across the run's employees. */
@@ -148,7 +165,7 @@ export function buildSandboxSalaryVouchers(input: SalaryVoucherInput): SalaryVou
       entry: { ...base, description: `Lön ${periodLabel}` },
       lines: [
         {
-          account_number: SALARY_ACCOUNTS.SALARY_EMPLOYEE,
+          account_number: lineItemAccount('monthly_salary', SANDBOX_EMPLOYEE),
           debit_amount: gross,
           credit_amount: 0,
           sort_order: 0,
@@ -162,7 +179,7 @@ export function buildSandboxSalaryVouchers(input: SalaryVoucherInput): SalaryVou
           dimensions: {},
         },
         {
-          account_number: SALARY_ACCOUNTS.BANK,
+          account_number: SANDBOX_BANK_ACCOUNT,
           debit_amount: 0,
           credit_amount: net,
           sort_order: 2,
@@ -197,7 +214,7 @@ export function buildSandboxSalaryVouchers(input: SalaryVoucherInput): SalaryVou
     if (vacation > 0) {
       lines.push(
         {
-          account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_EXPENSE,
+          account_number: vacationLiabilityChangeAccount(SANDBOX_EMPLOYEE),
           debit_amount: vacation,
           credit_amount: 0,
           sort_order: lines.length,

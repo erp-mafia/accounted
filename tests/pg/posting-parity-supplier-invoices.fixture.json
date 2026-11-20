@@ -1,0 +1,1525 @@
+{
+  "dumps": [
+    {
+      "flow": "registration: a domestic invoice at 25 % with its underlag posts its registration verifikat",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 1,
+          "entry_date": "2026-03-04",
+          "description": "Leverantörsfaktura F-1001, Kontorsbolaget AB (ankomstnr 1)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1001, Kontorsbolaget AB (ankomstnr 1)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1001, Kontorsbolaget AB (ankomstnr 1)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1001, Kontorsbolaget AB (ankomstnr 1)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1001, Kontorsbolaget AB (ankomstnr 1)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "registration: an EU supplier invoice in EUR under reverse charge self-assesses its moms",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 2,
+          "entry_date": "2026-03-10",
+          "description": "Leverantörsfaktura EU-2026-17, Hosting GmbH (ankomstnr 2)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "EUR",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2300",
+              "exchange_rate": "11.5",
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura EU-2026-17, Hosting GmbH (ankomstnr 2)",
+              "amount_in_currency": "200"
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "575",
+              "exchange_rate": null,
+              "account_number": "2614",
+              "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "575",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2645",
+              "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "4535",
+              "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2300",
+              "exchange_rate": null,
+              "account_number": "4598",
+              "line_description": "Motkonto beräknad omvänd moms 25%",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1725",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6540",
+              "line_description": "Leverantörsfaktura EU-2026-17, Hosting GmbH (ankomstnr 2)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "575",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6550",
+              "line_description": "Leverantörsfaktura EU-2026-17, Hosting GmbH (ankomstnr 2)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "registration: an invoice registered inside a staged operation's approval",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 3,
+          "entry_date": "2026-03-16",
+          "description": "Leverantörsfaktura F-1003, Kontorsbolaget AB (ankomstnr 3)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1003, Kontorsbolaget AB (ankomstnr 3)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1003, Kontorsbolaget AB (ankomstnr 3)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1003, Kontorsbolaget AB (ankomstnr 3)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1003, Kontorsbolaget AB (ankomstnr 3)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "booking: an invoice registered without a verifikat is booked by the deferred Bokför step",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 4,
+          "entry_date": "2026-04-02",
+          "description": "Leverantörsfaktura F-1004, Kontorsbolaget AB (ankomstnr 4)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1004, Kontorsbolaget AB (ankomstnr 4)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1004, Kontorsbolaget AB (ankomstnr 4)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1004, Kontorsbolaget AB (ankomstnr 4)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1004, Kontorsbolaget AB (ankomstnr 4)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "inbox: an inbox item converted to a supplier invoice with its underlag",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 5,
+          "entry_date": "2026-04-14",
+          "description": "Leverantörsfaktura F-1005, Kontorsbolaget AB (ankomstnr 5)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1005, Kontorsbolaget AB (ankomstnr 5)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "inbox: a staged conversion of an inbox item approved",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 6,
+          "entry_date": "2026-04-20",
+          "description": "Leverantörsfaktura F-1006, Kontorsbolaget AB (ankomstnr 6)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "4750",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1006, Kontorsbolaget AB (ankomstnr 6)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "950",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1006, Kontorsbolaget AB (ankomstnr 6)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3800",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6550",
+              "line_description": "Leverantörsfaktura F-1006, Kontorsbolaget AB (ankomstnr 6)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "credit: a registered invoice credited on the credit note's own date",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 7,
+          "entry_date": "2026-05-04",
+          "description": "Leverantörsfaktura F-1007, Kontorsbolaget AB (ankomstnr 7)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1007, Kontorsbolaget AB (ankomstnr 7)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1007, Kontorsbolaget AB (ankomstnr 7)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1007, Kontorsbolaget AB (ankomstnr 7)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1007, Kontorsbolaget AB (ankomstnr 7)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 8,
+          "entry_date": "2026-05-20",
+          "description": "Kreditfaktura leverantör KF-1007, Kontorsbolaget AB (ankomstnr 8)",
+          "source_type": "supplier_credit_note",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Kreditfaktura leverantör KF-1007, Kontorsbolaget AB (ankomstnr 8)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-1007, Kontorsbolaget AB (ankomstnr 8)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Kreditfaktura leverantör KF-1007, Kontorsbolaget AB (ankomstnr 8)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "200",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Kreditfaktura leverantör KF-1007, Kontorsbolaget AB (ankomstnr 8)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "credit: a credit note from the inbox, approved from a staged operation",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 9,
+          "entry_date": "2026-06-01",
+          "description": "Leverantörsfaktura F-1008, Kontorsbolaget AB (ankomstnr 9)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1008, Kontorsbolaget AB (ankomstnr 9)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1008, Kontorsbolaget AB (ankomstnr 9)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1008, Kontorsbolaget AB (ankomstnr 9)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1008, Kontorsbolaget AB (ankomstnr 9)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 10,
+          "entry_date": "2026-06-12",
+          "description": "Kreditfaktura leverantör KF-1008, Kontorsbolaget AB (ankomstnr 10)",
+          "source_type": "supplier_credit_note",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Kreditfaktura leverantör KF-1008, Kontorsbolaget AB (ankomstnr 10)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-1008, Kontorsbolaget AB (ankomstnr 10)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Kreditfaktura leverantör KF-1008, Kontorsbolaget AB (ankomstnr 10)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "200",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Kreditfaktura leverantör KF-1008, Kontorsbolaget AB (ankomstnr 10)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "uncredit: a credit undone with a storno of the credit verifikat",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 11,
+          "entry_date": "2026-06-08",
+          "description": "Leverantörsfaktura F-1009, Kontorsbolaget AB (ankomstnr 11)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1009, Kontorsbolaget AB (ankomstnr 11)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1009, Kontorsbolaget AB (ankomstnr 11)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1009, Kontorsbolaget AB (ankomstnr 11)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1009, Kontorsbolaget AB (ankomstnr 11)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 12,
+          "entry_date": "2026-06-15",
+          "description": "Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+          "source_type": "supplier_credit_note",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "200",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 13,
+          "entry_date": "2026-06-15",
+          "description": "Makulering: Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Reversal: Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: Ingående moms 25% Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Reversal: Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: Kreditfaktura leverantör KF-1009, Kontorsbolaget AB (ankomstnr 12)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "registration whose invoice link fails: the registration is reversed and the invoice kept as reversed",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 14,
+          "entry_date": "2026-07-01",
+          "description": "Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+          "source_type": "supplier_invoice_registered",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 15,
+          "entry_date": "2026-07-01",
+          "description": "Makulering: Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Reversal: Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: Ingående moms 25% Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Reversal: Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "200",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: Leverantörsfaktura F-1010, Kontorsbolaget AB (ankomstnr 13)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "credit whose credit note link fails: the credit verifikat is reversed and the credit note kept as reversed",
+      "entries": [
+        {
+          "voucher_series": "D",
+          "voucher_number": 16,
+          "entry_date": "2026-07-06",
+          "description": "Leverantörsfaktura F-1011, Kontorsbolaget AB (ankomstnr 14)",
+          "source_type": "supplier_invoice_registered",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Leverantörsfaktura F-1011, Kontorsbolaget AB (ankomstnr 14)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-1011, Kontorsbolaget AB (ankomstnr 14)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Leverantörsfaktura F-1011, Kontorsbolaget AB (ankomstnr 14)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Leverantörsfaktura F-1011, Kontorsbolaget AB (ankomstnr 14)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 17,
+          "entry_date": "2026-07-20",
+          "description": "Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+          "source_type": "supplier_credit_note",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "300",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1000",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "200",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "D",
+          "voucher_number": 18,
+          "entry_date": "2026-07-20",
+          "description": "Makulering: Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "2440",
+              "line_description": "Reversal: Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "300",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2641",
+              "line_description": "Reversal: Ingående moms 25% Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "5410",
+              "line_description": "Reversal: Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "200",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "6110",
+              "line_description": "Reversal: Kreditfaktura leverantör KF-1011, Kontorsbolaget AB (ankomstnr 15)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "invoices": [
+      {
+        "supplier_invoice_number": "F-1001",
+        "arrival_number": 1,
+        "status": "registered",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-03-04",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "registration_series": "D",
+        "registration_voucher": 1,
+        "registration_status": "posted",
+        "document": "faktura-1001.pdf"
+      },
+      {
+        "supplier_invoice_number": "EU-2026-17",
+        "arrival_number": 2,
+        "status": "registered",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-03-10",
+        "currency": "EUR",
+        "exchange_rate": "11.5",
+        "vat_treatment": "reverse_charge",
+        "reverse_charge": true,
+        "subtotal": "200",
+        "vat_amount": "0",
+        "total": "200",
+        "total_sek": "2300",
+        "vat_amount_sek": "0",
+        "remaining_amount": "200",
+        "registration_series": "D",
+        "registration_voucher": 2,
+        "registration_status": "posted",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "F-1003",
+        "arrival_number": 3,
+        "status": "registered",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-03-16",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "registration_series": "D",
+        "registration_voucher": 3,
+        "registration_status": "posted",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "F-1004",
+        "arrival_number": 4,
+        "status": "registered",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-04-02",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "registration_series": "D",
+        "registration_voucher": 4,
+        "registration_status": "posted",
+        "document": "faktura-1004.pdf"
+      },
+      {
+        "supplier_invoice_number": "F-1005",
+        "arrival_number": 5,
+        "status": "registered",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-04-14",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "registration_series": "D",
+        "registration_voucher": 5,
+        "registration_status": "posted",
+        "document": "inkorg-1005.pdf"
+      },
+      {
+        "supplier_invoice_number": "F-1006",
+        "arrival_number": 6,
+        "status": "registered",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-04-20",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "3800",
+        "vat_amount": "950",
+        "total": "4750",
+        "total_sek": "4750",
+        "vat_amount_sek": "950",
+        "remaining_amount": "4750",
+        "registration_series": "D",
+        "registration_voucher": 6,
+        "registration_status": "posted",
+        "document": "inkorg-1006.pdf"
+      },
+      {
+        "supplier_invoice_number": "F-1007",
+        "arrival_number": 7,
+        "status": "credited",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-05-04",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "registration_series": "D",
+        "registration_voucher": 7,
+        "registration_status": "posted",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "KF-1007",
+        "arrival_number": 8,
+        "status": "credited",
+        "is_credit_note": true,
+        "credits": "F-1007",
+        "invoice_date": "2026-05-20",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "registration_series": "D",
+        "registration_voucher": 8,
+        "registration_status": "posted",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "F-1008",
+        "arrival_number": 9,
+        "status": "credited",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-06-01",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "registration_series": "D",
+        "registration_voucher": 9,
+        "registration_status": "posted",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "KF-1008",
+        "arrival_number": 10,
+        "status": "credited",
+        "is_credit_note": true,
+        "credits": "F-1008",
+        "invoice_date": "2026-06-12",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "registration_series": "D",
+        "registration_voucher": 10,
+        "registration_status": "posted",
+        "document": "kredit-1008.pdf"
+      },
+      {
+        "supplier_invoice_number": "F-1009",
+        "arrival_number": 11,
+        "status": "approved",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-06-08",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "registration_series": "D",
+        "registration_voucher": 11,
+        "registration_status": "posted",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "KF-1009",
+        "arrival_number": 12,
+        "status": "reversed",
+        "is_credit_note": true,
+        "credits": "F-1009",
+        "invoice_date": "2026-06-15",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "registration_series": "D",
+        "registration_voucher": 12,
+        "registration_status": "reversed",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "F-1010",
+        "arrival_number": 13,
+        "status": "reversed",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-07-01",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "registration_series": null,
+        "registration_voucher": null,
+        "registration_status": null,
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "F-1011",
+        "arrival_number": 14,
+        "status": "registered",
+        "is_credit_note": false,
+        "credits": null,
+        "invoice_date": "2026-07-06",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "1500",
+        "registration_series": "D",
+        "registration_voucher": 16,
+        "registration_status": "posted",
+        "document": null
+      },
+      {
+        "supplier_invoice_number": "KF-1011",
+        "arrival_number": 15,
+        "status": "reversed",
+        "is_credit_note": true,
+        "credits": "F-1011",
+        "invoice_date": "2026-07-20",
+        "currency": "SEK",
+        "exchange_rate": null,
+        "vat_treatment": "standard_25",
+        "reverse_charge": false,
+        "subtotal": "1200",
+        "vat_amount": "300",
+        "total": "1500",
+        "total_sek": "1500",
+        "vat_amount_sek": "300",
+        "remaining_amount": "0",
+        "registration_series": null,
+        "registration_voucher": null,
+        "registration_status": null,
+        "document": null
+      }
+    ],
+    "documents": [
+      {
+        "file_name": "faktura-1001.pdf",
+        "voucher_series": "D",
+        "voucher_number": 1,
+        "link_basis": "user_created"
+      },
+      {
+        "file_name": "faktura-1004.pdf",
+        "voucher_series": "D",
+        "voucher_number": 4,
+        "link_basis": "system_derived"
+      },
+      {
+        "file_name": "inkorg-1005.pdf",
+        "voucher_series": "D",
+        "voucher_number": 5,
+        "link_basis": "user_created"
+      },
+      {
+        "file_name": "inkorg-1006.pdf",
+        "voucher_series": "D",
+        "voucher_number": 6,
+        "link_basis": "agent_proposed_user_approved"
+      },
+      {
+        "file_name": "kredit-1008.pdf",
+        "voucher_series": "D",
+        "voucher_number": 10,
+        "link_basis": "agent_proposed_user_approved"
+      }
+    ],
+    "inbox": [
+      {
+        "file_name": "inkorg-1005.pdf",
+        "converted_to": "F-1005"
+      },
+      {
+        "file_name": "inkorg-1006.pdf",
+        "converted_to": "F-1006"
+      },
+      {
+        "file_name": "kredit-1008.pdf",
+        "converted_to": "KF-1008"
+      }
+    ]
+  }
+}

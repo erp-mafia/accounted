@@ -36,6 +36,7 @@ import {
   toDeliveryReport,
   verifyDeliveryWebhook,
 } from '@/extensions/general/email/lib/delivery-webhook'
+import { testRoutes } from '@/tests/helpers'
 
 function baseData(overrides: Record<string, unknown> = {}) {
   return {
@@ -48,7 +49,7 @@ function baseData(overrides: Record<string, unknown> = {}) {
   }
 }
 
-const deliveryRoute = emailExtension.apiRoutes!.find(
+const deliveryRoute = testRoutes(emailExtension).find(
   (route) => route.path === '/delivery-status',
 )!
 
@@ -318,6 +319,47 @@ describe('POST /api/extensions/ext/email/delivery-status', () => {
 
     expect(response.status).toBe(200)
     expect(body.data).toEqual({ applied: false, reason: 'no_matching_delivery' })
+  })
+
+  it('records a bounce on the reminder that carries the message id', async () => {
+    verifyMock.mockReturnValue({
+      type: 'email.bounced',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({ email_id: 'reminder-mail', bounce: { message: 'Mailbox unavailable', subType: 'General', type: 'Permanent' } }),
+    })
+    rpcMock.mockImplementation(async (fn: string) =>
+      fn === 'apply_invoice_reminder_provider_status' ? { data: 'reminder-1', error: null } : { data: null, error: null },
+    )
+
+    const response = await deliveryRoute.handler(webhookRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data).toEqual({ applied: true })
+    expect(rpcMock).toHaveBeenCalledWith('apply_invoice_reminder_provider_status', {
+      p_provider: 'resend',
+      p_provider_message_id: 'reminder-mail',
+      p_status: 'bounced',
+      p_occurred_at: '2026-07-24T08:00:00.000Z',
+      p_detail: expect.stringContaining('Mailbox unavailable'),
+    })
+  })
+
+  it('matches nothing, without failing, before the reminder function exists', async () => {
+    verifyMock.mockReturnValue({
+      type: 'email.delivered',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({ email_id: 'auth-mail' }),
+    })
+    rpcMock.mockImplementation(async (fn: string) =>
+      fn === 'apply_invoice_reminder_provider_status'
+        ? { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }
+        : { data: null, error: null },
+    )
+
+    const response = await deliveryRoute.handler(webhookRequest())
+    expect(response.status).toBe(200)
+    expect((await response.json()).data).toEqual({ applied: false, reason: 'no_matching_delivery' })
   })
 
   it('names the domain when a bounce is for an address outside the send', async () => {

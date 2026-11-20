@@ -9,8 +9,7 @@
  */
 
 import { z } from 'zod'
-import { created, paginated } from '@/lib/api/v1/response'
-import { dryRunPreview } from '@/lib/api/v1/dry-run'
+import { paginated } from '@/lib/api/v1/response'
 import {
   decodeDefaultCursor,
   encodeDefaultCursor,
@@ -19,19 +18,13 @@ import {
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
-import { validateVatNumber } from '@/lib/vat/vies-client'
-import {
-  encryptCustomerPersonalNumber,
-  maskCustomerRow,
-} from '@/lib/customers/protect-personal-number'
-import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
-import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
-import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
-import { eventBus } from '@/lib/events'
-import type { Customer } from '@/types'
+import { orgNumberIsPersonalIdentifier } from '@/lib/invariants/personal-number-shape'
+import { createCustomer } from '@/lib/customers/customer-commands'
+import { CustomerRecordSchema, customerRecordOutcome } from '@/lib/customers/customer-record'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 
 // Mirror the canonical CustomerTypeSchema from lib/api/schemas.ts. Only
 // 'individual' refers to a natural person (Swedish sole trader / enskild
@@ -220,7 +213,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const customers = trimmed.map((r) => {
       const isIndividual =
         INDIVIDUAL_TYPES.has(r.customer_type)
-        || orgNumberIsPersonalIdentifier(r.customer_type, r.org_number)
+        || orgNumberIsPersonalIdentifier(r.org_number)
       return {
         id: r.id,
         name: r.name,
@@ -250,37 +243,15 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 // POST: create customer
 // ──────────────────────────────────────────────────────────────────
 
-const CustomerCreated = z.object({
+// The customer record every v1 customer read and write answers
+// (lib/customers/customer-record.ts). A dry run writes nothing, so it has no
+// id and no timestamps.
+const CustomerCreated = CustomerRecordSchema.extend({
   id: z.string().uuid().nullable(),
-  name: z.string(),
   customer_type: CustomerType,
-  customer_number: z.string().nullable(),
-  contact_person: z.string().nullable(),
-  email: z.string().nullable(),
-  phone: z.string().nullable(),
-  invoice_email_cc_addresses: z.array(z.string()).nullable(),
-  invoice_email_bcc_addresses: z.array(z.string()).nullable(),
-  address_line1: z.string().nullable(),
-  address_line2: z.string().nullable(),
-  postal_code: z.string().nullable(),
-  city: z.string().nullable(),
-  country: z.string(),
-  org_number: z.string().nullable(),
-  vat_number: z.string().nullable(),
-  vat_number_validated: z.boolean(),
-  // Always the masked display form ('********-1234'), never the stored value.
-  personal_number: z.string().nullable(),
-  default_payment_terms: z.number(),
-  notes: z.string().nullable(),
-  archived_at: z.string().nullable(),
   created_at: z.string().nullable(),
   updated_at: z.string().nullable(),
 })
-
-// Drop vat_number_validated_at: declared in neither CustomerCreated nor
-// CustomerDetail; an internal timestamp with no documented consumer.
-const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.create',
@@ -299,6 +270,7 @@ registerEndpoint({
     'A personnummer-shaped org_number on customer_type=individual is treated as the personnummer submitted in the wrong field: it is stored encrypted as personal_number, returned masked (********-1234), and org_number is left empty. Prefer passing it as personal_number. Next to a different personal_number in the same body it is a 400.',
     'An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: a sole trader (enskild firma) has no separate org number, so its owner\'s personnummer is the firm\'s identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business, which cannot have one.',
     'personal_number is accepted only for customer_type=individual, stored encrypted, and returned in the masked form ********-1234.',
+    'An individual has no org number: an org_number on customer_type=individual that is not a personnummer is a 400. Leave it empty, or use customer_type=swedish_business for a business.',
     'If default_payment_terms is omitted, it defaults to the company setting invoice_default_days, falling back to 30.',
     'VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.',
   ],
@@ -345,139 +317,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (!parsed.success) {
       return v1ValidationError(ctx, parsed.error)
     }
-    const body = parsed.data
 
-    // Unset payment terms follow the company's own default, not a hardcoded
-    // 30. Resolved before the dry-run branch so the preview shows the value
-    // a commit would store.
-    const defaultPaymentTerms = await resolveDefaultPaymentTerms(
-      ctx.supabase,
-      ctx.companyId!,
-      body.default_payment_terms,
+    // One insert and one rule set with the dashboard and the agent's approval
+    // (lib/customers/customer-commands.ts). The dry run answers the would-be
+    // record; VIES runs only on the real insert.
+    const outcome = await createCustomer(
+      { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+      parsed.data,
+      { dryRun: ctx.dryRun },
     )
-
-    // Dry-run: validate input, return the would-be record. id, timestamps,
-    // and vat_number_validated all populate on commit, not here.
-    if (ctx.dryRun) {
-      return dryRunPreview(
-        {
-          id: null,
-          name: body.name,
-          customer_type: body.customer_type,
-          customer_number: body.customer_number || null,
-          contact_person: body.contact_person ?? null,
-          email: body.email ?? null,
-          phone: body.phone ?? null,
-          invoice_email_cc_addresses: body.invoice_email_cc_addresses ?? null,
-          invoice_email_bcc_addresses: body.invoice_email_bcc_addresses ?? null,
-          address_line1: body.address_line1 ?? null,
-          address_line2: body.address_line2 ?? null,
-          postal_code: body.postal_code ?? null,
-          city: body.city ?? null,
-          country: body.country ?? 'SE',
-          org_number: body.org_number ?? null,
-          vat_number: body.vat_number ?? null,
-          vat_number_validated: false,
-          personal_number: maskCustomerPersonalNumber(body.personal_number ?? null),
-          default_payment_terms: defaultPaymentTerms,
-          notes: body.notes ?? null,
-          archived_at: null,
-          created_at: null,
-          updated_at: null,
-        },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
-    }
-
-    // Best-effort VIES validation. Resolve BEFORE the insert so the
-    // resulting row reflects the validation state atomically and the
-    // API response can't expose stale vat_number_validated.
-    let vatValidated = false
-    let vatValidatedAt: string | null = null
-    if (body.customer_type === 'eu_business' && body.vat_number) {
-      try {
-        const vatResult = await validateVatNumber(body.vat_number)
-        if (vatResult.valid) {
-          vatValidated = true
-          vatValidatedAt = new Date().toISOString()
-        }
-      } catch (err) {
-        ctx.log.warn('auto-VIES validation failed on customer create', err as Error)
-      }
-    }
-
-    const { data, error } = await ctx.supabase
-      .from('customers')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        name: body.name,
-        customer_type: body.customer_type,
-        // Empty string clears the customer number, same as an explicit null
-        // (matches the internal /api/customers route).
-        customer_number: body.customer_number || null,
-        contact_person: body.contact_person ?? null,
-        email: body.email ?? null,
-        phone: body.phone ?? null,
-        invoice_email_cc_addresses: body.invoice_email_cc_addresses ?? null,
-        invoice_email_bcc_addresses: body.invoice_email_bcc_addresses ?? null,
-        address_line1: body.address_line1 ?? null,
-        address_line2: body.address_line2 ?? null,
-        postal_code: body.postal_code ?? null,
-        city: body.city ?? null,
-        country: body.country ?? 'SE',
-        org_number: body.org_number ?? null,
-        vat_number: body.vat_number ?? null,
-        vat_number_validated: vatValidated,
-        vat_number_validated_at: vatValidatedAt,
-        // Stored as ciphertext; customers_personal_number_check accepts that
-        // shape only (20260726110000). Validated individual-only upstream by
-        // CreateCustomerSchema.
-        personal_number: encryptCustomerPersonalNumber(body.personal_number),
-        language: body.language ?? 'sv',
-        default_payment_terms: defaultPaymentTerms,
-        notes: body.notes ?? null,
-      })
-      .select(CUSTOMER_RESPONSE_COLUMNS)
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
-        // GDPR Art.5(1)(c): do NOT echo body.org_number in the response:
-        // for customer_type='individual' it IS the personnummer.
-        // The error code alone tells the caller which field conflicted;
-        // they already know the value they submitted.
-        return v1ErrorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', ctx.log, {
-          requestId: ctx.requestId,
-          details: { field: 'org_number' },
-        })
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    // The selected row carries personal_number ciphertext; nothing beyond
-    // this point may see it unmasked.
-    const safeCustomer = maskCustomerRow(data as Record<string, unknown> & { personal_number?: string | null })
-
-    // Emit customer.created so webhooks (Phase 2 PR-C) and downstream
-    // handlers can react. Best-effort: emit failure does not roll back.
-    // Cast through `unknown` because the response projection deliberately
-    // omits internal scoping fields (user_id, company_id) the Customer type
-    // requires; we re-inject them on the payload from ctx.
-    try {
-      await eventBus.emit({
-        type: 'customer.created',
-        payload: {
-          customer: { ...safeCustomer, user_id: ctx.userId, company_id: ctx.companyId! } as unknown as Customer,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
-      })
-    } catch (err) {
-      ctx.log.warn('customer.created emit failed', err as Error)
-    }
-
-    return created(safeCustomer, { requestId: ctx.requestId })
+    return v1OutcomeResponse(customerRecordOutcome(outcome), ctx)
   },
   { requireIdempotencyKey: true },
 )

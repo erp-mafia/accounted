@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import { linkBasisColumnsFor, type LinkBasisInput } from '@/lib/links/stamp'
 
 const log = createLogger('invoice-payment-row')
 
@@ -55,7 +57,27 @@ export interface RecordInvoicePaymentRowParams {
   exchangeRate?: number | null
   /** Free text on the row (rate provenance, link note). Default null. */
   notes?: string | null
+  /**
+   * Where the payment came from (invoice_payments.source). Payments on an
+   * invoice under collection are reported to the collections provider unless
+   * the source is 'collections' (the provider collected it itself). Omitted:
+   * null, read as "not from the provider".
+   */
+  source?: InvoicePaymentSource | null
+  /** The payment's reference in the system it came from (the provider's payment reference for 'collections'). */
+  externalRef?: string | null
+  /**
+   * Why this payment is linked to the invoice (invoice_payments.link_basis,
+   * src/lib/links/link-basis.ts): the door's own basis and what it saw. The
+   * request scope turns it into agent_proposed_user_approved inside an
+   * approval and client_asserted on a machine credential. Required, so a new
+   * settlement path cannot write a link without saying why.
+   */
+  linkBasis: LinkBasisInput
 }
+
+/** invoice_payments.source (migration 20261012030300_invoice_payment_provenance.sql). */
+export type InvoicePaymentSource = 'manual' | 'bank' | 'stripe' | 'collections' | 'link' | 'import' | 'setoff'
 
 export type RecordInvoicePaymentRowResult =
   | { ok: true; id: string }
@@ -88,6 +110,9 @@ export async function recordInvoicePaymentRow(
     transactionId,
     exchangeRate,
     notes,
+    source,
+    externalRef,
+    linkBasis,
   } = params
   const amount = appliedPaymentAmount(invoice, newPaidAmount)
 
@@ -104,6 +129,9 @@ export async function recordInvoicePaymentRow(
       journal_entry_id: journalEntryId,
       transaction_id: transactionId ?? null,
       notes: notes ?? null,
+      source: source ?? null,
+      external_ref: externalRef ?? null,
+      ...linkBasisColumnsFor(linkBasis),
     })
     .select('id')
     .single()
@@ -115,6 +143,9 @@ export async function recordInvoicePaymentRow(
       ...(error?.code ? { code: error.code } : {}),
     }
   }
+  // A payment on an invoice under collection waits in the forwarding outbox
+  // (a database trigger put it there); report it as soon as this request answers.
+  scheduleCollectionForwardDrain(companyId)
   return { ok: true, id: (data as { id: string }).id }
 }
 
@@ -133,22 +164,23 @@ export async function removeInvoicePaymentRow(
   supabase: SupabaseClient,
   companyId: string,
   paymentRowId: string | null,
+  table: 'invoice_payments' | 'supplier_invoice_payments' = 'invoice_payments',
 ): Promise<boolean> {
   if (!paymentRowId) return true
-  const ctx = { companyId, invoicePaymentId: paymentRowId }
+  const ctx = { companyId, invoicePaymentId: paymentRowId, ...(table === 'invoice_payments' ? {} : { table }) }
   try {
     const { error } = await supabase
-      .from('invoice_payments')
+      .from(table)
       .delete()
       .eq('id', paymentRowId)
       .eq('company_id', companyId)
     if (error) {
-      log.error('invoice_payments rollback failed (row may be stranded)', error, ctx)
+      log.error(`${table} rollback failed (row may be stranded)`, error, ctx)
       return false
     }
     return true
   } catch (err) {
-    log.error('invoice_payments rollback threw (row may be stranded)', err as Error, ctx)
+    log.error(`${table} rollback threw (row may be stranded)`, err as Error, ctx)
     return false
   }
 }

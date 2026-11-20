@@ -12,7 +12,7 @@ import type { EntityType } from '@/types'
  *
  * The fields describe what THIS PRODUCT does for the form, not what the law
  * says in general. `filings.incomeReturn` is null for a form whose return is
- * not modelled yet, even when the statute names one (ideell förening: INK3).
+ * not modelled yet, even when the statute names one.
  */
 export interface LegalFormProfile {
   /** ISO 3166-1 alpha-2. Fixed until a second country exists; then a key, not a refactor. */
@@ -46,6 +46,13 @@ export interface LegalFormProfile {
      * written for an enskild firma, `_ab` overrides it for an aktiebolag.
      */
     templateColumn: 'base' | 'ab'
+    /**
+     * Ledger accounts the form may run its skattekonto on, the default first:
+     * 1630 for every form, 2012 (eget kapital) as the alternative for an
+     * enskild firma. The company's choice is company_settings.
+     * skattekonto_account, read through lib/skatteverket/skattekonto-account.ts.
+     */
+    skattekontoAccounts: readonly string[]
   }
   equity: {
     /** Account the year's net result is closed to. */
@@ -53,10 +60,38 @@ export interface LegalFormProfile {
     closingName: string
     /** Account the prior year's result is moved to at the next year start; null when the form closes straight into equity. */
     priorYearCarry: string | null
+    /**
+     * Account earlier years' results are balanced to once the annual meeting
+     * has decided (balanserat resultat): AB 2091, förening 2067. An enskild
+     * firma keeps them on its equity account.
+     */
+    retained: string
     /** Whether someone owns the company (egna uttag, aktieägare). A förening has members, not owners. */
     hasOwners: boolean
     /** Money settled with the owner or member: EF 2013/2018, AB 2893, förening 2890. */
     settlement: { withdrawal: string; contribution: string }
+    /**
+     * Bound equity is member capital (medlemsinsatser 2083, förlagsinsatser
+     * 2084, ÅRL 3 kap. 10 b §) rather than aktiekapital 2081.
+     */
+    memberCapital: boolean
+    /**
+     * ÅRL 4 kap. 2 § andra stycket: capitalised own development expenditure
+     * needs the same amount moved from free equity to a fond för
+     * utvecklingsutgifter (2089). Aktiebolag and ekonomisk förening.
+     */
+    developmentFund: boolean
+    /**
+     * Fond för yttre underhåll, a bundet post of its own moved only by
+     * omföring (K3 38.14-38.15, BRL 9 kap. 5 §): BAS 2088 for a
+     * bostadsrättsförening, null for a form without one.
+     */
+    maintenanceFund: string | null
+    /**
+     * The company keeps an aktiebok (ABL 5 kap.), with shareholders whose
+     * votes decide the verkliga huvudmän: aktiebolag only.
+     */
+    shareRegister: boolean
   }
   filings: {
     /** The income return the product prepares for the form; null when none is modelled. */
@@ -69,6 +104,45 @@ export interface LegalFormProfile {
     arsredovisning: boolean
     /** Frameworks the product offers the form. */
     frameworks: ReadonlyArray<'K1' | 'K2' | 'K3'>
+    /** Whether a Bolagsverket iXBRL taxonomy covers the form's årsredovisning (K2 AB only today). */
+    ixbrl: boolean
+    /**
+     * Whether the product's K3 årsredovisning document is built for the form
+     * (the mindre aktiebolag's: ABL equity, förvaltningsberättelse and
+     * disclosure matrix). False: a K3 report of the form stays a
+     * granskningsutkast, never locked and never offered on paper
+     * (lib/bokslut/arsredovisning/k3-release.ts).
+     */
+    k3Document: boolean
+    /** A revisor is required whatever the size (EFL 8 kap. 1 §); an AB may opt out below ABL 9 kap. 1 §. */
+    auditorAlwaysRequired: boolean
+    /**
+     * The förenklat årsbokslut (BFL 6 kap. 3 § andra stycket, 6 §) the product
+     * prepares for the form, named by the BFN allmänt råd whose uppställningsform
+     * it follows; null when none. BFNAR 2006:1 (enskild firma) can join later.
+     */
+    forenklatArsbokslut: 'BFNAR 2010:1' | null
+    /**
+     * The provision that has the revisor make a hänvisning to the
+     * revisionsberättelse on the årsredovisning (the revisorspåteckning), as
+     * the PDF cites it: ABL 9 kap. 28 § for an aktiebolag, 8 kap. 32 § lagen
+     * (2018:672) om ekonomiska föreningar for an ekonomisk förening. Null when
+     * no statute has the form's revisor make one: the PDF then cites nothing
+     * rather than another form's law.
+     */
+    revisorspateckningLagrum: string | null
+    /**
+     * When the årsredovisning must hold a kassaflödesanalys (ÅRL 2 kap. 1 §
+     * andra stycket): 'always' for a bostadsrättsförening, 'larger' for a
+     * form that needs one only as a större företag, null when the product
+     * prepares no årsredovisning for the form.
+     */
+    cashFlowStatement: 'always' | 'larger' | null
+    /**
+     * The förvaltningsberättelse carries the bostadsrättsförening key ratios
+     * for four years (ÅRL 6 kap. 3 a §, K3 38.3-38.11).
+     */
+    housingKeyRatios: boolean
   }
   /**
    * Swedish nouns that differ by law, for labels that name the thing on its

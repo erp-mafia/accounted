@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod'
-import { accepted } from '@/lib/api/v1/response'
+import { accepted, OperationWebhookEventField } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
@@ -29,7 +29,7 @@ const RevaluationAccepted = z.object({
   type: z.literal('fiscal_periods.currency_revaluation'),
   status: z.enum(['queued', 'running', 'succeeded', 'failed']),
   poll_url: z.string(),
-  webhook_event: z.literal('operation.completed'),
+  webhook_event: OperationWebhookEventField,
 })
 
 registerEndpoint({
@@ -51,7 +51,7 @@ registerEndpoint({
   example: {
     request: { as_of_date: '2026-12-31' },
     response: {
-      data: { operation_id: '0e9c…', type: 'fiscal_periods.currency_revaluation', status: 'succeeded', poll_url: '/api/v1/operations/0e9c…', webhook_event: 'operation.completed' },
+      data: { operation_id: '0e9c…', type: 'fiscal_periods.currency_revaluation', status: 'queued', poll_url: '/api/v1/operations/0e9c…', webhook_event: 'operation.completed' },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
   },
@@ -173,7 +173,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         {
           id: operationId,
           error: {
-            code: msg.includes('already exists') ? 'CURRENCY_REVALUATION_ALREADY_EXISTS' : 'CURRENCY_REVALUATION_FAILED',
+            code:
+              (err as { code?: unknown })?.code === 'UNATTENDED_COMMIT_LIMIT_EXCEEDED'
+                ? 'UNATTENDED_COMMIT_LIMIT_EXCEEDED'
+                : msg.includes('already exists') ? 'CURRENCY_REVALUATION_ALREADY_EXISTS' : 'CURRENCY_REVALUATION_FAILED',
             message: getErrorMessage(err, { locale: 'en' }),
           },
         },

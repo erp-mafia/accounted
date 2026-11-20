@@ -9,6 +9,12 @@ export interface SettlementLine {
   journal_entry_id: string
   debit_amount: number
   credit_amount: number
+  /**
+   * Set when other bank rows' 1:N slices already settle part of the
+   * verifikat: what they leave of its net on the account, in the same sign
+   * convention (debit positive = money in). See get_account_gl_lines_for_matching.
+   */
+  remaining_amount?: number | string | null
 }
 
 /**
@@ -21,7 +27,7 @@ export function settlementAmount(line: SettlementLine): number {
 }
 
 export interface SplitSelection {
-  /** One slice per picked verifikat, in pick order: its net on the account. */
+  /** One slice per picked verifikat, in pick order: its net on the account, or what other slices leave of it. */
   allocations: { journal_entry_id: string; amount: number }[]
   /** Sum of the slices. */
   sum: number
@@ -47,12 +53,19 @@ export function buildSplitSelection(
   transactionAmount: number,
 ): SplitSelection {
   const netByEntry = new Map<string, number>()
+  const remainderByEntry = new Map<string, number>()
   for (const line of lines) {
     netByEntry.set(
       line.journal_entry_id,
       roundOre((netByEntry.get(line.journal_entry_id) ?? 0) + settlementAmount(line)),
     )
+    if (line.remaining_amount != null && Number.isFinite(Number(line.remaining_amount))) {
+      remainderByEntry.set(line.journal_entry_id, roundOre(Number(line.remaining_amount)))
+    }
   }
+  // A verifikat other rows already settle in part offers only its remainder:
+  // the engine refuses a slice larger than that (OVER_ALLOCATED).
+  for (const [id, remainder] of remainderByEntry) netByEntry.set(id, remainder)
   const allocations = selectedIds
     .filter((id) => netByEntry.has(id))
     .map((id) => ({ journal_entry_id: id, amount: netByEntry.get(id) as number }))

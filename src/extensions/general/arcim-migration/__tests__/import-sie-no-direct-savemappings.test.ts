@@ -27,6 +27,6 @@ describe('arcim-migration /import-sie handler', () => {
   })
 
   it('still routes the import through submitSIEJob, which owns mapping persistence', () => {
-    expect(indexSource).toContain('submitSIEJob(supabase,companyId,user.id,rawContent,mappings')
+    expect(indexSource).toContain('submitSIEJob(supabase,companyId,ctx.userId,rawContent,mappings')
   })
 })

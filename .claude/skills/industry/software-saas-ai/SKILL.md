@@ -73,8 +73,8 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 | **3001** | Försäljning inom Sverige, 25% moms | SaaS-intäkt B2B/B2C inom Sverige. Inte 3041 (existerar ej) |
 | **3305** | Försäljning tjänster till land utanför EU | Export digitala tjänster, ingen svensk moms (ML 2023:200 6 kap 33 §) |
 | **3308** | Försäljning tjänster till annat EU-land | B2B EU, omvänd hos köparen, rapporteras i periodisk sammanställning |
-| **4531** | Inköp av tjänster från annat EU-land, 25% | AWS EMEA SARL (LU), Google Cloud EMEA (IE), Azure Ireland |
-| **4535** | Inköp av tjänster från land utanför EU, 25% | OpenAI, Anthropic, Lambda Labs, RunPod, Modal, Cohere, Together AI |
+| **4531** | Inköp av tjänster från ett land utanför EU, 25% moms | OpenAI, Anthropic, Lambda Labs, RunPod, Modal, Cohere, Together AI |
+| **4535** | Inköp av tjänster från annat EU-land, 25% | AWS EMEA SARL (LU), Google Cloud EMEA (IE), Azure Ireland |
 | **4545** | Import av varor 25% | Endast vid hårdvaruimport (GPU). Inte 4541 (existerar ej) |
 | **5410** | Förbrukningsinventarier | Datorer under halvt PBB, periferi |
 | **6230** | Datakommunikation | Fiber, internet |
@@ -113,7 +113,7 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 
 **Avskrivningstid.** ÅRL 4 kap 4 § 2 st: om nyttjandeperiod inte kan fastställas tillförlitligt antas 5 år. I praktiken används 3-5 år för mjukvara.
 
-**Strategiskt K2 vs K3-val.** Bolag med betydande utvecklingsutgifter och optionsprogram bör välja K3 från start. **Kritisk förändring 2026:** Nya K2 1.1A g (BFNAR 2025:1, ikraft för räkenskapsår som inleds efter 2025-12-31) förbjuder K2 för bolag som förvärvat varor/tjänster mot aktierelaterade ersättningar under räkenskapsåret. SaaS-startups med personaloptioner kan inte längre välja K2.
+**Strategiskt K2 vs K3-val.** Bolag med betydande utvecklingsutgifter och optionsprogram bör välja K3 från start. **Kritisk förändring 2026:** Nya K2 1.1A g (BFNAR 2025:2, ikraft för räkenskapsår som inleds efter 2025-12-31) förbjuder K2 för bolag som förvärvat varor/tjänster mot aktierelaterade ersättningar under räkenskapsåret. SaaS-startups med personaloptioner kan inte längre välja K2.
 
 **Stoppregel K3 35.16/35.25.** Kostnadsförda utvecklingsutgifter i tidigare räkenskapsår får aldrig retroaktivt aktiveras vid modellbyte.
 
@@ -142,24 +142,24 @@ Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.1/409
 
 | Leverantör | Etablering | Konto inköp | Utg moms | Ing moms |
 |---|---|---|---|---|
-| AWS EMEA SARL | Luxemburg (EU) | 4531 | 2614 | 2645 (avdrag) |
-| Google Cloud EMEA Ltd | Irland (EU) | 4531 | 2614 | 2645 |
-| Microsoft Azure (Microsoft Ireland Operations) | Irland (EU) | 4531 | 2614 | 2645 |
-| OpenAI LLC | USA (utanför EU) | 4535 | 2614 | 2645 |
-| Anthropic PBC | USA (utanför EU) | 4535 | 2614 | 2645 |
-| Mistral AI | Frankrike (EU) | 4531 | 2614 | 2645 |
-| Cohere | Kanada (utanför EU) | 4535 | 2614 | 2645 |
-| Lambda Labs, RunPod, Modal, Together AI | USA | 4535 | 2614 | 2645 |
-| GitHub Inc | USA | 4535 | 2614 | 2645 |
-| Vercel Inc | USA | 4535 | 2614 | 2645 |
+| AWS EMEA SARL | Luxemburg (EU) | 4535 | 2614 | 2645 (avdrag) |
+| Google Cloud EMEA Ltd | Irland (EU) | 4535 | 2614 | 2645 |
+| Microsoft Azure (Microsoft Ireland Operations) | Irland (EU) | 4535 | 2614 | 2645 |
+| OpenAI LLC | USA (utanför EU) | 4531 | 2614 | 2645 |
+| Anthropic PBC | USA (utanför EU) | 4531 | 2614 | 2645 |
+| Mistral AI | Frankrike (EU) | 4535 | 2614 | 2645 |
+| Cohere | Kanada (utanför EU) | 4531 | 2614 | 2645 |
+| Lambda Labs, RunPod, Modal, Together AI | USA | 4531 | 2614 | 2645 |
+| GitHub Inc | USA | 4531 | 2614 | 2645 |
+| Vercel Inc | USA | 4531 | 2614 | 2645 |
 
 VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokumenteras (screenshot/timestamp). Stripe, Adyen, Paddle: betalningstjänst undantagen från moms (ML 10 kap 3 §, finansiell tjänst). Avgift bokas brutto på 6570 utan momsberäkning.
 
 **Periodisering API-kostnader.** Matcha mot intäkt månadsvis. Vid betydande månads-end-cutoff: upplupna kostnader 2990 baserat på dashboard-rapporter (AWS Cost Explorer, OpenAI Usage). Verifikatet ska referera till underliggande rapport, faktura kommer 3-10 dagar in i nästa månad.
 
 **Momsdeklaration ruta-rapportering (verifierat oförändrat 2025-2026):**
-- Inköp tjänster annat EU-land (4531): beskattningsunderlag i **ruta 21**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
-- Inköp tjänster utanför EU (4535): beskattningsunderlag i **ruta 22**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
+- Inköp tjänster annat EU-land (4535): beskattningsunderlag i **ruta 21**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
+- Inköp tjänster utanför EU (4531): beskattningsunderlag i **ruta 22**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
 - Försäljning tjänster B2B annat EU-land (3308): **ruta 39** plus periodisk sammanställning
 - Försäljning tjänster export utanför EU (3305): **ruta 40**
 
@@ -191,7 +191,7 @@ Effekt: skatte- och socialavgiftsbefrielse vid förvärv och utnyttjande; vinst 
 - Sociala avgifter på samma sätt som ersättningen (26.20).
 - Värderingsmodell (Black-Scholes, binomial) ej föreskriven i K3 men praxis.
 
-**K2 (BFNAR 2016:10) saknar regler för aktierelaterade ersättningar.** Nuvarande K2: tolkning utifrån grundprinciper, typiskt ingen kostnad vid equity-settled. **Nya K2 (BFNAR 2025:1) ikraft för räkenskapsår som inleds efter 2025-12-31, p 1.1A g: bolag som under räkenskapsåret förvärvat varor/tjänster mot aktierelaterade ersättningar får inte tillämpa K2.** Byte till K3 obligatoriskt.
+**K2 (BFNAR 2016:10) saknar regler för aktierelaterade ersättningar.** Nuvarande K2: tolkning utifrån grundprinciper, typiskt ingen kostnad vid equity-settled. **Nya K2 (BFNAR 2025:2) ikraft för räkenskapsår som inleds efter 2025-12-31, p 1.1A g: bolag som under räkenskapsåret förvärvat varor/tjänster mot aktierelaterade ersättningar får inte tillämpa K2.** Byte till K3 obligatoriskt.
 
 Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2024.3/399929.html (KPO); https://www4.skatteverket.se/rattsligvagledning/edition/2024.3/324733.html (aktierelaterade ersättningar).
 
@@ -329,7 +329,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 **Rätt.** Omvänd betalningsskyldighet ska tillämpas eftersom OpenAI LLC är etablerad utanför EU och tillhandahåller B2B-tjänst till svensk beskattningsbar person:
 ```
-4535 Inköp tjänster från land utanför EU 25%   1 000 D
+4531 Inköp tjänster från land utanför EU 25%   1 000 D
 2645 Beräknad ingående moms på förvärv         250 D
   1930 Bank                                      1 000 K
   2614 Utgående moms omv betaln.skyld 25%          250 K
@@ -337,7 +337,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 **Lagrum.** ML 2023:200 6 kap 33 § (huvudregel B2B-tjänst, omsatt i köparens land); ML 2023:200 16 kap (omvänd betalningsskyldighet); art. 196 EU:s momsdirektiv 2006/112/EG.
 
-**Momsdeklaration.** Beskattningsunderlag i **ruta 22**, utg moms 25% i **ruta 30**, ing moms-avdrag i **ruta 48**. (Ruta 21 plus 30 är korrekt för EU-inköp 4531, fel ruta för 4535 utanför EU.)
+**Momsdeklaration.** Beskattningsunderlag i **ruta 22**, utg moms 25% i **ruta 30**, ing moms-avdrag i **ruta 48**. (Ruta 21 plus 30 är korrekt för EU-inköp på 4535, fel ruta för 4531 utanför EU.)
 
 **Anmärkning.** Äldre referens till "ML 5 kap 5 §" gäller gamla mervärdesskattelagen (1994:200). Ny ML 2023:200 har bestämmelsen i 6 kap 33 § (plats för tillhandahållande) och 16 kap (vem är betalningsskyldig).
 
@@ -360,7 +360,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 **Åtgärd.** Byte till K3 (BFNAR 2012:1) krävs för aktivering. Då tillämpas K3 18.12 (sex aktiveringskriterier), 18.8 (forskningsfas vs utvecklingsfas), och ÅRL 4 kap 2 §: motsvarande belopp överförs från fritt EK till **fond för utvecklingsutgifter** (konto 2089). Stoppregel K3 35.16/35.25: kostnadsförda utvecklingsutgifter i tidigare räkenskapsår får aldrig retroaktivt aktiveras.
 
-**Bonusvarning från 2026.** Nya K2 1.1A g (BFNAR 2025:1) tvingar redan bolag med personaloptionsprogram över till K3. SaaS-startups med både utvecklingskostnader och optioner bör därför inte starta i K2.
+**Bonusvarning från 2026.** Nya K2 1.1A g (BFNAR 2025:2) tvingar redan bolag med personaloptionsprogram över till K3. SaaS-startups med både utvecklingskostnader och optioner bör därför inte starta i K2.
 
 ## 6. Öppna frågor
 
@@ -380,7 +380,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 ## 7. Modifier: ai-heavy
 
-Aktiveras när **API-leverantörer (OpenAI, Anthropic, Mistral, Cohere, Lambda Labs, RunPod, Modal, Together AI) över 15% av total kostnad** ELLER **konto 4535 över 15% av totala kostnader**.
+Aktiveras när **API-leverantörer (OpenAI, Anthropic, Mistral, Cohere, Lambda Labs, RunPod, Modal, Together AI) över 15% av total kostnad** ELLER **konto 4531 över 15% av totala kostnader**.
 
 **Token-baserad kostnadsallokering.** API-kostnader allokeras per kund/produkt baserat på faktisk token-konsumtion från leverantörens usage-API:
 - OpenAI: organization.usage endpoint
@@ -391,14 +391,14 @@ Lagra kund-ID i request metadata och avstäm månadsvis. Allokering bokas via in
 
 **COGS-attribution per kund.** Möjliggör verklig bruttomarginalsanalys per kund/plan, kritiskt för pricing och churn-modellering. Den månatliga matchningen API-cost mot intäkt sker via:
 1. Periodiserad intäkt månadsvis från 2979 till 3001/3305/3308
-2. Faktisk API-kostnad månadsvis på 4535
+2. Faktisk API-kostnad månadsvis på 4531 (utanför EU) och 4535 (annat EU-land)
 3. Bruttomarginal per kund = intäkt minus allokerad API-kostnad minus Stripe-avgift (6570)
 
-**Omvänd betalningsskyldighet bulk-hantering.** Vid många små API-fakturor (t.ex. OpenAI weekly invoicing): batch-bokning per månad mot 4535 plus spegelposter 2614/2645 acceptabelt om underliggande fakturasummering bifogas verifikatet. Verifieringsspår per faktura krävs för Skatteverkets revision.
+**Omvänd betalningsskyldighet bulk-hantering.** Vid många små API-fakturor (t.ex. OpenAI weekly invoicing): batch-bokning per månad mot 4531 plus spegelposter 2614/2645 acceptabelt om underliggande fakturasummering bifogas verifikatet. Verifieringsspår per faktura krävs för Skatteverkets revision.
 
 **AI Act conformity-kostnader.** För high-risk AI-system (Annex III): notified body-avgifter, riskhanteringssystem (art. 9), data governance-dokumentation (art. 10), teknisk dokumentation (art. 11), kvalitetsledningssystem (art. 17), post-market monitoring (art. 72). Bedömning aktivering vs opex:
 - Aktivering tillåten under K3 18.12 endast om kostnader är direkt hänförliga till specifik AI-systemvariant under utveckling och övriga sex kriterier uppfylls
 - Övergripande compliance-infrastruktur, governance, AI-litterati (art. 4): kostnadsförs (typiskt 6540, 7610 personalutbildning, 6550 konsultarvoden)
 - K2-bolag: alltid kostnadsföring
 
-**GPU-compute spend.** Stora månatliga GPU-kostnader (Lambda Labs, RunPod, Modal, Together AI) på 4535 plus 2614/2645. Reserved capacity / committed spend ska periodiseras enligt avtalsperioden: förskottsbetalning bokas mot 1790 (övriga förutbetalda kostnader) och resolveras månadsvis till 6540 eller 4535 beroende på behandling i momshänseende.
+**GPU-compute spend.** Stora månatliga GPU-kostnader (Lambda Labs, RunPod, Modal, Together AI) på 4531 plus 2614/2645. Reserved capacity / committed spend ska periodiseras enligt avtalsperioden: förskottsbetalning bokas mot 1790 (övriga förutbetalda kostnader) och resolveras månadsvis till 6540 eller 4531 beroende på behandling i momshänseende.

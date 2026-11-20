@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -10,7 +10,12 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 import { answerAssistantQuestion } from '@/lib/agent/ask/ask-service'
-import { EmptyModelAnswerError } from '@/lib/agent/ask/errors'
+import {
+  EmptyModelAnswerError,
+  emptyAnswerMessage,
+  isAiProviderUnavailable,
+  providerUnavailableMessage,
+} from '@/lib/agent/ask/errors'
 import {
   resolveChatConversation,
   loadChatHistory,
@@ -18,23 +23,53 @@ import {
   persistAssistantTurn,
 } from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-// The assistant answers over the read-only MCP tools, which are registered
-// into the agent tool registry by the mcp-server extension at load. Without
-// this the registry is empty and the assistant falls back to snapshot-only,
-// so a hosted deploy would silently lose its ledger tools.
-ensureInitialized()
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { assistantChatEnabledFor, assistantChatOffForEveryone } from '@/lib/env/assistant-chat-switch'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 
 const log = createLogger('api.agent.ask')
 
 // A tool-loop answer can take minutes (several model turns, each preceded by
 // real report reads). The plan default cap would kill the function mid-answer
 // and the client would see a silent empty stop; 300 s matches the other
-// long-running model surface (app/api/agent/invoke).
+// long-running model surfaces (app/api/receipt-hunt/run).
 export const maxDuration = 300
 
-// The Swedish body AskConsole's !res.ok branch renders verbatim.
-const EMPTY_ANSWER_MESSAGE = 'Assistenten gav inget svar. Försök igen.'
+/**
+ * The response for a failed answer. AskConsole's !res.ok branch renders
+ * `error` verbatim, so each case says what happened and what to do.
+ */
+function failedAnswer(
+  err: unknown,
+  ctx: { companyId: string; persist: boolean; locale: Locale | undefined },
+): Response {
+  if (err instanceof EmptyModelAnswerError) {
+    // Already logged with model, usage and stop reason by ask-service.
+    return NextResponse.json(
+      { error: emptyAnswerMessage(err, ctx.locale), code: 'empty_model_answer' },
+      { status: 502 },
+    )
+  }
+  if (isAiProviderUnavailable(err)) {
+    // The provider's outage, not our bug (Bedrock "503 unable to process your
+    // request" bursts, throttling), and the SDK already retried: warn, not
+    // error, and tell the user to wait. 502, never 503: AskConsole reads a
+    // 503 as "no AI backend configured on this installation".
+    const { status, statusCode } = err as { status?: unknown; statusCode?: unknown }
+    log.warn('assistant provider unavailable', {
+      companyId: ctx.companyId,
+      persist: ctx.persist,
+      status: status ?? statusCode ?? null,
+    })
+    return NextResponse.json(
+      { error: providerUnavailableMessage(ctx.locale), code: 'ai_provider_unavailable' },
+      { status: 502 },
+    )
+  }
+  log.error('assistant ask failed', err, { companyId: ctx.companyId, persist: ctx.persist })
+  return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+}
 
 /**
  * POST /api/agent/ask: a single-call, provider-agnostic assistant answer over a
@@ -63,11 +98,22 @@ const Schema = z.object({
   persist: z.boolean().optional(),
   conversation_id: z.string().uuid().nullable().optional(),
   context_ref: z.string().max(200).nullable().optional(),
+  // The page the question was asked from (AskConsole sends usePathname()),
+  // named in the prompt and resolved against the real menu. A path, never a
+  // URL: it starts with a slash and carries no whitespace.
+  route: z.string().max(300).regex(/^\/\S*$/).optional(),
+  // The UI locale, so the menu the model is given uses the labels on screen.
+  locale: z.enum(SUPPORTED_LOCALES).optional(),
 })
 
 export async function POST(request: Request): Promise<Response> {
   const { user, supabase, error } = await requireAuth()
   if (error) return error
+
+  // The built-in assistant switched off (ASSISTANT_CHAT_ENABLED) with no
+  // company keeping it: every question this route answers is the chat's
+  // question box, so none runs, and nothing is read or counted first.
+  if (assistantChatOffForEveryone(todayIsoStockholm())) return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
 
   const rate = await checkAgentRateLimit(supabase, user.id)
   if (!rate.ok) return NextResponse.json(agentRateLimitResponseBody(rate), { status: 429 })
@@ -88,11 +134,20 @@ export async function POST(request: Request): Promise<Response> {
 
   const { data: membership } = await supabase
     .from('company_members')
-    .select('user_id')
+    .select('user_id, role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
+  // assistant: it runs as the service role and reads the whole company.
+  if (isInvoicerRole(membership.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+  // Switched off with some companies keeping it: this company's own answer,
+  // asked once the company is known and the caller is a member of it.
+  if (!assistantChatEnabledFor(companyId, todayIsoStockholm())) {
+    return errorResponseFromCode('ASSISTANT_CHAT_OFF', log)
+  }
 
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked
@@ -118,19 +173,13 @@ export async function POST(request: Request): Promise<Response> {
         userId: user.id,
         question: parsed.data.question,
         pageContext: parsed.data.context,
+        route: parsed.data.route,
+        locale: parsed.data.locale,
         tier: parsed.data.tier,
       })
       return NextResponse.json({ data: result })
     } catch (err) {
-      if (err instanceof EmptyModelAnswerError) {
-        // Already logged with model + usage by ask-service.
-        return NextResponse.json(
-          { error: EMPTY_ANSWER_MESSAGE, code: 'empty_model_answer' },
-          { status: 502 },
-        )
-      }
-      log.error('assistant ask failed', err, { companyId, persist: false })
-      return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+      return failedAnswer(err, { companyId, persist: false, locale: parsed.data.locale })
     }
   }
 
@@ -167,6 +216,8 @@ export async function POST(request: Request): Promise<Response> {
       conversationId,
       question: parsed.data.question,
       pageContext: parsed.data.context,
+      route: parsed.data.route,
+      locale: parsed.data.locale,
       tier: parsed.data.tier,
       history,
     })
@@ -178,14 +229,6 @@ export async function POST(request: Request): Promise<Response> {
 
     return NextResponse.json({ data: { ...result, conversation_id: conversationId } })
   } catch (err) {
-    if (err instanceof EmptyModelAnswerError) {
-      // Already logged with model + usage by ask-service.
-      return NextResponse.json(
-        { error: EMPTY_ANSWER_MESSAGE, code: 'empty_model_answer' },
-        { status: 502 },
-      )
-    }
-    log.error('assistant ask failed', err, { companyId, persist: true })
-    return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+    return failedAnswer(err, { companyId, persist: true, locale: parsed.data.locale })
   }
 }

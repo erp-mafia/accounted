@@ -7,7 +7,7 @@
  * import, syncSkattekonto must adopt the existing rows in place (keeping row
  * id and journal_entry_id) instead of inserting duplicates.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { computeDedupKey } from '@/lib/skatteverket/skattekonto-dedup'
 
@@ -15,7 +15,8 @@ const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const getSaldoMock = vi.fn()
 const getTransaktionerMock = vi.fn()
-vi.mock('../lib/skattekonto-client', () => ({
+vi.mock('../lib/skattekonto-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/skattekonto-client')>()),
   getSaldo: (...args: unknown[]) => getSaldoMock(...args),
   getTransaktioner: (...args: unknown[]) => getTransaktionerMock(...args),
 }))
@@ -211,6 +212,23 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
     getSaldoMock.mockResolvedValue(makeSaldo())
   })
 
+  it('a system-credential sync nobody asked for (the cron) is audited with no user', async () => {
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [],
+      kommandeTransaktioner: [],
+    })
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods: none
+
+    // ctx.userId is whoever the cron put in the context; the audit rows must
+    // not name them for a call made on Accounted's own credentials.
+    await syncSkattekonto(makeCtx(), { mode: 'system' })
+
+    const systemActor = { companyId: 'company-1', userId: null }
+    expect(getSaldoMock).toHaveBeenCalledWith({ mode: 'system' }, expect.any(String), systemActor)
+    expect(getTransaktionerMock).toHaveBeenCalledWith({ mode: 'system' }, expect.any(String), undefined, systemActor)
+  })
+
   it('passes the earliest fiscal period start as datumFrom when inside the SKV window', async () => {
     getTransaktionerMock.mockResolvedValue({
       tidigareTransaktioner: [],
@@ -230,6 +248,8 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       periodStart,
+      // Default personal-token sync: audited against the ctx user.
+      { companyId: 'company-1', userId: 'user-1' },
     )
   })
 
@@ -252,7 +272,38 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       undefined,
+      { companyId: 'company-1', userId: 'user-1' },
     )
+  })
+
+  // accounted#18: SKV counts its 555-day default from the Swedish calendar
+  // day. 23:30 UTC is already the next day in Stockholm, in summer (UTC+2)
+  // and in winter (UTC+1), so a bound on the first day of SKV's own window
+  // adds nothing and is not sent.
+  describe('the default window is counted from the Swedish day', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it.each([
+      ['summer', '2026-07-01T23:30:00Z', '2024-12-24'],
+      ['winter', '2026-01-15T23:30:00Z', '2024-07-10'],
+    ])('%s: at %s a bound on %s is omitted', async (_season, instant, firstDayOfSkvWindow) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date(instant))
+      getTransaktionerMock.mockResolvedValue({ tidigareTransaktioner: [], kommandeTransaktioner: [] })
+      enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+      enqueue({ data: [{ period_start: firstDayOfSkvWindow }] }) // fiscal_periods earliest
+
+      await syncSkattekonto(makeCtx())
+
+      expect(getTransaktionerMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        undefined,
+        { companyId: 'company-1', userId: 'user-1' },
+      )
+    })
   })
 
   it('omits datumFrom when bookkeeping started past the ~915-day SKV limit (felkod 2)', async () => {
@@ -272,6 +323,7 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       undefined,
+      { companyId: 'company-1', userId: 'user-1' },
     )
   })
 
@@ -291,6 +343,7 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
       expect.anything(),
       expect.any(String),
       undefined,
+      { companyId: 'company-1', userId: 'user-1' },
     )
   })
 })

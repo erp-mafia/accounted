@@ -8,6 +8,7 @@ import {
   type PanelRequestOptions,
   type PanelRequestResult,
 } from '@/lib/browser/panel-request'
+import { feedSyncOutcome, type FeedSyncOutcome } from '@/lib/feed-sync/sync-outcome'
 
 export const ZETTLE_ACTION_TIMEOUT_MS = 15_000
 export const ZETTLE_CONNECT_TIMEOUT_MS = 30_000
@@ -37,36 +38,10 @@ export interface ZettleSyncPayload {
   } | null
 }
 
-type SyncCounts = {
-  fetched: number
-  imported: number
-  /** Sales imported unbookable (split tender, gift card, tip); see order-sync. */
-  needsReview: number
-}
+/** The shared ladder (lib/feed-sync/sync-outcome), with this connector's counts. */
+export type ZettleSyncOutcome = FeedSyncOutcome
 
-export type ZettleSyncOutcome =
-  | { reason: 'revoked' }
-  | { reason: 'empty' }
-  | { reason: 'partial'; values: SyncCounts & { errors: number } }
-  | { reason: 'errors'; values: SyncCounts & { errors: number } }
-  | { reason: 'feed'; values: SyncCounts }
-  | { reason: 'unknown' }
-
+/** Turn the sync route's success body into the single sentence the user gets. */
 export function syncSummary(payload: ZettleSyncPayload | null): ZettleSyncOutcome {
-  const summary = payload?.transactions
-  if (!summary) return { reason: 'unknown' }
-  if (summary.revoked === true) return { reason: 'revoked' }
-  if (typeof summary.fetched !== 'number') return { reason: 'unknown' }
-
-  const fetched = summary.fetched
-  const imported = typeof summary.inserted === 'number' ? summary.inserted : 0
-  const errors = typeof summary.errors === 'number' ? summary.errors : 0
-  const needsReview = typeof summary.needsReview === 'number' ? summary.needsReview : 0
-
-  if (summary.deadlineReached === true) {
-    return { reason: 'partial', values: { fetched, imported, needsReview, errors } }
-  }
-  if (fetched === 0) return { reason: 'empty' }
-  if (errors > 0) return { reason: 'errors', values: { fetched, imported, needsReview, errors } }
-  return { reason: 'feed', values: { fetched, imported, needsReview } }
+  return feedSyncOutcome(payload, { importedField: 'inserted', extraCounts: ['needsReview'] })
 }

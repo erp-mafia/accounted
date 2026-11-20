@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/supabase/service-client', () => ({
   createServiceRoleClient: mocks.createServiceRoleClient,
 }))
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: mocks.registryGet },
 }))

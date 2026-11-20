@@ -1,7 +1,9 @@
 import crypto from 'crypto'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { ensureInitialized } from '@/lib/init'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { sandboxSeedBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
+import { scopeFreeLinkBasisColumns } from '@/lib/links/link-basis'
+import { postingPort } from '@/lib/posting/port'
+import type { CreateJournalEntryInput } from '@/types'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logger'
@@ -9,12 +11,21 @@ import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { loadPayrollConfig } from '@/lib/salary/payroll-config'
+import { fetchTaxTableRates } from '@/lib/salary/tax-tables'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
+import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { buildSandboxCustomers } from './customers'
 import { buildSandboxPendingOperations } from './pending-operations'
 import { buildSandboxArticles } from './articles'
 import { buildSandboxVatDeadline } from './vat-deadline'
+import {
+  buildSandboxRepresentationVoucher,
+  SANDBOX_REPRESENTATION_ACCOUNT,
+  SANDBOX_REPRESENTATION_LINE,
+  SANDBOX_REPRESENTATION_NOTES,
+} from './representation'
 import {
   buildSandboxLedgerHistory,
   SANDBOX_LEDGER_ACCOUNT_NUMBERS,
@@ -24,15 +35,19 @@ import {
   buildSandboxSalaryLineItems,
   buildSandboxSalaryRunEmployees,
   buildSandboxSalaryRuns,
+  calculateSandboxPayroll,
   mapSandboxEmployeeIds,
   resolveSandboxSalaryPeriods,
-  SANDBOX_RUN_TOTALS,
-  SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER,
+  SANDBOX_TAX_COLUMN,
+  SANDBOX_TAX_TABLE_NUMBER,
+  sandboxRunTotals,
+  sandboxVacationAccrualAvgifterTotal,
 } from './salary'
 import {
   buildSandboxSalaryVouchers,
   SANDBOX_SALARY_ACCOUNT_NUMBERS,
 } from './salary-vouchers'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -40,9 +55,24 @@ import {
 // covers retries; an attacker has to rotate /24s to scale abuse.
 // The database lease outlives this function's maximum runtime.
 export const maxDuration = 300
-ensureInitialized()
 
 const RATE_LIMIT = { maxRequests: 5, windowMs: 60 * 60 * 1000 }
+
+/**
+ * A demo verifikat of the sandbox company, through the posting port (step
+ * 2i): the engine gets the input unchanged and, while POSTING_EVENTS is
+ * shadow or strict, records ledger.system (system_derived: the seed made the
+ * demo up), linked before the number is drawn.
+ */
+function postSeedEntry(supabase: SupabaseClient, companyId: string, userId: string, input: CreateJournalEntryInput) {
+  return postingPort.postJournalEntry({
+    supabase,
+    companyId,
+    userId,
+    event: () => sandboxSeedBusinessEvent({ entryDate: input.entry_date, linkBasis: scopeFreeLinkBasisColumns('system_derived') }),
+    input,
+  })
+}
 
 /**
  * POST /api/sandbox/seed
@@ -223,7 +253,7 @@ export async function POST(request: Request) {
     }
 
     // 4. Create fiscal period (current year)
-    const currentYear = new Date().getFullYear()
+    const currentYear = stockholmYearMonth().year
     const { data: fiscalPeriod, error: fpError } = await supabase
       .from('fiscal_periods')
       .insert({
@@ -352,7 +382,9 @@ export async function POST(request: Request) {
 
     const invoiceMap = Object.fromEntries(invoices.map(i => [i.invoice_number, i.id]))
 
-    // 7. Create invoice items
+    // 7. Create invoice items. Each line carries its own vat_amount (the
+    // column defaults to 0): the send dialog builds the 26xx line from the
+    // lines, so a line without it left the demo kontering 2 000 kr off.
     const { error: itemsError } = await supabase
       .from('invoice_items')
       .insert([
@@ -364,6 +396,7 @@ export async function POST(request: Request) {
           unit_price: 500,
           line_total: 15000,
           vat_rate: 25,
+          vat_amount: 3750,
         },
         {
           invoice_id: invoiceMap['F-2026002'],
@@ -373,6 +406,7 @@ export async function POST(request: Request) {
           unit_price: 500,
           line_total: 20000,
           vat_rate: 0,
+          vat_amount: 0,
         },
         {
           invoice_id: invoiceMap['F-2026003'],
@@ -382,6 +416,7 @@ export async function POST(request: Request) {
           unit_price: 5000,
           line_total: 5000,
           vat_rate: 25,
+          vat_amount: 1250,
         },
         {
           invoice_id: invoiceMap['F-2026004'],
@@ -391,6 +426,7 @@ export async function POST(request: Request) {
           unit_price: 500,
           line_total: 8000,
           vat_rate: 25,
+          vat_amount: 2000,
         },
       ])
 
@@ -410,8 +446,13 @@ export async function POST(request: Request) {
         ...SANDBOX_SALARY_ACCOUNT_NUMBERS,
         '1510',
         '1930',
+        '2440',
         '2611',
         '3001',
+        // The representation lunch (./representation): 6072 is not in the K1
+        // chart, and without it the demo would post to an account the company
+        // does not have.
+        SANDBOX_REPRESENTATION_ACCOUNT,
         // The 6 % article (a printed book) derives 3003/2631 at invoice-line
         // time; neither is in the K1 chart, so invoicing it would post to an
         // account the company does not have.
@@ -500,7 +541,7 @@ export async function POST(request: Request) {
 
     const historyEntryIds: string[] = []
     for (const [index, entry] of ledgerHistory.entries.entries()) {
-      const posted = await createJournalEntry(supabase, companyId, userId, {
+      const posted = await postSeedEntry(supabase, companyId, userId, {
         fiscal_period_id: entry.fiscal_period_id,
         voucher_series: entry.voucher_series,
         entry_date: entry.entry_date,
@@ -528,7 +569,7 @@ export async function POST(request: Request) {
     )
 
     // 10. Invoice vouchers use the engine's draft + atomic commit path.
-    const invoiceEntry = await createJournalEntry(supabase, companyId, userId, {
+    const invoiceEntry = await postSeedEntry(supabase, companyId, userId, {
       fiscal_period_id: fiscalPeriod.id,
       voucher_series: 'A',
       entry_date: toDateStr(thirtyDaysAgo),
@@ -541,7 +582,7 @@ export async function POST(request: Request) {
         { account_number: '2611', debit_amount: 0, credit_amount: 3750, dimensions: {} },
       ],
     })
-    const je2 = await createJournalEntry(supabase, companyId, userId, {
+    const je2 = await postSeedEntry(supabase, companyId, userId, {
       fiscal_period_id: fiscalPeriod.id,
       voucher_series: 'A',
       entry_date: toDateStr(fifteenDaysAgo),
@@ -557,6 +598,23 @@ export async function POST(request: Request) {
       .update({ journal_entry_id: invoiceEntry.id })
       .eq('id', invoiceMap['F-2026001']).eq('company_id', companyId)
     if (invoiceLinkError) throw invoiceLinkError
+    // The paid invoice's AR sub-ledger row, through the single writer every
+    // settlement uses (#2019): without it the demo books break the rule real
+    // books follow, and the invoice page shows a paid header with no payment
+    // date. paid_amount 0 is the state before this payment, so the row's
+    // amount is the full 18 750 the voucher clears.
+    const paymentRow = await recordInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice: { id: invoiceMap['F-2026001'], currency: 'SEK', exchange_rate: null, paid_amount: 0 },
+      paymentDate: toDateStr(fifteenDaysAgo),
+      newPaidAmount: 18750,
+      journalEntryId: je2.id,
+      source: 'manual',
+      // Demo data: the seed made both sides.
+      linkBasis: { basis: 'system_derived' },
+    })
+    if (!paymentRow.ok) throw new Error(`Sandbox invoice payment row failed: ${paymentRow.error}`)
 
     // 11. Create transactions
     const { data: txRows, error: txError } = await supabase
@@ -609,6 +667,8 @@ export async function POST(request: Request) {
           is_business: true,
           invoice_id: invoiceMap['F-2026001'],
           journal_entry_id: je2.id,
+          // Demo data: the seed made both sides.
+          link_basis: 'system_derived',
           merchant_name: 'Björk & Partner AB',
         },
         // Private transaction
@@ -751,6 +811,10 @@ export async function POST(request: Request) {
     // Supplier invoice #1, Telia, paid 15 days ago (mobile + bredband, 25% VAT).
     const sevenDaysFromNow = new Date(today)
     sevenDaysFromNow.setDate(today.getDate() + 7)
+    // Supplier invoice #2, the representation lunch, gets its registration
+    // verifikat below, so like the invoice vouchers it must fall inside the
+    // demo's one fiscal period in early January.
+    const representationDate = toDateStr(fiveDaysAgo < yearStart ? yearStart : fiveDaysAgo)
 
     // Hardcode 1 and 2: get_next_arrival_number is MAX+1 against the same
     // table we're about to insert into, so calling it twice before the first
@@ -787,14 +851,16 @@ export async function POST(request: Request) {
           supplier_id: supplierMap['Demokafé AB'],
           arrival_number: 2,
           supplier_invoice_number: '88245',
-          invoice_date: toDateStr(fiveDaysAgo),
+          invoice_date: representationDate,
           due_date: toDateStr(sevenDaysFromNow),
-          received_date: toDateStr(fiveDaysAgo),
+          received_date: representationDate,
           status: 'registered',
           currency: 'SEK',
-          subtotal: 240,
-          vat_amount: 28.80,
-          total: 268.80,
+          subtotal: SANDBOX_REPRESENTATION_LINE.net,
+          vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
+          total: SANDBOX_REPRESENTATION_LINE.total,
+          // Syfte and deltagare, written, not uploaded (crm#1342).
+          notes: SANDBOX_REPRESENTATION_NOTES,
           // Luhn-valid OCR so the betalfil preview demos the structured
           // reference path instead of the invoice-number fallback.
           payment_reference: '882456',
@@ -805,7 +871,7 @@ export async function POST(request: Request) {
           paid_amount: 0,
           // No trigger derives this; without it the unpaid demo invoice
           // shows "0 kr kvar att betala" and cannot join a betalfil.
-          remaining_amount: 268.80,
+          remaining_amount: SANDBOX_REPRESENTATION_LINE.total,
         },
       ])
       .select('id, supplier_invoice_number')
@@ -833,18 +899,44 @@ export async function POST(request: Request) {
           account_number: '6212',
         },
         {
+          // A customer lunch: 6072, not 5810 Biljetter (accounted#80).
           supplier_invoice_id: supInvoiceMap['88245'],
-          description: 'Kundmöte Demokafé (representation)',
+          description: SANDBOX_REPRESENTATION_LINE.description,
           quantity: 1,
-          unit_price: 240,
-          line_total: 240,
-          vat_rate: 0.12,
-          vat_amount: 28.80,
-          account_number: '5810',
+          unit_price: SANDBOX_REPRESENTATION_LINE.net,
+          line_total: SANDBOX_REPRESENTATION_LINE.net,
+          vat_rate: SANDBOX_REPRESENTATION_LINE.vatRatePercent / 100,
+          vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
+          account_number: SANDBOX_REPRESENTATION_ACCOUNT,
         },
       ])
 
     if (supItemsError) throw supItemsError
+
+    // The representation invoice's registration verifikat. Under
+    // faktureringsmetoden a registered invoice is booked when it arrives;
+    // without it 2440 would stay below the leverantörsreskontra and the demo's
+    // one representation example would have no verifikat to show syfte and
+    // deltagare on.
+    const representationEntry = await postSeedEntry(
+      supabase,
+      companyId,
+      userId,
+      buildSandboxRepresentationVoucher({
+        fiscalPeriodId: fiscalPeriod.id,
+        entryDate: representationDate,
+        supplierInvoiceId: supInvoiceMap['88245'],
+        supplierInvoiceNumber: '88245',
+        arrivalNumber: 2,
+        supplierName: 'Demokafé AB',
+      }),
+    )
+    const { error: representationLinkError } = await supabase
+      .from('supplier_invoices')
+      .update({ registration_journal_entry_id: representationEntry.id })
+      .eq('id', supInvoiceMap['88245'])
+      .eq('company_id', companyId)
+    if (representationLinkError) throw representationLinkError
 
     // 14. Add one fully-depreciable asset (laptop) so /assets shows
     // something other than a Package empty state. Acquired 18 months ago,
@@ -909,17 +1001,21 @@ export async function POST(request: Request) {
             currency: 'SEK',
             vatTreatment: 'reduced_12',
           },
-          totals: { subtotal: 240, vat: 28.80, total: 268.80 },
+          totals: {
+            subtotal: SANDBOX_REPRESENTATION_LINE.net,
+            vat: SANDBOX_REPRESENTATION_LINE.vat,
+            total: SANDBOX_REPRESENTATION_LINE.total,
+          },
           lineItems: [
             {
-              description: 'Kundmöte Demokafé (representation)',
+              description: SANDBOX_REPRESENTATION_LINE.description,
               quantity: 1,
               unit: 'st',
-              unit_price: 240,
-              line_total: 240,
-              account_number: '5810',
-              vat_rate: 12,
-              vat_amount: 28.80,
+              unit_price: SANDBOX_REPRESENTATION_LINE.net,
+              line_total: SANDBOX_REPRESENTATION_LINE.net,
+              account_number: SANDBOX_REPRESENTATION_ACCOUNT,
+              vat_rate: SANDBOX_REPRESENTATION_LINE.vatRatePercent,
+              vat_amount: SANDBOX_REPRESENTATION_LINE.vat,
             },
           ],
         },
@@ -958,19 +1054,34 @@ export async function POST(request: Request) {
 
     // 20. Payroll. An enskild firma may employ staff (it just may not put its
     // own owner on payroll), so the demo runs two employees through one booked
-    // and one open lönekörning.
+    // and one open lönekörning. The figures are the salary engine's, from the
+    // year's payroll config and Skatteverket table a real run loads, so a year
+    // without official rates fails here like a real calculation would.
+    const bookedYear = resolveSandboxSalaryPeriods(today).booked.year
+    const payrollConfig = await loadPayrollConfig(supabase, bookedYear)
+    const { rates: taxRates } = await fetchTaxTableRates(
+      bookedYear,
+      SANDBOX_TAX_TABLE_NUMBER,
+      SANDBOX_TAX_COLUMN,
+    )
+    const sandboxEmployees = buildSandboxEmployees({
+      userId,
+      companyId,
+      today,
+      // employees.personnummer stores AES-256-GCM ciphertext; the builder
+      // stays pure by taking the cipher as an argument.
+      encrypt: encryptPersonnummer,
+    })
+    const payroll = calculateSandboxPayroll({
+      employees: sandboxEmployees,
+      today,
+      config: payrollConfig,
+      taxRates,
+    })
+
     const { data: employeeRows, error: employeesError } = await supabase
       .from('employees')
-      .insert(
-        buildSandboxEmployees({
-          userId,
-          companyId,
-          today,
-          // employees.personnummer stores AES-256-GCM ciphertext; the builder
-          // stays pure by taking the cipher as an argument.
-          encrypt: encryptPersonnummer,
-        }),
-      )
+      .insert(sandboxEmployees)
       .select('id, last_name')
 
     if (employeesError) throw employeesError
@@ -978,7 +1089,7 @@ export async function POST(request: Request) {
 
     const { data: salaryRunRows, error: salaryRunsError } = await supabase
       .from('salary_runs')
-      .insert(buildSandboxSalaryRuns({ userId, companyId, today }))
+      .insert(buildSandboxSalaryRuns({ userId, companyId, today, payroll }))
       .select('id, status')
 
     if (salaryRunsError) throw salaryRunsError
@@ -999,9 +1110,10 @@ export async function POST(request: Request) {
           draftRunId: draftRun.id,
           annaEmployeeId,
           erikEmployeeId,
+          payroll,
         }),
       )
-      .select('id, employee_id')
+      .select('id, employee_id, salary_run_id')
 
     if (runEmployeesError) throw runEmployeesError
 
@@ -1012,7 +1124,9 @@ export async function POST(request: Request) {
           companyId,
           annaEmployeeId,
           erikEmployeeId,
+          bookedRunId: bookedRun.id,
           runEmployees: runEmployeeRows,
+          payroll,
         }),
       )
 
@@ -1023,6 +1137,7 @@ export async function POST(request: Request) {
     // these through the engine before advancing the status. The pure builder
     // supplies the same account structure and the engine performs the writes.
     const bookedPeriod = resolveSandboxSalaryPeriods(today).booked
+    const runTotals = sandboxRunTotals(payroll)
     const salaryVouchers = buildSandboxSalaryVouchers({
       userId,
       companyId,
@@ -1031,20 +1146,20 @@ export async function POST(request: Request) {
       paymentDate: bookedPeriod.paymentDate,
       periodYear: bookedPeriod.year,
       periodMonth: bookedPeriod.month,
-      totalGross: SANDBOX_RUN_TOTALS.total_gross,
-      totalTax: SANDBOX_RUN_TOTALS.total_tax,
-      totalNet: SANDBOX_RUN_TOTALS.total_net,
-      totalAvgifter: SANDBOX_RUN_TOTALS.total_avgifter,
-      totalVacationAccrual: SANDBOX_RUN_TOTALS.total_vacation_accrual,
+      totalGross: runTotals.total_gross,
+      totalTax: runTotals.total_tax,
+      totalNet: runTotals.total_net,
+      totalAvgifter: runTotals.total_avgifter,
+      totalVacationAccrual: runTotals.total_vacation_accrual,
       // salary_runs has no column for avgifter on the vacation accrual (it is
-      // a per-employee figure), so ./salary exports the sum of the same
-      // figures the salary_run_employees rows were written from.
-      totalVacationAvgifter: SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER,
+      // a per-employee figure), so ./salary sums the same results the
+      // salary_run_employees rows were written from.
+      totalVacationAvgifter: sandboxVacationAccrualAvgifterTotal(payroll),
     })
 
     const runEntryLinks: Record<string, string> = {}
     for (const voucher of salaryVouchers) {
-      const posted = await createJournalEntry(supabase, companyId, userId, {
+      const posted = await postSeedEntry(supabase, companyId, userId, {
         fiscal_period_id: voucher.entry.fiscal_period_id,
         voucher_series: voucher.entry.voucher_series,
         entry_date: voucher.entry.entry_date,

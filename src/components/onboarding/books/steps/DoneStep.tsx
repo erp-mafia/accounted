@@ -1,30 +1,38 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
+import useSWR from 'swr'
 import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { useFetch } from '@/lib/hooks/use-fetch'
 import { useFormat } from '@/lib/hooks/use-format'
-import type { AiClient } from '@/lib/onboarding/ai-clients'
+import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
-import { AI_TASK_HREF, AI_TASK_LABEL_KEY, listAiTasks } from '@/lib/worklist/ai-task'
+import { AI_TASK_LABEL_KEY, aiTaskHref, foundTasksStartOpen, listAiTasks } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
 import { InkText } from '@/components/onboarding/journey/ink'
 import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
+import { FactsImport } from '../ui/FactsImport'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
+
+async function fetchWorklistCounts(): Promise<WorklistCounts> {
+  const res = await fetch('/api/worklist/counts')
+  if (!res.ok) throw new Error(`/api/worklist/counts ${res.status}`)
+  return ((await res.json()) as { data: WorklistCounts }).data
+}
 
 /** Null when the status is unavailable: the chips keep what they last showed. */
-async function fetchAiStatus(signal: AbortSignal): Promise<AiClient[] | null> {
+async function fetchAiStatus(signal: AbortSignal): Promise<AiConnection | null> {
   try {
     const res = await fetch('/api/onboarding/ai-status', { signal })
     if (!res.ok) return null
-    const json = (await res.json()) as { data: { connected: AiClient[] } }
-    return json.data.connected
+    const json = (await res.json()) as { data: { connected: AiClient[]; agentConnected?: boolean } }
+    return aiConnectionFromWire(json.data.connected, json.data.agentConnected)
   } catch {
     return null
   }
@@ -32,9 +40,9 @@ async function fetchAiStatus(signal: AbortSignal): Promise<AiClient[] | null> {
 
 /**
  * Klart: a few flecks let go, the card of what got connected, the three
- * agent chips, then what the app already found to do (folded until asked;
- * each row opens the page in the app or hands the row to a connected
- * agent), and the door to Hem.
+ * agent chips, then what the app already found to do (open when bank rows
+ * wait to be booked, otherwise folded until asked; each row opens the page
+ * in the app or hands the row to a connected agent), and the door to Hem.
  */
 export function DoneStep({ ctx, onLeave, leaving }: {
   ctx: BooksCtx
@@ -50,25 +58,28 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { findings, state } = ctx
   const hasAi = useCapability(CAPABILITY.ai)
   const [preferredClient, setPreferredClient] = useState<AiClient>()
-  const [polledConnected, setPolledConnected] = useState<AiClient[] | null>(null)
-  const [open, setOpen] = useState(false)
-  const { data: worklist, loading, error, refetch } = useFetch<{ data: WorklistCounts }, WorklistCounts>(
-    '/api/worklist/counts',
-    { select: (body) => body.data },
+  const [polled, setPolled] = useState<AiConnection | null>(null)
+  // null until the toggle is clicked: the list then follows what it holds (foundTasksStartOpen).
+  const [toggled, setToggled] = useState<boolean | null>(null)
+  const { data: worklist, isValidating, error, mutate } = useSWR(
+    ['worklist-counts', company?.id ?? null] as const,
+    fetchWorklistCounts,
   )
-  const connected = polledConnected ?? findings?.ai.connected ?? []
+  const refetch = useCallback(() => {
+    void mutate()
+  }, [mutate])
+  const connection = polled ?? aiConnectionFromWire(findings?.ai.connected ?? [], findings?.ai.agentConnected)
+  const connected = connection.clients
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
+  const open = toggled ?? foundTasksStartOpen(tasks)
 
   // Refresh the same queue Hem uses when OAuth finishes or the user returns
-  // from their agent. Do not keep offering work they have already completed.
+  // from their agent (SWR revalidates on focus). Do not keep offering work
+  // they have already completed.
   useEffect(() => {
     if (connectionKey) refetch()
   }, [connectionKey, refetch])
-  useEffect(() => {
-    window.addEventListener('focus', refetch)
-    return () => window.removeEventListener('focus', refetch)
-  }, [refetch])
 
   // The OAuth sign-in happens in another tab, so the chip turns green by
   // asking the status route (one api_keys read, never the findings): in a
@@ -77,7 +88,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   useEffect(() => {
     const poller = createAiStatusPoller({
       fetchStatus: fetchAiStatus,
-      onStatus: setPolledConnected,
+      onStatus: setPolled,
       isHidden: () => document.visibilityState === 'hidden',
     })
     pollerRef.current = poller
@@ -127,21 +138,23 @@ export function DoneStep({ ctx, onLeave, leaving }: {
 
       <h2 className="agent-title">{t('ai_title')}</h2>
       <p className="agent-lead">{t('ai_lead')}</p>
-      <AgentChips connected={connected} onConnect={onConnect} />
+      <AgentChips connection={connection} onConnect={onConnect} />
+      {/* Once an AI is connected: let it tell Accounted what it already remembers (skill company-facts-import). */}
+      <FactsImport clients={connected} preferredClient={preferredClient} disabled={leaving} />
 
       {error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
-          <button type="button" className="jny-btn-quiet" onClick={refetch} disabled={loading}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={refetch} disabled={isValidating}>
             {t('ai_handoff_retry')}
-          </button>
+          </Button>
         </p>
       ) : tasks.length > 0 && (
         <div className="found">
-          <button type="button" className="found-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          <Button variant="ghost" className="found-toggle gap-2 text-muted-foreground" aria-expanded={open} onClick={() => setToggled(!open)}>
             {t('tasks_found', { count: tasks.length })}
-            <ChevronDown size={14} aria-hidden="true" className="chev" />
-          </button>
+            <ChevronDownIcon aria-hidden="true" className="size-3.5 chev" />
+          </Button>
           {open && (
             <ul className="found-list">
               {tasks.map((task) => (
@@ -151,9 +164,9 @@ export function DoneStep({ ctx, onLeave, leaving }: {
                     <span className="n">{task.count}</span>
                   </span>
                   <span className="a">
-                    <button type="button" className="open" disabled={leaving} onClick={() => onLeave('done', AI_TASK_HREF[task.category])}>
+                    <Button variant="outline" disabled={leaving} onClick={() => onLeave('done', aiTaskHref(task.category, worklist?.inboxHref))}>
                       {t('task_open')}
-                    </button>
+                    </Button>
                     <AiTaskAction
                       clients={connected}
                       task={task}
@@ -169,12 +182,12 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         </div>
       )}
 
-      {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (founder direction 2026-09-14). */}
+      {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (product direction 2026-09-14). */}
       <div className="done-door">
-        <button type="button" className="jny-btn-quiet" disabled={leaving} onClick={() => onLeave('done')}>
+        <Button variant="ghost" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
           {t('open_app', { appName })}
-          <ChevronRight size={13} aria-hidden="true" />
-        </button>
+          <ChevronRightIcon className="size-[13px]" aria-hidden="true" />
+        </Button>
       </div>
     </div>
   )

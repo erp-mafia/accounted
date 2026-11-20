@@ -95,14 +95,15 @@ describe('rutorToMomsuppgift', () => {
     expect(result.momsImportUtgaendeHog).toBe(500)
   })
 
-  // FK009 regression: SKV recomputes summaMoms from rounded rutor and
-  // compares against ours. If we round ruta49 from unrounded inputs while
-  // rounding each ruta independently we drift by ±1 SEK per fractional ruta.
-  it('summaMoms equals Σ(rounded output VAT rutor) - rounded ruta48', () => {
+  // FK009 regression: SKV recomputes summaMoms from the whole-krona rutor and
+  // compares against ours. If we took ruta49 from the öre figure while each
+  // ruta is brought to whole kronor on its own we drift by a krona per
+  // fractional ruta.
+  it('summaMoms equals Σ(whole-krona output VAT rutor) - whole-krona ruta48', () => {
     const rutor: VatDeclarationRutor = {
       ...emptyRutor,
-      // Fractional öres on every VAT-amount ruta so banker's rounding can
-      // disagree between the orundad ruta49 and the rundade individual fält.
+      // Fractional öre on every VAT-amount ruta so the net of the öre figures
+      // (126,98) and the net of the whole-krona fields (123) disagree.
       ruta10: 100.49,
       ruta11: 50.51,
       ruta12: 25.49,
@@ -133,6 +134,11 @@ describe('rutorToMomsuppgift', () => {
     expect(result.summaMoms).toBe(expectedSumma)
     // Sanity-check: result is an integer (SKV requires whole kronor)
     expect(Number.isInteger(result.summaMoms)).toBe(true)
+    // Öre are dropped, not rounded: 50,51 files as 50 and 80,51 as 80, so the
+    // net is 100 + 50 + 25 + 10 + 5 + 2 + 7 + 3 + 1 - 80.
+    expect(result.momsForsaljningUtgaendeMedel).toBe(50)
+    expect(result.ingaendeMomsAvdrag).toBe(80)
+    expect(result.summaMoms).toBe(123)
   })
 
   it('summaMoms is negative when input VAT exceeds output VAT', () => {

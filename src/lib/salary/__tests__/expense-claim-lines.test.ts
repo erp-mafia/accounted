@@ -12,6 +12,12 @@ import {
   settleExpenseClaimsForBookedRun,
 } from '../expense-claim-lines'
 
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
+
 const COMPANY = 'company-1'
 const RUN = 'run-1'
 const EMPLOYEE = 'emp-1'

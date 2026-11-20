@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Badge } from '@/components/ui/badge'
 import {
   DropdownMenu,
@@ -13,9 +14,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn, formatDate } from '@/lib/utils'
-import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react'
-import { getConnectionUiState } from '../lib/connection-state'
-import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
+import { ChevronRightIcon, EllipsisHorizontalIcon, SpinnerIcon } from '@/components/icons'
+import { switchDeepLink } from '@/lib/bank-feed/switch-link'
+import { getConnectionUiState, offersAccountChoice, type SunsetPath, type SyncPauseReason } from '../lib/connection-state'
+import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
 
 interface BankConnectionStatusProps {
@@ -28,6 +30,14 @@ interface BankConnectionStatusProps {
    *  bank (abandoned 'pending' row). The connect route sweeps that row. */
   onRetry?: (connection: BankConnection) => void
   isSyncing?: boolean
+  /** The Enable Banking feed has ended for this row (lib/connection-state.ts
+   *  SunsetPath): 'switch' offers the switch to the new connection, 'import'
+   *  the bank file import. Null while the feed runs. */
+  sunset?: SunsetPath | null
+  /** The company's syncs are paused (lib/connection-state.ts SyncPauseReason):
+   *  no bank_sync capability, so the row offers the way back instead of a
+   *  Synka the server would refuse. Null while syncs run. */
+  paused?: SyncPauseReason | null
 }
 
 /**
@@ -35,8 +45,10 @@ interface BankConnectionStatusProps {
  * identity + state on one line, exactly ONE primary action decided by the
  * derived UI state, every secondary action behind a "..." menu, and the
  * details (accounts, IBAN, balances, initial backfill) behind a collapsed
- * disclosure. The page-level attention sentence lives in the panel, not
- * here (design convention 6: one .attn per page).
+ * disclosure. When the disclosure line says an account does not sync, the
+ * way to change that ("Välj konton", also in the menu) sits beside it. The
+ * page-level attention sentence lives in the panel, not here (design
+ * convention 6: one .attn per page).
  */
 export function BankConnectionStatus({
   connection,
@@ -46,16 +58,21 @@ export function BankConnectionStatus({
   onManageAccounts,
   onRetry,
   isSyncing = false,
+  sunset = null,
+  paused = null,
 }: BankConnectionStatusProps) {
+  // Sync stays live for a read-only member; connecting, renewing, account choice and removal do not.
+  const { canWrite, lockedTitle } = useViewerLock()
   const [now] = useState(() => Date.now())
   const [detailsOpen, setDetailsOpen] = useState(false)
 
-  const uiState = getConnectionUiState(connection, now)
+  const uiState = getConnectionUiState({ ...connection, sunset, paused }, now)
 
   // Parse accounts from connection
   const accounts = (connection.accounts_data as Array<{
     uid: string
     iban?: string
+    bban?: string
     name?: string
     currency: string
     balance?: number
@@ -64,10 +81,12 @@ export function BankConnectionStatus({
     claimed_by_company_id?: string
     claimed_by_company_name?: string
   }>) || []
-  // Accounts another of the user's companies books (one SEB consent covers
-  // every company the signer represents) are not this company's accounts:
-  // they are left out of the list and the count, and summarised in one line.
-  const { own: ownAccounts, claimedElsewhere } = partitionByClaim(accounts)
+  // The same split as the account picker (crm#1097). Accounts another of the
+  // user's companies books (one SEB consent covers every company the signer
+  // represents) and a card account that only mirrors the main account are
+  // not this company's accounts: they are left out of the list and the
+  // count, and each kind is summarised in one line.
+  const { own: ownAccounts, claimedElsewhere, mirrorCards } = partitionAccounts(accounts)
   const enabledCount = ownAccounts.filter((a) => a.enabled !== false).length
 
   function formatBalanceAge(updatedAt: string): string {
@@ -84,19 +103,20 @@ export function BankConnectionStatus({
   // badge: one sentence, start over or remove.
   if (uiState === 'abandoned') {
     return (
-      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3">
+      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b-hairline px-1 py-3">
         <span className="text-sm font-medium">{connection.bank_name}</span>
         <span className="text-xs text-muted-foreground">Anslutningen slutfördes inte hos banken</span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {onRetry && (
-            <Button size="sm" onClick={() => onRetry(connection)}>
+            <Button disabled={!canWrite} title={lockedTitle} onClick={() => onRetry(connection)}>
               Försök igen
             </Button>
           )}
           <Button
             variant="ghost"
-            size="sm"
             className="text-muted-foreground hover:text-foreground"
+            disabled={!canWrite}
+            title={lockedTitle}
             onClick={() => onDisconnect(connection.id)}
           >
             Ta bort
@@ -111,17 +131,18 @@ export function BankConnectionStatus({
   // button lock alone made this state invisible).
   if (uiState === 'pending') {
     return (
-      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3">
+      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b-hairline px-1 py-3">
         <span className="text-sm font-medium">{connection.bank_name}</span>
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
           Väntar på banken…
         </span>
         <span className="ml-auto shrink-0">
           <Button
             variant="ghost"
-            size="sm"
             className="text-muted-foreground hover:text-foreground"
+            disabled={!canWrite}
+            title={lockedTitle}
             onClick={() => onDisconnect(connection.id)}
           >
             Avbryt
@@ -138,10 +159,16 @@ export function BankConnectionStatus({
     | { kind: 'badge'; label: string; variant: 'warning' | 'destructive' | 'secondary' }
   const statusDisplay: StatusEntry = (() => {
     switch (uiState) {
+      case 'sunset':
+        return { kind: 'badge', label: 'Upphört', variant: 'destructive' }
+      case 'paused':
+        return { kind: 'badge', label: 'Pausad', variant: 'warning' }
       case 'pending_selection':
         return { kind: 'badge', label: 'Välj konton', variant: 'warning' }
       case 'error':
         return { kind: 'badge', label: 'Fel', variant: 'destructive' }
+      case 'needs_configuration':
+        return { kind: 'badge', label: 'Synkningen har stannat', variant: 'warning' }
       case 'expired':
         return { kind: 'badge', label: 'Utgånget samtycke', variant: 'warning' }
       case 'expiring':
@@ -152,22 +179,47 @@ export function BankConnectionStatus({
   })()
 
   const isExpired = uiState === 'expired'
-  const canReconnect = !!onReconnect
-  const canSync = connection.status === 'active' || connection.status === 'error'
+  const isSunset = uiState === 'sunset'
+  const isPaused = uiState === 'paused'
+  // The old provider is gone, or the company's syncs are paused: nothing to
+  // sync and no consent worth renewing (the server refuses both while paused).
+  const canReconnect = !!onReconnect && !isSunset && !isPaused
+  const canSync = (connection.status === 'active' || connection.status === 'error') && !isSunset && !isPaused
 
   // Exactly ONE primary action per state; everything else goes in the menu.
   function renderPrimaryAction() {
     switch (uiState) {
+      case 'sunset':
+        // The switch is done on Kopplingar (the deep link opens Koppla banken
+        // in switch mode for exactly this row); where the new provider does
+        // not reach the bank, bank statements come in as files.
+        return sunset === 'import' ? (
+          <Button asChild>
+            <Link href="/import?mode=bank">Importera kontoutdrag</Link>
+          </Button>
+        ) : (
+          <Button asChild>
+            <Link href={switchDeepLink(connection.id)}>Byt till ny koppling</Link>
+          </Button>
+        )
+      case 'paused':
+        // Hosted, the subscription brings the feed back; self-hosted, the
+        // connector key, which the page's sentence names.
+        return paused === 'subscription' ? (
+          <Button asChild>
+            <Link href="/settings/billing">Uppgradera</Link>
+          </Button>
+        ) : null
       case 'pending_selection':
+      case 'needs_configuration':
         return onManageAccounts ? (
-          <Button size="sm" onClick={() => onManageAccounts(connection.id)}>
+          <Button disabled={!canWrite} title={lockedTitle} onClick={() => onManageAccounts(connection.id)}>
             Välj konton
           </Button>
         ) : null
       case 'error':
         return (
-          <Button size="sm" onClick={() => onSync(connection.id)} disabled={isSyncing}>
-            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+          <Button onClick={() => onSync(connection.id)} loading={isSyncing}>
             Försök igen
           </Button>
         )
@@ -176,15 +228,14 @@ export function BankConnectionStatus({
         // No psu override: the server reuses the stored psu_type, so renewal
         // is one click. Switching account type lives in the menu.
         return canReconnect ? (
-          <Button size="sm" onClick={() => onReconnect!(connection)}>
+          <Button disabled={!canWrite} title={lockedTitle} onClick={() => onReconnect!(connection)}>
             Förnya samtycke
           </Button>
         ) : null
       case 'stale':
       case 'never_synced':
         return (
-          <Button size="sm" onClick={() => onSync(connection.id)} disabled={isSyncing}>
-            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+          <Button onClick={() => onSync(connection.id)} loading={isSyncing}>
             Synka nu
           </Button>
         )
@@ -194,12 +245,10 @@ export function BankConnectionStatus({
         return (
           <Button
             variant="ghost"
-            size="sm"
             className="text-muted-foreground hover:text-foreground"
             onClick={() => onSync(connection.id)}
-            disabled={isSyncing}
+            loading={isSyncing}
           >
-            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
             Synka
           </Button>
         )
@@ -210,7 +259,7 @@ export function BankConnectionStatus({
   const primaryIsReconnect = uiState === 'expired' || uiState === 'expiring'
 
   return (
-    <div className="border-b border-border px-1 py-3">
+    <div className="border-b-hairline px-1 py-3">
       {/* Main line: identity + state left, one primary action + menu right */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="text-sm font-medium">{connection.bank_name}</span>
@@ -222,7 +271,7 @@ export function BankConnectionStatus({
         {uiState === 'pending_selection' ? (
           <span className="text-xs text-muted-foreground">
             {ownAccounts.length > 0
-              ? `${ownAccounts.length} konton tillgängliga: inga transaktioner synkas ännu`
+              ? `${ownAccounts.length} ${ownAccounts.length === 1 ? 'konto tillgängligt' : 'konton tillgängliga'}: inga transaktioner synkas ännu`
               : claimedElsewhere.length > 0
                 ? 'Alla konton i kopplingen synkas redan i andra bolag'
                 : 'Inga konton i kopplingen: inga transaktioner synkas ännu'}
@@ -234,7 +283,7 @@ export function BankConnectionStatus({
                 Synkad {formatDate(connection.last_synced_at)}
               </span>
             )}
-            {connection.consent_expires && !isExpired && (
+            {connection.consent_expires && !isExpired && !isSunset && (
               <span className="text-xs text-muted-foreground tabular-nums">
                 Samtycke till {formatDate(connection.consent_expires)}
               </span>
@@ -251,7 +300,7 @@ export function BankConnectionStatus({
                 className="text-muted-foreground hover:text-foreground"
                 aria-label={`Fler åtgärder för ${connection.bank_name}`}
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <EllipsisHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -261,14 +310,15 @@ export function BankConnectionStatus({
                 // could not finish, so the way out went unfound.
                 <DropdownMenuItem
                   className="text-destructive focus:text-destructive"
+                  disabled={!canWrite}
                   onSelect={() => onDisconnect(connection.id)}
                 >
                   Ta bort anslutningen
                 </DropdownMenuItem>
               ) : (
                 <>
-                  {onManageAccounts && (
-                    <DropdownMenuItem onSelect={() => onManageAccounts(connection.id)}>
+                  {onManageAccounts && uiState !== 'needs_configuration' && !isSunset && (
+                    <DropdownMenuItem disabled={!canWrite} onSelect={() => onManageAccounts(connection.id)}>
                       Välj konton
                     </DropdownMenuItem>
                   )}
@@ -278,7 +328,7 @@ export function BankConnectionStatus({
                     </DropdownMenuItem>
                   )}
                   {canReconnect && !primaryIsReconnect && (
-                    <DropdownMenuItem onSelect={() => onReconnect!(connection)}>
+                    <DropdownMenuItem disabled={!canWrite} onSelect={() => onReconnect!(connection)}>
                       Förnya samtycke
                     </DropdownMenuItem>
                   )}
@@ -291,10 +341,10 @@ export function BankConnectionStatus({
                       <DropdownMenuLabel className="text-xs font-normal normal-case tracking-normal">
                         Förnya och logga in som
                       </DropdownMenuLabel>
-                      <DropdownMenuItem onSelect={() => onReconnect!(connection, 'business')}>
+                      <DropdownMenuItem disabled={!canWrite} onSelect={() => onReconnect!(connection, 'business')}>
                         Företagskonto
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => onReconnect!(connection, 'personal')}>
+                      <DropdownMenuItem disabled={!canWrite} onSelect={() => onReconnect!(connection, 'personal')}>
                         Privatkonto
                       </DropdownMenuItem>
                     </>
@@ -305,6 +355,7 @@ export function BankConnectionStatus({
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
+                    disabled={!canWrite}
                     onSelect={() => onDisconnect(connection.id)}
                   >
                     Koppla från
@@ -316,10 +367,21 @@ export function BankConnectionStatus({
         </span>
       </div>
 
+      {/* The feed has ended: one quiet line on what the row offers now. The
+          page-level .attn owns the ochre sentence (the worst row only), so
+          every other sunset row still says where to go. */}
+      {isSunset && (
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          {sunset === 'import'
+            ? 'Den gamla leverantören har stängts och banken nås inte än genom den nya. Importera kontoutdrag som fil (SIE eller CSV) tills vidare; historiken behålls.'
+            : 'Den gamla leverantören har stängts. Bytet signeras med BankID och tar cirka två minuter; historiken behålls.'}
+        </p>
+      )}
+
       {/* Error detail: the page-level .attn owns the ochre sentence; the
           row's own message stays quiet. */}
-      {uiState === 'error' && connection.error_message && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+      {(uiState === 'error' || uiState === 'needs_configuration') && connection.error_message && (
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           {connection.error_message}
         </p>
       )}
@@ -329,22 +391,41 @@ export function BankConnectionStatus({
           would read as current). */}
       {accounts.length > 0 && uiState !== 'pending_selection' && (
         <div className="mt-1">
-          <button
-            type="button"
-            onClick={() => setDetailsOpen((v) => !v)}
-            aria-expanded={detailsOpen}
-            className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
-          >
-            <ChevronRight
-              className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-90')}
-            />
-            <span className="tabular-nums">
-              {enabledCount} av {ownAccounts.length} konton synkas
-            </span>
-          </button>
+          <div className="flex flex-wrap items-center gap-x-3">
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((v) => !v)}
+              aria-expanded={detailsOpen}
+              className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            >
+              <ChevronRightIcon
+                className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-90')}
+              />
+              <span className="tabular-nums">
+                {enabledCount} av {ownAccounts.length} {ownAccounts.length === 1 ? 'konto' : 'konton'} synkas
+              </span>
+            </button>
+            {/* Where the row says an account of this company does not sync,
+                the way to switch it on sits beside it, under the name the
+                menu entry and the picker use (crm#1097: the picker was only
+                in the "..." menu, and was not found there). Never for a card
+                account or another company's account: neither is a choice
+                here (offersAccountChoice). */}
+            {onManageAccounts && offersAccountChoice(connection, accounts, now) && (
+              <Button
+                variant="outline"
+                aria-label={`Välj konton för ${connection.bank_name}`}
+                disabled={!canWrite}
+                title={lockedTitle}
+                onClick={() => onManageAccounts(connection.id)}
+              >
+                Välj konton
+              </Button>
+            )}
+          </div>
 
           {detailsOpen && (
-            <div className="ml-3 border-l border-border pl-4">
+            <div className="ml-3 border-l-hairline pl-4">
               {/* Initial backfill summary: what the bank actually returned vs
                   what we asked for. Diagnostics, so it lives in the details. */}
               {!isExpired &&
@@ -373,7 +454,7 @@ export function BankConnectionStatus({
                       </span>
                       {truncated && (
                         <Badge variant="outline">
-                          Bankens API returnerade kortare period än begärt: använd SIE-import för äldre data
+                          Bankens API returnerade kortare period än begärt: importera äldre bankhistorik som bankfil (Importera, Bankfil)
                         </Badge>
                       )}
                     </div>
@@ -394,7 +475,7 @@ export function BankConnectionStatus({
                       {account.name || account.iban || 'Okänt konto'}
                     </span>
                     {isDisabled && (
-                      <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      <Badge variant="outline" className="text-xs text-muted-foreground">
                         Synkas ej
                       </Badge>
                     )}
@@ -406,7 +487,7 @@ export function BankConnectionStatus({
                     {!isExpired && account.balance !== undefined && (
                       <span className="ml-auto inline-flex shrink-0 items-baseline gap-2">
                         {account.balance_updated_at && (
-                          <span className="text-[10px] text-muted-foreground">
+                          <span className="text-xs text-muted-foreground">
                             {formatBalanceAge(account.balance_updated_at)}
                           </span>
                         )}
@@ -421,10 +502,22 @@ export function BankConnectionStatus({
                   </div>
                 )
               })}
+              {/* A card account that only mirrors the main account is never
+                  an account of its own (lib/bank-sync/mirror-card-account.ts)
+                  and can never be switched on. A "Synkas ej" row with a
+                  balance read as something to switch on or remove, and the
+                  way to do that could not be found because there is none
+                  (crm#1097). One muted line says what it is, in the picker's
+                  words, and offers nothing. */}
+              {mirrorCards.length > 0 && (
+                <div className="py-2 text-xs text-muted-foreground">
+                  {describeMirrorCards(mirrorCards)}
+                </div>
+              )}
               {/* Sibling companies' accounts carried by this consent: one
-                  muted line, never rows. Moving one here is done in the
-                  account picker ("Hantera konton"), where it is a deliberate
-                  tick inside a disclosure. */}
+                  muted line, never rows, no action. Moving one here is done
+                  in the account picker ("Välj konton"), where it is a
+                  deliberate tick inside a disclosure. */}
               {claimedElsewhere.length > 0 && (
                 <div className="py-2 text-xs text-muted-foreground tabular-nums" data-ph-mask="">
                   {describeClaimedElsewhere(claimedElsewhere)}

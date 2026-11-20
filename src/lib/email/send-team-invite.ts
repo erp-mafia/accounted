@@ -40,7 +40,7 @@ export async function sendTeamInviteMail(params: {
   const inviteUrl = `${appUrl}/invite/${token}`
 
   let emailSent = false
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   if (emailService.isConfigured()) {
     const emailData = {
       inviterEmail,

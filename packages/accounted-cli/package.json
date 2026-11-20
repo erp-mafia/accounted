@@ -1,0 +1,31 @@
+{
+  "name": "accounted",
+  "version": "0.1.0",
+  "description": "Command-line client for Accounted, Swedish bookkeeping: run every Accounted MCP tool from a terminal or an agent's shell",
+  "bin": {
+    "accounted": "./bin/accounted.mjs"
+  },
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "accounted",
+    "bookkeeping",
+    "accounting",
+    "cli",
+    "mcp",
+    "agents"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/erp-mafia/accounted.git",
+    "directory": "packages/accounted-cli"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ]
+}

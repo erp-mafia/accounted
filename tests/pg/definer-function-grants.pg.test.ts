@@ -49,7 +49,40 @@ const ANON_CALLABLE_ALLOWLIST: string[] = []
 // PUBLIC), so both roles are asserted explicitly.
 const SERVICE_ROLE_ONLY = [
   'sync_team_to_company(uuid,uuid)',
+  // Byrå member company access (20261028110000): the team routes check the
+  // caller is team owner or admin, then call it on the service role.
+  'set_team_member_companies(uuid,uuid[])',
   'claim_due_webhook_deliveries(integer,timestamp with time zone)',
+  // BankID signing (20261025200000): the signer's poll records the signature as
+  // the service role after resolving the link or the member.
+  'record_signing_signature(uuid,text,jsonb)',
+  // The actor id is trusted input from the v1/MCP service-role doors
+  // (20260926020100): no session may name an actor.
+  'stage_peppol_delivery_as_actor(uuid,uuid,uuid,text,text,text,text,text,text,text)',
+  // Collections payment forwarding (20261012030400): the drain and the case
+  // service run on the service role only.
+  'seed_collection_forwards(uuid,jsonb,jsonb)',
+  'claim_collection_forwards(integer,integer,uuid)',
+  'finish_collection_forward(uuid,uuid,text,text,numeric,numeric,text,timestamp with time zone)',
+  'collection_forward_case_for_invoice(uuid,uuid,boolean)',
+  // The forward reconcile (20261012030500): the sync cron only.
+  'reconcile_collection_forwards(uuid)',
+  // Kundförlust decisions (20261021120700): lib/customer-loss calls it as the
+  // service role after its own writer check; no session records a decision.
+  'record_invoice_write_off(uuid,uuid,uuid,text,date,numeric,numeric,numeric,jsonb,numeric,uuid,uuid,text,uuid,uuid,uuid)',
+  // The event outbox (20261017120100): the event bus's writer, the
+  // dispatcher, the events cleanup cron and the shadow reconciliation.
+  'enqueue_event(text,uuid,jsonb,text[],text,jsonb)',
+  'claim_event_deliveries(integer,integer,integer)',
+  'complete_event_deliveries(bigint[],text[],integer[])',
+  'fail_event_delivery(bigint,text,integer,text,integer,integer)',
+  'prune_event_outbox(interval,interval,integer)',
+  'event_outbox_shadow_counts(timestamp with time zone,timestamp with time zone)',
+  // The async reconciliation (20261018110300): the operator's switch-on check.
+  'event_outbox_async_counts(timestamp with time zone,timestamp with time zone)',
+  // Allowlist team roles (20261103231023): called by the auth.users and
+  // allowlist triggers; a session never joins itself to a byrå team.
+  'join_byra_teams_for_user(uuid)',
 ]
 
 // Called on the user's session client by the app, so authenticated keeps

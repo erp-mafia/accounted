@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -29,6 +29,12 @@ vi.mock('@/lib/auth/require-write', () => ({
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { POST } from '../route'
+
+// The step every input write takes has its own suite (invalidate-calculation.test.ts).
+vi.mock('@/lib/salary/invalidate-calculation', async (original) => ({
+  ...(await original<typeof import('@/lib/salary/invalidate-calculation')>()),
+  invalidateRunCalculation: vi.fn(async () => null),
+}))
 
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
 
@@ -88,6 +94,22 @@ describe('POST /api/salary/employees/[id]/absence', () => {
 
     expect(status).toBe(201)
     expect(body.data.id).toBe('abs-1')
+  })
+
+  it('takes one scheduled day of the employee when the hours are left out', async () => {
+    enqueue({ data: { id: 'emp-1', hours_per_week: 40, workdays_per_week: 4 } }) // loadEmployee
+    enqueueNoLockingRuns()
+    enqueue({ data: { id: 'abs-1', absence_date: '2026-07-01', absence_type: 'sick', hours: 10 } }) // upsert
+
+    const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick' }), params)
+
+    expect(response.status).toBe(201)
+    expect(findCall('salary_absence_days', 'upsert')?.[0]).toMatchObject({ hours: 10 })
+  })
+
+  it('returns 400 for hours above a day', async () => {
+    const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick', hours: 25 }), params)
+    expect(response.status).toBe(400)
   })
 
   it('returns 404 when the employee is not in the company', async () => {

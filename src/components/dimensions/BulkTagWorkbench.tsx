@@ -1,16 +1,17 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  Search,
-  Tags,
-  Undo2,
-  X,
-} from 'lucide-react'
+  ArrowUturnLeftIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ExclamationTriangleIcon,
+  HashtagIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -29,6 +30,9 @@ import {
   DataListRow,
 } from '@/components/ui/data-list'
 import { useToast } from '@/components/ui/use-toast'
+import { LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { LateReveal } from '@/components/ui/skeleton'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -37,6 +41,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { dimensionDisplayName } from '@/components/dimensions/dimension-label'
+import { useDimensions } from '@/lib/reference-data/hooks'
+import type { RetagBlock, RetagBlockReason } from '@/lib/dimensions/retag-lock'
 
 /** Line DTO inside a voucher from GET /api/dimensions/tagging/lines. */
 interface TaggingLine {
@@ -58,8 +65,17 @@ interface TaggingVoucher {
   reversed_by_id: string | null
   reverses_id: string | null
   fiscal_period_id: string
+  /** Why the voucher's lines cannot be retagged (a period lock), else null. */
+  retag_block: RetagBlock | null
   lines: TaggingLine[]
 }
+
+/** The chip a voucher behind a lock carries, per reason. */
+const BLOCK_LABEL_KEY = {
+  period_closed: 'tagging_block_period_closed',
+  period_locked: 'tagging_block_period_locked',
+  company_lock_date: 'tagging_block_company_lock_date',
+} as const satisfies Record<RetagBlockReason, string>
 
 interface ApplyResult {
   retagged: number
@@ -71,12 +87,6 @@ const ACCOUNT_RE = /^\d{4}$/
 /** POST /api/dimensions/tagging/apply accepts at most 500 line_ids per call. */
 const APPLY_CHUNK = 500
 
-function dimensionLabel(sieDimNo: string): string {
-  if (sieDimNo === '1') return 'KS'
-  if (sieDimNo === '6') return 'Proj'
-  return `Dim ${sieDimNo}`
-}
-
 /** Stable grouping key for a dimensions map (sorted entries). */
 function mapKey(dims: Record<string, string>): string {
   return JSON.stringify(
@@ -86,9 +96,6 @@ function mapKey(dims: Record<string, string>): string {
   )
 }
 
-function voucherLabel(v: TaggingVoucher): string {
-  return `${v.voucher_series ?? ''}${v.voucher_number ?? ''}`
-}
 
 /**
  * Distinct non-empty bags across a voucher's lines (insertion order), plus
@@ -131,6 +138,8 @@ function voucherTagState(v: TaggingVoucher): {
  */
 export default function BulkTagWorkbench() {
   const { toast } = useToast()
+  const t = useTranslations('dimensions')
+  const tCommon = useTranslations('common')
   const { canWrite } = useCanWrite()
 
   // Filter bar
@@ -146,6 +155,12 @@ export default function BulkTagWorkbench() {
   const [vouchers, setVouchers] = useState<TaggingVoucher[] | null>(null)
   const [totalCapped, setTotalCapped] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  // The last fetch's failure, said in the page instead of a toast (Stil v3 states).
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // Tag chips carry each dimension's registry name, as every other surface
+  // does (session-cached: the pickers below read the same entry).
+  const { dimensions: registry } = useDimensions()
+  const dimensionLabel = (sieDimNo: string) => dimensionDisplayName(registry, sieDimNo)
 
   // Selection (line-id based: the retag RPC is per line), expansion + apply
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -193,12 +208,9 @@ export default function BulkTagWorkbench() {
       setExpanded(new Set())
       setRowErrors({})
       anchorIndexRef.current = null
+      setLoadError(null)
     } catch (err) {
-      toast({
-        title: 'Kunde inte hämta verifikat',
-        description: getErrorMessage(err, { locale: 'sv' }),
-        variant: 'destructive',
-      })
+      setLoadError(getErrorMessage(err, { locale: 'sv' }))
     } finally {
       setIsLoading(false)
     }
@@ -280,6 +292,18 @@ export default function BulkTagWorkbench() {
     return vouchers.filter((v) => v.lines.some((l) => selected.has(l.id))).length
   }, [vouchers, selected])
 
+  // Selected lines of vouchers behind a period lock: the apply route leaves
+  // them as they are, so the count says so before anyone clicks.
+  const blockedSelectedCount = useMemo(() => {
+    if (!vouchers) return 0
+    let count = 0
+    for (const v of vouchers) {
+      if (!v.retag_block) continue
+      for (const line of v.lines) if (selected.has(line.id)) count++
+    }
+    return count
+  }, [vouchers, selected])
+
   // Reversal-pair guard: only reachable when annullerade are shown: a
   // selected voucher whose counter-entry is loaded but not fully selected.
   const missingPairLineIds = useMemo(() => {
@@ -306,7 +330,7 @@ export default function BulkTagWorkbench() {
     const ids = new Set(missingPairLineIds)
     const labels = new Set<string>()
     for (const v of vouchers) {
-      if (v.lines.some((l) => ids.has(l.id))) labels.add(voucherLabel(v))
+      if (v.lines.some((l) => ids.has(l.id))) labels.add(formatVoucher(v))
     }
     return [...labels]
   }, [vouchers, missingPairLineIds])
@@ -464,7 +488,7 @@ export default function BulkTagWorkbench() {
     <div className="space-y-8">
       {/* Filter bar */}
       <Card>
-        <CardContent className="p-6 space-y-4">
+        <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <Label htmlFor="tag-date-from" className="text-xs text-muted-foreground">
@@ -521,7 +545,7 @@ export default function BulkTagWorkbench() {
           </div>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Sök i beskrivning…"
                 className="pl-10"
@@ -552,24 +576,30 @@ export default function BulkTagWorkbench() {
                 Visa annullerade
               </Label>
             </div>
-            <Button onClick={() => void loadVouchers()} disabled={isLoading}>
-              {isLoading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Search className="mr-2 h-4 w-4" />
-              )}
+            {/* A fetch is never the filled button: the page's primary is
+                Tagga N verifikat in the bar below. */}
+            <Button variant="outline" onClick={() => void loadVouchers()} loading={isLoading}>
+              {!isLoading && <MagnifyingGlassIcon className="h-4 w-4" />}
               Hämta verifikat
             </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Result list */}
-      {vouchers === null && !isLoading ? (
+      {/* Result list. A failed fetch with rows on screen keeps them under
+          one line; with nothing on screen it says so in place of the rows. */}
+      {loadError && vouchers !== null && !isLoading && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadVouchers() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+      {vouchers === null && !isLoading && loadError ? (
+        <LoadError description={loadError} onRetry={() => void loadVouchers()} />
+      ) : vouchers === null && !isLoading ? (
         <Card>
-          <CardContent className="p-0">
+          <CardContent>
             <DataListEmpty
-              icon={<Tags className="h-6 w-6" />}
+              icon={<HashtagIcon className="h-6 w-6" />}
               title="Hämta verifikat att tagga"
               description="Välj filter ovan och klicka på Hämta verifikat för att bläddra bland bokförda verifikat."
             />
@@ -598,10 +628,12 @@ export default function BulkTagWorkbench() {
             )}
           </DataListHeader>
           {isLoading ? (
-            <DataListLoading />
+            <LateReveal>
+              <DataListLoading />
+            </LateReveal>
           ) : vouchers && vouchers.length === 0 ? (
             <DataListEmpty
-              icon={<Search className="h-6 w-6" />}
+              icon={<MagnifyingGlassIcon className="h-6 w-6" />}
               title="Inga verifikat matchade filtren"
               description="Justera datum, kontointervall eller söktext och försök igen."
             />
@@ -627,27 +659,26 @@ export default function BulkTagWorkbench() {
                             e.stopPropagation()
                             toggleVoucher(index, e.shiftKey)
                           }}
-                          aria-label={`Markera verifikat ${voucherLabel(voucher)}`}
+                          aria-label={`Markera verifikat ${formatVoucher(voucher)}`}
                         />
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-6 w-6"
                           onClick={(e) => {
                             e.stopPropagation()
                             toggleExpanded(voucher.journal_entry_id)
                           }}
                           aria-label={
                             isExpanded
-                              ? `Dölj rader för ${voucherLabel(voucher)}`
-                              : `Visa rader för ${voucherLabel(voucher)}`
+                              ? `Dölj rader för ${formatVoucher(voucher)}`
+                              : `Visa rader för ${formatVoucher(voucher)}`
                           }
                           aria-expanded={isExpanded}
                         >
                           {isExpanded ? (
-                            <ChevronDown className="h-4 w-4" />
+                            <ChevronDownIcon className="h-4 w-4" />
                           ) : (
-                            <ChevronRight className="h-4 w-4" />
+                            <ChevronRightIcon className="h-4 w-4" />
                           )}
                         </Button>
                       </div>
@@ -658,7 +689,7 @@ export default function BulkTagWorkbench() {
                   >
                     <DataListPrimary className="flex items-center gap-2">
                       <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                        {voucherLabel(voucher)}
+                        {formatVoucher(voucher)}
                       </span>
                       <span className="truncate">{voucher.description}</span>
                       {voucher.annulled && (
@@ -666,7 +697,7 @@ export default function BulkTagWorkbench() {
                           title="Verifikatet ingår i ett storno-par"
                           className="inline-flex shrink-0"
                         >
-                          <Undo2
+                          <ArrowUturnLeftIcon
                             className="h-3.5 w-3.5 text-muted-foreground"
                             aria-hidden="true"
                           />
@@ -685,7 +716,7 @@ export default function BulkTagWorkbench() {
                           key={mapKey(bag)}
                           data-ph-mask=""
                           variant="outline"
-                          className="px-1.5 py-0 text-[10px] font-normal"
+                          className="px-1.5 py-0 text-xs font-normal"
                         >
                           {Object.entries(bag)
                             .sort(([a], [b]) => Number(a) - Number(b))
@@ -696,10 +727,21 @@ export default function BulkTagWorkbench() {
                       {partial && (
                         <Badge
                           variant="secondary"
-                          className="px-1.5 py-0 text-[10px] font-normal"
+                          className="px-1.5 py-0 text-xs font-normal"
                         >
                           Delvis taggad
                         </Badge>
+                      )}
+                      {voucher.retag_block && (
+                        <>
+                          <DataListMetaSeparator />
+                          <Badge
+                            variant="secondary"
+                            className="px-1.5 py-0 text-xs font-normal"
+                          >
+                            {t(BLOCK_LABEL_KEY[voucher.retag_block.reason])}
+                          </Badge>
+                        </>
                       )}
                     </DataListMeta>
                     {hasError && !isExpanded && (
@@ -729,7 +771,7 @@ export default function BulkTagWorkbench() {
                                   e.stopPropagation()
                                   toggleLine(line.id)
                                 }}
-                                aria-label={`Markera rad ${line.account_number} på ${voucherLabel(voucher)}`}
+                                aria-label={`Markera rad ${line.account_number} på ${formatVoucher(voucher)}`}
                               />
                             </div>
                           }
@@ -749,7 +791,7 @@ export default function BulkTagWorkbench() {
                                   key={dimNo}
                                   data-ph-mask=""
                                   variant="outline"
-                                  className="px-1.5 py-0 text-[10px] font-normal"
+                                  className="px-1.5 py-0 text-xs font-normal"
                                 >
                                   {dimensionLabel(dimNo)}{' '}
                                   <span className="ml-1 font-mono">{code}</span>
@@ -777,11 +819,11 @@ export default function BulkTagWorkbench() {
 
       {/* Apply panel: fixed footer bar while a selection is active */}
       {selected.size > 0 && (
-        <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-lg border border-border bg-background p-4 shadow-lg md:bottom-6">
+        <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-pop p-4 md:bottom-6 bg-popover shadow-float">
           {missingPairLineIds.length > 0 && (
-            <div className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-secondary/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mb-4 flex flex-col gap-3 rounded-lg bg-secondary/40 p-3 sm:flex-row sm:items-center sm:justify-between bg-control shadow-raised">
               <div className="flex items-start gap-2">
-                <AlertTriangle
+                <ExclamationTriangleIcon
                   className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
                   aria-hidden="true"
                 />
@@ -790,7 +832,7 @@ export default function BulkTagWorkbench() {
                   projektresultatet kan bli skevt.
                 </p>
               </div>
-              <Button variant="outline" size="sm" onClick={includeCounterVouchers}>
+              <Button variant="outline" onClick={includeCounterVouchers}>
                 Inkludera motverifikat
               </Button>
             </div>
@@ -799,16 +841,16 @@ export default function BulkTagWorkbench() {
           <div className="flex flex-wrap items-center gap-3">
             <Badge variant="secondary">
               {selectedVoucherCount} verifikat · {selected.size} rader
+              {blockedSelectedCount > 0 && ` · ${t('tagging_selected_blocked', { count: blockedSelectedCount })}`}
             </Badge>
             <Button
               variant="ghost"
-              size="sm"
               onClick={() => {
                 setSelected(new Set())
                 anchorIndexRef.current = null
               }}
             >
-              <X className="mr-1 h-3 w-3" />
+              <XMarkIcon className="h-3 w-3" />
               Avmarkera
             </Button>
             <div className="ml-auto flex items-center gap-2">
@@ -844,12 +886,8 @@ export default function BulkTagWorkbench() {
                   disabled={isApplying}
                   className="flex-1"
                 />
-                <Button onClick={() => void handleApply()} disabled={!canApply}>
-                  {isApplying ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Tags className="mr-2 h-4 w-4" />
-                  )}
+                <Button onClick={() => void handleApply()} disabled={!canApply} loading={isApplying}>
+                  {!isApplying && <HashtagIcon className="h-4 w-4" />}
                   Tagga {selectedVoucherCount} verifikat
                 </Button>
               </div>

@@ -3,15 +3,17 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
+import { AttnLine } from '@/components/ui/attn-line'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { RecordAction, RecordHeader } from '@/components/ui/record-header'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Lock } from 'lucide-react'
+import { TrashIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatAmount, formatDate } from '@/lib/utils'
 import SupplierForm from '@/components/suppliers/SupplierForm'
@@ -21,8 +23,18 @@ import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } fro
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
+import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
-import { formatOrgNumber } from '@/lib/utils'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
+import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
+import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
+import { useCompanySettings } from '@/components/settings/useSettings'
+import {
+  openPaymentMarker,
+  OPEN_PAYMENT_MARKER_LABEL_KEYS,
+  type OpenPaymentInstruction,
+} from '@/lib/supplier-invoices/stages'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {
@@ -46,9 +58,20 @@ export default function SupplierDetailPage() {
   const router = useRouter()
   const { toast } = useToast()
   const t = useTranslations('supplier_detail')
+  const tSuppliers = useTranslations('suppliers')
+  const tCommon = useTranslations('common')
   const tParties = useTranslations('parties')
+  const tInvoices = useTranslations('supplier_invoices')
+  // Kontantmetoden never attests, so 'registered' reads "Att betala" there.
+  const { settings: companySettings } = useCompanySettings()
+  const attests = companyAttestsSupplierInvoices(companySettings?.accounting_method)
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
   const partyId = (supplier as { party_id?: string | null } | null)?.party_id ?? null
+  // The codes its new invoices are tagged with, in dimension-number order.
+  const defaultDimensionsLabel = Object.entries(supplier?.default_dimensions ?? {})
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, code]) => code)
+    .join(' · ')
   const party = usePartyDossier(partyId)
   const registryAddress = party.registry?.contact.address ? addressRowsFromRegistry(party.registry.contact.address) : null
   // Which contact fields carry what the register said: one note for the
@@ -62,8 +85,15 @@ export default function SupplierDetailPage() {
   const registryNote = registryFields.length ? (
     <p className="pt-2 text-xs text-muted-foreground">{tParties('facts_contact_from_registry', { fields: listSv(registryFields, tParties('facts_list_and')) })}</p>
   ) : null
-  const [invoices, setInvoices] = useState<SupplierInvoice[]>([])
+  // Each row carries the payment instruction that already covers it (GET /api/supplier-invoices).
+  const [invoices, setInvoices] = useState<Array<SupplierInvoice & { open_payment?: OpenPaymentInstruction | null }>>([])
   const [isLoading, setIsLoading] = useState(true)
+  // What the last read left: nothing wrong, the supplier is gone, or the read
+  // failed. A failure with no supplier on screen says so in place of it; a
+  // supplier already on screen stays, with one line above it.
+  const [loadError, setLoadError] = useState<{ kind: 'not_found' } | { kind: 'failed'; description: string } | null>(
+    null,
+  )
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
@@ -88,20 +118,17 @@ export default function SupplierDetailPage() {
       // the whole app on global-error. Route it through getErrorMessage, same
       // as every other call site in this file.
       if (!res.ok || body?.error) {
-        toast({
-          title: t('load_failed_title'),
-          description: getErrorMessage(body, { statusCode: res.status, context: 'supplier' }),
-          variant: 'destructive',
-        })
+        setLoadError(
+          res.status === 404
+            ? { kind: 'not_found' }
+            : { kind: 'failed', description: getErrorMessage(body, { statusCode: res.status, context: 'supplier' }) },
+        )
       } else {
         setSupplier(body.data)
+        setLoadError(null)
       }
     } catch (err) {
-      toast({
-        title: t('load_failed_title'),
-        description: getErrorMessage(err, { context: 'supplier' }),
-        variant: 'destructive',
-      })
+      setLoadError({ kind: 'failed', description: getErrorMessage(err, { context: 'supplier' }) })
     } finally {
       setIsLoading(false)
     }
@@ -113,7 +140,7 @@ export default function SupplierDetailPage() {
     )
     const { data } = await res.json()
     if (data) {
-      setInvoices(data as SupplierInvoice[])
+      setInvoices(data as Array<SupplierInvoice & { open_payment?: OpenPaymentInstruction | null }>)
     }
   }
 
@@ -134,6 +161,9 @@ export default function SupplierDetailPage() {
       toast({ title: t('update_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
       toast({ title: t('saved_title'), description: t('saved_description') })
+      // Every supplier picker reads the cached roster: refresh it now, not
+      // after the dedupe window, so a renamed supplier shows renamed.
+      void invalidateReferenceData('ref:suppliers')
       setSupplier({ ...result.data, stats: supplier?.stats })
       setIsEditOpen(false)
     }
@@ -155,6 +185,7 @@ export default function SupplierDetailPage() {
       toast({ title: t('delete_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
       toast({ title: t('deleted_title'), description: t('deleted_description') })
+      void invalidateReferenceData('ref:suppliers')
       router.push('/suppliers')
     }
   }
@@ -165,31 +196,19 @@ export default function SupplierDetailPage() {
 
   if (!supplier) {
     return (
-      <div className="text-center py-12">
-        <p className="text-muted-foreground">{t('not_found')}</p>
-        <Button variant="outline" className="mt-4" onClick={() => router.push('/suppliers')}>
-          {t('back')}
-        </Button>
+      <div className="space-y-8">
+        <PageHeader title={tSuppliers('title')} />
+        {loadError?.kind === 'failed' ? (
+          <LoadError
+            title={t('load_failed_title')}
+            description={loadError.description}
+            onRetry={() => void fetchSupplier()}
+          />
+        ) : (
+          <EmptyState title={t('not_found')} actionLabel={t('back')} actionHref="/suppliers" />
+        )}
       </div>
     )
-  }
-
-  const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
-    registered: 'secondary',
-    approved: 'default',
-    paid: 'success',
-    partially_paid: 'warning',
-    overdue: 'destructive',
-    credited: 'secondary',
-  }
-
-  const statusLabels: Record<string, string> = {
-    registered: t('status_registered'),
-    approved: t('status_approved'),
-    paid: t('status_paid'),
-    partially_paid: t('status_partially_paid'),
-    overdue: t('status_overdue'),
-    credited: t('status_credited'),
   }
 
   // One fallback row keeps the figures band composed for a supplier that has
@@ -202,46 +221,30 @@ export default function SupplierDetailPage() {
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type/org kicker, quiet actions right */}
       <div>
-        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="page-header-lead min-w-0">
-            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
-            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
-              {supplierTypeLabels[supplier.supplier_type]}
-              {supplier.org_number ? ` · ${t('kicker_org', { number: formatOrgNumber(supplier.org_number) })}` : ''}
-            </p>
-          </div>
-
-          <div className="page-header-action flex shrink-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsEditOpen(true)}
-              className="min-h-10 text-muted-foreground hover:text-foreground"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
-              {t('edit')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleDelete}
-              className="min-h-10 text-muted-foreground hover:text-destructive"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
-              {t('delete')}
-            </Button>
-          </div>
-        </div>
+        <RecordHeader
+          parent={{ label: tSuppliers('title'), href: '/suppliers' }}
+          title={supplier.name}
+          facts={<>
+            {supplierTypeLabels[supplier.supplier_type]}
+            {supplier.org_number ? ` · ${t('kicker_org', { number: formatOrgNumberDisplay(supplier.org_number) })}` : ''}
+          </>}
+          actions={<>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={() => setIsEditOpen(true)}>{t('edit')}</RecordAction>
+            <RecordAction canWrite={canWrite} lockedTitle={t('viewer_disabled_tooltip')} onClick={handleDelete} destructive icon={<TrashIcon className="h-4 w-4" />}>{t('delete')}</RecordAction>
+          </>}
+        />
       </div>
+
+      {loadError && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchSupplier() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
 
       {/* Figures band: the three headline numbers, flat on the page */}
       <div className="grid gap-6 sm:grid-cols-3">
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             {t('outstanding')}
           </p>
           <div className="mt-1">
@@ -253,7 +256,7 @@ export default function SupplierDetailPage() {
           </div>
         </div>
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             {t('total_paid')}
           </p>
           <div className="mt-1">
@@ -265,7 +268,7 @@ export default function SupplierDetailPage() {
           </div>
         </div>
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             {t('invoice_count')}
           </p>
           <p className="mt-1 font-display text-xl tabular-nums">
@@ -274,8 +277,11 @@ export default function SupplierDetailPage() {
         </div>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
-      <div className="space-y-8">
+      {/* The invoices fill the left; the facts sit in a capped column on the
+          right (V7 register detail: label-value rows do not stretch). Below
+          lg the facts come first, as in the markup. */}
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-x-12">
+      <div className="min-w-0 space-y-8 lg:order-2">
       {partyId && party.dossier ? (
         <PartyFactsSection
           partyId={partyId}
@@ -290,10 +296,11 @@ export default function SupplierDetailPage() {
           }}
         />
       ) : null}
+      {partyId && party.dossier ? <CounterpartyRoleLink partyId={partyId} dossier={party.dossier} role="supplier" /> : null}
 
       <DetailSection kicker={t('contact_section_title')}>
         <DefRow label={t('def_email')}>
-          {supplier.email || <DefEmpty />}
+          {supplier.email ? <span className="break-all">{supplier.email}</span> : <DefEmpty />}
         </DefRow>
         <DefRow label={t('def_phone')}>
           {supplier.phone || <DefEmpty />}
@@ -351,86 +358,84 @@ export default function SupplierDetailPage() {
             <DefEmpty />
           )}
         </DefRow>
+        {companySettings?.dimensions_enabled === true && (
+          <DefRow label={t('def_default_dimensions')}>
+            {defaultDimensionsLabel ? <span data-ph-mask="">{defaultDimensionsLabel}</span> : <DefEmpty />}
+          </DefRow>
+        )}
       </DetailSection>
 
       </div>
-      <div className="space-y-8">
+      <div className="min-w-0 space-y-8 lg:order-1">
       <DetailSection
         kicker={t('invoices_section_title')}
-        aside={
+        aside={canWrite ? (
           <Link href="/supplier-invoices?new=1" className={QUIET_LINK_CLASS}>
             {t('new_invoice')}
           </Link>
-        }
+        ) : undefined}
       >
           {invoices.length === 0 ? (
             <p className="text-muted-foreground text-sm py-4">
               {t('no_invoices')}
             </p>
           ) : (
-            <>
-            {/* Desktop table */}
-            <div className="hidden sm:block">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('col_arrival')}</TableHead>
-                    <TableHead>{t('col_invoice_number')}</TableHead>
-                    <TableHead>{t('col_date')}</TableHead>
-                    <TableHead>{t('col_due')}</TableHead>
-                    <TableHead className="text-right">{t('col_amount')}</TableHead>
-                    <TableHead className="text-right">{t('col_remaining')}</TableHead>
-                    <TableHead>{t('col_status')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {invoices.map((inv) => (
-                    <TableRow key={inv.id}>
-                      <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
-                      <TableCell>
-                        <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline">
-                          {inv.supplier_invoice_number}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
-                      <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{amountWithCurrency(inv.total, inv.currency)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{amountWithCurrency(inv.remaining_amount, inv.currency)}</TableCell>
-                      <TableCell>
-                        <Badge variant={statusVariants[inv.status] || 'secondary'}>
-                          {statusLabels[inv.status] || inv.status}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            /* One line per invoice, the customer-detail shape: the side
+               column is too narrow for a seven-column table, and arrival
+               number and invoice date live on the invoice itself.
+               Chips mark exceptions: paid and approved render as muted text. */
+            <div className="divide-y divide-border">
+              {invoices.map((inv) => {
+                // The same status as the supplier-invoice list and detail
+                // (lib/supplier-invoices/status-display.ts).
+                const statusDisplay = supplierInvoiceStatusDisplay(inv.status, { attests })
+                const exceptionVariant = statusDisplay?.chip ?? undefined
+                const label = statusDisplay ? tInvoices(statusDisplay.labelKey) : inv.status
+                const openPayment = openPaymentMarker(inv)
+                return (
+                  <Link
+                    key={inv.id}
+                    href={`/supplier-invoices/${inv.id}`}
+                    className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
+                  >
+                    <span className="min-w-0 truncate">
+                      {inv.supplier_invoice_number ?? (
+                        <span className="text-muted-foreground">{tInvoices('number_missing')}</span>
+                      )}
+                    </span>
+                    <span className="hidden shrink-0 text-muted-foreground tabular-nums sm:inline">
+                      {formatDate(inv.due_date)}
+                    </span>
+                    <span className="ml-auto shrink-0 tabular-nums">
+                      {amountWithCurrency(inv.total, inv.currency)}
+                    </span>
+                    {/* A partial payment keeps its outstanding balance visible. */}
+                    {Number(inv.remaining_amount) > 0 &&
+                      Number(inv.remaining_amount) !== Number(inv.total) && (
+                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                          {t('remaining_inline', {
+                            amount: amountWithCurrency(inv.remaining_amount, inv.currency),
+                          })}
+                        </span>
+                      )}
+                    {exceptionVariant ? (
+                      <Badge variant={exceptionVariant} className="shrink-0 font-normal">
+                        {label}
+                      </Badge>
+                    ) : (
+                      <span className="min-w-14 shrink-0 text-right text-xs text-muted-foreground">
+                        {label}
+                      </span>
+                    )}
+                    {openPayment && (
+                      <Badge variant="outline" className="shrink-0 font-normal">
+                        {tInvoices(OPEN_PAYMENT_MARKER_LABEL_KEYS[openPayment])}
+                      </Badge>
+                    )}
+                  </Link>
+                )
+              })}
             </div>
-            {/* Mobile cards */}
-            <div className="sm:hidden space-y-3">
-              {invoices.map((inv) => (
-                <div key={inv.id} className="border rounded-lg p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline font-medium text-sm">
-                      {inv.supplier_invoice_number}
-                    </Link>
-                    <Badge variant={statusVariants[inv.status] || 'secondary'}>
-                      {statusLabels[inv.status] || inv.status}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground tabular-nums">{formatDate(inv.invoice_date)} → {formatDate(inv.due_date)}</span>
-                    <span className="font-mono">{amountWithCurrency(inv.total, inv.currency)}</span>
-                  </div>
-                  {Number(inv.remaining_amount) > 0 && Number(inv.remaining_amount) !== Number(inv.total) && (
-                    <div className="text-xs text-muted-foreground text-right">
-                      {t('remaining_inline', { amount: amountWithCurrency(inv.remaining_amount, inv.currency) })}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-            </>
           )}
       </DetailSection>
       </div>
@@ -440,7 +445,7 @@ export default function SupplierDetailPage() {
 
       {/* Edit Dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+        <DialogContent size="wide">
           <DialogHeader>
             <DialogTitle>{t('edit_dialog_title')}</DialogTitle>
           </DialogHeader>
@@ -463,9 +468,18 @@ export default function SupplierDetailPage() {
               plusgiro: supplier.plusgiro || '',
               iban: supplier.iban || '',
               bic: supplier.bic || '',
+              // Every field the form submits starts from the stored value: one
+              // left out here was written back as empty on the next save
+              // (clearing and account number, the self-billing agreement and
+              // autogiro were reset that way).
+              clearing_number: supplier.clearing_number || '',
+              account_number: supplier.account_number || '',
               default_expense_account: supplier.default_expense_account || '',
               default_payment_terms: supplier.default_payment_terms,
               default_currency: supplier.default_currency || 'SEK',
+              self_billing_agreement_ref: supplier.self_billing_agreement_ref || '',
+              auto_debit: supplier.auto_debit ?? false,
+              default_dimensions: supplier.default_dimensions ?? {},
               notes: supplier.notes || '',
             }}
           />

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { tools } from '../server'
 import { findSkill } from '../skills'
-import { buildKvittojaktenSkill, kvittojaktenSkills, kvittojaktenSlug } from '../skills/kvittojakten'
+import { buildKvittojaktenSkill, kvittojaktenSkills, kvittojaktenSlug } from '@/lib/agent-skills/workflows/kvittojakten'
 import { AI_CLIENTS, kvittojaktenSkillSlug } from '@/lib/onboarding/ai-clients'
 
 describe('kvittojakten skills', () => {
@@ -84,6 +84,77 @@ describe('kvittojakten skills', () => {
       expect(skill.body, skill.slug).toContain('When everything was found, do not ask at all.')
       // The durable fix is a forwarding rule, not a second search.
       expect(skill.body, skill.slug).toContain('forwarding rule')
+    }
+  })
+
+  it('gives the portal section to the harnesses that can drive a browser, for both of Claude\'s browsers', () => {
+    for (const harness of ['claude', 'local'] as const) {
+      const body = buildKvittojaktenSkill(harness).body
+      expect(body, harness).toContain('### Portal items with a browser')
+      // The desktop app's own browser keeps its sign-ins; Claude in Chrome is the other one.
+      expect(body, harness).toContain('the browser built into the Claude desktop app')
+      expect(body, harness).toContain('Claude in Chrome')
+    }
+    for (const harness of ['chatgpt', 'grok'] as const) {
+      expect(buildKvittojaktenSkill(harness).body, harness).not.toContain('Portal items')
+    }
+  })
+
+  it('never gets past a login, a bot check or a foreign account on its own', () => {
+    // A persistent profile makes a signed-in portal the normal case, which is
+    // exactly when an agent must not sign out, pick an account or push
+    // through a check that refuses it.
+    for (const harness of ['claude', 'local'] as const) {
+      const body = buildKvittojaktenSkill(harness).body
+      expect(body, harness).toContain('never type a password or a code')
+      expect(body, harness).toContain('Never sign out or switch account.')
+      expect(body, harness).toContain('ask which one to use')
+      expect(body, harness).toContain('A bot check that still does not clear ends the attempt for that vendor')
+    }
+  })
+
+  it('pairs a card purchase abroad on the implied rate and says the rate', () => {
+    // The bank posts kronor and the receipt states USD or EUR: an agent told
+    // to compare amounts strictly never pairs a single foreign subscription.
+    for (const skill of kvittojaktenSkills) {
+      expect(skill.body, skill.slug).toContain('Three exceptions to the amount rule')
+      expect(skill.body, skill.slug).toContain('A card purchase abroad')
+      expect(skill.body, skill.slug).toContain('Say the rate in the report')
+    }
+  })
+
+  it('clears portal sign-ins right after the worklist, without waiting on them', () => {
+    // A login met halfway through the run stopped it once per portal
+    // (2026-10-29): the check now runs before any search and the run goes on.
+    for (const harness of ['claude', 'local'] as const) {
+      const body = buildKvittojaktenSkill(harness).body
+      expect(body, harness).toContain('**Sign-ins first, not when you get here.** Right after Step 2, before any search')
+      expect(body, harness).toContain('carry on with the search without waiting')
+    }
+    for (const skill of kvittojaktenSkills) {
+      expect(skill.body, skill.slug).toContain('so every pause comes at the start and none in the middle of the run')
+    }
+  })
+
+  it('searches the Photos library before mail, only with a shell on the user\'s own Mac', () => {
+    // Photos gave half of the first full run's links; a VM shell cannot reach it.
+    for (const harness of ['claude', 'local'] as const) {
+      const body = buildKvittojaktenSkill(harness).body
+      expect(body, harness).toContain('### Paper receipts in the Photos library')
+      expect(body, harness).toContain('only with a shell on the user\'s own Mac, where `osascript` runs')
+      expect(body, harness).toContain('without `with using originals`')
+      expect(body, harness).toContain('A photo that answers no worklist item is never uploaded, described or kept')
+      expect(body.indexOf('**Then the Photos library'), harness).toBeLessThan(body.indexOf('Then search for the items nothing explains yet'))
+    }
+    for (const harness of ['chatgpt', 'grok'] as const) {
+      expect(buildKvittojaktenSkill(harness).body, harness).not.toContain('### Paper receipts in the Photos library')
+    }
+  })
+
+  it('names the address receipts were forwarded to instead of asking in general', () => {
+    for (const skill of kvittojaktenSkills) {
+      expect(skill.body, skill.slug).toContain('Watch for the answer while you search')
+      expect(skill.body, skill.slug).toContain('Name that address in the question')
     }
   })
 

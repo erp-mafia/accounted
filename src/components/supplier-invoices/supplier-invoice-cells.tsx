@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LEGAL_VAT_RATES } from '@/lib/vat/supplier-invoice-line-checks'
 import { rateToPctString } from '@/lib/supplier-invoices/form-payload'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
+import { parseDecimalInput, parseAmountInput, formatAmountInput } from '@/lib/money'
 
 export function VatRateCell({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const t = useTranslations('supplier_invoice_editor')
@@ -42,15 +43,11 @@ export function VatRateCell({ value, onChange }: { value: number; onChange: (v: 
             // Blocks "2-22", "100-2", "1.2.3", letters, signs: the keystroke
             // is dropped before reaching the draft.
             if (raw !== '' && !/^\d*[.,]?\d*$/.test(raw)) return
-            const normalized = raw.replace(',', '.')
-            if (normalized === '' || normalized === '.') {
+            const parsed = parseDecimalInput(raw)
+            if (parsed === null) {
+              // Empty or a lone separator: the rate is 0 until a digit arrives.
               setDraft(raw)
               onChange(0)
-              return
-            }
-            const parsed = parseFloat(normalized)
-            if (!Number.isFinite(parsed)) {
-              setDraft(raw)
               return
             }
             const clamped = Math.min(100, Math.max(0, parsed))
@@ -72,10 +69,10 @@ export function VatRateCell({ value, onChange }: { value: number; onChange: (v: 
             type="button"
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className="shrink-0"
             aria-label={t('vat_rate_presets_aria')}
           >
-            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[6rem]">
@@ -109,15 +106,17 @@ export function AmountCell({
   onChange,
   inputRef,
   className,
+  id,
 }: {
   value: number
   onChange: (v: number) => void
   inputRef?: (el: HTMLInputElement | null) => void
   className?: string
+  id?: string
 }) {
   const innerRef = useRef<HTMLInputElement | null>(null)
   // Display Swedish comma decimals; parsing accepts both comma and dot.
-  const toDisplay = (v: number) => (v ? String(v).replace('.', ',') : '')
+  const toDisplay = (v: number) => (v ? formatAmountInput(v) : '')
   const [draft, setDraft] = useState(() => toDisplay(value))
 
   useEffect(() => {
@@ -132,6 +131,7 @@ export function AmountCell({
         innerRef.current = el
         inputRef?.(el)
       }}
+      id={id}
       type="text"
       inputMode="decimal"
       placeholder="0,00"
@@ -149,13 +149,8 @@ export function AmountCell({
         const raw = e.target.value
         if (raw !== '' && !/^-?\d*[.,]?\d*$/.test(raw)) return
         setDraft(raw)
-        const normalized = raw.replace(',', '.')
-        if (normalized === '' || normalized === '.' || normalized === '-') {
-          onChange(0)
-          return
-        }
-        const parsed = parseFloat(normalized)
-        onChange(Number.isFinite(parsed) ? parsed : 0)
+        // Empty, a lone sign or separator reads as 0 until a digit arrives.
+        onChange(parseAmountInput(raw) ?? 0)
       }}
     />
   )

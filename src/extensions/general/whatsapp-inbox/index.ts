@@ -742,11 +742,6 @@ export const whatsappInboxExtension: Extension = {
   version: '1.0.0',
   sector: 'general',
 
-  settingsPanel: {
-    label: 'WhatsApp',
-    path: '/settings/whatsapp',
-  },
-
   apiRoutes: [
     // ── Meta webhook: subscription handshake ────────────────
     {
@@ -875,8 +870,7 @@ export const whatsappInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/link/start',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      handler: async (request: Request, ctx: ExtensionContext) => {
         if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
           return NextResponse.json(
             { error: 'WhatsApp-kanalen är inte konfigurerad på den här installationen.' },
@@ -917,8 +911,7 @@ export const whatsappInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/link',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const { data } = await ctx.supabase
           .from('whatsapp_phone_links')
           .select('id, phone_masked, default_company_id, muted_at, verified_at')
@@ -1009,8 +1002,9 @@ export const whatsappInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/link/revoke',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      // Only revokes the caller's own phone link: taking away one's own access.
+      viewerMay: true,
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         await ctx.supabase
           .from('whatsapp_phone_links')
           .update({ revoked_at: new Date().toISOString() })
@@ -1023,8 +1017,7 @@ export const whatsappInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/link/unmute',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         // Clears a stopp pause from the app (the in-chat counterpart is the
         // literal text `start`). The user-scoped client is deliberate: RLS
         // (whatsapp_phone_links_update_own) proves the caller owns the row.
@@ -1048,9 +1041,7 @@ export const whatsappInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/link/default-company',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         let parsedBody: z.infer<typeof DefaultCompanySchema>
         try {
           parsedBody = DefaultCompanySchema.parse(await request.json())

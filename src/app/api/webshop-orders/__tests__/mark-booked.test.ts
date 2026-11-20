@@ -151,29 +151,26 @@ describe('POST /api/webshop-orders/[id]/mark-booked', () => {
 
   it('refuses to mark while the legacy feed transaction is still OPEN (double-booking gate)', async () => {
     enqueue({ data: makeOrderRow({ legacy_transaction_id: 'txn-1' }) })
-    enqueue({ data: { id: 'txn-1', journal_entry_id: null, is_ignored: false } })
+    enqueue({ data: { id: 'txn-1' } }) // open_bank_rows answers it
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await postMark(),
     )
     expect(status).toBe(409)
     expect(body.error.code).toBe('WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN')
+    expect(findCalls('open_bank_rows', 'eq')).toEqual([
+      ['id', 'txn-1'],
+      ['company_id', 'company-1'],
+    ])
     expect(findCall('webshop_orders', 'update')).toBeUndefined()
   })
 
-  it('marks when the legacy feed transaction was ignored', async () => {
+  it('marks when the legacy feed transaction is not open work: ignored or booked, no open twin remains', async () => {
     enqueue({ data: makeOrderRow({ legacy_transaction_id: 'txn-1' }) })
-    enqueue({ data: { id: 'txn-1', journal_entry_id: null, is_ignored: true } })
+    enqueue({ data: null }) // open_bank_rows leaves it out
     enqueue({ data: [{ id: 'order-1' }] }) // claim
     const { status } = await parseJsonResponse(await postMark())
     expect(status).toBe(200)
-  })
-
-  it('marks when the legacy feed transaction is already booked (no open twin remains)', async () => {
-    enqueue({ data: makeOrderRow({ legacy_transaction_id: 'txn-1' }) })
-    enqueue({ data: { id: 'txn-1', journal_entry_id: 'je-77', is_ignored: false } })
-    enqueue({ data: [{ id: 'order-1' }] }) // claim
-    const { status } = await parseJsonResponse(await postMark())
-    expect(status).toBe(200)
+    expect(findCall('open_bank_rows', 'select')).toEqual(['id'])
   })
 
   it('marks the row with who/when via a conditional claim', async () => {

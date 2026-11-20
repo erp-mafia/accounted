@@ -148,6 +148,22 @@ describe('runPreflightChecks', () => {
     expect(firstYearCodes).not.toContain('3007')
   })
 
+  it('3006/3007: name the missing year and the ways to record it', () => {
+    const input = makeInput()
+    input.period = { start: '2024-01-01', end: '2024-12-31' }
+    input.totals.tillgangar = { ...input.totals.tillgangar, previous: null }
+    input.totals.aretsResultat = { ...input.totals.aretsResultat, previous: null }
+    const { issues } = runPreflightChecks(input, TODAY)
+    for (const [code, statement] of [['3006', 'balansräkningen'], ['3007', 'resultaträkningen']]) {
+      const message = issues.find((found) => found.code === code)?.message
+      expect(message).toContain(statement)
+      expect(message).toContain('slutar 2023-12-31')
+      expect(message).toContain('SIE-fil')
+      expect(message).toContain('bankrad daterad i det')
+      expect(message).toContain('högst 18 månader')
+    }
+  })
+
   it('ACC-2099: unbooked result blocks', () => {
     const input = makeInput()
     input.br['AretsResultatEgetKapital'] = { current: 0, previous: null }

@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CoreEvent, CoreEventType } from '@/lib/events/types'
 import type {
-  CashAccount,
   EntityType,
   IngestOptions,
   IngestResult,
@@ -49,93 +48,65 @@ export interface ExtensionDefinition {
   subscriptionNotice?: string
 }
 
-/** Sector definition with its extensions */
-export interface Sector {
-  slug: SectorSlug
-  name: string
-  icon: string
-  description: string
-  extensions: ExtensionDefinition[]
-}
-
 // ============================================================
 // Extension Interface & Supporting Types
 // ============================================================
 
-/** A route exposed by an extension (page route) */
-export interface RouteDefinition {
+interface ApiRouteBase {
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
   path: string
-  label: string
 }
 
 /**
- * An API route exposed by an extension.
- *
- * Auth/context modes (mutually exclusive: combining throws at dispatch time):
- *   - default: requires auth AND a resolved company; ctx is passed to the handler
- *   - `skipAuth: true`: no auth, no ctx (e.g. OAuth callbacks)
- *   - `skipCompanyContext: true`: auth required, no ctx (pre-onboarding routes)
+ * The default route: the dispatcher has authenticated the caller and resolved
+ * their active company before the handler runs, so `ctx` is always there.
+ * Role gates are declared, not coded: the dispatcher answers 403 before the
+ * handler runs, with the same checks withRouteContext makes. A write method
+ * (POST, PUT, PATCH, DELETE) refuses viewers by default, as if it declared
+ * requireWrite, unless the route sets viewerMay.
  */
-export interface ApiRouteDefinition {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
-  path: string
-  /** Skip auth check for this route (e.g. OAuth callbacks from external providers) */
-  skipAuth?: boolean
+export interface ContextApiRoute extends ApiRouteBase {
+  skipAuth?: false
+  skipCompanyContext?: false
+  /** Refuse viewers (and callers without a membership). */
+  requireWrite?: boolean
   /**
-   * Require auth but NOT a resolved company context. Use for routes that
-   * legitimately run during onboarding (before the user has a company):
-   * e.g. TIC /lookup used by Step2CompanyDetails to fetch company info
-   * while the user types their org number. Handler is called without a
-   * ctx argument; handlers that opt in must tolerate a missing context.
-   *
-   * Must NOT be combined with `skipAuth: true`: the dispatcher treats
-   * that as a misconfiguration and returns 500.
+   * Refuse everyone but owner and admin, by the database's own predicate
+   * (user_is_company_admin). Implies requireWrite.
    */
-  skipCompanyContext?: boolean
-  handler: (request: Request, ctx?: ExtensionContext) => Promise<Response>
+  requireAdmin?: boolean
+  /**
+   * Opt a write-method route out of the dispatcher's default viewer refusal.
+   * Only for a route that changes nothing (search, preview, compute, export,
+   * a dry run), or one whose handler decides the viewer case itself (a
+   * viewer's bank sync inserts raw rows only; the owner of a grant may
+   * always take their own access away). Give the reason in a comment at the
+   * route. Ignored with requireWrite or requireAdmin.
+   */
+  viewerMay?: true
+  handler: (request: Request, ctx: ExtensionContext) => Promise<Response>
 }
 
-/** Sidebar navigation item added by an extension */
-export interface SidebarItem {
-  label: string
-  icon?: string
-  path: string
-  order?: number
+/** No auth and no ctx (e.g. OAuth callbacks from external providers). */
+export interface PublicApiRoute extends ApiRouteBase {
+  skipAuth: true
+  skipCompanyContext?: false
+  handler: (request: Request) => Promise<Response>
 }
 
-/** Report type added by an extension */
-export interface ReportDefinition {
-  id: string
-  name: string
-  description: string
+/**
+ * Auth required but NOT a resolved company context: routes that run during
+ * onboarding, before the user has a company (e.g. TIC /lookup used by
+ * Step2CompanyDetails while the user types their org number). No ctx.
+ */
+export interface NoCompanyApiRoute extends ApiRouteBase {
+  skipAuth?: false
+  skipCompanyContext: true
+  handler: (request: Request) => Promise<Response>
 }
 
-/** Settings panel exposed by an extension */
-export interface SettingsPanelDefinition {
-  label: string
-  path: string
-}
-
-/** Tax code definition added by an extension */
-export interface TaxCodeDefinition {
-  code: string
-  rate: number
-  description: string
-}
-
-/** Dimension type definition added by an extension */
-export interface DimensionDefinition {
-  id: string
-  name: string
-  description: string
-}
-
-/** Mapping rule type added by an extension */
-export interface MappingRuleTypeDefinition {
-  id: string
-  name: string
-  description: string
-}
+/** An API route exposed by an extension: exactly one of the three modes. */
+export type ApiRouteDefinition = ContextApiRoute | PublicApiRoute | NoCompanyApiRoute
 
 /** Event handler registration for an extension */
 export interface ExtensionEventHandler {
@@ -163,31 +134,12 @@ export interface ExtensionSettings {
   clear(key: string): Promise<void>
 }
 
-/** Storage accessor wrapping Supabase storage */
-export interface ExtensionStorage {
-  download(bucket: string, path: string): Promise<{ data: Blob | null; error?: string }>
-  upload(bucket: string, path: string, data: ArrayBuffer, options?: { contentType?: string }): Promise<{ path: string; error?: string }>
-  getPublicUrl(bucket: string, path: string): string
-}
-
 /** Core services exposed to extensions */
 export interface ExtensionServices {
   ingestTransactions(supabase: SupabaseClient, companyId: string, userId: string, raw: RawTransaction[], options?: IngestOptions): Promise<IngestResult>
-  /**
-   * List a company's cash accounts (cash_accounts table). Replaces ad-hoc reads
-   * of bank_connections.accounts_data for routing decisions. Returns rows
-   * sorted by `is_primary DESC, ledger_account ASC`.
-   */
-  getCashAccounts(supabase: SupabaseClient, companyId: string, opts?: { enabledOnly?: boolean }): Promise<CashAccount[]>
-  /**
-   * Primary cash account for a company, optionally filtered by currency.
-   * Falls back to the global primary when no currency-specific row matches.
-   * Used by the skattekonto __PRIMARY_SEK__ sentinel and transfer-pairing.
-   */
-  getPrimaryCashAccount(supabase: SupabaseClient, companyId: string, currency?: string): Promise<CashAccount | null>
 }
 
-/** Context passed to extension lifecycle hooks and event handlers */
+/** Context passed to extension API route and event handlers */
 export interface ExtensionContext {
   userId: string
   companyId: string
@@ -198,10 +150,20 @@ export interface ExtensionContext {
    * support staff can grep stdout logs by it.
    */
   requestId?: string
+  /**
+   * True when the caller signed in anonymously (a sandbox demo session). Set
+   * by the route dispatcher from the authenticated user, so a route never
+   * asks auth again; absent outside an HTTP request.
+   */
+  isAnonymous?: boolean
+  /**
+   * In an API route: the caller's client. In an event handler: the
+   * service-role client, whichever path emitted the event (lib/extensions/
+   * registry.ts), so every query filters by `companyId`.
+   */
   supabase: SupabaseClient
   emit(event: CoreEvent): Promise<void>
   settings: ExtensionSettings
-  storage: ExtensionStorage
   log: ExtensionLogger
   services: ExtensionServices
 }
@@ -209,7 +171,7 @@ export interface ExtensionContext {
 /**
  * Extension interface: the contract for all add-ons.
  *
- * Extensions declare what they provide (routes, event handlers, sidebar items, etc.)
+ * Extensions declare what they provide (API routes, event handlers, services)
  * and the registry wires them into the system.
  */
 export interface Extension {
@@ -219,21 +181,10 @@ export interface Extension {
   sector?: SectorSlug
 
   // Surfaces
-  routes?: RouteDefinition[]
   apiRoutes?: ApiRouteDefinition[]
-  sidebarItems?: SidebarItem[]
   eventHandlers?: ExtensionEventHandler[]
-  mappingRuleTypes?: MappingRuleTypeDefinition[]
-  reportTypes?: ReportDefinition[]
-  settingsPanel?: SettingsPanelDefinition
-  taxCodes?: TaxCodeDefinition[]
-  dimensionTypes?: DimensionDefinition[]
 
   /** Named services this extension provides to core via registry lookup */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   services?: Record<string, (...args: any[]) => Promise<any>>
-
-  // Lifecycle hooks
-  onInstall?(ctx: ExtensionContext): Promise<void>
-  onUninstall?(ctx: ExtensionContext): Promise<void>
 }

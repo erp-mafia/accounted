@@ -6,8 +6,9 @@ import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   Dialog,
@@ -24,13 +25,14 @@ import {
   SlideOverFooter,
   SlideOverHeader,
 } from '@/components/ui/slide-over'
-import { FileText, Loader2 } from 'lucide-react'
+import { DocumentTextIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
+import { collectPages } from '@/lib/lists/collect-pages'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 type BatchListRow = SupplierPaymentBatch & { settled_count: number }
@@ -40,7 +42,7 @@ type BatchItemWithInvoice = SupplierPaymentBatchItem & {
     id: string
     status: string
     remaining_amount: number
-    supplier_invoice_number: string
+    supplier_invoice_number: string | null
     arrival_number: number
   } | null
 }
@@ -50,19 +52,30 @@ type BatchDetail = SupplierPaymentBatch & { items: BatchItemWithInvoice[] }
 /** Mirrors the öre epsilon the server derives settled_count with. */
 const SETTLED_EPSILON = 0.005
 
-function batchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>): string {
+// Files per page, and the most the list API returns per request
+// (SupplierPaymentBatchListQuerySchema).
+const LIST_PAGE_SIZE = 50
+const BATCH_API_MAX_LIMIT = 100
+
+/** The name to save under should the response name none; the server's (supplierPaymentBatchFilename) comes first. */
+function batchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at' | 'format'>): string {
   const datePart = batch.created_at.slice(0, 10).replace(/-/g, '')
-  return `betalfil_${datePart}_${batch.id.replace(/-/g, '').slice(0, 8)}.xml`
+  return `betalfil_${datePart}_${batch.id.replace(/-/g, '').slice(0, 8)}.${batch.format === 'bg_lb' ? 'txt' : 'xml'}`
 }
 
 export default function PaymentFilesPage() {
   const t = useTranslations('supplier_payment_files')
+  const tNav = useTranslations('nav')
+  const tCommon = useTranslations('common')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
   const [batches, setBatches] = useState<BatchListRow[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The last read failed. With no files on screen the list says so in place
+  // of them; files already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [detail, setDetail] = useState<BatchDetail | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
@@ -70,16 +83,39 @@ export default function PaymentFilesPage() {
   const [cancelling, setCancelling] = useState(false)
   const [markingAll, setMarkingAll] = useState(false)
 
+  // Files loaded so far. "Ladda fler" grows it; a refetch after a cancel or
+  // a mark-paid reloads the whole grown window in chunks so the list never
+  // collapses back to the newest page.
+  const [windowSize, setWindowSize] = useState(LIST_PAGE_SIZE)
+  const [hasMore, setHasMore] = useState(false)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+
   const fetchBatches = useCallback(async () => {
-    setIsLoading(true)
+    // A grown window refreshes in place: the skeleton would hide the rows
+    // the user paged to.
+    if (windowSize === LIST_PAGE_SIZE) setIsLoading(true)
     try {
-      const res = await fetch('/api/supplier-invoices/payment-batches?status=all')
-      const body = await res.json()
-      setBatches((body.data as BatchListRow[]) ?? [])
+      const { data, count } = await collectPages<BatchListRow>(
+        async (offset, limit) => {
+          const res = await fetch(
+            `/api/supplier-invoices/payment-batches?status=all&limit=${limit}&offset=${offset}`,
+          )
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const body = await res.json()
+          return { data: (body.data as BatchListRow[]) ?? [], count: body.count ?? null }
+        },
+        { want: windowSize, chunkSize: BATCH_API_MAX_LIMIT },
+      )
+      setBatches(data)
+      setHasMore(count !== null && count > data.length)
+      setLoadFailed(false)
+    } catch {
+      setLoadFailed(true)
     } finally {
       setIsLoading(false)
+      setIsLoadingMore(false)
     }
-  }, [])
+  }, [windowSize])
 
   useEffect(() => {
     fetchBatches()
@@ -97,13 +133,14 @@ export default function PaymentFilesPage() {
     setDetail(body.data as BatchDetail)
   }, [])
 
-  async function handleDownload(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>) {
+  async function handleDownload(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at' | 'format'>) {
     if (downloadingId) return
     setDownloadingId(batch.id)
     try {
       const result = await downloadFile({
         url: `/api/supplier-invoices/payment-batches/${batch.id}/file`,
         filename: batchFilename(batch),
+        preferServerFilename: true,
         locale,
       })
       if (!result.ok) {
@@ -212,28 +249,37 @@ export default function PaymentFilesPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title={t('history_title')} />
+      <PageHeader parent={{ label: tNav('supplier_invoices'), href: '/supplier-invoices' }} title={t('history_title')} />
+
+      {loadFailed && batches.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchBatches() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-4 px-4 py-3">
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="h-4 w-20 flex-1" />
-              <Skeleton className="h-4 w-24" />
+        <LateReveal>
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-8" />
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-32" />
             </div>
           ))}
-        </div>
+        </LateReveal>
+      ) : loadFailed && batches.length === 0 ? (
+        <LoadError onRetry={() => void fetchBatches()} />
       ) : batches.length === 0 ? (
         <EmptyState
-          icon={FileText}
+          icon={DocumentTextIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('empty_action')}
           actionHref="/supplier-invoices"
         />
       ) : (
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -251,14 +297,14 @@ export default function PaymentFilesPage() {
                   className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                   onClick={() => openDetail(batch.id)}
                 >
-                  <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                  <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures')}>
                     {formatDate(batch.created_at)}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
                     {batch.item_count}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                    {formatCurrency(batch.total_amount)}
+                    {formatRowAmount(batch.total_amount)}
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                     {batch.status === 'cancelled' ? (
@@ -304,6 +350,22 @@ export default function PaymentFilesPage() {
               ))}
             </tbody>
           </table>
+          {/* The list is paged: keep the way to older files reachable
+              whenever the server holds more than the loaded window. */}
+          {hasMore && (
+            <div className="flex justify-center pt-3">
+              <Button
+                variant="outline"
+                loading={isLoadingMore}
+                onClick={() => {
+                  setIsLoadingMore(true)
+                  setWindowSize((size) => size + LIST_PAGE_SIZE)
+                }}
+              >
+                {tCommon('load_more')}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -337,7 +399,7 @@ export default function PaymentFilesPage() {
                     return (
                       <div
                         key={item.id}
-                        className="flex items-center gap-3 border-b border-border/60 py-2.5 text-[13px]"
+                        className="flex items-center gap-3 border-b-hairline py-2.5 text-[13px]"
                       >
                         <div className="min-w-0 flex-1">
                           <Link
@@ -346,14 +408,14 @@ export default function PaymentFilesPage() {
                           >
                             {item.payee_name}
                           </Link>
-                          <span className="block text-[11px] text-muted-foreground tabular-nums">
+                          <span className="block text-xs text-muted-foreground tabular-nums">
                             {item.invoice?.supplier_invoice_number ?? item.reference}
                             {' · '}
                             {formatDate(item.payment_date)}
                           </span>
                         </div>
                         {settled ? (
-                          <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                          <span className="whitespace-nowrap text-xs text-muted-foreground">
                             {t('item_settled')}
                           </span>
                         ) : (
@@ -390,8 +452,7 @@ export default function PaymentFilesPage() {
                     </Button>
                   )}
                   {detail.status === 'created' && canWrite && detailUnsettled > 0 && (
-                    <Button onClick={handleMarkAllPaid} disabled={markingAll}>
-                      {markingAll && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    <Button onClick={handleMarkAllPaid} loading={markingAll}>
                       {t('mark_all_paid', { count: detailUnsettled })}
                     </Button>
                   )}
@@ -399,10 +460,12 @@ export default function PaymentFilesPage() {
               </SlideOverFooter>
             </>
           ) : (
-            <SlideOverBody className="space-y-3 pt-6">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-5 w-full" />
-              ))}
+            <SlideOverBody className="pt-6">
+              <LateReveal className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-5 w-full" />
+                ))}
+              </LateReveal>
             </SlideOverBody>
           )}
         </SlideOverContent>
@@ -415,7 +478,7 @@ export default function PaymentFilesPage() {
           if (!open && !cancelling) setConfirmCancelId(null)
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('cancel_confirm_title')}</DialogTitle>
             <DialogDescription>{t('cancel_confirm_body')}</DialogDescription>
@@ -428,8 +491,7 @@ export default function PaymentFilesPage() {
             >
               {t('cancel_confirm_abort')}
             </Button>
-            <Button variant="destructive" onClick={handleCancel} disabled={cancelling}>
-              {cancelling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button variant="destructive" onClick={handleCancel} loading={cancelling}>
               {t('cancel_confirm_action')}
             </Button>
           </DialogFooter>

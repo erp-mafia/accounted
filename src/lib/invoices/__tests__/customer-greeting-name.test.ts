@@ -4,14 +4,14 @@ import { makeCustomer } from '@/tests/helpers'
 
 describe('customerGreetingName', () => {
   it('uses the contact person first name when one is set', () => {
-    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: 'Anna Svensson' })
+    const customer = makeCustomer({ name: 'Exempel Bygg AB', contact_person: 'Anna Svensson' })
     expect(customerGreetingName(customer)).toBe('Anna')
   })
 
   it('never truncates a company name to its first word', () => {
-    // "Hej Eminos," for a company named "Eminos Bygg AB" was the bug.
-    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: null })
-    expect(customerGreetingName(customer)).toBe('Eminos Bygg AB')
+    // "Hej Exempel," for a company named "Exempel Bygg AB" was the bug.
+    const customer = makeCustomer({ name: 'Exempel Bygg AB', contact_person: null })
+    expect(customerGreetingName(customer)).toBe('Exempel Bygg AB')
   })
 
   it('greets a private individual by first name', () => {

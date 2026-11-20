@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { getAiService, getAiStatus } from '@/lib/ai'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-
-ensureInitialized()
 
 /**
  * AI fallback for the expense template chooser: the keyword matcher covers
@@ -51,6 +48,7 @@ export const POST = withRouteContext(
         .join('\n')
       const result = await getAiService().generateStructured({
         tier: 'extraction',
+        meter: { feature: 'expense_template_suggest', companyId },
         system:
           'You classify Swedish business expenses onto booking templates. ' +
           'Pick the best matching template ids for the expense, most likely first. ' +

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CURRENCIES, FOREIGN_CURRENCIES } from '@/types'
 import { CurrencySchema } from '@/lib/api/schemas'
-import { fetchMultipleRates, formatCurrencyAmount } from '@/lib/currency/riksbanken'
+import { RIKSBANKEN_CURRENCIES } from '@/lib/currency/riksbanken'
 
 /**
  * The currency set lives in two places that cannot share code: the TS tuple
@@ -36,17 +36,18 @@ describe('CURRENCIES', () => {
     expect(CurrencySchema.safeParse('CHF').success).toBe(true)
   })
 
-  it('every foreign currency has a fallback rate and a symbol', async () => {
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async () => new Response('', { status: 503 })) as typeof fetch
-    try {
-      const rates = await fetchMultipleRates([...FOREIGN_CURRENCIES])
-      for (const c of FOREIGN_CURRENCIES) {
-        expect(rates.get(c)?.rate, c).toBeGreaterThan(0)
-        expect(formatCurrencyAmount(1, c).length).toBeGreaterThan(4)
-      }
-    } finally {
-      globalThis.fetch = originalFetch
+  it('includes CAD (Riksbanken series SEKCADPMI)', () => {
+    expect(CURRENCIES).toContain('CAD')
+    expect(FOREIGN_CURRENCIES).toContain('CAD')
+    expect(CurrencySchema.safeParse('CAD').success).toBe(true)
+  })
+
+  it('every bookable foreign currency has a Riksbanken rate series', () => {
+    // The rate set (RIKSBANKEN_CURRENCIES) is wider than the bookable set: a
+    // bank row can be in PLN although no invoice can. The other direction
+    // must hold, or a currency offered in a dropdown could never reach SEK.
+    for (const c of FOREIGN_CURRENCIES) {
+      expect(RIKSBANKEN_CURRENCIES, c).toContain(c)
     }
   })
 })

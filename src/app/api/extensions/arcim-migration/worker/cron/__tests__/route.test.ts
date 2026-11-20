@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const { enabled, worker } = vi.hoisted(() => ({ enabled: vi.fn(), worker: vi.fn() }))
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: enabled } }))
 vi.mock('@/extensions/general/arcim-migration/lib/migration-job-worker', () => ({ runProviderMigrationWorker: worker }))
 import { GET } from '../route'
@@ -18,7 +17,7 @@ describe('provider worker cron', () => {
     enabled.mockReturnValue(undefined)
     const response = await GET(request())
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { skipped: 'extension_disabled' } })
+    expect(await response.json()).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(worker).not.toHaveBeenCalled()
   })
   it('runs without a browser or user session and reports its checkpoints', async () => {

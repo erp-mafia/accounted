@@ -192,6 +192,21 @@ describe('bokslut.step prompt template', () => {
     expect(missingOut).not.toContain('status: öppen')
   })
 
+  // #3440: the cut-off is årsomföring per invoice. The prompt sends the agent
+  // to the staging tool, never to a vändning, and forbids booking it by hand.
+  it('points the kontantmetoden cut-off at the staging tool, per invoice and without vändning', async () => {
+    const { captured } = await capture({
+      fiscal_periods: { data: periodRow(), error: null },
+      companies: { data: { entity_type: 'ab' }, error: null },
+    })
+    const out = render(captured)
+
+    expect(out).toContain('använd gnubok_post_kontantmetod_cutoff')
+    expect(out).toContain('egen verifikation på balansdagen (ingen vändning)')
+    expect(out).toContain('Bokför aldrig avgränsningen manuellt')
+    expect(out).not.toMatch(/tillfälligt avstängd|KONTANTMETOD_CUTOFF_SUSPENDED|visa alla föreslagna verifikat och vändningar/)
+  })
+
   it('exposes gnubok_list_fiscal_periods so the fail-closed instruction is actionable', () => {
     expect(bokslutStep.tools).toContain('gnubok_list_fiscal_periods')
     expect(bokslutStep.tools).toContain('gnubok_year_end_readiness')

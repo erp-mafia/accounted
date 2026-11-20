@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { useAccounts, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useCashAccounts, useCompanySettings, usePaymentBankLedger } from '@/lib/reference-data/hooks'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -18,17 +19,22 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
+import { carriedSekOf } from '@/lib/bookkeeping/ledger-carried-sek'
 import { proposePaymentLines, resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
-import { Plus, Trash2, Loader2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { withLineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type DuplicateMatchReason =
   | 'ocr_exact'
@@ -97,7 +103,7 @@ export default function PaymentBookingDialog({
     for (const account of accounts) names.set(account.account_number, account.account_name)
     return names
   }, [accounts, catalog])
-  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [paymentDate, setPaymentDate] = useState(() => todayIsoStockholm())
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isInitialized, setIsInitialized] = useState(false)
   const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[] | null>(null)
@@ -113,13 +119,14 @@ export default function PaymentBookingDialog({
   // existing-voucher picker must look for a 1510 clearing for the same
   // reason. Same rule as resolveInvoicePaymentSourceType.
   const proposalMethod: 'accrual' | 'cash' = invoice.journal_entry_id ? 'accrual' : accountingMethod
-  // The bank account the invoice asked to be paid to (1930 when none was
-  // chosen): the proposed debit lands there, same as the route's default.
+  // The bank account the invoice asked to be paid to, else the company's
+  // primary: the proposed debit lands there, same as the route's default.
   const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const paymentLedger = usePaymentBankLedger()
   const chosenPaymentAccount = useMemo(() => {
     const id = (invoice as { payment_cash_account_id?: string | null }).payment_cash_account_id
-    return id ? cashAccounts.find((a) => a.id === id)?.ledger_account ?? undefined : undefined
-  }, [cashAccounts, invoice])
+    return (id ? cashAccounts.find((a) => a.id === id)?.ledger_account : undefined) ?? paymentLedger
+  }, [cashAccounts, invoice, paymentLedger])
   // source_type the booking will use: drives the voucher-series preview so the
   // number shown matches what mark-paid will actually create.
   const [sourceType, setSourceType] =
@@ -169,9 +176,18 @@ export default function PaymentBookingDialog({
           }),
         )
 
+        // A foreign invoice clears what 1510 carries.
+        const carried = await carriedSekOf(createClient(), company.id, 'customer', invoice).catch(() => {
+          // Safe: the proposal falls back to the invoice's rate, and the rows are the person's to edit.
+          return null
+        })
+        if (cancelled) return
+
         const proposed = proposePaymentLines({
           invoice: {
+            id: invoice.id,
             invoice_number: invoice.invoice_number,
+            customer_name: invoice.customer?.name ?? null,
             total: invoice.total,
             total_sek: invoice.total_sek,
             subtotal: invoice.subtotal,
@@ -181,6 +197,8 @@ export default function PaymentBookingDialog({
             currency: invoice.currency,
             exchange_rate: invoice.exchange_rate,
             vat_treatment: invoice.vat_treatment,
+            // #2906: goods delivered abroad book 3108 / 3105, as on every other door.
+            delivery_country: invoice.delivery_country,
             items: invoice.items,
             default_dimensions: invoice.default_dimensions,
             ore_rounding: invoice.ore_rounding,
@@ -190,6 +208,7 @@ export default function PaymentBookingDialog({
             // partially_paid invoice (öre write-off when < 1 kr remains).
             paid_amount: invoice.paid_amount,
             remaining_amount: invoice.remaining_amount,
+            carried_sek: carried,
           },
           accountingMethod: proposalMethod,
           entityType,
@@ -199,7 +218,7 @@ export default function PaymentBookingDialog({
         })
 
         setLines(proposed)
-        setPaymentDate(new Date().toISOString().split('T')[0])
+        setPaymentDate(todayIsoStockholm())
         setIsInitialized(true)
       } catch (err) {
         if (cancelled) return
@@ -240,16 +259,7 @@ export default function PaymentBookingDialog({
   }, [open, sourceType, paymentDate])
 
   // Balance computation
-  const { totalDebit, totalCredit, isBalanced } = useMemo(() => {
-    let totalDebit = 0
-    let totalCredit = 0
-    for (const line of lines) {
-      totalDebit += parseFloat(line.debit_amount) || 0
-      totalCredit += parseFloat(line.credit_amount) || 0
-    }
-    const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0 && totalDebit > 0
-    return { totalDebit, totalCredit, isBalanced }
-  }, [lines])
+  const { totalDebit, totalCredit, balanced: isBalanced } = useMemo(() => lineBalance(lines), [lines])
 
   const updateLine = (index: number, field: keyof FormLine, value: string) => {
     setLines((prev) => {
@@ -269,7 +279,9 @@ export default function PaymentBookingDialog({
   }
 
   const addLine = () => {
-    setLines((prev) => [...prev, { ...BLANK_LINE }])
+    // A row the user adds belongs to the same payment: it starts with the
+    // invoice's bag, like the proposed rows.
+    setLines((prev) => [...prev, { ...BLANK_LINE, ...withLineDimensions(invoice.default_dimensions) }])
   }
 
   const removeLine = (index: number) => {
@@ -348,7 +360,7 @@ export default function PaymentBookingDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[680px]">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>
             {/* data-ph-mask: the invoice number is user data */}
@@ -362,7 +374,9 @@ export default function PaymentBookingDialog({
             )}
           </DialogTitle>
           <DialogDescription>
-            {formatCurrency(invoice.total, invoice.currency)}
+            {/* What the invoice asks for (getAmountToPay): öresavrundning and
+                any ROT/RUT deduction applied, as on the PDF and in the mail. */}
+            {formatCurrency(getAmountToPay(invoice, companySettings).toPay, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
             )}
@@ -381,11 +395,11 @@ export default function PaymentBookingDialog({
             </div>
             <ul className="space-y-2">
               {duplicateCandidates.map((c) => {
-                const reasonVariant: 'success' | 'secondary' | 'outline' | 'warning' =
+                const reasonVariant: 'muted' | 'secondary' | 'outline' | 'warning' =
                   c.match_reason === 'already_booked'
                     ? 'warning'
                     : c.match_reason === 'ocr_exact' || c.match_reason === 'aggregate_exact'
-                      ? 'success'
+                      ? 'muted'
                       : c.match_reason === 'name_amount_fuzzy'
                         ? 'secondary'
                         : 'outline'
@@ -397,11 +411,15 @@ export default function PaymentBookingDialog({
                 return (
                   <li
                     key={c.id}
-                    className="flex flex-col gap-2 rounded-lg border bg-card p-3 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-col gap-2 rounded-lg p-3 sm:flex-row sm:items-center sm:justify-between bg-control shadow-raised"
                   >
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={reasonVariant}>{MATCH_REASON_LABEL[c.match_reason]}</Badge>
+                        {reasonVariant === 'muted' ? (
+                          <span className="text-xs text-muted-foreground">{MATCH_REASON_LABEL[c.match_reason]}</span>
+                        ) : (
+                          <Badge variant={reasonVariant}>{MATCH_REASON_LABEL[c.match_reason]}</Badge>
+                        )}
                         <span className="text-sm tabular-nums text-muted-foreground">
                           {formatDate(c.date)}
                         </span>
@@ -431,7 +449,6 @@ export default function PaymentBookingDialog({
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
                       onClick={() =>
                         isAlreadyBooked
                           ? router.push(`/bookkeeping/${c.journal_entry_id}`)
@@ -470,8 +487,11 @@ export default function PaymentBookingDialog({
             </TabsContent>
             <TabsContent value="new" className="mt-4">
               {!isInitialized ? (
-                <div className="flex items-center justify-center py-12">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <div className="space-y-3 py-2">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-1/2" />
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -482,143 +502,37 @@ export default function PaymentBookingDialog({
                 id="payment-date"
                 type="date"
                 value={paymentDate}
+                max={todayIsoStockholm()}
                 onChange={(e) => setPaymentDate(e.target.value)}
                 className="w-full sm:w-48"
               />
             </div>
 
             {/* Journal entry lines */}
-            {/* Mobile card layout */}
-            <div className="sm:hidden space-y-3">
-              {lines.map((line, index) => (
-                <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
-                  <div className="flex items-start gap-2">
-                    <div className="flex-1">
-                      <AccountCombobox
-                        value={line.account_number}
-                        accounts={accounts}
-                        onChange={(val) => updateLine(index, 'account_number', val)}
-                        selectedName={accountNameByNumber.get(line.account_number)}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
-                      onClick={() => removeLine(index)}
-                      disabled={lines.length <= 2}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">{t('debit_label')}</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0,00"
-                        value={line.debit_amount}
-                        onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                        className="tabular-nums text-right"
-                        inputMode="decimal"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">{t('credit_label')}</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0,00"
-                        value={line.credit_amount}
-                        onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                        className="tabular-nums text-right"
-                        inputMode="decimal"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <Button type="button" variant="outline" size="sm" onClick={addLine} className="w-full">
-                <Plus className="mr-1 h-3.5 w-3.5" /> {t('add_row')}
-              </Button>
-            </div>
-
-            {/* Desktop table layout */}
-            <div className="hidden sm:block space-y-2">
-              {/* Header */}
-              <div className="grid grid-cols-[1fr_120px_120px_32px] gap-2 text-xs font-medium text-muted-foreground px-1">
-                <span>{t('account_label')}</span>
-                <span className="text-right">{t('debit_label')}</span>
-                <span className="text-right">{t('credit_label')}</span>
-                <span />
-              </div>
-
-              {/* Lines */}
-              {lines.map((line, index) => (
-                <div key={index} className="grid grid-cols-[1fr_120px_120px_32px] gap-2 items-start">
-                  <div className="min-w-0">
-                    <AccountCombobox
-                      value={line.account_number}
-                      accounts={accounts}
-                      onChange={(val) => updateLine(index, 'account_number', val)}
-                      selectedName={accountNameByNumber.get(line.account_number)}
-                    />
-                  </div>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0,00"
-                    value={line.debit_amount}
-                    onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    className="tabular-nums text-right"
-                  />
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0,00"
-                    value={line.credit_amount}
-                    onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    className="tabular-nums text-right"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                    onClick={() => removeLine(index)}
-                    disabled={lines.length <= 2}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
-
-              {/* Add row */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={addLine}
-                className="text-muted-foreground"
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                {t('add_row')}
-              </Button>
-            </div>
+            <KonteringLinesEditor
+              lines={lines}
+              accounts={accounts}
+              accountName={(number) => accountNameByNumber.get(number)}
+              onAccountChange={(index, value) => updateLine(index, 'account_number', value)}
+              onAmountChange={(index, field, value) => updateLine(index, field, value)}
+              onAdd={addLine}
+              onRemove={removeLine}
+              labels={{
+                account: t('account_label'),
+                debit: t('debit_label'),
+                credit: t('credit_label'),
+                addRow: t('add_row'),
+                removeRow: t('remove_row'),
+              }}
+            />
 
             {/* Balance indicator */}
             <div className="flex items-center justify-between border-t pt-3">
               <div className="flex items-center gap-2">
                 {isBalanced ? (
-                  <Badge variant="success">
+                  <span className="text-xs text-muted-foreground">
                     {t('balanced_badge')}
-                  </Badge>
+                  </span>
                 ) : (
                   <Badge variant="destructive">
                     {t('unbalanced_badge', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
@@ -637,25 +551,23 @@ export default function PaymentBookingDialog({
 
         {(duplicateCandidates && duplicateCandidates.length > 0) || tab === 'new' ? (
           <DialogFooter>
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting} className="w-full sm:w-auto min-h-11">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
               {t('cancel')}
             </Button>
             {duplicateCandidates && duplicateCandidates.length > 0 ? (
               <Button
                 onClick={handleForceSubmit}
-                disabled={!isBalanced || isSubmitting}
-                className="w-full sm:w-auto min-h-11"
+                disabled={!isBalanced}
+                loading={isSubmitting}
               >
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('book_anyway')}
               </Button>
             ) : (
               <Button
                 onClick={handleSubmit}
-                disabled={!isBalanced || isSubmitting || !isInitialized}
-                className="w-full sm:w-auto min-h-11"
+                disabled={!isBalanced || !isInitialized}
+                loading={isSubmitting}
               >
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('confirm_and_book')}
               </Button>
             )}

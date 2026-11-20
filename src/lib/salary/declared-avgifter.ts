@@ -111,8 +111,9 @@ export function resolveDeclaredAvgifterParams(
 /**
  * AGI reporting category for a roster row. Legacy rows (category null)
  * resolve by rate: at/below the 10,21/10,22 band → 65+-reduced, at/below
- * the 20,81/20,82 band → youth, else standard. Växa-stöd reports under
- * standard (its FK062/FK063 flags live on the IU, not the category map).
+ * the 20,81/20,82 band → youth, else standard. A legacy 'vaxa_stod' row
+ * (the engine stopped writing them when växa-stöd became a refund, Lag
+ * 2025:1334) reports under standard.
  */
 export function reportingCategory(row: Pick<DeclaredAvgifterRow, 'rate' | 'category'>): DeclaredAvgifterCategory {
   switch (row.category) {
@@ -167,9 +168,11 @@ export function computeDeclaredAvgifter(
     if (rateHundredths <= 0) continue
 
     // Salary caps: the reduced sats applies up to the monthly cap, the
-    // remainder is charged at the full sats: mirrors the engine's
-    // youth/växa-stöd blend (calculation-engine.ts step 8), applied on the
-    // declared whole-krona underlag the way Skatteverket applies it.
+    // remainder is charged at the full sats: mirrors the engine's youth cap
+    // (calculation-engine.ts step 8), applied on the declared whole-krona
+    // underlag the way Skatteverket applies it. The växa cap only serves
+    // legacy 'vaxa_stod' rows stored before växa-stöd became a refund (Lag
+    // 2025:1334); the engine no longer writes them.
     // The youth cap keys on the RESOLVED category so a legacy null-category
     // row classified as youth by the rate heuristic still gets capped; växa
     // keys on the raw category (it resolves to 'standard' for reporting).
@@ -281,4 +284,71 @@ export function computeDeclaredAvgifterWithOverrides(
   }
 
   return { totalAmount, totalUnderlag, byCategory }
+}
+
+/** One salary_run_employees row as stored, with the F-skatt join. */
+export interface DeclaredAvgifterRunRow {
+  avgifter_basis: number
+  avgifter_basis_override?: number | null
+  avgifter_amount_override?: number | null
+  avgifter_rate: number
+  avgifter_category?: string | null
+  removed_from_agi?: boolean | null
+  employee?: { f_skatt_status?: string | null } | null
+}
+
+/**
+ * The arbetsgivaravgifter a run's AGI declares (FK487) and Skatteverket
+ * draws, computed from the stored roster rows. The AGI generator files
+ * exactly this number, and every screen or PDF that shows the declared
+ * figure next to the öre-exact computed avgift calls it too, so the two can
+ * never disagree (crm#1149: the run page showed the öre-exact avgift with
+ * nothing explaining the lower whole-krona amount the AGI declared).
+ *
+ * Row rules, the AGI's own:
+ *  - removed_from_agi rows (FK205 borttag tombstones) contribute nothing:
+ *    the earlier submission's amounts stay on file at Skatteverket;
+ *  - F-skatt rows contribute nothing, overrides included (isFSkattStatus);
+ *  - a row with an avgifter_amount_override contributes that manual amount
+ *    (with its override-coalesced basis);
+ *  - every other row computes from the FILED basis. A basis override of 0
+ *    reaches the IU, as pay that is no underlag for socialavgifter,
+ *    FK131-FK134, and is only saved or filed together with an amount
+ *    override of 0 (crm#1372). A partial basis override above 0 is refused
+ *    at save and at AGI generation (#91): no IU field can carry it, so a
+ *    legacy row stored with one stays inert here.
+ */
+export function declaredAvgifterForRun(
+  rows: DeclaredAvgifterRunRow[],
+  calculationParams: Record<string, unknown> | null | undefined,
+): DeclaredAvgifterWithOverrides {
+  return computeDeclaredAvgifterWithOverrides(
+    declaredAvgifterRowsForRun(rows),
+    resolveDeclaredAvgifterParams(calculationParams),
+  )
+}
+
+/**
+ * The stored roster rows as the AGI declares them (the row rules above):
+ * borttag tombstones dropped, F-skatt rows at basis 0, amount overrides
+ * carried with their override-coalesced basis. Shared with the regionalt
+ * stöd underlag (regional-support.ts) so FK471 reads the rows FK487 reads.
+ */
+export function declaredAvgifterRowsForRun(rows: DeclaredAvgifterRunRow[]): DeclaredAvgifterHybridRow[] {
+  return rows
+    .filter((sre) => !sre.removed_from_agi)
+    .map((sre) => {
+      const fSkatt = isFSkattStatus(sre.employee?.f_skatt_status)
+      const overridden = !fSkatt && sre.avgifter_amount_override != null
+      return {
+        basis: fSkatt
+          ? 0
+          : overridden
+            ? (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
+            : sre.avgifter_basis || 0,
+        rate: sre.avgifter_rate,
+        category: sre.avgifter_category ?? null,
+        overrideAmount: overridden ? sre.avgifter_amount_override : null,
+      }
+    })
 }

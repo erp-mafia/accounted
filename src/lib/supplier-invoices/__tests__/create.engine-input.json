@@ -1,0 +1,256 @@
+[
+  {
+    "name": "a domestic invoice at 25 %: the registration verifikat is posted",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-4000, Leverantören AB (ankomstnr 70)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-4000, Leverantören AB (ankomstnr 70)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-4000, Leverantören AB (ankomstnr 70)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-4000, Leverantören AB (ankomstnr 70)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Leverantörsfaktura F-4000, Leverantören AB (ankomstnr 70)"
+            }
+          ]
+        }
+      ]
+    ],
+    "reverseEntry": [],
+    "outcome": {
+      "ok": true,
+      "registrationJournalEntryId": "je-reg-0"
+    }
+  },
+  {
+    "name": "an invoice in EUR under reverse charge with invoice dimensions",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-4001, Leverantören AB (ankomstnr 71)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "6540",
+              "debit_amount": 1725,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-4001, Leverantören AB (ankomstnr 71)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "2645",
+              "debit_amount": 431.25,
+              "credit_amount": 0,
+              "line_description": "Fiktiv ingående moms 25% (omvänd skattskyldighet)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "2614",
+              "debit_amount": 0,
+              "credit_amount": 431.25,
+              "line_description": "Fiktiv utgående moms 25% (omvänd skattskyldighet)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "4535",
+              "debit_amount": 1725,
+              "credit_amount": 0,
+              "line_description": "Inköp tjänster annat EU-land 25% (basbelopp omvänd skattskyldighet)",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "4598",
+              "debit_amount": 0,
+              "credit_amount": 1725,
+              "line_description": "Motkonto beräknad omvänd moms 25%",
+              "dimensions": {
+                "6": "P100"
+              }
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1725,
+              "line_description": "Leverantörsfaktura F-4001, Leverantören AB (ankomstnr 71)",
+              "dimensions": {
+                "6": "P100"
+              },
+              "currency": "EUR",
+              "amount_in_currency": 150,
+              "exchange_rate": 11.5
+            }
+          ]
+        }
+      ]
+    ],
+    "reverseEntry": [],
+    "outcome": {
+      "ok": true,
+      "registrationJournalEntryId": "je-reg-1"
+    }
+  },
+  {
+    "name": "the invoice cannot point at its verifikat: the registration is reversed on the invoice date",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-4002, Leverantören AB (ankomstnr 72)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-4002, Leverantören AB (ankomstnr 72)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-4002, Leverantören AB (ankomstnr 72)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-4002, Leverantören AB (ankomstnr 72)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Leverantörsfaktura F-4002, Leverantören AB (ankomstnr 72)"
+            }
+          ]
+        }
+      ]
+    ],
+    "reverseEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-reg-2",
+        "2026-09-01"
+      ]
+    ],
+    "outcome": {
+      "ok": false,
+      "code": "SI_CREATE_FAILED",
+      "details": {
+        "step": "registration_journal_entry_link"
+      }
+    }
+  },
+  {
+    "name": "the engine threw after the verifikat posted: the posted registration is found and reversed",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-01",
+          "description": "Leverantörsfaktura F-4003, Leverantören AB (ankomstnr 73)",
+          "source_type": "supplier_invoice_registered",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "lines": [
+            {
+              "account_number": "5410",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-4003, Leverantören AB (ankomstnr 73)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 200,
+              "credit_amount": 0,
+              "line_description": "Leverantörsfaktura F-4003, Leverantören AB (ankomstnr 73)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 300,
+              "credit_amount": 0,
+              "line_description": "Ingående moms 25% Leverantörsfaktura F-4003, Leverantören AB (ankomstnr 73)"
+            },
+            {
+              "account_number": "2440",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Leverantörsfaktura F-4003, Leverantören AB (ankomstnr 73)"
+            }
+          ]
+        }
+      ]
+    ],
+    "reverseEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "00000000-0000-4000-8000-0000000e9999",
+        "2026-09-01"
+      ]
+    ],
+    "outcome": {
+      "ok": false,
+      "code": "SI_CREATE_FAILED",
+      "details": {
+        "reason": "Något gick fel. Försök igen.",
+        "step": "registration_journal_entry"
+      }
+    }
+  }
+]

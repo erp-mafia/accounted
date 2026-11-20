@@ -7,7 +7,7 @@ import {
 } from '@/tests/helpers'
 
 // Mock session auth (requireAuth enforces MFA; returns the request-scoped client)
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls: findSessionCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -31,6 +31,16 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     validateApiKey: (...args: unknown[]) => mockValidateApiKey(...args),
     extractBearerToken: (...args: unknown[]) => mockExtractBearerToken(...args),
     createServiceClientNoCookies: () => mockCreateServiceClientNoCookies(),
+  }
+})
+
+// The multi-user seat gate's membership check (MULTI_USER_SEAT_GATE).
+const mockIsMembershipActive = vi.fn()
+vi.mock('@/lib/entitlements/multi-user', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/multi-user')>()
+  return {
+    ...actual,
+    isMembershipActive: (...args: unknown[]) => mockIsMembershipActive(...args),
   }
 })
 
@@ -92,6 +102,7 @@ describe('GET /api/events', () => {
     vi.clearAllMocks()
     reset()
     mockExtractBearerToken.mockReturnValue(null)
+    mockIsMembershipActive.mockResolvedValue(true)
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   })
 
@@ -227,6 +238,45 @@ describe('GET /api/events', () => {
 
     expect(status).toBe(404)
     expect(body.error.code).toBe('NOT_FOUND')
+  })
+
+  it('returns 403 for a non-owner key in a company paused by the multi-user seat gate, before reading events', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_frozen')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    mockIsMembershipActive.mockResolvedValue(false)
+    const keyClient = withKeyClient([{ data: { company_id: 'company-1', role: 'member' } }, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(mockIsMembershipActive).toHaveBeenCalledWith(keyClient.supabase, 'company-1', 'member')
+    expect(keyClient.findCalls('event_log', 'select')).toEqual([])
+  })
+
+  it('returns 403 for a key whose membership has the invoicing-only role, before reading events', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_invoicer')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([{ data: { company_id: 'company-1', role: 'invoicer' } }, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(keyClient.findCalls('event_log', 'select')).toEqual([])
+  })
+
+  it('serves an owner key through the seat gate check', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_owner')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([{ data: { company_id: 'company-1', role: 'owner' } }, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+
+    expect(response.status).toBe(200)
+    expect(mockIsMembershipActive).toHaveBeenCalledWith(keyClient.supabase, 'company-1', 'owner')
   })
 
   it('returns 500 when the membership lookup itself fails', async () => {
@@ -424,5 +474,58 @@ describe('GET /api/events', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
+  })
+
+  // ── Payroll events need payroll:read on a key ───────────────
+
+  it('withholds payroll events from a key without payroll:read', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+
+    expect(response.status).toBe(200)
+    expect(keyClient.findCalls('event_log', 'not')).toEqual([
+      ['event_type', 'like', 'salary_run.%'],
+      ['event_type', 'like', 'agi.%'],
+    ])
+  })
+
+  it('serves payroll events to a key holding payroll:read', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth({ scopes: ['events:read', 'payroll:read'] }))
+    const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+
+    expect(response.status).toBe(200)
+    expect(keyClient.findCalls('event_log', 'not')).toEqual([])
+  })
+
+  it('serves payroll events to a session user', async () => {
+    enqueue({ data: sampleEvents })
+
+    const response = await GET(createMockRequest('/api/events'))
+
+    expect(response.status).toBe(200)
+    expect(findSessionCalls('event_log', 'select')).toHaveLength(1)
+    expect(findSessionCalls('event_log', 'not')).toEqual([])
+  })
+
+  it('refuses a payroll type named in types without payroll:read, before reading events', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_ok')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([membershipFound, { data: sampleEvents }])
+
+    const response = await GET(
+      createMockRequest('/api/events', { searchParams: { types: 'invoice.paid,salary_run.booked' } }),
+    )
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(body.error.details).toMatchObject({ required_scope: 'payroll:read' })
+    expect(keyClient.findCalls('event_log', 'select')).toEqual([])
   })
 })

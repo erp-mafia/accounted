@@ -26,14 +26,13 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   SYNC_COOLDOWN_MS,
   type EnableBankingServices,
 } from '@/lib/bank-sync/trigger-sync-contract'
-
-ensureInitialized()
+import { getBankFeedConnect } from '@/lib/bank-feed/connect'
+import { runOpenPaymentsSync } from '@/lib/bank-feed/feed'
 
 const SyncResponse = z.object({
   connection_id: z.string().uuid(),
@@ -43,6 +42,17 @@ const SyncResponse = z.object({
   from_date: z.string(),
   to_date: z.string(),
   last_synced_at: z.string(),
+  enriched_updated: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('Open Payments only: stored rows this read updated with the bank\'s daily enrichment (a payer, an organisationsnummer, an OCR reference) instead of only skipping them as duplicates.'),
+  window_enriched: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe('Open Payments only: true when the window carried the bank\'s enrichment of today, false when the bank had not yet enriched it (the next read updates the rows), null when the bank says nothing.'),
 })
 
 registerEndpoint({
@@ -63,6 +73,7 @@ registerEndpoint({
     '409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.',
     'imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today\'s transactions often arrive tomorrow.',
     'Costs one Enable Banking call per enabled account: 403 CAPABILITY_BLOCKED when the company has no bank_sync entitlement.',
+    '410 ENABLE_BANKING_SUNSET means the old provider (enable_banking rows) has ended and the connection fetches nothing any more: no retry helps. GET /bank-connections marks these rows with sunset=true; the person switches to the new connection from the Kopplingar page (or imports bank statements as files where the new provider does not reach the bank).',
   ],
   example: {
     response: {
@@ -80,7 +91,7 @@ registerEndpoint({
   },
   scope: 'transactions:write',
   risk: 'low',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: false,
   response: {
@@ -88,10 +99,12 @@ registerEndpoint({
     errorCodes: [
       'BANK_SYNC_COOLDOWN',
       'BANK_RATE_LIMITED',
+      'BANK_THROTTLED',
       'BANK_SYNC_NOT_ACTIVE',
       'BANK_SYNC_NO_ACCOUNTS',
       'BANK_SESSION_EXPIRED',
       'BANK_SYNC_FAILED',
+      'ENABLE_BANKING_SUNSET',
       'CAPABILITY_BLOCKED',
       'EXTENSION_DISABLED',
       'NOT_FOUND',
@@ -107,39 +120,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; connectionI
     const capBlocked = await requireCapability(ctx.supabase, ctx.companyId!, CAPABILITY.bank_sync)
     if (capBlocked) return capBlocked
 
-    // The bank round-trip IS the side effect, so there is nothing to simulate.
-    // Test keys never reach this line (the wrapper blocks them on endpoints
-    // that cannot dry-run); a live key passing ?dry_run=true is told why.
-    if (ctx.dryRun) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'dry_run',
-          message: 'dry_run is not supported: the bank call is the side effect.',
-          cooldown_ms: SYNC_COOLDOWN_MS,
-        },
-      })
-    }
+    // The bank round-trip IS the side effect, so there is nothing to simulate:
+    // withApiV1 refuses a dry run (and a test key) on this endpoint before
+    // this line (dryRunSupported: false).
 
     // The enable-banking extension is opt-in (extensions.config.json) and the
     // registry is the runtime source of truth: absent registration means the
     // deployment does not offer PSD2 sync at all.
-    const services = extensionRegistry.get('enable-banking')?.services as
+    const services = (await extensionRegistry.get('enable-banking'))?.services as
       | Partial<EnableBankingServices>
       | undefined
     if (!services?.triggerConnectionSync) {
       return v1ErrorResponseFromCode('EXTENSION_DISABLED', ctx.log, {
         requestId: ctx.requestId,
+        details: { extension: 'enable-banking' },
       })
     }
 
     try {
-      const result = await services.triggerConnectionSync(ctx.supabase, {
-        companyId: ctx.companyId!,
-        userId: ctx.userId,
-        connectionId,
-        log: ctx.log,
-      })
+      const input = { companyId: ctx.companyId!, userId: ctx.userId, connectionId, log: ctx.log }
+      let result = await services.triggerConnectionSync(ctx.supabase, input)
+      // The Enable Banking runner only knows its own connections. An Open
+      // Payments connection is read by the core runner (lib/bank-feed/feed.ts).
+      if (!result.ok && result.code === 'NOT_FOUND' && getBankFeedConnect()) {
+        result = await runOpenPaymentsSync(ctx.supabase, { ...input, trigger: 'agent' })
+      }
 
       if (!result.ok) {
         const { ok: _ok, code, ...details } = result

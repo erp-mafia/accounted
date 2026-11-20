@@ -15,13 +15,15 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   findFiscalPeriod: vi.fn().mockResolvedValue('period-1'),
   createJournalEntry: vi.fn(async (_db, _company, _user, input: CreateJournalEntryInput) => ({ id: 'entry-1', ...input })),
 }))
+// No momskoder configured: the reverse-charge registration reads them (crm#1096).
+vi.mock('@/lib/bookkeeping/chart-vat-treatments', () => ({ fetchChartVatTreatments: vi.fn(async () => new Map()) }))
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }))
 vi.mock('@/components/ui/account-number', () => ({ AccountNumber: ({ number }: { number: string }) => number }))
 
 const form: SupplierInvoiceFormData = {
   supplier_id: 'supplier-1', supplier_invoice_number: 'ROUND-1', invoice_date: '2026-09-01',
   due_date: '2026-09-30', delivery_date: '', currency: 'SEK', exchange_rate: '',
-  reverse_charge: false, payment_reference: '', notes: '', payer: 'unpaid',
+  reverse_charge: false, reverse_charge_kind: 'eu_services', payment_reference: '', notes: '', payer: 'unpaid',
   claimant_name: '', employee_id: '',
   items: [
     { description: 'Purchase', amount: 16000, account_number: '6110', vat_rate: 0.25 },
@@ -37,7 +39,7 @@ it.each([false, true])('saves the previewed payable and keeps VAT unchanged (rev
     : form
   const payload = buildSupplierInvoicePayload(data, {
     oreRounding: true, inboxItemId: null, uploadedDocumentId: undefined,
-    defaultDims: {}, canUseAccrual: false,
+    defaultDims: {}, canUseAccrual: false, euSupplier: false,
   })
   const items: SupplierInvoiceItem[] = payload.items.map((item, i) => ({
     ...item, id: `item-${i}`, supplier_invoice_id: 'invoice-1', sort_order: i,
@@ -53,7 +55,7 @@ it.each([false, true])('saves the previewed payable and keeps VAT unchanged (rev
     vat_treatment: reverseCharge ? 'reverse_charge' : 'standard_25',
   })
   await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', invoice, items, 'swedish_business')
-  await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, items, '2026-09-21', 'swedish_business')
+  await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, items, '2026-09-21', 'swedish_business', undefined, '1930')
   for (const [i, anchor] of ['2440', '1930'].entries()) {
     const lines = vi.mocked(createJournalEntry).mock.calls[i][3].lines
     expect(lines.find(l => l.account_number === anchor)?.credit_amount).toBe(reverseCharge ? 100 : 20056)
@@ -71,12 +73,13 @@ it.each([false, true])('renders a rounding credit and the actual 2440 total (exp
   const html = renderToStaticMarkup(createElement(SupplierInvoiceReviewContent, {
     supplier: makeSupplier(), invoiceNumber: form.supplier_invoice_number,
     invoiceDate: form.invoice_date, dueDate: form.due_date,
-    currency: 'SEK', reverseCharge: false, items, oreRounding: true,
+    currency: 'SEK', reverseCharge: false, items, oreRounding: true, bookingMoment: 'issue',
+    chartVatTreatments: new Map(),
   }))
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const cellsFor = (account: string) => {
     const row = [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].find(m => m[1].includes(account))![1]
-    return [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m => m[1]).slice(-2)
+    return [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m => m[1].replace(/<[^>]+>/g, '')).slice(-2)
   }
   expect(cellsFor('3740')).toEqual(['', formatAmount(0.25)])
   expect(cellsFor('2440')).toEqual(['', formatAmount(20056)])
@@ -98,7 +101,7 @@ it.each([
   }
   const payload = buildSupplierInvoicePayload(data, {
     oreRounding: false, inboxItemId: null, uploadedDocumentId: undefined,
-    defaultDims: {}, canUseAccrual: false,
+    defaultDims: {}, canUseAccrual: false, euSupplier: false,
   })
   const items: SupplierInvoiceItem[] = payload.items.map((item, i) => ({
     ...item, id: `item-${i}`, supplier_invoice_id: 'invoice-1', sort_order: i,
@@ -120,10 +123,11 @@ it.each([
   const html = renderToStaticMarkup(createElement(SupplierInvoiceReviewContent, {
     supplier: makeSupplier({ supplier_type: 'swedish_business' }), invoiceNumber: form.supplier_invoice_number,
     invoiceDate: form.invoice_date, dueDate: form.due_date, exchangeRate: data.exchange_rate,
-    currency, reverseCharge: true, items: data.items, oreRounding: false,
+    currency, reverseCharge: true, items: data.items, oreRounding: false, bookingMoment: 'issue',
+    chartVatTreatments: new Map(),
   }))
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const vatRow = [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].find(row => row[1].includes('2647'))![1]
-  const vatCells = [...vatRow.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(cell => cell[1]).slice(-2)
+  const vatCells = [...vatRow.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(cell => cell[1].replace(/<[^>]+>/g, '')).slice(-2)
   expect(vatCells).toEqual([formatAmount(expectedVat), ''])
 })

@@ -1,5 +1,5 @@
 /**
- * Tests for /api/settings/rot-rut-signal — invoice-derived ROT/RUT signal.
+ * Tests for /api/settings/rot-rut-signal - invoice-derived ROT/RUT signal.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'

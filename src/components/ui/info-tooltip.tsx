@@ -2,8 +2,9 @@
 
 import * as React from 'react'
 import * as TooltipPrimitive from '@radix-ui/react-tooltip'
-import { Info, HelpCircle } from 'lucide-react'
+import { InformationCircleIcon, QuestionMarkCircleIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
+import { POPOVER_SURFACE_CLASS, RADIX_POPOVER_MOTION_CLASS } from '@/components/ui/popover-surface'
 
 const TooltipProvider = TooltipPrimitive.Provider
 
@@ -26,7 +27,9 @@ const TooltipContent = React.forwardRef<
       sideOffset={sideOffset}
       data-ph-unmask=""
       className={cn(
-        'z-50 overflow-hidden rounded-lg border border-border/60 bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2',
+        'z-50 overflow-hidden px-2.5 py-1.5 text-[12px] leading-4',
+        POPOVER_SURFACE_CLASS,
+        RADIX_POPOVER_MOTION_CLASS,
         className
       )}
       {...props}
@@ -67,17 +70,37 @@ function InfoTooltip({
   variant = 'info',
   maxWidth = '280px',
 }: InfoTooltipProps) {
-  const Icon = variant === 'help' ? HelpCircle : Info
+  const Icon = variant === 'help' ? QuestionMarkCircleIcon : InformationCircleIcon
 
   return (
       <Tooltip>
         <TooltipTrigger asChild>
           {children ? (
-            <span className={cn('inline-flex items-center gap-1.5 cursor-help', className)}>
+            // tabIndex is what makes this branch reachable at all. Radix opens a
+            // tooltip on focus as well as hover, but TooltipTrigger with asChild
+            // only forwards props: it never adds tabIndex, and a bare <span>
+            // cannot take focus, so the focus handler never fired and everything
+            // behind a labelled tooltip was mouse-only. WCAG 2.1 asks for
+            // keyboard access to content shown on hover, and the design system
+            // asks for it too.
+            //
+            // Not a <button>: six of the nine call sites sit inside a
+            // <label htmlFor>, where a button would swallow the click that
+            // focuses the field. And no role="button" either, since there is
+            // nothing to activate. Focus IS the interaction, and Radix already
+            // wires aria-describedby to the content while it is open.
+            <span
+              tabIndex={0}
+              className={cn(
+                'inline-flex items-center gap-1.5 cursor-help rounded-sm',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                className,
+              )}
+            >
               {children}
               <Icon
                 className={cn(
-                  'h-3.5 w-3.5 text-muted-foreground/70 hover:text-muted-foreground transition-colors flex-shrink-0',
+                  'h-3.5 w-3.5 text-muted-foreground hover:text-muted-foreground transition-colors flex-shrink-0',
                   iconClassName
                 )}
               />
@@ -86,7 +109,7 @@ function InfoTooltip({
             <button
               type="button"
               className={cn(
-                'inline-flex items-center justify-center rounded-full p-0.5 text-muted-foreground/70 hover:text-muted-foreground hover:bg-muted/50 transition-colors cursor-help',
+                'inline-flex items-center justify-center rounded-full p-0.5 text-muted-foreground hover:text-muted-foreground hover:bg-secondary/60 transition-colors cursor-help',
                 className
               )}
             >
@@ -101,34 +124,9 @@ function InfoTooltip({
           className="max-w-[var(--tooltip-max-width)]"
           style={{ '--tooltip-max-width': maxWidth } as React.CSSProperties}
         >
-          <div className="text-sm leading-relaxed">{content}</div>
+          <div className="text-[12px] leading-[18px]">{content}</div>
         </TooltipContent>
       </Tooltip>
-  )
-}
-
-interface InfoTextProps {
-  term: string
-  explanation: string
-  className?: string
-  termClassName?: string
-}
-
-/**
- * InfoText - Kombination av primär text med fackterm i parentes
- *
- * Användning:
- * <InfoText term="Enkla avdrag" explanation="schablonavdrag" />
- * Visar: "Enkla avdrag (schablonavdrag)"
- */
-function InfoText({ term, explanation, className, termClassName }: InfoTextProps) {
-  return (
-    <span className={className}>
-      {term}
-      <span className={cn('text-muted-foreground ml-1', termClassName)}>
-        ({explanation})
-      </span>
-    </span>
   )
 }
 
@@ -159,7 +157,6 @@ function HelpLink({ href, children, className, external = true }: HelpLinkProps)
 
 export {
   InfoTooltip,
-  InfoText,
   HelpLink,
   Tooltip,
   TooltipTrigger,

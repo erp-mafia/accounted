@@ -12,7 +12,9 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { AccountKeySchema } from '@/lib/reconciliation/schemas'
-import { setItemIgnored } from '@/lib/reconciliation/actions'
+import { reconciliationRefusalCode, setItemIgnored } from '@/lib/reconciliation/actions'
+import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const IgnoreRequest = z.object({ ignored: z.boolean().optional() })
 const IgnoreResponse = z.object({ external_id: z.string(), is_ignored: z.boolean() })
@@ -75,7 +77,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; accountKey:
       if (ctx.dryRun) {
         return dryRunPreview({ external_id: itemId, would_set_ignored: ignored }, { requestId: ctx.requestId, log: ctx.log })
       }
-      const result = await setItemIgnored(ctx.supabase, ctx.companyId!, accountKey, itemId, ignored)
+      const result = await setItemIgnored(ctx.supabase, ctx.companyId!, accountKey, itemId, ignored, ctx.userId)
       if (!result) {
         return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
           requestId: ctx.requestId,
@@ -84,6 +86,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; accountKey:
       }
       return ok(result, { requestId: ctx.requestId })
     } catch (err) {
+      // A refusal of the reconciliation surface is a typed 4xx, never 500 (PH 194).
+      if (err instanceof SkattekontoLinkError) {
+        const refusal = reconciliationRefusalCode(err)
+        if (refusal) {
+          return v1ErrorResponseFromCode(refusal, ctx.log, {
+            requestId: ctx.requestId,
+            messageSv: getErrorMessage(err),
+            details: { reason: err.code },
+          })
+        }
+      }
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }
   },

@@ -613,6 +613,48 @@ describe('annual report profile and version enforcement', () => {
     expect(previous.rows[0].status).toBe('superseded')
   })
 
+  it('keeps the signer slots of a version when the same content is locked again (PH 186)', async () => {
+    const owner = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.arsredovisning_signature_requests
+         (user_id, company_id, fiscal_period_id, role, signer_name)
+       VALUES ($1, $2, $3, 'Styrelseledamot', 'Anna Andersson'),
+              ($1, $2, $3, 'VD', 'Erik Eriksson')`,
+      [owner.userId, owner.companyId, owner.fiscalPeriodId],
+    )
+    const first = await createVersion({ ...owner, status: 'ready_for_signature' })
+    // An owner reopen supersedes the locked version; its pending slots stay with it.
+    await getPool().query(
+      `UPDATE public.annual_report_versions SET status = 'superseded' WHERE id = $1`,
+      [first.rows[0].id],
+    )
+    const slotsOf = async (versionId: string) =>
+      (
+        await getPool().query<{ role: string; signer_name: string; status: string }>(
+          `SELECT role, signer_name, status
+           FROM public.arsredovisning_signature_requests
+           WHERE annual_report_version_id = $1
+           ORDER BY role`,
+          [versionId],
+        )
+      ).rows
+    const roster = [
+      { role: 'Styrelseledamot', signer_name: 'Anna Andersson', status: 'pending' },
+      { role: 'VD', signer_name: 'Erik Eriksson', status: 'pending' },
+    ]
+
+    // The first lock after the supersede copies the roster onto the new version.
+    const relocked = await createVersion({ ...owner, hash: 'b'.repeat(64), status: 'ready_for_signature' })
+    expect(relocked.rows[0]).toMatchObject({ version_number: 2, status: 'ready_for_signature' })
+    expect(await slotsOf(relocked.rows[0].id)).toEqual(roster)
+
+    // Locking the same content again returns that version and leaves its slots as they are.
+    const again = await createVersion({ ...owner, hash: 'b'.repeat(64), status: 'ready_for_signature' })
+    expect(again.rows[0]).toMatchObject({ id: relocked.rows[0].id, status: 'ready_for_signature' })
+    expect(await slotsOf(relocked.rows[0].id)).toEqual(roster)
+    expect(await slotsOf(first.rows[0].id)).toEqual(roster)
+  })
+
   it('rejects validation rows linked to another company version', async () => {
     const first = await seedCompany()
     const second = await seedCompany()

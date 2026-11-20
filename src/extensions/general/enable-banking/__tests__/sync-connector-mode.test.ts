@@ -14,6 +14,8 @@ vi.mock('../lib/api-client', async () => {
 import { syncAccountTransactions } from '../lib/sync'
 import { SessionExpiredError, ConnectorSyncError, AspspUnavailableError } from '../lib/api-client'
 import { buildStableExternalIds } from '@/lib/transactions/external-id'
+import type { NormalizedBankTransaction } from '@accounted/connect-contract'
+import type { RawTransaction } from '@/types'
 import type { StoredAccount } from '../types'
 
 const fetchMock = vi.fn()
@@ -30,6 +32,10 @@ const account: StoredAccount = {
 
 /** A supabase stand-in that answers the connection lookup with the session id. */
 const supabase = {
+  rpc: vi.fn(async () => ({ data: {
+    connectionId: 'conn-1', sessionId: 'sess-1', accountUid: 'acc-1',
+    currency: 'SEK', cashAccountId: 'cash-1', ledgerAccount: '1930', token: 'route-token',
+  }, error: null })),
   from: (table: string) => {
     if (table !== 'bank_connections') throw new Error(`unexpected table ${table}`)
     const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { session_id: 'sess-1' }, error: null }) }
@@ -74,9 +80,76 @@ describe('syncAccountTransactions in connector mode', () => {
     expect(raw.map((r) => r.external_id)).toEqual(expectedIds)
     expect(raw[0]).toMatchObject({ date: '2026-09-01', amount: -125.5, counterparty_iban: 'SE4550000000058398257466', counterparty_account: null, import_source: 'enable_banking', bank_connection_id: 'conn-1' })
     expect(raw[1]).toMatchObject({ counterparty_iban: null, counterparty_account: '123456789' })
+    // A service that predates the optional fields: the rows sync without them.
+    expect(raw[0]).toMatchObject({ reference: null, value_date: null, provider_transaction_id: null, raw_document_id: null })
     expect(account.dedup_scope).toBe('SE4550000000058398257466')
     expect(h.upload).toHaveBeenCalledTimes(2)
     expect(result).toMatchObject({ imported: 2, returnedMinBookingDate: '2026-09-01', returnedMaxBookingDate: '2026-09-01' })
+  })
+
+  it('carries every contract field to ingest and links each row to the raw page it came in', async () => {
+    // Required<> makes a new contract field fail the type check until it is
+    // set here, and `lands` until it names the ingest field it must reach.
+    const row: Required<NormalizedBankTransaction> = {
+      booking_date: '2026-09-02',
+      amount: 1250,
+      currency: 'SEK',
+      description: 'Faktura 1001',
+      counterparty_name: 'Kund AB',
+      counterparty_account: 'SE4550000000058398257466',
+      reference: '1001000000017',
+      merchant_category_code: '5411',
+      bank_transaction_code: 'PMNT/RCDT',
+      proprietary_bank_transaction_code: 'BG',
+      value_date: '2026-09-03',
+      provider_transaction_id: 'ENTRY-1',
+      end_to_end_id: 'ACC0F3A2026',
+      counterparty_iban: 'SE4550000000058398257466',
+      raw_page_index: 1,
+      counterparty_org_number: '5560160680',
+      instructed_amount: 112.5,
+      instructed_currency: 'EUR',
+      exchange_rate: 11.11,
+      balance_after: 20500.5,
+      is_enriched: true,
+      parts: [{ amount: 1250, currency: 'SEK', counterparty_name: 'Kund AB', counterparty_org_number: '5560160680', counterparty_account: null, reference: '1001000000017', invoice_numbers: ['1001'], message: null, provider_part_id: 'P1' }],
+    }
+    const lands: Record<keyof NormalizedBankTransaction, Partial<RawTransaction>> = {
+      booking_date: { date: '2026-09-02' },
+      amount: { amount: 1250 },
+      currency: { currency: 'SEK' },
+      description: { description: 'Faktura 1001' },
+      counterparty_name: { merchant_name: 'Kund AB' },
+      counterparty_account: { counterparty_iban: 'SE4550000000058398257466' },
+      reference: { reference: '1001000000017' },
+      merchant_category_code: { mcc_code: 5411 },
+      bank_transaction_code: { bank_transaction_code: 'PMNT/RCDT' },
+      proprietary_bank_transaction_code: { proprietary_bank_transaction_code: 'BG' },
+      value_date: { value_date: '2026-09-03' },
+      provider_transaction_id: { provider_transaction_id: 'ENTRY-1' },
+      end_to_end_id: { end_to_end_id: 'ACC0F3A2026' },
+      counterparty_iban: { counterparty_iban: 'SE4550000000058398257466' },
+      raw_page_index: { raw_document_id: 'doc-p2' },
+      counterparty_org_number: { counterparty_org_number: '5560160680' },
+      instructed_amount: { instructed_amount: 112.5 },
+      instructed_currency: { instructed_currency: 'EUR' },
+      // A SEK account: the bank's rate rides exchange_rate (see RawTransaction.exchange_rate).
+      exchange_rate: { exchange_rate: 11.11 },
+      balance_after: { balance_after: 20500.5 },
+      is_enriched: { is_enriched: true },
+      // The Bankgirot split lands nowhere yet: a later change stores it.
+      parts: {},
+    }
+    h.upload.mockResolvedValueOnce({ id: 'doc-p1' }).mockResolvedValueOnce({ id: 'doc-p2' })
+    const outOfRange = { ...row, booking_date: '2026-09-04', raw_page_index: 2 }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ...remote, transactions: [row, outOfRange] }), { status: 200 }))
+    const ingest = vi.fn().mockResolvedValue({ imported: 2, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: [] })
+    await syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-04', ingest)
+
+    const raw = ingest.mock.calls[0][3] as RawTransaction[]
+    expect(raw[0]).toMatchObject(Object.assign({}, ...Object.values(lands)))
+    // An index past the archived pages links nothing rather than a wrong page.
+    expect(raw[1].raw_document_id).toBeNull()
   })
 
   it('maps the connector 410 onto SessionExpiredError so callers flip the connection to expired', async () => {

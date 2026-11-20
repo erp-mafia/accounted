@@ -49,6 +49,19 @@ describe('buildCompanyGraph', () => {
     expect(mock.findCalls('journal_entry_lines', 'in')).toEqual(expect.arrayContaining([['journal_entries.status', ['posted', 'reversed']]]))
   })
 
+  it('reads the ledger past the 1000-row page instead of drawing from a silent first 1000', async () => {
+    enqueue({ data: { name: 'Exempelbolaget AB' } })
+    enqueue({ data: [] }) // accounts
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => line('1930', '2026-09-15', `je-${i}`, 1, 0)) })
+    enqueue({ data: [line('3010', '2026-09-20', 'je-late', 0, 60000)] })
+    for (let i = 0; i < 18; i++) enqueue({ data: [] }) // parties through expected
+    const g = await buildCompanyGraph(supabase, CO, TODAY)
+    expect(mock.findCalls('journal_entry_lines', 'range')).toEqual([[0, 999], [1000, 1999]])
+    expect(mock.findCalls('journal_entry_lines', 'limit')).toEqual([])
+    expect(g.nodes.map((n) => n.ref)).toContain('account:3010')
+    expect(g.truncated).toBe(false)
+  })
+
   it('ties an agreement to its counterparty, its source, the accounts that paid it, and what it produces next', async () => {
     enqueueAll({
       lines: [line('2350', '2026-09-30', 'je-9', 10417), line('8410', '2026-09-30', 'je-9', 4625), line('1930', '2026-09-30', 'je-9', 0, 15042)],
@@ -196,5 +209,12 @@ describe('buildCompanyGraph', () => {
     )
     // No authority claims a ledger fact.
     expect(g.links.find((l) => l.target === 'fact:f-sal' && l.kind === 'authority')).toBeUndefined()
+  })
+
+  it('reads open deadlines only: the stored status outlives a tick-off and a dismissal (crm#1848)', async () => {
+    enqueueAll({})
+    await buildCompanyGraph(supabase, CO, TODAY)
+    expect(mock.findCalls('deadlines', 'eq')).toContainEqual(['is_completed', false])
+    expect(mock.findCalls('deadlines', 'is')).toEqual([['dismissed_at', null]])
   })
 })

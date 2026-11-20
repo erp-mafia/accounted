@@ -1,0 +1,4483 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`annual report over a ledger: aktiebolag > builds the balance sheet of every year unchanged > fp-2023 1`] = `
+{
+  "asset_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Inventarier och verktyg",
+          "account_number": "1220",
+          "amount": 5000,
+        },
+        {
+          "account_name": "Ackumulerade avskrivningar på inventarier och verktyg",
+          "account_number": "1229",
+          "amount": -1000,
+        },
+      ],
+      "subtotal": 4000,
+      "title": "Maskiner och inventarier",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Företagskonto / affärskonto",
+          "account_number": "1930",
+          "amount": 28626.25,
+        },
+      ],
+      "subtotal": 28626.25,
+      "title": "Kassa och bank",
+    },
+  ],
+  "equity_liability_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Aktiekapital",
+          "account_number": "2081",
+          "amount": 25000,
+        },
+        {
+          "account_name": "Årets resultat",
+          "account_number": "2099",
+          "amount": 5876.25,
+        },
+      ],
+      "subtotal": 30876.25,
+      "title": "Eget kapital",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Redovisningskonto för moms",
+          "account_number": "2650",
+          "amount": 1750,
+        },
+      ],
+      "subtotal": 1750,
+      "title": "Moms och punktskatter",
+    },
+  ],
+  "period": {
+    "end": "",
+    "start": "",
+  },
+  "total_assets": 32626.25,
+  "total_equity_liabilities": 32626.25,
+}
+`;
+
+exports[`annual report over a ledger: aktiebolag > builds the balance sheet of every year unchanged > fp-2024 1`] = `
+{
+  "asset_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Inventarier och verktyg",
+          "account_number": "1220",
+          "amount": 5000,
+        },
+        {
+          "account_name": "Ackumulerade avskrivningar på inventarier och verktyg",
+          "account_number": "1229",
+          "amount": -2000,
+        },
+      ],
+      "subtotal": 3000,
+      "title": "Maskiner och inventarier",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Företagskonto / affärskonto",
+          "account_number": "1930",
+          "amount": 49752.5,
+        },
+      ],
+      "subtotal": 49752.5,
+      "title": "Kassa och bank",
+    },
+  ],
+  "equity_liability_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Aktiekapital",
+          "account_number": "2081",
+          "amount": 25000,
+        },
+        {
+          "account_name": "Vinst eller förlust från föregående år",
+          "account_number": "2098",
+          "amount": 5876.25,
+        },
+        {
+          "account_name": "Årets resultat",
+          "account_number": "2099",
+          "amount": 15876.25,
+        },
+      ],
+      "subtotal": 46752.5,
+      "title": "Eget kapital",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Redovisningskonto för moms",
+          "account_number": "2650",
+          "amount": 6000,
+        },
+      ],
+      "subtotal": 6000,
+      "title": "Moms och punktskatter",
+    },
+  ],
+  "period": {
+    "end": "",
+    "start": "",
+  },
+  "total_assets": 52752.5,
+  "total_equity_liabilities": 52752.5,
+}
+`;
+
+exports[`annual report over a ledger: aktiebolag > builds the balance sheet of every year unchanged > fp-2025 1`] = `
+{
+  "asset_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Inventarier och verktyg",
+          "account_number": "1220",
+          "amount": 5000,
+        },
+        {
+          "account_name": "Ackumulerade avskrivningar på inventarier och verktyg",
+          "account_number": "1229",
+          "amount": -3000,
+        },
+      ],
+      "subtotal": 2000,
+      "title": "Maskiner och inventarier",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Företagskonto / affärskonto",
+          "account_number": "1930",
+          "amount": 83378.75,
+        },
+      ],
+      "subtotal": 83378.75,
+      "title": "Kassa och bank",
+    },
+  ],
+  "equity_liability_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Aktiekapital",
+          "account_number": "2081",
+          "amount": 25000,
+        },
+        {
+          "account_name": "Vinst eller förlust från föregående år",
+          "account_number": "2098",
+          "amount": 21752.5,
+        },
+        {
+          "account_name": "Årets resultat",
+          "account_number": "2099",
+          "amount": 25876.25,
+        },
+      ],
+      "subtotal": 72628.75,
+      "title": "Eget kapital",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Redovisningskonto för moms",
+          "account_number": "2650",
+          "amount": 12750,
+        },
+      ],
+      "subtotal": 12750,
+      "title": "Moms och punktskatter",
+    },
+  ],
+  "period": {
+    "end": "",
+    "start": "",
+  },
+  "total_assets": 85378.75,
+  "total_equity_liabilities": 85378.75,
+}
+`;
+
+exports[`annual report over a ledger: aktiebolag > builds the canonical model, iXBRL input included, unchanged 1`] = `
+{
+  "company_id": "co-books",
+  "disclosures": {
+    "agm_disposition_decision": null,
+    "agm_disposition_outcome": null,
+    "contingent_liabilities_confirmed": false,
+    "long_term_debt_over_five_years_confirmed": false,
+    "parent_company_confirmed": false,
+    "securities_pledged_confirmed": false,
+  },
+  "eligibility": {
+    "digital_filing_eligible": false,
+    "digital_issues": [
+      {
+        "code": "AR-SCOPE-LIQUIDATION-UNKNOWN",
+        "message": "Om bolaget är i likvidation är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PUBLIC-UNKNOWN",
+        "message": "Om bolaget är publikt är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-LISTED-UNKNOWN",
+        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PARENT-UNKNOWN",
+        "message": "Om bolaget är moderföretag är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-DIGITAL-AUDIT-UNKNOWN",
+        "message": "Det är inte bekräftat om en revisionsberättelse krävs.",
+        "remediation": "Hämta grunduppgifter från Bolagsverket eller bekräfta uppgiften manuellt.",
+        "section": "scope",
+        "severity": "error",
+      },
+    ],
+    "issues": [
+      {
+        "code": "AR-SCOPE-LIQUIDATION-UNKNOWN",
+        "message": "Om bolaget är i likvidation är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PUBLIC-UNKNOWN",
+        "message": "Om bolaget är publikt är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-LISTED-UNKNOWN",
+        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PARENT-UNKNOWN",
+        "message": "Om bolaget är moderföretag är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+    ],
+    "k2_eligible": false,
+    "k2_relief_rule": "eligible",
+    "size_classification": "smaller",
+  },
+  "entity_type": "aktiebolag",
+  "fiscal_period_id": "fp-2025",
+  "generated_at": "2026-02-01T10:00:00.000Z",
+  "ixbrl": {
+    "br": {
+      "AckumuleradeOveravskrivningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AgarintressenOvrigaForetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Aktiekapital": {
+        "current": 25000,
+        "previous": 25000,
+      },
+      "AndelarIntresseforetagGemensamtStyrdaForetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndelarKoncernforetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndelarKoncernforetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndraLangfristigaFordringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndraLangfristigaVardepappersinnehav": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AretsResultatEgetKapital": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "AvsattningarPensionerLiknandeForpliktelserEnligtLag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "BalanseratResultat": {
+        "current": 21753,
+        "previous": 5877,
+      },
+      "ByggnaderMark": {
+        "current": 0,
+        "previous": 0,
+      },
+      "CheckrakningskreditKortfristig": {
+        "current": 0,
+        "previous": 0,
+      },
+      "CheckrakningskreditLangfristig": {
+        "current": 0,
+        "previous": 0,
+      },
+      "EjRegistreratAktiekapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FaktureradEjUpparbetadIntakt": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForbattringsutgifterAnnansFastighet": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarKoncernforetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarKoncernforetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarOvrigaForetagAgarintresseLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarOvrigaforetagAgarintresseKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForskottFranKunder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForskottImmateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForskottTillLeverantorer": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForutbetaldaKostnaderUpplupnaIntakter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Goodwill": {
+        "current": 0,
+        "previous": 0,
+      },
+      "HyresratterLiknandeRattigheter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "InventarierVerktygInstallationer": {
+        "current": 2000,
+        "previous": 3000,
+      },
+      "KassaBankExklRedovisningsmedel": {
+        "current": 83379,
+        "previous": 49753,
+      },
+      "KoncessionerPatentLicenserVarumarkenLiknandeRattigheter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Kundfordringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LagerFardigaVarorHandelsvaror": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LagerRavarorFornodenheter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LagerVarorUnderTillverkning": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LanDelagareNarstaende": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Leverantorsskulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "MaskinerAndraTekniskaAnlaggningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Obligationslan": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Overkursfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OverkursfondBunden": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaAvsattningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaAvsattningarPensionerLiknandeForpliktelser": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaFordringarKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaKortfristigaPlaceringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaKortfristigaSkulder": {
+        "current": 12750,
+        "previous": 6000,
+      },
+      "OvrigaKortfristigaSkulderKreditinstitut": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaLagertillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaLangfristigaSkulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaLangfristigaSkulderKreditinstitut": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaMateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaObeskattadeReserver": {
+        "current": 0,
+        "previous": 0,
+      },
+      "PagaendeArbetenAnnansRakningKortfristigaSkulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "PagaendeArbetenAnnansRakningOmsattningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Periodiseringsfonder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Redovisningsmedel": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Reservfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Skatteskulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderKoncernforetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderKoncernforetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderOvrigaForetagAgarintresseKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderOvrigaForetagAgarintresseLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "TecknatEjInbetaltKapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "UpparbetadEjFaktureradIntakt": {
+        "current": 0,
+        "previous": 0,
+      },
+      "UpplupnaKostnaderForutbetaldaIntakter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Uppskrivningsfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Vaxelskulder": {
+        "current": 0,
+        "previous": 0,
+      },
+    },
+    "company": {
+      "name": "Bokföringsexempel",
+      "orgNumber": "5566778899",
+      "registeredOffice": "Sundsvall",
+    },
+    "disclosures": {
+      "aktiekapitalNot": {
+        "aktiekapital": 25000,
+        "antalAktier": 250,
+      },
+      "contingentLiabilities": "Inga.",
+      "longTermDebtOverFiveYears": 0,
+      "parentCompany": null,
+      "securitiesPledged": "Inga.",
+    },
+    "entryPointId": "k2-ab-risbs-2024-09-12",
+    "faststallelseintyg": {
+      "arsstammaDatum": "2026-04-15",
+      "genereratDatum": "2026-02-01",
+      "resultatdispositionDecision": null,
+      "resultatdispositionOutcome": null,
+      "signerFirstName": "",
+      "signerLastName": "",
+      "signerRole": "Styrelseledamot",
+    },
+    "forvaltningsberattelse": {
+      "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
+      "egetKapital": {
+        "aktiekapital": {
+          "ib": 25000,
+          "ub": 25000,
+        },
+        "aretsResultat": {
+          "ib": 15876,
+          "ub": 25876,
+        },
+        "aretsResultatRorelse": 25876,
+        "balanserasINyRakning": 15876,
+        "balanseratResultat": {
+          "ib": 5877,
+          "ub": 21753,
+        },
+        "forandringAktiekapital": 0,
+        "ovrigForandringBalanserat": 0,
+        "ovrigaPoster": {
+          "ib": 0,
+          "ub": 0,
+        },
+        "totalt": {
+          "ib": 46753,
+          "ub": 72629,
+        },
+        "utdelning": 0,
+      },
+      "flerarsPerioder": [
+        {
+          "end": "2025-12-31",
+          "start": "2025-01-01",
+        },
+        {
+          "end": "2024-12-31",
+          "start": "2024-01-01",
+        },
+        {
+          "end": "2023-12-31",
+          "start": "2023-01-01",
+        },
+      ],
+      "flerarsoversikt": [
+        {
+          "nettoomsattning": 30000,
+          "resultatEfterFinansiellaPoster": 25876,
+          "soliditetPct": 85.1,
+          "year": "2025",
+        },
+        {
+          "nettoomsattning": 20000,
+          "resultatEfterFinansiellaPoster": 15876,
+          "soliditetPct": 88.6,
+          "year": "2024",
+        },
+        {
+          "nettoomsattning": 10000,
+          "resultatEfterFinansiellaPoster": 5876,
+          "soliditetPct": 94.6,
+          "year": "2023",
+        },
+      ],
+      "kontrollbalansrakningUpprattad": false,
+      "resultatdisposition": {
+        "aretsResultat": 25876,
+        "balanserasINyRakning": 47629,
+        "balanseratResultat": 21753,
+        "kommentar": "Styrelsen föreslår att årets resultat balanseras i ny räkning.",
+        "overkursfond": 0,
+        "summa": 47629,
+        "utdelning": 0,
+      },
+      "vasentligaHandelser": "Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.",
+    },
+    "isFirstFiscalYear": false,
+    "medelantalAnstallda": {
+      "current": 0,
+      "previous": 0,
+    },
+    "noter": [
+      {
+        "body": "Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).",
+        "number": 1,
+        "title": "Redovisnings- och värderingsprinciper",
+      },
+      {
+        "body": "Aktiekapital: 25 000 kr. Antal aktier: 250. Kvotvärde per aktie: 100 kr.",
+        "number": 2,
+        "title": "Aktiekapital",
+      },
+      {
+        "body": "Bolaget har inte haft några anställda under räkenskapsåret.",
+        "number": 3,
+        "title": "Medelantal anställda",
+      },
+      {
+        "body": "Inga skulder förfaller till betalning senare än fem år efter balansdagen.",
+        "number": 4,
+        "title": "Långfristiga skulder",
+      },
+      {
+        "body": "Inga.",
+        "number": 5,
+        "title": "Ställda säkerheter",
+      },
+      {
+        "body": "Inga.",
+        "number": 6,
+        "title": "Eventualförpliktelser",
+      },
+    ],
+    "period": {
+      "end": "2025-12-31",
+      "start": "2025-01-01",
+    },
+    "previousPeriod": {
+      "end": "2024-12-31",
+      "start": "2024-01-01",
+    },
+    "programvara": {
+      "namn": "Arcim Technology AB - Accounted",
+      "version": "1.0",
+    },
+    "rr": {
+      "AktiveratArbeteEgenRakning": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar": {
+        "current": 1000,
+        "previous": 1000,
+      },
+      "ErhallnaKoncernbidrag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForandringLagerProdukterIArbeteFardigaVarorPagaendeArbetenAnnansRakning": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForandringOveravskrivningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForandringPeriodiseringsfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "HandelsvarorKostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LamnadeKoncernbidrag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "NedskrivningarOmsattningstillgangarUtoverNormalaNedskrivningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Nettoomsattning": {
+        "current": 30000,
+        "previous": 20000,
+      },
+      "OvrigaBokslutsdispositioner": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaExternaKostnader": {
+        "current": 3124,
+        "previous": 3124,
+      },
+      "OvrigaRanteintakterLiknandeResultatposter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaRorelseintakter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaRorelsekostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaSkatter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Personalkostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "RantekostnaderLiknandeResultatposter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "RavarorFornodenheterKostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatAndelarIntresseforetagGemensamtStyrda": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatAndelarKoncernforetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatOvrigaFinansiellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatOvrigaforetagAgarintresse": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkattAretsResultat": {
+        "current": 0,
+        "previous": 0,
+      },
+    },
+    "totals": {
+      "anlaggningstillgangar": {
+        "current": 2000,
+        "previous": 3000,
+      },
+      "aretsResultat": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "avsattningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "bokslutsdispositioner": {
+        "current": 0,
+        "previous": 0,
+      },
+      "bundetEgetKapital": {
+        "current": 25000,
+        "previous": 25000,
+      },
+      "egetKapital": {
+        "current": 72629,
+        "previous": 46753,
+      },
+      "egetKapitalSkulder": {
+        "current": 85379,
+        "previous": 52753,
+      },
+      "finansiellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "finansiellaPoster": {
+        "current": 0,
+        "previous": 0,
+      },
+      "frittEgetKapital": {
+        "current": 47629,
+        "previous": 21753,
+      },
+      "immateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "kassaBank": {
+        "current": 83379,
+        "previous": 49753,
+      },
+      "kortfristigaFordringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "kortfristigaPlaceringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "kortfristigaSkulder": {
+        "current": 12750,
+        "previous": 6000,
+      },
+      "langfristigaSkulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "materiellaAnlaggningstillgangar": {
+        "current": 2000,
+        "previous": 3000,
+      },
+      "obeskattadeReserver": {
+        "current": 0,
+        "previous": 0,
+      },
+      "omsattningstillgangar": {
+        "current": 83379,
+        "previous": 49753,
+      },
+      "resultatEfterFinansiellaPoster": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "resultatForeSkatt": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "rorelseintakter": {
+        "current": 30000,
+        "previous": 20000,
+      },
+      "rorelsekostnader": {
+        "current": 4124,
+        "previous": 4124,
+      },
+      "rorelseresultat": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "tillgangar": {
+        "current": 85379,
+        "previous": 52753,
+      },
+      "varulager": {
+        "current": 0,
+        "previous": 0,
+      },
+    },
+    "underskrifter": {
+      "dateringsdatum": null,
+      "harVd": false,
+      "ort": "Sundsvall",
+      "signers": [],
+    },
+    "warnings": [
+      "Inga underskrifter är registrerade: årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).",
+      "Årsstämmans beslut om resultatdisposition saknas i fastställelseintyget.",
+      "Undertecknare av fastställelseintyget saknas (kontrollera-kod 1169).",
+    ],
+  },
+  "profile": {
+    "auditor_firm_name": null,
+    "auditor_opinion": null,
+    "auditor_report_included": false,
+    "auditor_report_required": null,
+    "building_revenue_share_pct": null,
+    "company_id": "co-books",
+    "dividend_prudence_confirmed": null,
+    "fiscal_period_id": "fp-2025",
+    "has_convertible_debt": null,
+    "has_crypto_assets": null,
+    "has_foreign_branch": null,
+    "has_material_deferred_tax": null,
+    "has_other_temporary_differences": null,
+    "has_share_based_payments": null,
+    "id": null,
+    "is_in_liquidation": null,
+    "is_parent_company": null,
+    "is_public_limited_company": null,
+    "k2_assessment_confirmed_at": null,
+    "narrative_confirmed_at": null,
+    "parent_group_size": null,
+    "prepares_consolidated_accounts": null,
+    "previous_year_framework": null,
+    "reporting_currency": "SEK",
+    "securities_traded_on_regulated_market": null,
+    "signer_roster_confirmed_at": null,
+    "updated_at": null,
+  },
+  "report": {
+    "accounting_framework": "k2",
+    "balansrakning": {
+      "assets": [
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Anläggningstillgångar",
+          "previous": null,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Materiella anläggningstillgångar",
+          "previous": null,
+        },
+        {
+          "current": 2000,
+          "indent": 2,
+          "label": "Inventarier, verktyg och installationer",
+          "previous": 3000,
+        },
+        {
+          "current": 2000,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa materiella anläggningstillgångar",
+          "previous": 3000,
+        },
+        {
+          "current": 2000,
+          "is_total": true,
+          "label": "Summa anläggningstillgångar",
+          "previous": 3000,
+        },
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Omsättningstillgångar",
+          "previous": null,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Kortfristiga fordringar",
+          "previous": null,
+        },
+        {
+          "current": 0,
+          "indent": 2,
+          "label": "Övriga fordringar",
+          "previous": 0,
+        },
+        {
+          "current": 0,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa kortfristiga fordringar",
+          "previous": 0,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Kassa och bank",
+          "previous": null,
+        },
+        {
+          "current": 83379,
+          "indent": 2,
+          "label": "Kassa och bank",
+          "previous": 49753,
+        },
+        {
+          "current": 83379,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa kassa och bank",
+          "previous": 49753,
+        },
+        {
+          "current": 83379,
+          "is_total": true,
+          "label": "Summa omsättningstillgångar",
+          "previous": 49753,
+        },
+        {
+          "current": 85379,
+          "is_total": true,
+          "label": "Summa tillgångar",
+          "previous": 52753,
+        },
+      ],
+      "equity_liabilities": [
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Eget kapital",
+          "previous": null,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Bundet eget kapital",
+          "previous": null,
+        },
+        {
+          "current": 25000,
+          "indent": 2,
+          "label": "Aktiekapital",
+          "previous": 25000,
+          "semantic_key": "balance_sheet_share_capital",
+        },
+        {
+          "current": 25000,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa bundet eget kapital",
+          "previous": 25000,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Fritt eget kapital",
+          "previous": null,
+        },
+        {
+          "current": 21753,
+          "indent": 2,
+          "label": "Balanserat resultat",
+          "previous": 5877,
+        },
+        {
+          "current": 25876,
+          "indent": 2,
+          "label": "Årets resultat",
+          "previous": 15876,
+          "semantic_key": "balance_sheet_current_year_result",
+        },
+        {
+          "current": 47629,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa fritt eget kapital",
+          "previous": 21753,
+        },
+        {
+          "current": 72629,
+          "is_total": true,
+          "label": "Summa eget kapital",
+          "previous": 46753,
+          "semantic_key": "balance_sheet_equity_total",
+        },
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Kortfristiga skulder",
+          "previous": null,
+        },
+        {
+          "current": 0,
+          "indent": 1,
+          "label": "Leverantörsskulder",
+          "previous": 0,
+        },
+        {
+          "current": 12750,
+          "indent": 1,
+          "label": "Övriga skulder",
+          "previous": 6000,
+        },
+        {
+          "current": 12750,
+          "is_total": true,
+          "label": "Summa kortfristiga skulder",
+          "previous": 6000,
+        },
+        {
+          "current": 85379,
+          "is_total": true,
+          "label": "Summa eget kapital och skulder",
+          "previous": 52753,
+        },
+      ],
+      "total_assets": 85379,
+      "total_assets_previous": 52753,
+      "total_equity_liabilities": 85379,
+      "total_equity_liabilities_previous": 52753,
+    },
+    "company": {
+      "entity_type": "aktiebolag",
+      "name": "Bokföringsexempel",
+      "org_number": "5566778899",
+      "registered_office": "Sundsvall",
+    },
+    "disclosures": {
+      "confirmations": {
+        "contingent_liabilities": false,
+        "long_term_debt_over_five_years": false,
+        "parent_company": false,
+        "securities_pledged": false,
+      },
+      "contingent_liabilities": null,
+      "kassaflodesanalys_omission_confirmed": false,
+      "long_term_debt_over_five_years": null,
+      "medelantal_anstallda_override": null,
+      "omit_kassaflodesanalys": false,
+      "parent_company_city": null,
+      "parent_company_name": null,
+      "parent_company_org_number": null,
+      "securities_pledged": null,
+    },
+    "equity_specification": {
+      "current": {
+        "derived": false,
+        "fiscal_period_id": "fp-2025",
+        "name": "2025",
+        "period_end": "2025-12-31",
+        "period_start": "2025-01-01",
+        "posts": [
+          {
+            "bound": true,
+            "closing": 25000,
+            "concept": "Aktiekapital",
+            "label": "Aktiekapital",
+            "movements": {},
+            "opening": 25000,
+          },
+          {
+            "bound": false,
+            "closing": 21753,
+            "concept": "BalanseratResultat",
+            "label": "Balanserat resultat",
+            "movements": {
+              "resultatdisposition": 15876,
+            },
+            "opening": 5877,
+          },
+          {
+            "bound": false,
+            "closing": 25876,
+            "concept": "AretsResultatEgetKapital",
+            "label": "Årets resultat",
+            "movements": {
+              "arets_resultat": 25876,
+              "resultatdisposition": -15876,
+            },
+            "opening": 15876,
+          },
+        ],
+        "totals": {
+          "closing": 72629,
+          "movements": {
+            "arets_resultat": 25876,
+          },
+          "opening": 46753,
+        },
+        "unclassified": [],
+      },
+      "integrity_issues": [],
+      "kinds": [
+        "resultatdisposition",
+        "arets_resultat",
+      ],
+      "placement": "management_report",
+      "previous": {
+        "derived": false,
+        "fiscal_period_id": "fp-2024",
+        "name": "2024",
+        "period_end": "2024-12-31",
+        "period_start": "2024-01-01",
+        "posts": [
+          {
+            "bound": true,
+            "closing": 25000,
+            "concept": "Aktiekapital",
+            "label": "Aktiekapital",
+            "movements": {},
+            "opening": 25000,
+          },
+          {
+            "bound": false,
+            "closing": 5877,
+            "concept": "BalanseratResultat",
+            "label": "Balanserat resultat",
+            "movements": {},
+            "opening": 5877,
+          },
+          {
+            "bound": false,
+            "closing": 15876,
+            "concept": "AretsResultatEgetKapital",
+            "label": "Årets resultat",
+            "movements": {
+              "arets_resultat": 15876,
+            },
+            "opening": 0,
+          },
+        ],
+        "totals": {
+          "closing": 46753,
+          "movements": {
+            "arets_resultat": 15876,
+          },
+          "opening": 30877,
+        },
+        "unclassified": [],
+      },
+      "warnings": [],
+    },
+    "fiscal_period": {
+      "id": "fp-2025",
+      "name": "2025",
+      "period_end": "2025-12-31",
+      "period_start": "2025-01-01",
+    },
+    "forvaltningsberattelse": {
+      "agm_date": "2026-04-15",
+      "agm_disposition_decision": null,
+      "agm_disposition_outcome": null,
+      "description": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
+      "egen_kapital_changes": [
+        {
+          "amount": 25000,
+          "label": "Aktiekapital",
+        },
+        {
+          "amount": 21753,
+          "label": "Balanserat resultat",
+        },
+        {
+          "amount": 25876,
+          "label": "Årets resultat",
+        },
+        {
+          "amount": 72629,
+          "label": "Summa eget kapital",
+        },
+      ],
+      "flerarsoversikt": [
+        {
+          "net_revenue": 10000,
+          "result_after_financial": 5876,
+          "soliditet_pct": 94.6,
+          "year": "2023",
+        },
+        {
+          "net_revenue": 20000,
+          "result_after_financial": 15876,
+          "soliditet_pct": 88.6,
+          "year": "2024",
+        },
+        {
+          "net_revenue": 30000,
+          "result_after_financial": 25876,
+          "soliditet_pct": 85.1,
+          "year": "2025",
+        },
+      ],
+      "important_events": "Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.",
+      "kontrollbalans_required": false,
+      "proposed_dividend": 0,
+      "resultatdisposition": "Styrelsen föreslår att årets resultat balanseras i ny räkning.",
+      "resultatdisposition_amounts": {
+        "carried_forward": 47629,
+        "current_year_result": 25876,
+        "proposed_dividend": 0,
+        "retained_earnings": 21753,
+        "share_premium_reserve": 0,
+        "total": 47629,
+      },
+    },
+    "kassaflodesanalys": undefined,
+    "noter": [
+      {
+        "body": "Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).",
+        "number": 1,
+        "title": "Redovisnings- och värderingsprinciper",
+      },
+      {
+        "body": "Aktiekapital: 25 000 kr. Antal aktier: 250. Kvotvärde per aktie: 100 kr.",
+        "number": 2,
+        "title": "Aktiekapital",
+      },
+      {
+        "body": "Bolaget har inte haft några anställda under räkenskapsåret.",
+        "number": 3,
+        "title": "Medelantal anställda",
+      },
+      {
+        "body": "Inga skulder förfaller till betalning senare än fem år efter balansdagen.",
+        "number": 4,
+        "title": "Långfristiga skulder",
+      },
+      {
+        "body": "Inga.",
+        "number": 5,
+        "title": "Ställda säkerheter",
+      },
+      {
+        "body": "Inga.",
+        "number": 6,
+        "title": "Eventualförpliktelser",
+      },
+    ],
+    "previous_period": {
+      "id": "fp-2024",
+      "name": "2024",
+      "period_end": "2024-12-31",
+      "period_start": "2024-01-01",
+    },
+    "resultatrakning": [
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Rörelseintäkter, lagerförändringar m.m.",
+        "previous": null,
+      },
+      {
+        "current": 30000,
+        "indent": 1,
+        "label": "Nettoomsättning",
+        "previous": 20000,
+      },
+      {
+        "current": 30000,
+        "is_total": true,
+        "label": "Summa rörelseintäkter, lagerförändringar m.m.",
+        "previous": 20000,
+      },
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Rörelsekostnader",
+        "previous": null,
+      },
+      {
+        "current": -3124,
+        "indent": 1,
+        "label": "Övriga externa kostnader",
+        "previous": -3124,
+      },
+      {
+        "current": -1000,
+        "indent": 1,
+        "label": "Av- och nedskrivningar av materiella och immateriella anläggningstillgångar",
+        "previous": -1000,
+      },
+      {
+        "current": -4124,
+        "is_total": true,
+        "label": "Summa rörelsekostnader",
+        "previous": -4124,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Rörelseresultat",
+        "previous": 15876,
+      },
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Finansiella poster",
+        "previous": null,
+      },
+      {
+        "current": 0,
+        "is_total": true,
+        "label": "Summa finansiella poster",
+        "previous": 0,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Resultat efter finansiella poster",
+        "previous": 15876,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Resultat före skatt",
+        "previous": 15876,
+      },
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Skatter",
+        "previous": null,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Årets resultat",
+        "previous": 15876,
+        "semantic_key": "income_statement_result",
+      },
+    ],
+    "signatures": [],
+    "warnings": [],
+  },
+  "schema_version": "1.0",
+  "validation": {
+    "error_count": 10,
+    "issues": [
+      {
+        "code": "AR-SCOPE-LIQUIDATION-UNKNOWN",
+        "message": "Om bolaget är i likvidation är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PUBLIC-UNKNOWN",
+        "message": "Om bolaget är publikt är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-LISTED-UNKNOWN",
+        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PARENT-UNKNOWN",
+        "message": "Om bolaget är moderföretag är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-ASSESSMENT-UNCONFIRMED",
+        "message": "Bedömningen att bolaget får använda K2 är inte uttryckligen bekräftad.",
+        "remediation": "Besvara frågorna om omfattning och regelverk och spara bedömningen.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-MANAGEMENT-UNCONFIRMED",
+        "message": "Förvaltningsberättelsens texter är inte uttryckligen granskade.",
+        "remediation": "Granska texterna och markera dem som bekräftade.",
+        "section": "management_report",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-LONG-DEBT-UNCONFIRMED",
+        "message": "Uppgiften om långfristiga skulder som förfaller efter mer än fem år är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat uppgiften" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-SECURITIES-UNCONFIRMED",
+        "message": "Uppgiften om ställda säkerheter är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat ställda säkerheter" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-CONTINGENT-UNCONFIRMED",
+        "message": "Uppgiften om eventualförpliktelser är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat eventualförpliktelser" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-PARENT-UNCONFIRMED",
+        "message": "Uppgiften om koncern- och moderföretagsförhållanden är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat koncernförhållandet" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+    ],
+    "ok": false,
+    "stage": "draft",
+    "warning_count": 0,
+  },
+}
+`;
+
+exports[`annual report over a ledger: aktiebolag > builds the iXBRL input on its own (the file and preflight path) unchanged 1`] = `
+{
+  "br": {
+    "AckumuleradeOveravskrivningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AgarintressenOvrigaForetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Aktiekapital": {
+      "current": 25000,
+      "previous": 25000,
+    },
+    "AndelarIntresseforetagGemensamtStyrdaForetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndelarKoncernforetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndelarKoncernforetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndraLangfristigaFordringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndraLangfristigaVardepappersinnehav": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AretsResultatEgetKapital": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "AvsattningarPensionerLiknandeForpliktelserEnligtLag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "BalanseratResultat": {
+      "current": 21753,
+      "previous": 5877,
+    },
+    "ByggnaderMark": {
+      "current": 0,
+      "previous": 0,
+    },
+    "CheckrakningskreditKortfristig": {
+      "current": 0,
+      "previous": 0,
+    },
+    "CheckrakningskreditLangfristig": {
+      "current": 0,
+      "previous": 0,
+    },
+    "EjRegistreratAktiekapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FaktureradEjUpparbetadIntakt": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForbattringsutgifterAnnansFastighet": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarKoncernforetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarKoncernforetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarOvrigaForetagAgarintresseLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarOvrigaforetagAgarintresseKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForskottFranKunder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForskottImmateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForskottTillLeverantorer": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForutbetaldaKostnaderUpplupnaIntakter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Goodwill": {
+      "current": 0,
+      "previous": 0,
+    },
+    "HyresratterLiknandeRattigheter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "InventarierVerktygInstallationer": {
+      "current": 2000,
+      "previous": 3000,
+    },
+    "KassaBankExklRedovisningsmedel": {
+      "current": 83379,
+      "previous": 49753,
+    },
+    "KoncessionerPatentLicenserVarumarkenLiknandeRattigheter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Kundfordringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LagerFardigaVarorHandelsvaror": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LagerRavarorFornodenheter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LagerVarorUnderTillverkning": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LanDelagareNarstaende": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Leverantorsskulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "MaskinerAndraTekniskaAnlaggningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Obligationslan": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Overkursfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OverkursfondBunden": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaAvsattningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaAvsattningarPensionerLiknandeForpliktelser": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaFordringarKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaKortfristigaPlaceringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaKortfristigaSkulder": {
+      "current": 12750,
+      "previous": 6000,
+    },
+    "OvrigaKortfristigaSkulderKreditinstitut": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaLagertillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaLangfristigaSkulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaLangfristigaSkulderKreditinstitut": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaMateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaObeskattadeReserver": {
+      "current": 0,
+      "previous": 0,
+    },
+    "PagaendeArbetenAnnansRakningKortfristigaSkulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "PagaendeArbetenAnnansRakningOmsattningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Periodiseringsfonder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Redovisningsmedel": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Reservfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Skatteskulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderKoncernforetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderKoncernforetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderOvrigaForetagAgarintresseKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderOvrigaForetagAgarintresseLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "TecknatEjInbetaltKapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "UpparbetadEjFaktureradIntakt": {
+      "current": 0,
+      "previous": 0,
+    },
+    "UpplupnaKostnaderForutbetaldaIntakter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Uppskrivningsfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Vaxelskulder": {
+      "current": 0,
+      "previous": 0,
+    },
+  },
+  "company": {
+    "name": "Bokföringsexempel",
+    "orgNumber": "5566778899",
+    "registeredOffice": "Sundsvall",
+  },
+  "disclosures": {
+    "aktiekapitalNot": {
+      "aktiekapital": 25000,
+      "antalAktier": 250,
+    },
+    "contingentLiabilities": "Inga.",
+    "longTermDebtOverFiveYears": 0,
+    "parentCompany": null,
+    "securitiesPledged": "Inga.",
+  },
+  "entryPointId": "k2-ab-risbs-2024-09-12",
+  "faststallelseintyg": {
+    "arsstammaDatum": "2026-04-15",
+    "genereratDatum": "2026-02-01",
+    "resultatdispositionDecision": null,
+    "resultatdispositionOutcome": null,
+    "signerFirstName": "",
+    "signerLastName": "",
+    "signerRole": "Styrelseledamot",
+  },
+  "forvaltningsberattelse": {
+    "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
+    "egetKapital": {
+      "aktiekapital": {
+        "ib": 25000,
+        "ub": 25000,
+      },
+      "aretsResultat": {
+        "ib": 15876,
+        "ub": 25876,
+      },
+      "aretsResultatRorelse": 25876,
+      "balanserasINyRakning": 15876,
+      "balanseratResultat": {
+        "ib": 5877,
+        "ub": 21753,
+      },
+      "forandringAktiekapital": 0,
+      "ovrigForandringBalanserat": 0,
+      "ovrigaPoster": {
+        "ib": 0,
+        "ub": 0,
+      },
+      "totalt": {
+        "ib": 46753,
+        "ub": 72629,
+      },
+      "utdelning": 0,
+    },
+    "flerarsPerioder": [
+      {
+        "end": "2025-12-31",
+        "start": "2025-01-01",
+      },
+      {
+        "end": "2024-12-31",
+        "start": "2024-01-01",
+      },
+      {
+        "end": "2023-12-31",
+        "start": "2023-01-01",
+      },
+    ],
+    "flerarsoversikt": [
+      {
+        "nettoomsattning": 30000,
+        "resultatEfterFinansiellaPoster": 25876,
+        "soliditetPct": 85.1,
+        "year": "2025",
+      },
+      {
+        "nettoomsattning": 20000,
+        "resultatEfterFinansiellaPoster": 15876,
+        "soliditetPct": 88.6,
+        "year": "2024",
+      },
+      {
+        "nettoomsattning": 10000,
+        "resultatEfterFinansiellaPoster": 5876,
+        "soliditetPct": 94.6,
+        "year": "2023",
+      },
+    ],
+    "kontrollbalansrakningUpprattad": false,
+    "resultatdisposition": {
+      "aretsResultat": 25876,
+      "balanserasINyRakning": 47629,
+      "balanseratResultat": 21753,
+      "kommentar": "Styrelsen föreslår att årets resultat balanseras i ny räkning.",
+      "overkursfond": 0,
+      "summa": 47629,
+      "utdelning": 0,
+    },
+    "vasentligaHandelser": "Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.",
+  },
+  "isFirstFiscalYear": false,
+  "medelantalAnstallda": {
+    "current": 0,
+    "previous": 0,
+  },
+  "noter": [
+    {
+      "body": "Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).",
+      "number": 1,
+      "title": "Redovisnings- och värderingsprinciper",
+    },
+    {
+      "body": "Aktiekapital: 25 000 kr. Antal aktier: 250. Kvotvärde per aktie: 100 kr.",
+      "number": 2,
+      "title": "Aktiekapital",
+    },
+    {
+      "body": "Bolaget har inte haft några anställda under räkenskapsåret.",
+      "number": 3,
+      "title": "Medelantal anställda",
+    },
+    {
+      "body": "Inga skulder förfaller till betalning senare än fem år efter balansdagen.",
+      "number": 4,
+      "title": "Långfristiga skulder",
+    },
+    {
+      "body": "Inga.",
+      "number": 5,
+      "title": "Ställda säkerheter",
+    },
+    {
+      "body": "Inga.",
+      "number": 6,
+      "title": "Eventualförpliktelser",
+    },
+  ],
+  "period": {
+    "end": "2025-12-31",
+    "start": "2025-01-01",
+  },
+  "previousPeriod": {
+    "end": "2024-12-31",
+    "start": "2024-01-01",
+  },
+  "programvara": {
+    "namn": "Arcim Technology AB - Accounted",
+    "version": "1.0",
+  },
+  "rr": {
+    "AktiveratArbeteEgenRakning": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar": {
+      "current": 1000,
+      "previous": 1000,
+    },
+    "ErhallnaKoncernbidrag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForandringLagerProdukterIArbeteFardigaVarorPagaendeArbetenAnnansRakning": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForandringOveravskrivningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForandringPeriodiseringsfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "HandelsvarorKostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LamnadeKoncernbidrag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "NedskrivningarOmsattningstillgangarUtoverNormalaNedskrivningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Nettoomsattning": {
+      "current": 30000,
+      "previous": 20000,
+    },
+    "OvrigaBokslutsdispositioner": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaExternaKostnader": {
+      "current": 3124,
+      "previous": 3124,
+    },
+    "OvrigaRanteintakterLiknandeResultatposter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaRorelseintakter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaRorelsekostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaSkatter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Personalkostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "RantekostnaderLiknandeResultatposter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "RavarorFornodenheterKostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatAndelarIntresseforetagGemensamtStyrda": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatAndelarKoncernforetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatOvrigaFinansiellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatOvrigaforetagAgarintresse": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkattAretsResultat": {
+      "current": 0,
+      "previous": 0,
+    },
+  },
+  "totals": {
+    "anlaggningstillgangar": {
+      "current": 2000,
+      "previous": 3000,
+    },
+    "aretsResultat": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "avsattningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "bokslutsdispositioner": {
+      "current": 0,
+      "previous": 0,
+    },
+    "bundetEgetKapital": {
+      "current": 25000,
+      "previous": 25000,
+    },
+    "egetKapital": {
+      "current": 72629,
+      "previous": 46753,
+    },
+    "egetKapitalSkulder": {
+      "current": 85379,
+      "previous": 52753,
+    },
+    "finansiellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "finansiellaPoster": {
+      "current": 0,
+      "previous": 0,
+    },
+    "frittEgetKapital": {
+      "current": 47629,
+      "previous": 21753,
+    },
+    "immateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "kassaBank": {
+      "current": 83379,
+      "previous": 49753,
+    },
+    "kortfristigaFordringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "kortfristigaPlaceringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "kortfristigaSkulder": {
+      "current": 12750,
+      "previous": 6000,
+    },
+    "langfristigaSkulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "materiellaAnlaggningstillgangar": {
+      "current": 2000,
+      "previous": 3000,
+    },
+    "obeskattadeReserver": {
+      "current": 0,
+      "previous": 0,
+    },
+    "omsattningstillgangar": {
+      "current": 83379,
+      "previous": 49753,
+    },
+    "resultatEfterFinansiellaPoster": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "resultatForeSkatt": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "rorelseintakter": {
+      "current": 30000,
+      "previous": 20000,
+    },
+    "rorelsekostnader": {
+      "current": 4124,
+      "previous": 4124,
+    },
+    "rorelseresultat": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "tillgangar": {
+      "current": 85379,
+      "previous": 52753,
+    },
+    "varulager": {
+      "current": 0,
+      "previous": 0,
+    },
+  },
+  "underskrifter": {
+    "dateringsdatum": null,
+    "harVd": false,
+    "ort": "Sundsvall",
+    "signers": [],
+  },
+  "warnings": [
+    "Inga underskrifter är registrerade: årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).",
+    "Årsstämmans beslut om resultatdisposition saknas i fastställelseintyget.",
+    "Undertecknare av fastställelseintyget saknas (kontrollera-kod 1169).",
+  ],
+}
+`;
+
+exports[`annual report over a ledger: enskild_firma > builds the balance sheet of every year unchanged > fp-2023 1`] = `
+{
+  "asset_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Inventarier och verktyg",
+          "account_number": "1220",
+          "amount": 5000,
+        },
+        {
+          "account_name": "Ackumulerade avskrivningar på inventarier och verktyg",
+          "account_number": "1229",
+          "amount": -1000,
+        },
+      ],
+      "subtotal": 4000,
+      "title": "Maskiner och inventarier",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Företagskonto / affärskonto",
+          "account_number": "1930",
+          "amount": 27626.25,
+        },
+      ],
+      "subtotal": 27626.25,
+      "title": "Kassa och bank",
+    },
+  ],
+  "equity_liability_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Eget kapital",
+          "account_number": "2010",
+          "amount": 30876.25,
+        },
+        {
+          "account_name": "Övriga egna uttag",
+          "account_number": "2013",
+          "amount": -1000,
+        },
+      ],
+      "subtotal": 29876.25,
+      "title": "Eget kapital",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Redovisningskonto för moms",
+          "account_number": "2650",
+          "amount": 1750,
+        },
+      ],
+      "subtotal": 1750,
+      "title": "Moms och punktskatter",
+    },
+  ],
+  "period": {
+    "end": "",
+    "start": "",
+  },
+  "total_assets": 31626.25,
+  "total_equity_liabilities": 31626.25,
+}
+`;
+
+exports[`annual report over a ledger: enskild_firma > builds the balance sheet of every year unchanged > fp-2024 1`] = `
+{
+  "asset_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Inventarier och verktyg",
+          "account_number": "1220",
+          "amount": 5000,
+        },
+        {
+          "account_name": "Ackumulerade avskrivningar på inventarier och verktyg",
+          "account_number": "1229",
+          "amount": -2000,
+        },
+      ],
+      "subtotal": 3000,
+      "title": "Maskiner och inventarier",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Företagskonto / affärskonto",
+          "account_number": "1930",
+          "amount": 47752.5,
+        },
+      ],
+      "subtotal": 47752.5,
+      "title": "Kassa och bank",
+    },
+  ],
+  "equity_liability_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Eget kapital",
+          "account_number": "2010",
+          "amount": 46752.5,
+        },
+        {
+          "account_name": "Övriga egna uttag",
+          "account_number": "2013",
+          "amount": -2000,
+        },
+      ],
+      "subtotal": 44752.5,
+      "title": "Eget kapital",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Redovisningskonto för moms",
+          "account_number": "2650",
+          "amount": 6000,
+        },
+      ],
+      "subtotal": 6000,
+      "title": "Moms och punktskatter",
+    },
+  ],
+  "period": {
+    "end": "",
+    "start": "",
+  },
+  "total_assets": 50752.5,
+  "total_equity_liabilities": 50752.5,
+}
+`;
+
+exports[`annual report over a ledger: enskild_firma > builds the balance sheet of every year unchanged > fp-2025 1`] = `
+{
+  "asset_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Inventarier och verktyg",
+          "account_number": "1220",
+          "amount": 5000,
+        },
+        {
+          "account_name": "Ackumulerade avskrivningar på inventarier och verktyg",
+          "account_number": "1229",
+          "amount": -3000,
+        },
+      ],
+      "subtotal": 2000,
+      "title": "Maskiner och inventarier",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Företagskonto / affärskonto",
+          "account_number": "1930",
+          "amount": 80378.75,
+        },
+      ],
+      "subtotal": 80378.75,
+      "title": "Kassa och bank",
+    },
+  ],
+  "equity_liability_sections": [
+    {
+      "rows": [
+        {
+          "account_name": "Eget kapital",
+          "account_number": "2010",
+          "amount": 72628.75,
+        },
+        {
+          "account_name": "Övriga egna uttag",
+          "account_number": "2013",
+          "amount": -3000,
+        },
+      ],
+      "subtotal": 69628.75,
+      "title": "Eget kapital",
+    },
+    {
+      "rows": [
+        {
+          "account_name": "Redovisningskonto för moms",
+          "account_number": "2650",
+          "amount": 12750,
+        },
+      ],
+      "subtotal": 12750,
+      "title": "Moms och punktskatter",
+    },
+  ],
+  "period": {
+    "end": "",
+    "start": "",
+  },
+  "total_assets": 82378.75,
+  "total_equity_liabilities": 82378.75,
+}
+`;
+
+exports[`annual report over a ledger: enskild_firma > builds the canonical model, iXBRL input included, unchanged 1`] = `
+{
+  "company_id": "co-books",
+  "disclosures": {
+    "agm_disposition_decision": null,
+    "agm_disposition_outcome": null,
+    "contingent_liabilities_confirmed": false,
+    "long_term_debt_over_five_years_confirmed": false,
+    "parent_company_confirmed": false,
+    "securities_pledged_confirmed": false,
+  },
+  "eligibility": {
+    "digital_filing_eligible": false,
+    "digital_issues": [
+      {
+        "code": "AR-SCOPE-ENTITY",
+        "message": "Accounteds årsredovisningsflöde stöder inte den här företagsformen ännu.",
+        "remediation": "Använd rätt årsboksluts- eller deklarationsflöde för företagsformen.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-SCOPE-LIQUIDATION-UNKNOWN",
+        "message": "Om bolaget är i likvidation är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PUBLIC-UNKNOWN",
+        "message": "Om bolaget är publikt är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-LISTED-UNKNOWN",
+        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PARENT-UNKNOWN",
+        "message": "Om bolaget är moderföretag är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-DIGITAL-AUDIT-UNKNOWN",
+        "message": "Det är inte bekräftat om en revisionsberättelse krävs.",
+        "remediation": "Hämta grunduppgifter från Bolagsverket eller bekräfta uppgiften manuellt.",
+        "section": "scope",
+        "severity": "error",
+      },
+    ],
+    "issues": [
+      {
+        "code": "AR-SCOPE-ENTITY",
+        "message": "Accounteds årsredovisningsflöde stöder inte den här företagsformen ännu.",
+        "remediation": "Använd rätt årsboksluts- eller deklarationsflöde för företagsformen.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-SCOPE-LIQUIDATION-UNKNOWN",
+        "message": "Om bolaget är i likvidation är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PUBLIC-UNKNOWN",
+        "message": "Om bolaget är publikt är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-LISTED-UNKNOWN",
+        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PARENT-UNKNOWN",
+        "message": "Om bolaget är moderföretag är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+    ],
+    "k2_eligible": false,
+    "k2_relief_rule": "eligible",
+    "size_classification": "smaller",
+  },
+  "entity_type": "enskild_firma",
+  "fiscal_period_id": "fp-2025",
+  "generated_at": "2026-02-01T10:00:00.000Z",
+  "ixbrl": {
+    "br": {
+      "AckumuleradeOveravskrivningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AgarintressenOvrigaForetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Aktiekapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndelarIntresseforetagGemensamtStyrdaForetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndelarKoncernforetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndelarKoncernforetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndraLangfristigaFordringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AndraLangfristigaVardepappersinnehav": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AretsResultatEgetKapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AvsattningarPensionerLiknandeForpliktelserEnligtLag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "BalanseratResultat": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ByggnaderMark": {
+        "current": 0,
+        "previous": 0,
+      },
+      "CheckrakningskreditKortfristig": {
+        "current": 0,
+        "previous": 0,
+      },
+      "CheckrakningskreditLangfristig": {
+        "current": 0,
+        "previous": 0,
+      },
+      "EjRegistreratAktiekapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FaktureradEjUpparbetadIntakt": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForbattringsutgifterAnnansFastighet": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarKoncernforetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarKoncernforetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarOvrigaForetagAgarintresseLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "FordringarOvrigaforetagAgarintresseKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForskottFranKunder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForskottImmateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForskottTillLeverantorer": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForutbetaldaKostnaderUpplupnaIntakter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Goodwill": {
+        "current": 0,
+        "previous": 0,
+      },
+      "HyresratterLiknandeRattigheter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "InventarierVerktygInstallationer": {
+        "current": 2000,
+        "previous": 3000,
+      },
+      "KassaBankExklRedovisningsmedel": {
+        "current": 80379,
+        "previous": 47753,
+      },
+      "KoncessionerPatentLicenserVarumarkenLiknandeRattigheter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Kundfordringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LagerFardigaVarorHandelsvaror": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LagerRavarorFornodenheter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LagerVarorUnderTillverkning": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LanDelagareNarstaende": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Leverantorsskulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "MaskinerAndraTekniskaAnlaggningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Obligationslan": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Overkursfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OverkursfondBunden": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaAvsattningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaAvsattningarPensionerLiknandeForpliktelser": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaFordringarKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaKortfristigaPlaceringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaKortfristigaSkulder": {
+        "current": 12750,
+        "previous": 6000,
+      },
+      "OvrigaKortfristigaSkulderKreditinstitut": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaLagertillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaLangfristigaSkulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaLangfristigaSkulderKreditinstitut": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaMateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaObeskattadeReserver": {
+        "current": 0,
+        "previous": 0,
+      },
+      "PagaendeArbetenAnnansRakningKortfristigaSkulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "PagaendeArbetenAnnansRakningOmsattningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Periodiseringsfonder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Redovisningsmedel": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Reservfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Skatteskulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderKoncernforetagKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderKoncernforetagLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderOvrigaForetagAgarintresseKortfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkulderOvrigaForetagAgarintresseLangfristiga": {
+        "current": 0,
+        "previous": 0,
+      },
+      "TecknatEjInbetaltKapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "UpparbetadEjFaktureradIntakt": {
+        "current": 0,
+        "previous": 0,
+      },
+      "UpplupnaKostnaderForutbetaldaIntakter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Uppskrivningsfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Vaxelskulder": {
+        "current": 0,
+        "previous": 0,
+      },
+    },
+    "company": {
+      "name": "Bokföringsexempel",
+      "orgNumber": "5566778899",
+      "registeredOffice": "Sundsvall",
+    },
+    "disclosures": {
+      "aktiekapitalNot": null,
+      "contingentLiabilities": "Inga.",
+      "longTermDebtOverFiveYears": 0,
+      "parentCompany": null,
+      "securitiesPledged": "Inga.",
+    },
+    "entryPointId": "k2-ab-risbs-2024-09-12",
+    "faststallelseintyg": {
+      "arsstammaDatum": "2026-04-15",
+      "genereratDatum": "2026-02-01",
+      "resultatdispositionDecision": null,
+      "resultatdispositionOutcome": null,
+      "signerFirstName": "",
+      "signerLastName": "",
+      "signerRole": "Styrelseledamot",
+    },
+    "forvaltningsberattelse": {
+      "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
+      "egetKapital": {
+        "aktiekapital": {
+          "ib": 0,
+          "ub": 0,
+        },
+        "aretsResultat": {
+          "ib": 0,
+          "ub": 0,
+        },
+        "aretsResultatRorelse": 0,
+        "balanserasINyRakning": 0,
+        "balanseratResultat": {
+          "ib": 0,
+          "ub": 0,
+        },
+        "forandringAktiekapital": 0,
+        "ovrigForandringBalanserat": 0,
+        "ovrigaPoster": {
+          "ib": 0,
+          "ub": 0,
+        },
+        "totalt": {
+          "ib": 0,
+          "ub": 0,
+        },
+        "utdelning": 0,
+      },
+      "flerarsPerioder": [
+        {
+          "end": "2025-12-31",
+          "start": "2025-01-01",
+        },
+        {
+          "end": "2024-12-31",
+          "start": "2024-01-01",
+        },
+        {
+          "end": "2023-12-31",
+          "start": "2023-01-01",
+        },
+      ],
+      "flerarsoversikt": [
+        {
+          "nettoomsattning": 30000,
+          "resultatEfterFinansiellaPoster": 25876,
+          "soliditetPct": 0,
+          "year": "2025",
+        },
+        {
+          "nettoomsattning": 20000,
+          "resultatEfterFinansiellaPoster": 15876,
+          "soliditetPct": 0,
+          "year": "2024",
+        },
+        {
+          "nettoomsattning": 10000,
+          "resultatEfterFinansiellaPoster": 5876,
+          "soliditetPct": 0,
+          "year": "2023",
+        },
+      ],
+      "kontrollbalansrakningUpprattad": false,
+      "resultatdisposition": {
+        "aretsResultat": 0,
+        "balanserasINyRakning": 0,
+        "balanseratResultat": 0,
+        "kommentar": "Styrelsen föreslår att årets resultat balanseras i ny räkning.",
+        "overkursfond": 0,
+        "summa": 0,
+        "utdelning": 0,
+      },
+      "vasentligaHandelser": "Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.",
+    },
+    "isFirstFiscalYear": false,
+    "medelantalAnstallda": {
+      "current": 0,
+      "previous": 0,
+    },
+    "noter": [
+      {
+        "body": "Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.",
+        "number": 1,
+        "title": "Redovisnings- och värderingsprinciper",
+      },
+      {
+        "body": "Inga skulder förfaller till betalning senare än fem år efter balansdagen.",
+        "number": 2,
+        "title": "Långfristiga skulder",
+      },
+      {
+        "body": "Inga.",
+        "number": 3,
+        "title": "Ställda säkerheter",
+      },
+      {
+        "body": "Inga.",
+        "number": 4,
+        "title": "Eventualförpliktelser",
+      },
+    ],
+    "period": {
+      "end": "2025-12-31",
+      "start": "2025-01-01",
+    },
+    "previousPeriod": {
+      "end": "2024-12-31",
+      "start": "2024-01-01",
+    },
+    "programvara": {
+      "namn": "Arcim Technology AB - Accounted",
+      "version": "1.0",
+    },
+    "rr": {
+      "AktiveratArbeteEgenRakning": {
+        "current": 0,
+        "previous": 0,
+      },
+      "AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar": {
+        "current": 1000,
+        "previous": 1000,
+      },
+      "ErhallnaKoncernbidrag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForandringLagerProdukterIArbeteFardigaVarorPagaendeArbetenAnnansRakning": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForandringOveravskrivningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ForandringPeriodiseringsfond": {
+        "current": 0,
+        "previous": 0,
+      },
+      "HandelsvarorKostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "LamnadeKoncernbidrag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "NedskrivningarOmsattningstillgangarUtoverNormalaNedskrivningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Nettoomsattning": {
+        "current": 30000,
+        "previous": 20000,
+      },
+      "OvrigaBokslutsdispositioner": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaExternaKostnader": {
+        "current": 3124,
+        "previous": 3124,
+      },
+      "OvrigaRanteintakterLiknandeResultatposter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaRorelseintakter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaRorelsekostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "OvrigaSkatter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "Personalkostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "RantekostnaderLiknandeResultatposter": {
+        "current": 0,
+        "previous": 0,
+      },
+      "RavarorFornodenheterKostnader": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatAndelarIntresseforetagGemensamtStyrda": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatAndelarKoncernforetag": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatOvrigaFinansiellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "ResultatOvrigaforetagAgarintresse": {
+        "current": 0,
+        "previous": 0,
+      },
+      "SkattAretsResultat": {
+        "current": 0,
+        "previous": 0,
+      },
+    },
+    "totals": {
+      "anlaggningstillgangar": {
+        "current": 2000,
+        "previous": 3000,
+      },
+      "aretsResultat": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "avsattningar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "bokslutsdispositioner": {
+        "current": 0,
+        "previous": 0,
+      },
+      "bundetEgetKapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "egetKapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "egetKapitalSkulder": {
+        "current": 12750,
+        "previous": 6000,
+      },
+      "finansiellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "finansiellaPoster": {
+        "current": 0,
+        "previous": 0,
+      },
+      "frittEgetKapital": {
+        "current": 0,
+        "previous": 0,
+      },
+      "immateriellaAnlaggningstillgangar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "kassaBank": {
+        "current": 80379,
+        "previous": 47753,
+      },
+      "kortfristigaFordringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "kortfristigaPlaceringar": {
+        "current": 0,
+        "previous": 0,
+      },
+      "kortfristigaSkulder": {
+        "current": 12750,
+        "previous": 6000,
+      },
+      "langfristigaSkulder": {
+        "current": 0,
+        "previous": 0,
+      },
+      "materiellaAnlaggningstillgangar": {
+        "current": 2000,
+        "previous": 3000,
+      },
+      "obeskattadeReserver": {
+        "current": 0,
+        "previous": 0,
+      },
+      "omsattningstillgangar": {
+        "current": 80379,
+        "previous": 47753,
+      },
+      "resultatEfterFinansiellaPoster": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "resultatForeSkatt": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "rorelseintakter": {
+        "current": 30000,
+        "previous": 20000,
+      },
+      "rorelsekostnader": {
+        "current": 4124,
+        "previous": 4124,
+      },
+      "rorelseresultat": {
+        "current": 25876,
+        "previous": 15876,
+      },
+      "tillgangar": {
+        "current": 82379,
+        "previous": 50753,
+      },
+      "varulager": {
+        "current": 0,
+        "previous": 0,
+      },
+    },
+    "underskrifter": {
+      "dateringsdatum": null,
+      "harVd": false,
+      "ort": "Sundsvall",
+      "signers": [],
+    },
+    "warnings": [
+      "Konto 2010 (Eget kapital) med saldo -72629 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+      "Konto 2013 (Övriga egna uttag) med saldo 3000 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+      "Årets resultat enligt resultaträkningen (25876 kr) stämmer inte med konto 2099 (0 kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).",
+      "Balansräkningen balanserar inte: Summa tillgångar 82379 kr ≠ Summa eget kapital och skulder 12750 kr (kontrollera-kod 3005).",
+      "Jämförelseårets resultat enligt resultaträkningen (15876 kr) stämmer inte med konto 2099 (0 kr), och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+      "Jämförelseårets balansräkning balanserar inte: Summa tillgångar 50753 kr ≠ Summa eget kapital och skulder 6000 kr. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+      "Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.",
+      "Inga underskrifter är registrerade: årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).",
+      "Årsstämmans beslut om resultatdisposition saknas i fastställelseintyget.",
+      "Undertecknare av fastställelseintyget saknas (kontrollera-kod 1169).",
+    ],
+  },
+  "profile": {
+    "auditor_firm_name": null,
+    "auditor_opinion": null,
+    "auditor_report_included": false,
+    "auditor_report_required": null,
+    "building_revenue_share_pct": null,
+    "company_id": "co-books",
+    "dividend_prudence_confirmed": null,
+    "fiscal_period_id": "fp-2025",
+    "has_convertible_debt": null,
+    "has_crypto_assets": null,
+    "has_foreign_branch": null,
+    "has_material_deferred_tax": null,
+    "has_other_temporary_differences": null,
+    "has_share_based_payments": null,
+    "id": null,
+    "is_in_liquidation": null,
+    "is_parent_company": null,
+    "is_public_limited_company": null,
+    "k2_assessment_confirmed_at": null,
+    "narrative_confirmed_at": null,
+    "parent_group_size": null,
+    "prepares_consolidated_accounts": null,
+    "previous_year_framework": null,
+    "reporting_currency": "SEK",
+    "securities_traded_on_regulated_market": null,
+    "signer_roster_confirmed_at": null,
+    "updated_at": null,
+  },
+  "report": {
+    "accounting_framework": "k2",
+    "balansrakning": {
+      "assets": [
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Anläggningstillgångar",
+          "previous": null,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Materiella anläggningstillgångar",
+          "previous": null,
+        },
+        {
+          "current": 2000,
+          "indent": 2,
+          "label": "Inventarier, verktyg och installationer",
+          "previous": 3000,
+        },
+        {
+          "current": 2000,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa materiella anläggningstillgångar",
+          "previous": 3000,
+        },
+        {
+          "current": 2000,
+          "is_total": true,
+          "label": "Summa anläggningstillgångar",
+          "previous": 3000,
+        },
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Omsättningstillgångar",
+          "previous": null,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Kortfristiga fordringar",
+          "previous": null,
+        },
+        {
+          "current": 0,
+          "indent": 2,
+          "label": "Övriga fordringar",
+          "previous": 0,
+        },
+        {
+          "current": 0,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa kortfristiga fordringar",
+          "previous": 0,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Kassa och bank",
+          "previous": null,
+        },
+        {
+          "current": 80379,
+          "indent": 2,
+          "label": "Kassa och bank",
+          "previous": 47753,
+        },
+        {
+          "current": 80379,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa kassa och bank",
+          "previous": 47753,
+        },
+        {
+          "current": 80379,
+          "is_total": true,
+          "label": "Summa omsättningstillgångar",
+          "previous": 47753,
+        },
+        {
+          "current": 82379,
+          "is_total": true,
+          "label": "Summa tillgångar",
+          "previous": 50753,
+        },
+      ],
+      "equity_liabilities": [
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Eget kapital",
+          "previous": null,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Bundet eget kapital",
+          "previous": null,
+        },
+        {
+          "current": 0,
+          "indent": 2,
+          "label": "Aktiekapital",
+          "previous": 0,
+          "semantic_key": "balance_sheet_share_capital",
+        },
+        {
+          "current": 0,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa bundet eget kapital",
+          "previous": 0,
+        },
+        {
+          "current": null,
+          "indent": 1,
+          "is_heading": true,
+          "label": "Fritt eget kapital",
+          "previous": null,
+        },
+        {
+          "current": 0,
+          "indent": 2,
+          "label": "Balanserat resultat",
+          "previous": 0,
+        },
+        {
+          "current": 0,
+          "indent": 2,
+          "label": "Årets resultat",
+          "previous": 0,
+          "semantic_key": "balance_sheet_current_year_result",
+        },
+        {
+          "current": 0,
+          "indent": 1,
+          "is_total": true,
+          "label": "Summa fritt eget kapital",
+          "previous": 0,
+        },
+        {
+          "current": 0,
+          "is_total": true,
+          "label": "Summa eget kapital",
+          "previous": 0,
+          "semantic_key": "balance_sheet_equity_total",
+        },
+        {
+          "current": null,
+          "indent": 0,
+          "is_heading": true,
+          "label": "Kortfristiga skulder",
+          "previous": null,
+        },
+        {
+          "current": 0,
+          "indent": 1,
+          "label": "Leverantörsskulder",
+          "previous": 0,
+        },
+        {
+          "current": 12750,
+          "indent": 1,
+          "label": "Övriga skulder",
+          "previous": 6000,
+        },
+        {
+          "current": 12750,
+          "is_total": true,
+          "label": "Summa kortfristiga skulder",
+          "previous": 6000,
+        },
+        {
+          "current": 12750,
+          "is_total": true,
+          "label": "Summa eget kapital och skulder",
+          "previous": 6000,
+        },
+      ],
+      "total_assets": 82379,
+      "total_assets_previous": 50753,
+      "total_equity_liabilities": 12750,
+      "total_equity_liabilities_previous": 6000,
+    },
+    "company": {
+      "entity_type": "enskild_firma",
+      "name": "Bokföringsexempel",
+      "org_number": "5566778899",
+      "registered_office": "Sundsvall",
+    },
+    "disclosures": {
+      "confirmations": {
+        "contingent_liabilities": false,
+        "long_term_debt_over_five_years": false,
+        "parent_company": false,
+        "securities_pledged": false,
+      },
+      "contingent_liabilities": null,
+      "kassaflodesanalys_omission_confirmed": false,
+      "long_term_debt_over_five_years": null,
+      "medelantal_anstallda_override": null,
+      "omit_kassaflodesanalys": false,
+      "parent_company_city": null,
+      "parent_company_name": null,
+      "parent_company_org_number": null,
+      "securities_pledged": null,
+    },
+    "equity_specification": {
+      "current": {
+        "derived": false,
+        "fiscal_period_id": "fp-2025",
+        "name": "2025",
+        "period_end": "2025-12-31",
+        "period_start": "2025-01-01",
+        "posts": [],
+        "totals": {
+          "closing": 0,
+          "movements": {},
+          "opening": 0,
+        },
+        "unclassified": [],
+      },
+      "integrity_issues": [],
+      "kinds": [],
+      "placement": "management_report",
+      "previous": {
+        "derived": false,
+        "fiscal_period_id": "fp-2024",
+        "name": "2024",
+        "period_end": "2024-12-31",
+        "period_start": "2024-01-01",
+        "posts": [],
+        "totals": {
+          "closing": 0,
+          "movements": {},
+          "opening": 0,
+        },
+        "unclassified": [],
+      },
+      "warnings": [],
+    },
+    "fiscal_period": {
+      "id": "fp-2025",
+      "name": "2025",
+      "period_end": "2025-12-31",
+      "period_start": "2025-01-01",
+    },
+    "forvaltningsberattelse": {
+      "agm_date": "2026-04-15",
+      "agm_disposition_decision": null,
+      "agm_disposition_outcome": null,
+      "description": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
+      "egen_kapital_changes": [
+        {
+          "amount": 0,
+          "label": "Aktiekapital",
+        },
+        {
+          "amount": 0,
+          "label": "Balanserat resultat",
+        },
+        {
+          "amount": 0,
+          "label": "Årets resultat",
+        },
+        {
+          "amount": 0,
+          "label": "Summa eget kapital",
+        },
+      ],
+      "flerarsoversikt": [
+        {
+          "net_revenue": 10000,
+          "result_after_financial": 5876,
+          "soliditet_pct": 0,
+          "year": "2023",
+        },
+        {
+          "net_revenue": 20000,
+          "result_after_financial": 15876,
+          "soliditet_pct": 0,
+          "year": "2024",
+        },
+        {
+          "net_revenue": 30000,
+          "result_after_financial": 25876,
+          "soliditet_pct": 0,
+          "year": "2025",
+        },
+      ],
+      "important_events": "Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.",
+      "kontrollbalans_required": false,
+      "proposed_dividend": 0,
+      "resultatdisposition": "Styrelsen föreslår att årets resultat balanseras i ny räkning.",
+      "resultatdisposition_amounts": {
+        "carried_forward": 0,
+        "current_year_result": 0,
+        "proposed_dividend": 0,
+        "retained_earnings": 0,
+        "share_premium_reserve": 0,
+        "total": 0,
+      },
+    },
+    "kassaflodesanalys": undefined,
+    "noter": [
+      {
+        "body": "Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.",
+        "number": 1,
+        "title": "Redovisnings- och värderingsprinciper",
+      },
+      {
+        "body": "Inga skulder förfaller till betalning senare än fem år efter balansdagen.",
+        "number": 2,
+        "title": "Långfristiga skulder",
+      },
+      {
+        "body": "Inga.",
+        "number": 3,
+        "title": "Ställda säkerheter",
+      },
+      {
+        "body": "Inga.",
+        "number": 4,
+        "title": "Eventualförpliktelser",
+      },
+    ],
+    "previous_period": {
+      "id": "fp-2024",
+      "name": "2024",
+      "period_end": "2024-12-31",
+      "period_start": "2024-01-01",
+    },
+    "resultatrakning": [
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Rörelseintäkter, lagerförändringar m.m.",
+        "previous": null,
+      },
+      {
+        "current": 30000,
+        "indent": 1,
+        "label": "Nettoomsättning",
+        "previous": 20000,
+      },
+      {
+        "current": 30000,
+        "is_total": true,
+        "label": "Summa rörelseintäkter, lagerförändringar m.m.",
+        "previous": 20000,
+      },
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Rörelsekostnader",
+        "previous": null,
+      },
+      {
+        "current": -3124,
+        "indent": 1,
+        "label": "Övriga externa kostnader",
+        "previous": -3124,
+      },
+      {
+        "current": -1000,
+        "indent": 1,
+        "label": "Av- och nedskrivningar av materiella och immateriella anläggningstillgångar",
+        "previous": -1000,
+      },
+      {
+        "current": -4124,
+        "is_total": true,
+        "label": "Summa rörelsekostnader",
+        "previous": -4124,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Rörelseresultat",
+        "previous": 15876,
+      },
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Finansiella poster",
+        "previous": null,
+      },
+      {
+        "current": 0,
+        "is_total": true,
+        "label": "Summa finansiella poster",
+        "previous": 0,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Resultat efter finansiella poster",
+        "previous": 15876,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Resultat före skatt",
+        "previous": 15876,
+      },
+      {
+        "current": null,
+        "indent": 0,
+        "is_heading": true,
+        "label": "Skatter",
+        "previous": null,
+      },
+      {
+        "current": 25876,
+        "is_total": true,
+        "label": "Årets resultat",
+        "previous": 15876,
+        "semantic_key": "income_statement_result",
+      },
+    ],
+    "signatures": [],
+    "warnings": [
+      "Konto 2010 (Eget kapital) med saldo -72629 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+      "Konto 2013 (Övriga egna uttag) med saldo 3000 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+      "Årets resultat enligt resultaträkningen (25876 kr) stämmer inte med konto 2099 (0 kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).",
+      "Balansräkningen balanserar inte: Summa tillgångar 82379 kr ≠ Summa eget kapital och skulder 12750 kr (kontrollera-kod 3005).",
+      "Jämförelseårets resultat enligt resultaträkningen (15876 kr) stämmer inte med konto 2099 (0 kr), och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+      "Jämförelseårets balansräkning balanserar inte: Summa tillgångar 50753 kr ≠ Summa eget kapital och skulder 6000 kr. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+      "Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.",
+    ],
+  },
+  "schema_version": "1.0",
+  "validation": {
+    "error_count": 13,
+    "issues": [
+      {
+        "code": "AR-SCOPE-ENTITY",
+        "message": "Accounteds årsredovisningsflöde stöder inte den här företagsformen ännu.",
+        "remediation": "Använd rätt årsboksluts- eller deklarationsflöde för företagsformen.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-SCOPE-LIQUIDATION-UNKNOWN",
+        "message": "Om bolaget är i likvidation är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PUBLIC-UNKNOWN",
+        "message": "Om bolaget är publikt är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-LISTED-UNKNOWN",
+        "message": "Om värdepapper är upptagna till handel på en reglerad marknad är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-PARENT-UNKNOWN",
+        "message": "Om bolaget är moderföretag är inte besvarad.",
+        "remediation": "Besvara frågan i avsnittet Omfattning och regelverk.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-K2-ASSESSMENT-UNCONFIRMED",
+        "message": "Bedömningen att bolaget får använda K2 är inte uttryckligen bekräftad.",
+        "remediation": "Besvara frågorna om omfattning och regelverk och spara bedömningen.",
+        "section": "scope",
+        "severity": "error",
+      },
+      {
+        "code": "AR-MANAGEMENT-UNCONFIRMED",
+        "message": "Förvaltningsberättelsens texter är inte uttryckligen granskade.",
+        "remediation": "Granska texterna och markera dem som bekräftade.",
+        "section": "management_report",
+        "severity": "error",
+      },
+      {
+        "code": "AR-BALANCE-MISMATCH",
+        "message": "Balansräkningen balanserar inte i årsredovisningen.",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "error",
+      },
+      {
+        "code": "AR-RESULT-MISMATCH",
+        "message": "Årets resultat i resultaträkningen stämmer inte med årets resultat i balansräkningen.",
+        "remediation": "Kontrollera att årsredovisningen innehåller bokslutsdispositioner och skatt före resultatstängningen.",
+        "section": "statements",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-LONG-DEBT-UNCONFIRMED",
+        "message": "Uppgiften om långfristiga skulder som förfaller efter mer än fem år är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat uppgiften" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-SECURITIES-UNCONFIRMED",
+        "message": "Uppgiften om ställda säkerheter är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat ställda säkerheter" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-CONTINGENT-UNCONFIRMED",
+        "message": "Uppgiften om eventualförpliktelser är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat eventualförpliktelser" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+      {
+        "code": "AR-NOTE-PARENT-UNCONFIRMED",
+        "message": "Uppgiften om koncern- och moderföretagsförhållanden är inte bekräftad.",
+        "remediation": "Kryssa i "Jag har kontrollerat koncernförhållandet" under Lagstadgade upplysningar och klicka på Spara texten.",
+        "section": "notes",
+        "severity": "error",
+      },
+      {
+        "code": "AR-SOURCE-WARNING",
+        "message": "Konto 2010 (Eget kapital) med saldo -72629 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "warning",
+      },
+      {
+        "code": "AR-SOURCE-WARNING",
+        "message": "Konto 2013 (Övriga egna uttag) med saldo 3000 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "warning",
+      },
+      {
+        "code": "AR-SOURCE-WARNING",
+        "message": "Årets resultat enligt resultaträkningen (25876 kr) stämmer inte med konto 2099 (0 kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "warning",
+      },
+      {
+        "code": "AR-SOURCE-WARNING",
+        "message": "Balansräkningen balanserar inte: Summa tillgångar 82379 kr ≠ Summa eget kapital och skulder 12750 kr (kontrollera-kod 3005).",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "warning",
+      },
+      {
+        "code": "AR-SOURCE-WARNING",
+        "message": "Jämförelseårets resultat enligt resultaträkningen (15876 kr) stämmer inte med konto 2099 (0 kr), och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "warning",
+      },
+      {
+        "code": "AR-SOURCE-WARNING",
+        "message": "Jämförelseårets balansräkning balanserar inte: Summa tillgångar 50753 kr ≠ Summa eget kapital och skulder 6000 kr. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "warning",
+      },
+      {
+        "code": "AR-SOURCE-WARNING",
+        "message": "Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.",
+        "remediation": undefined,
+        "section": "statements",
+        "severity": "warning",
+      },
+    ],
+    "ok": false,
+    "stage": "draft",
+    "warning_count": 7,
+  },
+}
+`;
+
+exports[`annual report over a ledger: enskild_firma > builds the iXBRL input on its own (the file and preflight path) unchanged 1`] = `
+{
+  "br": {
+    "AckumuleradeOveravskrivningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AgarintressenOvrigaForetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Aktiekapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndelarIntresseforetagGemensamtStyrdaForetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndelarKoncernforetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndelarKoncernforetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndraLangfristigaFordringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AndraLangfristigaVardepappersinnehav": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AretsResultatEgetKapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AvsattningarPensionerLiknandeForpliktelserEnligtLag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "BalanseratResultat": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ByggnaderMark": {
+      "current": 0,
+      "previous": 0,
+    },
+    "CheckrakningskreditKortfristig": {
+      "current": 0,
+      "previous": 0,
+    },
+    "CheckrakningskreditLangfristig": {
+      "current": 0,
+      "previous": 0,
+    },
+    "EjRegistreratAktiekapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FaktureradEjUpparbetadIntakt": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForbattringsutgifterAnnansFastighet": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarKoncernforetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarKoncernforetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarOvrigaForetagAgarintresseLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "FordringarOvrigaforetagAgarintresseKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForskottFranKunder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForskottImmateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForskottTillLeverantorer": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForutbetaldaKostnaderUpplupnaIntakter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Goodwill": {
+      "current": 0,
+      "previous": 0,
+    },
+    "HyresratterLiknandeRattigheter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "InventarierVerktygInstallationer": {
+      "current": 2000,
+      "previous": 3000,
+    },
+    "KassaBankExklRedovisningsmedel": {
+      "current": 80379,
+      "previous": 47753,
+    },
+    "KoncessionerPatentLicenserVarumarkenLiknandeRattigheter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Kundfordringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LagerFardigaVarorHandelsvaror": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LagerRavarorFornodenheter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LagerVarorUnderTillverkning": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LanDelagareNarstaende": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Leverantorsskulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "MaskinerAndraTekniskaAnlaggningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Obligationslan": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Overkursfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OverkursfondBunden": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaAvsattningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaAvsattningarPensionerLiknandeForpliktelser": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaFordringarKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaKortfristigaPlaceringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaKortfristigaSkulder": {
+      "current": 12750,
+      "previous": 6000,
+    },
+    "OvrigaKortfristigaSkulderKreditinstitut": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaLagertillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaLangfristigaSkulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaLangfristigaSkulderKreditinstitut": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaMateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaObeskattadeReserver": {
+      "current": 0,
+      "previous": 0,
+    },
+    "PagaendeArbetenAnnansRakningKortfristigaSkulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "PagaendeArbetenAnnansRakningOmsattningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "PagaendeNyanlaggningarForskottMateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Periodiseringsfonder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Redovisningsmedel": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Reservfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Skatteskulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderIntresseforetagGemensamtStyrdaForetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderIntresseforetagGemensamtStyrdaForetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderKoncernforetagKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderKoncernforetagLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderOvrigaForetagAgarintresseKortfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkulderOvrigaForetagAgarintresseLangfristiga": {
+      "current": 0,
+      "previous": 0,
+    },
+    "TecknatEjInbetaltKapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "UpparbetadEjFaktureradIntakt": {
+      "current": 0,
+      "previous": 0,
+    },
+    "UpplupnaKostnaderForutbetaldaIntakter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Uppskrivningsfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Vaxelskulder": {
+      "current": 0,
+      "previous": 0,
+    },
+  },
+  "company": {
+    "name": "Bokföringsexempel",
+    "orgNumber": "5566778899",
+    "registeredOffice": "Sundsvall",
+  },
+  "disclosures": {
+    "aktiekapitalNot": null,
+    "contingentLiabilities": "Inga.",
+    "longTermDebtOverFiveYears": 0,
+    "parentCompany": null,
+    "securitiesPledged": "Inga.",
+  },
+  "entryPointId": "k2-ab-risbs-2024-09-12",
+  "faststallelseintyg": {
+    "arsstammaDatum": "2026-04-15",
+    "genereratDatum": "2026-02-01",
+    "resultatdispositionDecision": null,
+    "resultatdispositionOutcome": null,
+    "signerFirstName": "",
+    "signerLastName": "",
+    "signerRole": "Styrelseledamot",
+  },
+  "forvaltningsberattelse": {
+    "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
+    "egetKapital": {
+      "aktiekapital": {
+        "ib": 0,
+        "ub": 0,
+      },
+      "aretsResultat": {
+        "ib": 0,
+        "ub": 0,
+      },
+      "aretsResultatRorelse": 0,
+      "balanserasINyRakning": 0,
+      "balanseratResultat": {
+        "ib": 0,
+        "ub": 0,
+      },
+      "forandringAktiekapital": 0,
+      "ovrigForandringBalanserat": 0,
+      "ovrigaPoster": {
+        "ib": 0,
+        "ub": 0,
+      },
+      "totalt": {
+        "ib": 0,
+        "ub": 0,
+      },
+      "utdelning": 0,
+    },
+    "flerarsPerioder": [
+      {
+        "end": "2025-12-31",
+        "start": "2025-01-01",
+      },
+      {
+        "end": "2024-12-31",
+        "start": "2024-01-01",
+      },
+      {
+        "end": "2023-12-31",
+        "start": "2023-01-01",
+      },
+    ],
+    "flerarsoversikt": [
+      {
+        "nettoomsattning": 30000,
+        "resultatEfterFinansiellaPoster": 25876,
+        "soliditetPct": 0,
+        "year": "2025",
+      },
+      {
+        "nettoomsattning": 20000,
+        "resultatEfterFinansiellaPoster": 15876,
+        "soliditetPct": 0,
+        "year": "2024",
+      },
+      {
+        "nettoomsattning": 10000,
+        "resultatEfterFinansiellaPoster": 5876,
+        "soliditetPct": 0,
+        "year": "2023",
+      },
+    ],
+    "kontrollbalansrakningUpprattad": false,
+    "resultatdisposition": {
+      "aretsResultat": 0,
+      "balanserasINyRakning": 0,
+      "balanseratResultat": 0,
+      "kommentar": "Styrelsen föreslår att årets resultat balanseras i ny räkning.",
+      "overkursfond": 0,
+      "summa": 0,
+      "utdelning": 0,
+    },
+    "vasentligaHandelser": "Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.",
+  },
+  "isFirstFiscalYear": false,
+  "medelantalAnstallda": {
+    "current": 0,
+    "previous": 0,
+  },
+  "noter": [
+    {
+      "body": "Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.",
+      "number": 1,
+      "title": "Redovisnings- och värderingsprinciper",
+    },
+    {
+      "body": "Inga skulder förfaller till betalning senare än fem år efter balansdagen.",
+      "number": 2,
+      "title": "Långfristiga skulder",
+    },
+    {
+      "body": "Inga.",
+      "number": 3,
+      "title": "Ställda säkerheter",
+    },
+    {
+      "body": "Inga.",
+      "number": 4,
+      "title": "Eventualförpliktelser",
+    },
+  ],
+  "period": {
+    "end": "2025-12-31",
+    "start": "2025-01-01",
+  },
+  "previousPeriod": {
+    "end": "2024-12-31",
+    "start": "2024-01-01",
+  },
+  "programvara": {
+    "namn": "Arcim Technology AB - Accounted",
+    "version": "1.0",
+  },
+  "rr": {
+    "AktiveratArbeteEgenRakning": {
+      "current": 0,
+      "previous": 0,
+    },
+    "AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar": {
+      "current": 1000,
+      "previous": 1000,
+    },
+    "ErhallnaKoncernbidrag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForandringLagerProdukterIArbeteFardigaVarorPagaendeArbetenAnnansRakning": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForandringOveravskrivningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ForandringPeriodiseringsfond": {
+      "current": 0,
+      "previous": 0,
+    },
+    "HandelsvarorKostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "LamnadeKoncernbidrag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "NedskrivningarFinansiellaAnlaggningstillgangarKortfristigaPlaceringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "NedskrivningarOmsattningstillgangarUtoverNormalaNedskrivningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Nettoomsattning": {
+      "current": 30000,
+      "previous": 20000,
+    },
+    "OvrigaBokslutsdispositioner": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaExternaKostnader": {
+      "current": 3124,
+      "previous": 3124,
+    },
+    "OvrigaRanteintakterLiknandeResultatposter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaRorelseintakter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaRorelsekostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "OvrigaSkatter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "Personalkostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "RantekostnaderLiknandeResultatposter": {
+      "current": 0,
+      "previous": 0,
+    },
+    "RavarorFornodenheterKostnader": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatAndelarIntresseforetagGemensamtStyrda": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatAndelarKoncernforetag": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatOvrigaFinansiellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "ResultatOvrigaforetagAgarintresse": {
+      "current": 0,
+      "previous": 0,
+    },
+    "SkattAretsResultat": {
+      "current": 0,
+      "previous": 0,
+    },
+  },
+  "totals": {
+    "anlaggningstillgangar": {
+      "current": 2000,
+      "previous": 3000,
+    },
+    "aretsResultat": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "avsattningar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "bokslutsdispositioner": {
+      "current": 0,
+      "previous": 0,
+    },
+    "bundetEgetKapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "egetKapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "egetKapitalSkulder": {
+      "current": 12750,
+      "previous": 6000,
+    },
+    "finansiellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "finansiellaPoster": {
+      "current": 0,
+      "previous": 0,
+    },
+    "frittEgetKapital": {
+      "current": 0,
+      "previous": 0,
+    },
+    "immateriellaAnlaggningstillgangar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "kassaBank": {
+      "current": 80379,
+      "previous": 47753,
+    },
+    "kortfristigaFordringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "kortfristigaPlaceringar": {
+      "current": 0,
+      "previous": 0,
+    },
+    "kortfristigaSkulder": {
+      "current": 12750,
+      "previous": 6000,
+    },
+    "langfristigaSkulder": {
+      "current": 0,
+      "previous": 0,
+    },
+    "materiellaAnlaggningstillgangar": {
+      "current": 2000,
+      "previous": 3000,
+    },
+    "obeskattadeReserver": {
+      "current": 0,
+      "previous": 0,
+    },
+    "omsattningstillgangar": {
+      "current": 80379,
+      "previous": 47753,
+    },
+    "resultatEfterFinansiellaPoster": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "resultatForeSkatt": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "rorelseintakter": {
+      "current": 30000,
+      "previous": 20000,
+    },
+    "rorelsekostnader": {
+      "current": 4124,
+      "previous": 4124,
+    },
+    "rorelseresultat": {
+      "current": 25876,
+      "previous": 15876,
+    },
+    "tillgangar": {
+      "current": 82379,
+      "previous": 50753,
+    },
+    "varulager": {
+      "current": 0,
+      "previous": 0,
+    },
+  },
+  "underskrifter": {
+    "dateringsdatum": null,
+    "harVd": false,
+    "ort": "Sundsvall",
+    "signers": [],
+  },
+  "warnings": [
+    "Konto 2010 (Eget kapital) med saldo -72629 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+    "Konto 2013 (Övriga egna uttag) med saldo 3000 kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.",
+    "Årets resultat enligt resultaträkningen (25876 kr) stämmer inte med konto 2099 (0 kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).",
+    "Balansräkningen balanserar inte: Summa tillgångar 82379 kr ≠ Summa eget kapital och skulder 12750 kr (kontrollera-kod 3005).",
+    "Jämförelseårets resultat enligt resultaträkningen (15876 kr) stämmer inte med konto 2099 (0 kr), och skillnaden kan inte förklaras av ett år som aldrig avslutades. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+    "Jämförelseårets balansräkning balanserar inte: Summa tillgångar 50753 kr ≠ Summa eget kapital och skulder 6000 kr. Jämförelsetalen visas som de är bokförda: stäm av dem mot föregående års fastställda årsredovisning.",
+    "Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.",
+    "Inga underskrifter är registrerade: årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).",
+    "Årsstämmans beslut om resultatdisposition saknas i fastställelseintyget.",
+    "Undertecknare av fastställelseintyget saknas (kontrollera-kod 1169).",
+  ],
+}
+`;
