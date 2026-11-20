@@ -148,6 +148,7 @@ const RETAINED = new Set([
   'event_log.user_id',
   'fiscal_period_tax_adjustments.user_id',
   'ink3_underlag_inputs.updated_by', // Who last saved a förening's INK3 inputs; the company keeps the record.
+  'ne_declaration_inputs.updated_by', // Who last saved an enskild firma's NE-bilaga inputs; the company keeps the record.
   'tax_loss_carryforwards.updated_by', // Who last saved a year of the underskottsregister; the company keeps the record.
   'fiscal_periods.user_id',
   'journal_entries.user_id',
@@ -237,6 +238,9 @@ const RETAINED = new Set([
   'bolagsverket_subscriptions.user_id',
   // Company, team and configuration
   'agent_memory.created_by_user_id',
+  // Who filed and who answered a question put to the company: the company keeps its question list.
+  'company_questions.answered_by',
+  'company_questions.created_by_user_id',
   'agent_profiles.verified_by_user_id',
   'company_skills.created_by',
   'community_feedback.user_id', // An upvote on a shared item: one count among others, no personal content.
