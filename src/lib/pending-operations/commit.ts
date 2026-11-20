@@ -2903,6 +2903,28 @@ async function commitCreditNoteRefund(
   }
 }
 
+/**
+ * A credit note staged as an ordinary send or mark-sent (crm#2061): the
+ * refusal says how it does reach the customer. A linked draft is sent from
+ * its page, which issues and books it; an issued one is not emailed again by
+ * any door, so its PDF goes by hand. The last sentence is the agent's and is
+ * stripped from the person's copy (approval-refusal.ts).
+ */
+function creditNoteSendRefusal(invoice: Pick<Invoice, 'status' | 'credited_invoice_id'>): ExecutorResult {
+  const code =
+    invoice.status !== 'draft'
+      ? 'INVOICE_SEND_CREDIT_NOTE_ISSUED'
+      : invoice.credited_invoice_id
+        ? 'INVOICE_SEND_CREDIT_NOTE_DRAFT'
+        : 'INVOICE_CREDIT_NOTE_NOT_ISSUABLE'
+  const entry = getErrorEntry(code)
+  const agentStep =
+    code === 'INVOICE_SEND_CREDIT_NOTE_ISSUED'
+      ? ' Hämta PDF:en med gnubok_get_invoice_pdf och se med gnubok_get_invoice_deliveries om den har levererats.'
+      : ''
+  return { error: `${entry?.message_sv ?? code}${agentStep}`, errorCode: code, status: 409 }
+}
+
 /** A refused issue as the executors answer it. */
 function issueRefusalResult(refusal: IssueRefusal, currency: Invoice['currency']): ExecutorResult {
   if (refusal.code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING') {
@@ -2934,12 +2956,7 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (isCreditNoteDocument(invoice)) {
-    return {
-      error: 'Credit notes must be issued through the invoice send flow',
-      status: 409,
-    }
-  }
+  if (isCreditNoteDocument(invoice)) return creditNoteSendRefusal(invoice)
   const notEmailed = emailRefusal(invoice)
   if (notEmailed) return issueRefusalResult(notEmailed, invoice.currency)
   // partially_paid/credited imply the invoice was already issued too: the
@@ -3274,12 +3291,7 @@ async function commitMarkInvoiceSent(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (isCreditNoteDocument(invoice)) {
-    return {
-      error: 'Credit notes must be issued through the invoice send flow',
-      status: 409,
-    }
-  }
+  if (isCreditNoteDocument(invoice)) return creditNoteSendRefusal(invoice)
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
   // Before the number below is taken (crm#263): the draft stays deletable.
   if (invoiceLacksCustomer(invoice)) return customerMissingResult()

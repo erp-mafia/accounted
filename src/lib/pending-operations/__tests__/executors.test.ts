@@ -173,6 +173,7 @@ import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoic
 import { categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { personRefusalText } from '@/lib/pending-operations/approval-refusal'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   return {
@@ -539,8 +540,34 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
 
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
-    expect(result.error).toContain('Credit notes must be issued')
+    expect(result.code).toBe('INVOICE_SEND_CREDIT_NOTE_DRAFT')
+    expect(result.error).toContain('kreditfakturans sida')
   })
+
+  // crm#2061: an issued credit note cannot be emailed by any door, and the
+  // refusal named a send flow that does not exist.
+  it.each(['send_invoice', 'mark_invoice_sent'] as const)(
+    '%s on an issued credit note says how it reaches the customer',
+    async (type) => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({
+        data: makeInvoice({ id: 'credit-1', status: 'sent', credited_invoice_id: 'invoice-1' }),
+        error: null,
+      })
+      enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+      const op = makePendingOp({ operation_type: type, params: { invoice_id: 'credit-1' } })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(result.status).toBe('rejected')
+      expect(result.http_status).toBe(409)
+      expect(result.code).toBe('INVOICE_SEND_CREDIT_NOTE_ISSUED')
+      expect(result.error).toContain('Ladda ner PDF:en')
+      expect(result.error).toContain('gnubok_get_invoice_deliveries')
+      expect(personRefusalText(result.error)).toBe(getErrorEntry('INVOICE_SEND_CREDIT_NOTE_ISSUED')?.message_sv)
+    },
+  )
 
   it('records delivery history when a regular invoice is marked as sent', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
