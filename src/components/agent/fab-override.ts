@@ -26,3 +26,14 @@ export function resolveFabOverride(
   else if (next && next.armed && hidden !== next.against) next = null
   return { override: next, effectiveHidden: next && next.against === hidden ? next.value : hidden }
 }
+
+/**
+ * The undo's own save has landed: an undo override that never saw the prop at
+ * "hidden" ends here (the hide's refresh rendered after the undo's write, so
+ * no refresh will bring "hidden"). Kept, it would arm on a later hide from the
+ * settings row and keep the button shown against it. An armed one stays until
+ * the undo's refresh brings the prop back to "shown".
+ */
+export function settleUndoOverride(override: FabOverride | null): FabOverride | null {
+  return override && !override.armed ? null : override
+}

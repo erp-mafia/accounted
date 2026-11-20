@@ -7,7 +7,7 @@ import { ToastAction } from '@/components/ui/toast'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { saveFabHidden as storeFabHidden, type FabKind } from '@/lib/ui-state/fab-preference'
-import { resolveFabOverride, type FabOverride } from './fab-override'
+import { resolveFabOverride, settleUndoOverride, type FabOverride } from './fab-override'
 
 /**
  * A floating button's own X: it writes the opt-out the settings switch
@@ -76,7 +76,13 @@ export function useFabHidden(
   async function restoreFab() {
     // Not armed: the prop may not have reached "hidden" yet.
     setHideOverride({ value: false, against: true, armed: false })
-    if (!(await saveFabHidden(false))) setHideOverride(null)
+    if (!(await saveFabHidden(false))) {
+      setHideOverride(null)
+      return
+    }
+    // Still not armed once the write has landed: no refresh brought "hidden",
+    // and none will, so the override ends before a later hide could arm it.
+    setHideOverride(settleUndoOverride)
   }
 
   async function hideFab() {
