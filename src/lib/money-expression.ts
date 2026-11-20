@@ -1,4 +1,4 @@
-import { parseDecimalInput, roundOre } from '@/lib/money'
+import { decimalDigits, parseDecimalInput, pow10 } from '@/lib/money'
 
 /**
  * Arithmetic in amount fields.
@@ -31,11 +31,70 @@ import { parseDecimalInput, roundOre } from '@/lib/money'
  *   - A second sign is unary, so "1200++300" is 1500, as in any calculator.
  */
 
+/**
+ * An exact decimal value: numerator over a positive denominator. The sum is
+ * evaluated on these, never on binary floats, so a half öre is exactly a half
+ * when the result is rounded: 2,75*0,06 is 0,165 and rounds to 0,17 (as a
+ * float product it is 0,16499... and would round to 0,16). Each literal enters
+ * through decimalDigits, the decimals the number is written with, as
+ * multiplyOre reads them.
+ */
+interface Exact {
+  n: bigint
+  d: bigint
+}
+
 type Token =
-  | { kind: 'num'; value: number }
+  | { kind: 'num'; value: Exact }
   | { kind: 'op'; value: '+' | '-' | '*' | '/' }
   | { kind: 'lparen' }
   | { kind: 'rparen' }
+
+const ZERO = BigInt(0)
+const ONE = BigInt(1)
+const TWO = BigInt(2)
+const HUNDRED = BigInt(100)
+
+function exactOf(value: number): Exact {
+  const [digits, scale] = decimalDigits(value)
+  return { n: value < 0 ? -digits : digits, d: pow10(scale) }
+}
+
+function add(a: Exact, b: Exact): Exact {
+  return { n: a.n * b.d + b.n * a.d, d: a.d * b.d }
+}
+
+function negate(a: Exact): Exact {
+  return { n: -a.n, d: a.d }
+}
+
+function multiply(a: Exact, b: Exact): Exact {
+  return { n: a.n * b.n, d: a.d * b.d }
+}
+
+/** a / b; null when b is exactly zero. */
+function divide(a: Exact, b: Exact): Exact | null {
+  if (b.n === ZERO) return null
+  return b.n < ZERO ? { n: -a.n * b.d, d: a.d * -b.n } : { n: a.n * b.d, d: a.d * b.n }
+}
+
+/** floor(a / b) for b > 0 (bigint division truncates toward zero). */
+function floorDiv(a: bigint, b: bigint): bigint {
+  const q = a / b
+  return a % b !== ZERO && a < ZERO ? q - ONE : q
+}
+
+/**
+ * Round to the öre as roundOre does: half up, so a positive half öre rounds
+ * away from zero and a negative one toward zero (roundOre(-1.005) is -1).
+ * floor(x * 100 + 1/2), computed exactly.
+ */
+function toOre(value: Exact): number {
+  const ore = floorDiv(TWO * value.n * HUNDRED + value.d, TWO * value.d)
+  const amount = Number(`${ore.toString()}e-2`)
+  // A plain 0, never -0, as parseAmountInput.
+  return amount === 0 ? 0 : amount
+}
 
 /** Space, non-breaking space and narrow non-breaking space all group thousands. */
 const WHITESPACE = /[\s  ]/g
@@ -78,7 +137,7 @@ function tokenize(input: string): Token[] | null {
 
     const value = parseDecimalInput(s.slice(start, i))
     if (value === null) return null
-    tokens.push({ kind: 'num', value })
+    tokens.push({ kind: 'num', value: exactOf(value) })
   }
 
   return tokens
@@ -90,11 +149,19 @@ function tokenize(input: string): Token[] | null {
  * unary  := ('+' | '-')? unary | atom
  * atom   := number | '(' expr ')'
  */
-function parse(tokens: Token[]): number | null {
+/**
+ * The deepest nesting of parentheses and signs a field takes. No amount needs
+ * more; a pasted run of thousands would otherwise overflow the recursion and
+ * throw while the field renders.
+ */
+const MAX_DEPTH = 100
+
+function parse(tokens: Token[]): Exact | null {
   let pos = 0
+  let depth = 0
   const peek = (): Token | undefined => tokens[pos]
 
-  function parseExpr(): number | null {
+  function parseExpr(): Exact | null {
     let left = parseTerm()
     if (left === null) return null
     for (;;) {
@@ -103,11 +170,11 @@ function parse(tokens: Token[]): number | null {
       pos++
       const right = parseTerm()
       if (right === null) return null
-      left = t.value === '+' ? left + right : left - right
+      left = add(left, t.value === '+' ? right : negate(right))
     }
   }
 
-  function parseTerm(): number | null {
+  function parseTerm(): Exact | null {
     let left = parseUnary()
     if (left === null) return null
     for (;;) {
@@ -116,24 +183,27 @@ function parse(tokens: Token[]): number | null {
       pos++
       const right = parseUnary()
       if (right === null) return null
-      // Division by zero yields Infinity or NaN, neither of which is an amount.
-      if (t.value === '/' && right === 0) return null
-      left = t.value === '*' ? left * right : left / right
+      // Division by zero is no amount.
+      const next: Exact | null = t.value === '*' ? multiply(left, right) : divide(left, right)
+      if (next === null) return null
+      left = next
     }
   }
 
-  function parseUnary(): number | null {
+  function parseUnary(): Exact | null {
     const t = peek()
     if (t?.kind === 'op' && (t.value === '+' || t.value === '-')) {
       pos++
+      if (++depth > MAX_DEPTH) return null
       const operand = parseUnary()
+      depth--
       if (operand === null) return null
-      return t.value === '-' ? -operand : operand
+      return t.value === '-' ? negate(operand) : operand
     }
     return parseAtom()
   }
 
-  function parseAtom(): number | null {
+  function parseAtom(): Exact | null {
     const t = peek()
     if (t === undefined) return null
     if (t.kind === 'num') {
@@ -142,7 +212,9 @@ function parse(tokens: Token[]): number | null {
     }
     if (t.kind === 'lparen') {
       pos++
+      if (++depth > MAX_DEPTH) return null
       const inner = parseExpr()
+      depth--
       if (inner === null) return null
       if (peek()?.kind !== 'rparen') return null
       pos++
@@ -158,7 +230,8 @@ function parse(tokens: Token[]): number | null {
 }
 
 /**
- * Evaluate an amount field's text. Returns the öre-rounded value, or null when
+ * Evaluate an amount field's text. Returns the value rounded once to the öre
+ * (computed on exact decimals, rounded as roundOre rounds), or null when
  * the text is not a well-formed expression (in which case the caller keeps the
  * raw text so the user can see and fix what they typed).
  *
@@ -169,6 +242,5 @@ export function parseAmountExpression(raw: string): number | null {
   const tokens = tokenize(raw)
   if (tokens === null) return null
   const value = parse(tokens)
-  if (value === null || !Number.isFinite(value)) return null
-  return roundOre(value)
+  return value === null ? null : toOre(value)
 }

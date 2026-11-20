@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseAmountExpression } from '@/lib/money-expression'
-import { formatAmountInput, parseAmountInput } from '@/lib/money'
+import { formatAmountInput, parseAmountInput, roundOre } from '@/lib/money'
 
 describe('parseAmountExpression', () => {
   describe('plain numbers', () => {
@@ -123,6 +123,44 @@ describe('parseAmountExpression', () => {
       expect(parseAmountExpression('1200--300')).toBe(1500)
       expect(parseAmountExpression('1200+-300')).toBe(900)
     })
+  })
+})
+
+describe('exact decimals: one rounding, on the exact result', () => {
+  // As float products these land just below the half öre and round down.
+  it.each([
+    ['2,75*0,06', 0.17],
+    ['0,42/1,12', 0.38],
+    ['33,33*11,5', 383.3],
+    ['1,005', 1.01],
+    ['0,005+0,005+0,005', 0.02],
+  ])('%s is %s', (input, expected) => {
+    expect(parseAmountExpression(input)).toBe(expected)
+  })
+
+  it('rounds a negative half öre as roundOre does', () => {
+    expect(parseAmountExpression('-1,005')).toBe(roundOre(-1.005))
+    expect(parseAmountExpression('0-1,005')).toBe(roundOre(-1.005))
+  })
+
+  it('refuses a division by a sum that is exactly zero', () => {
+    expect(parseAmountExpression('1/(0,1+0,2-0,3)')).toBeNull()
+  })
+
+  it('answers 0, never -0', () => {
+    expect(Object.is(parseAmountExpression('-0'), 0)).toBe(true)
+    expect(Object.is(parseAmountExpression('0*-1'), 0)).toBe(true)
+    expect(Object.is(parseAmountExpression('-0,001'), 0)).toBe(true)
+  })
+
+  it('reads U+2212 as a minus inside a sum', () => {
+    expect(parseAmountExpression('1200\u2212300')).toBe(900)
+  })
+
+  it('answers null, without throwing, past 100 levels of nesting', () => {
+    expect(parseAmountExpression('('.repeat(100) + '1' + ')'.repeat(100))).toBe(1)
+    expect(parseAmountExpression('('.repeat(20000) + '1' + ')'.repeat(20000))).toBeNull()
+    expect(parseAmountExpression('-'.repeat(20000) + '1')).toBeNull()
   })
 })
 

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { Input, type InputProps } from '@/components/ui/input'
-import { formatAmountInput, parseAmountInput } from '@/lib/money'
+import { formatAmountInput, parseDecimalInput } from '@/lib/money'
 import { parseAmountExpression } from '@/lib/money-expression'
 
 export interface AmountInputProps extends Omit<InputProps, 'type' | 'onChange' | 'value'> {
@@ -18,7 +18,7 @@ export interface AmountInputProps extends Omit<InputProps, 'type' | 'onChange' |
  * The expression is evaluated when the field is left (blur, Enter or Tab), and
  * the result is written back into the field (formatAmountInput), so the number
  * that will be booked is on screen before anything is committed. A plain
- * amount is left as typed. Nothing is evaluated while typing: a value that
+ * amount already at the öre is left as typed. Nothing is evaluated while typing: a value that
  * changes under the user's fingers mid-keystroke is worse than no arithmetic
  * at all.
  *
@@ -45,8 +45,9 @@ const AmountInput = React.forwardRef<HTMLInputElement, AmountInputProps>(
       // carries the sign in double-entry bookkeeping, so leave the text for the
       // user to fix rather than writing back a number the form would reject.
       if (result === null || result < 0) return
-      // A plain amount already says what will be booked: keep it as typed.
-      if (parseAmountInput(raw) !== null) return
+      // A plain amount already at the öre says what will be booked: keep it
+      // as typed. "1.234" or "1,005" round, so they are written back too.
+      if (parseDecimalInput(raw) === result) return
       onValueChange(formatAmountInput(result))
     }, [value, onValueChange])
 
