@@ -73,6 +73,23 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
 }))
 
+// Open: the gate has its own suites (is-booked.test.ts, and every shape on real
+// Postgres in tests/pg/customer-bank-match-doors.pg.test.ts). Mocked with the
+// chart check so neither consumes a slot in the queued Supabase mock.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebooking: vi.fn(async () => ({ outcome: 'open' })),
+}))
+vi.mock('@/lib/bookkeeping/account-validation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn(async () => []),
+}))
+// No invoice here needs its sale booked first; that rule has its own suites.
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -132,6 +149,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'credit-1' } })
@@ -178,11 +196,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -202,6 +221,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
@@ -283,11 +304,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -332,14 +354,15 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     // With cash_account_id null, resolveSettlementAccount lists the company's
     // enabled cash accounts for the currency (issue #1722); no rows here, so
     // it keeps the 1930 fallback.
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -356,6 +379,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
   })
 
@@ -394,6 +419,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
     enqueue({ data: null, error: null }) // dispatcher marks the op 'rejected'
@@ -440,11 +466,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -462,6 +489,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '3740' }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
     expect(invoiceUpdate).toMatchObject({
@@ -511,11 +540,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -576,11 +606,12 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -598,6 +629,8 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
           expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
         ]),
       }),
+      undefined,
+      undefined,
     )
     expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
       status: 'paid',
@@ -650,11 +683,13 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { ok: false, reason: 'no_registration_voucher' }, error: null }) // what 1510 carries
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
-    enqueue({ data: null, error: null }) // transactions update (link)
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -705,6 +740,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -751,6 +787,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       },
       error: null,
     }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
@@ -773,5 +810,300 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       error_code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
       details: { currency: 'SEK', transaction_amount: 814, remaining_amount: 812.40, excess: 1.60 },
     })
+  })
+})
+
+describe('commitPendingOperation: match_transaction_invoice with overpayment_account (crm#253)', () => {
+  function enqueueCommit(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    tx: Record<string, unknown>,
+    invoice: Record<string, unknown>,
+    accountingMethod: 'accrual' | 'cash',
+    carriedSek?: number,
+  ) {
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', currency: 'SEK', date: '2026-09-30', invoice_id: null, journal_entry_id: null, cash_account_id: null, ...tx },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'sent', paid_amount: 0, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, ...invoice },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: accountingMethod, entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    if (carriedSek !== undefined) enqueue({ data: { ok: true, sek: carriedSek }, error: null }) // what 1510 carries
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+  }
+
+  const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+    lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('kontantmetod RUT invoice paid 340 on 337,50: 1930 takes the bank row, 3740 the 2,50', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/bookkeeping/invoice-entries')>(
+      '@/lib/bookkeeping/invoice-entries',
+    )
+    mockCreateCashEntry.mockImplementationOnce(actual.createInvoiceCashEntry)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // 540 + 135 moms = 675; RUT 50 % = 337,50 from Skatteverket, 337,50 from the customer.
+    enqueueCommit(enqueue, { amount: 340 }, {
+      total: 675,
+      subtotal: 540,
+      vat_amount: 135,
+      vat_treatment: 'standard_25',
+      remaining_amount: 337.5,
+      items: [{
+        id: 'item-1', invoice_id: 'inv-1', description: 'Städning', quantity: 1, unit: 'tim',
+        unit_price: 540, line_total: 540, vat_rate: 25, vat_amount: 135, sort_order: 0,
+        // Saved before the whole-krona rule: the stored öre amount is what books.
+        deduction_type: 'rut', work_type: 'STAD', deduction_amount: 337.5,
+      }],
+    }, 'cash')
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '3740', overpayment_amount: 2.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    const booked = rows(input.lines)
+    // Kontantmetoden: the customer's share only (ML 2023:200 7 kap. 16 §);
+    // the 337,50 RUT-avdrag (270 + 67,50 moms) waits for the payout.
+    expect(booked).toContainEqual(['1930', 340, 0])
+    expect(booked.some(([account]) => account === '1513')).toBe(false)
+    expect(booked).toContainEqual(['3001', 0, 270])
+    expect(booked).toContainEqual(['2611', 0, 67.5])
+    expect(booked).toContainEqual(['3740', 0, 2.5])
+    const debit = input.lines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = input.lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round((debit - credit) * 100)).toBe(0)
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 337.5,
+      remaining_amount: 0,
+    })
+  })
+
+  it('faktureringsmetod: 1510 is credited the remaining and 2420 the excess', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, { amount: 1312.4 }, { total: 812.4, remaining_amount: 812.4, journal_entry_id: 'je-sent' }, 'accrual', 812.4)
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '2420', overpayment_amount: 500 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(rows(input.lines)).toEqual([
+      ['1930', 1312.4, 0],
+      ['1510', 0, 812.4],
+      ['2420', 0, 500],
+    ])
+  })
+
+  it('refuses when the excess differs from the one staged, before anything is posted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 1312.4, currency: 'SEK', date: '2026-09-30', invoice_id: null, journal_entry_id: 'je-categorized', cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'partially_paid', total: 812.4, paid_amount: 312.4, remaining_amount: 500, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-sent', customer: { name: 'Test AB' } },
+      error: null,
+    }) // invoice fetch: a payment landed after staging
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '2420', overpayment_amount: 500 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.code).toBe('MATCH_OVERPAYMENT_CHANGED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as { result_data: Record<string, unknown> }
+    expect(rejected.result_data).toMatchObject({ details: { shown_excess: 500, current_excess: 812.4 } })
+  })
+
+  it('refuses 3740 for an excess at or above the cap at approval too', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 822.4, currency: 'SEK', date: '2026-09-30', invoice_id: null, journal_entry_id: null, cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-2026001', status: 'sent', total: 812.4, paid_amount: 0, remaining_amount: 812.4, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' } },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', overpayment_account: '3740', overpayment_amount: 10 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('MATCH_OVERPAYMENT_ROUNDING_CAP')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1364: the customer paid in full by card, the provider paid out net of
+// its fee. The approved match books the fee on 6570 and settles in full.
+describe('commitPendingOperation: match_transaction_invoice with fee_account (crm#1364)', () => {
+  function enqueueCommit(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    tx: Record<string, unknown>,
+    invoice: Record<string, unknown>,
+    accountingMethod: 'accrual' | 'cash',
+  ) {
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', currency: 'SEK', date: '2026-10-21', invoice_id: null, journal_entry_id: null, cash_account_id: null, ...tx },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: '001', status: 'sent', paid_amount: 0, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, ...invoice },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: accountingMethod, entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // row claim
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+  }
+
+  const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+    lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  // 8 000 + 2 000 moms = 10 000, never booked; the payout is 9 809,50.
+  const cashInvoice = {
+    total: 10000,
+    subtotal: 8000,
+    vat_amount: 2000,
+    vat_treatment: 'standard_25',
+    remaining_amount: 10000,
+    items: [{
+      id: 'item-1', invoice_id: 'inv-1', description: 'Skyltar', quantity: 1, unit: 'st',
+      unit_price: 8000, line_total: 8000, vat_rate: 25, vat_amount: 2000, sort_order: 0,
+    }],
+  }
+
+  it('kontantmetod: revenue and moms on the whole invoice, 1930 the payout, 6570 the fee, invoice paid', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/bookkeeping/invoice-entries')>(
+      '@/lib/bookkeeping/invoice-entries',
+    )
+    mockCreateCashEntry.mockImplementationOnce(actual.createInvoiceCashEntry)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, { amount: 9809.5 }, cashInvoice, 'cash')
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', fee_account: '6570', fee_amount: 190.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.source_type).toBe('invoice_cash_payment')
+    expect(rows(input.lines)).toEqual([
+      ['1930', 9809.5, 0],
+      ['3001', 0, 8000],
+      ['2611', 0, 2000],
+      ['6570', 190.5, 0],
+    ])
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 10000,
+      remaining_amount: 0,
+    })
+    // The AR sub-ledger row carries what the customer paid, not the payout.
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({ amount: 10000 })
+  })
+
+  it('faktureringsmetod: 1510 is credited the whole remaining and 6570 debited the fee', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, { amount: 9809.5 }, { total: 10000, remaining_amount: 10000, journal_entry_id: 'je-sent' }, 'accrual')
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', fee_account: '6570', fee_amount: 190.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(rows(input.lines)).toEqual([
+      ['1930', 9809.5, 0],
+      ['1510', 0, 10000],
+      ['6570', 190.5, 0],
+    ])
+  })
+
+  it('refuses when the fee differs from the one staged, before anything is posted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 9809.5, currency: 'SEK', date: '2026-10-21', invoice_id: null, journal_entry_id: null, cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: '001', status: 'sent', total: 10000, paid_amount: 0, remaining_amount: 9900, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-sent', customer: { name: 'Test AB' } },
+      error: null,
+    }) // invoice fetch: the remaining moved after staging
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', fee_account: '6570', fee_amount: 190.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.code).toBe('MATCH_PAYMENT_FEE_CHANGED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as { result_data: Record<string, unknown> }
+    expect(rejected.result_data).toMatchObject({ details: { shown_fee: 190.5, current_fee: 90.5 } })
+  })
+
+  it('without fee_account a kontantmetod payout short of the invoice stays refused at approval', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 9809.5, currency: 'SEK', date: '2026-10-21', invoice_id: null, journal_entry_id: null, cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: '001', status: 'sent', currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, paid_amount: 0, ...cashInvoice },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
   })
 })

@@ -27,7 +27,8 @@ const SupplierInvoiceCredited = z.object({
   credit_note_id: z.string().uuid(),
   original_id: z.string().uuid(),
   arrival_number: z.number().int(),
-  supplier_invoice_number: z.string(),
+  // NULL when neither the credit note nor the invoice it credits has a number.
+  supplier_invoice_number: z.string().nullable(),
   invoice_date: z.string(),
   registration_journal_entry_id: z.string().uuid().nullable(),
   document_id: z.string().uuid().nullable(),
@@ -47,8 +48,10 @@ registerEndpoint({
     'A credit note for PART of an invoice (400 SI_CREDIT_PARTIAL: this always reverses the whole invoice). Editing line items on an unchanged invoice (use PATCH on `registered` SIs). Crediting an already-credited SI (409 SI_CREDIT_ALREADY_CREDITED); undo a credit with POST /supplier-invoices/{id}/uncredit.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
+    'An invoice with a bank payment order that is signed or being signed returns 409 SI_BANK_PAYMENT_UNDER_WAY, also under dry-run: the bank still pays it. Cancel the order first; once the money has left, match its bank row to the invoice instead.',
     'The credit note is dated credit_date, else the inbox item\'s credit note date, else today (Stockholm). That date must fall in an open fiscal period: a locked one returns 400 SI_CREDIT_PERIOD_LOCKED and is never re-dated for you.',
     'With inbox_item_id the credit note must be from the invoice\'s supplier and for its whole total in its currency: otherwise 400 SI_CREDIT_PARTIAL or SI_CREDIT_DOCUMENT_MISMATCH (details carry both totals). A credit_date or document date before the invoice date is a 400 VALIDATION_ERROR.',
+    'The reversal is built from the invoice\'s stored rows. Rows that do not add up to the invoice total, or no rows at all (typically an invoice imported from another system), return 409 SI_CREDIT_ROWS_MISMATCH with details.rows_payable_sek and details.invoice_payable_sek, on a dry run too and before anything is written. Do not retry: book the credit note as a verifikat of its own (debit 2440 by the invoice total, credit the cost accounts and 2641), then settle a still unpaid invoice against that verifikat in the app or with the MCP tool gnubok_link_supplier_invoice_to_voucher.',
     'Cash basis (kontantmetoden): an unpaid original gets no reversing JE; recognition waits for the refund. The credit-note row is still created so the AP audit trail stays consistent.',
     'The original SI is flipped to `credited` regardless of how much of it was already paid; reconcile the bank refund via the transactions endpoints.',
   ],

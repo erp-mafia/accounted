@@ -2,7 +2,7 @@
  * Settle a ROT/RUT begäran: book Skatteverkets utbetalning and, optionally,
  * link the bank transaction that carried it.
  *
- *   Debit  19xx bank account (default 1930)  [amount]
+ *   Debit  19xx bank account  [amount]
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * Shared between two callers:
@@ -22,6 +22,13 @@
  * the whole-kronor request (3740, see lib/invoices/rot-rut-receivable.ts),
  * recomputed here at booking so the voucher never trusts a stale preview.
  *
+ * Under kontantmetoden an invoice whose customer payment booked only the
+ * customer's share has its deduction share booked here, as försäljning and
+ * utgående moms for what Skatteverket paid on it, instead of a 1513 credit
+ * (lib/invoices/rot-rut-payout-recognition.ts). A partial beslut over several
+ * invoices recorded as one total cannot be split per invoice: refused with
+ * ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN (import the beslutsfil).
+ *
  * The journal entry IS the accounting record: engine failure blocks the whole
  * operation. Everything after the voucher is best-effort-with-loud-logging,
  * never an unbook (the voucher is immutable per BFL).
@@ -32,12 +39,16 @@ import {
   createRotRutPayoutEntry,
   createRotRutPayoutSetEntry,
 } from '@/lib/bookkeeping/rot-rut-entries'
+import type { RotRutPostingContext } from '@/lib/bookkeeping/rot-rut-business-events'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { futurePaymentDateRefusal } from '@/lib/invoices/payment-date'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { roundOre } from '@/lib/money'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
+import { getPayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
 import { createLogger } from '@/lib/logger'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const log = createLogger('invoices/rot-rut-settle')
 
@@ -46,7 +57,7 @@ export interface SettleRotRutPayoutParams {
   paymentDate: string
   /** Defaults to decided_total ?? requested_total. */
   amount?: number
-  /** BAS 19xx account the payout landed on. Defaults to 1930 in the engine. */
+  /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
   bankAccount?: string
   /**
    * Bank transaction that carried the payout. When set, the row is linked to
@@ -83,7 +94,9 @@ export type SettleRotRutPayoutErrorCode =
   | 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS'
   | 'ROT_RUT_SETTLE_SET_AMOUNT'
   | 'ROT_RUT_SETTLE_RACE'
+  | 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN'
   | 'ROT_RUT_MATCH_TX_LINK_FAILED'
+  | 'PAYMENT_DATE_IN_FUTURE'
 
 export type SettleRotRutPayoutOutcome =
   | {
@@ -188,6 +201,8 @@ async function linkTransactionToSettlement(
       // match-invoice): a literal null keeps the phantom-column scanner
       // able to verify the column set.
       reconciliation_method: null,
+      // The caller named this bank row as the payout; the request scope says who.
+      ...linkBasisColumns('user_confirmed'),
     })
     .eq('id', params.transactionId)
     .eq('company_id', companyId)
@@ -226,6 +241,18 @@ async function linkTransactionToSettlement(
   return true
 }
 
+/**
+ * What the settle saw, for the posting port's event (read only while
+ * POSTING_EVENTS is on): a payout matched from a bank row names that row (the
+ * caller named it as the payout, as the row's own link records), a headless
+ * settle is the person's statement that Skatteverket paid.
+ */
+function payoutPostingContext(transactionId: string | undefined): RotRutPostingContext {
+  return transactionId
+    ? { linkBasis: linkBasisColumns('user_confirmed'), bankLine: true }
+    : { linkBasis: linkBasisColumns('user_created'), bankLine: false }
+}
+
 /** A fully paid begäran mirrors requested_amount onto every item's decided_amount. */
 async function mirrorDecidedAmounts(supabase: SupabaseClient, requestId: string): Promise<void> {
   const { data: items, error: itemsFetchError } = await supabase
@@ -252,12 +279,61 @@ async function mirrorDecidedAmounts(supabase: SupabaseClient, requestId: string)
   }
 }
 
+/**
+ * Point a begäran at a payout verifikat booked outside the settle flow, with
+ * the settle's own writes: a set-off on the skattekonto is Skatteverket's
+ * payout received there instead of the bank, and its verifikat
+ * (skattekonto-booking.ts, the payout's lines from buildRotRutPayoutLines)
+ * settles the begäran like a settle voucher. The CAS on
+ * settlement_journal_entry_id IS NULL picks one winner; the decided_amount
+ * mirror for a fully paid begäran and the dead bank-row hints follow. The
+ * verifikat may still be a draft: deleting it clears the pointer (ON DELETE
+ * SET NULL), a reversal releases it (release_rot_rut_settlement_on_reversal).
+ */
+export async function attachRotRutPayoutVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: { requestId: string; journalEntryId: string; amount: number },
+): Promise<
+  | { ok: true; request: SettledRotRutPayoutRequest; fullyPaid: boolean }
+  | { ok: false; kind: 'code'; code: 'ROT_RUT_REQUEST_NOT_FOUND' | 'ROT_RUT_SETTLE_INVALID_STATE' | 'ROT_RUT_SETTLE_RACE' }
+  | { ok: false; kind: 'error'; error: unknown }
+> {
+  const { data: request, error: fetchError } = await supabase
+    .from('rot_rut_payout_requests')
+    .select('id, name, deduction_type, status, requested_total, decided_total, decided_at, settlement_journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('id', params.requestId)
+    .maybeSingle()
+  if (fetchError) return { ok: false, kind: 'error', error: fetchError }
+  if (!request) return { ok: false, kind: 'code', code: 'ROT_RUT_REQUEST_NOT_FOUND' }
+  const row = request as PayoutRequestRow
+  if (!isSettleable(row)) return { ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_INVALID_STATE' }
+
+  const amount = roundOre(params.amount)
+  const fullyPaid = amount >= Number(row.requested_total)
+  const { updated, error } = await attachSettlementVoucher(supabase, companyId, row, params.journalEntryId, amount, fullyPaid)
+  if (error) return { ok: false, kind: 'error', error }
+  if (!updated) return { ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_RACE' }
+  if (fullyPaid) await mirrorDecidedAmounts(supabase, params.requestId)
+  await clearSettledInvoiceSuggestions(supabase, companyId, 'rot_rut_payout_request', params.requestId, {
+    exceptTransactionId: null,
+  })
+  return { ok: true, request: updated, fullyPaid }
+}
+
 export async function settleRotRutPayoutRequest(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
   params: SettleRotRutPayoutParams,
 ): Promise<SettleRotRutPayoutOutcome> {
+  // Typed by hand, the date is the day the money moved. A bank row brings its own.
+  if (!params.transactionId) {
+    const futureDate = futurePaymentDateRefusal(params.paymentDate)
+    if (futureDate) return { ok: false, kind: 'code', ...futureDate }
+  }
+
   const { data: payoutRequest, error: fetchError } = await supabase
     .from('rot_rut_payout_requests')
     .select('*')
@@ -326,20 +402,34 @@ export async function settleRotRutPayoutRequest(
   const oreRounding = fullyPaid
     ? await getPayoutOreRounding(supabase, companyId, payoutRequest, amount)
     : { rounding: 0, invoiceCount: 0 }
+  // Kontantmetoden's second step: the share the customer's payment left
+  // unbooked is försäljning and moms now, never a 1513 credit.
+  const recognition = await getPayoutRecognition(supabase, companyId, payoutRequest, amount, params.paymentDate)
+  if (!recognition.ok) {
+    if ('code' in recognition) return { ok: false, kind: 'code', code: recognition.code, details: recognition.details }
+    return { ok: false, kind: 'error', error: recognition.error, stage: 'fetch' }
+  }
 
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
   try {
-    const entry = await createRotRutPayoutEntry(supabase, companyId, userId, {
-      requestId: payoutRequest.id,
-      requestName: payoutRequest.name,
-      deductionType: payoutRequest.deduction_type,
-      paymentDate: params.paymentDate,
-      amount,
-      oreRounding: oreRounding.rounding,
-      invoiceCount: oreRounding.invoiceCount,
-      bankAccount: params.bankAccount,
-    })
+    const entry = await createRotRutPayoutEntry(
+      supabase,
+      companyId,
+      userId,
+      {
+        requestId: payoutRequest.id,
+        requestName: payoutRequest.name,
+        deductionType: payoutRequest.deduction_type,
+        paymentDate: params.paymentDate,
+        amount,
+        oreRounding: oreRounding.rounding,
+        invoiceCount: oreRounding.invoiceCount,
+        bankAccount: params.bankAccount,
+        recognition: recognition.recognition ?? undefined,
+      },
+      () => payoutPostingContext(params.transactionId),
+    )
     journalEntryId = entry.id
   } catch (engineError) {
     return { ok: false, kind: 'error', error: engineError, stage: 'book' }
@@ -438,7 +528,7 @@ export interface SettleRotRutPayoutSetParams {
   paymentDate: string
   /** The bank row amount: must equal the requests' expected payouts to the öre. */
   amount: number
-  /** BAS 19xx account the payout landed on. Defaults to 1930 in the engine. */
+  /** BAS 19xx account the payout landed on; the company's primary bank account when nothing names one. */
   bankAccount?: string
   /** See SettleRotRutPayoutParams.transactionId. */
   transactionId?: string
@@ -543,22 +633,38 @@ export async function settleRotRutPayoutRequestSet(
         : { rounding: 0, invoiceCount: 0 },
     ),
   )
+  // Same rule as the single path: kontantmetoden's second step per begäran.
+  const recognitions = await Promise.all(
+    legs.map((leg) => getPayoutRecognition(supabase, companyId, leg.request, leg.amount, params.paymentDate)),
+  )
+  for (const recognition of recognitions) {
+    if (recognition.ok) continue
+    if ('code' in recognition) return { ok: false, kind: 'code', code: recognition.code, details: recognition.details }
+    return { ok: false, kind: 'error', error: recognition.error, stage: 'fetch' }
+  }
 
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
   try {
-    const entry = await createRotRutPayoutSetEntry(supabase, companyId, userId, {
-      paymentDate: params.paymentDate,
-      bankAccount: params.bankAccount,
-      legs: legs.map((leg, i) => ({
-        requestId: leg.request.id,
-        requestName: leg.request.name,
-        deductionType: leg.request.deduction_type,
-        amount: leg.amount,
-        oreRounding: oreRoundings[i].rounding,
-        invoiceCount: oreRoundings[i].invoiceCount,
-      })),
-    })
+    const entry = await createRotRutPayoutSetEntry(
+      supabase,
+      companyId,
+      userId,
+      {
+        paymentDate: params.paymentDate,
+        bankAccount: params.bankAccount,
+        legs: legs.map((leg, i) => ({
+          requestId: leg.request.id,
+          requestName: leg.request.name,
+          deductionType: leg.request.deduction_type,
+          amount: leg.amount,
+          oreRounding: oreRoundings[i].rounding,
+          invoiceCount: oreRoundings[i].invoiceCount,
+          recognition: (recognitions[i].ok ? recognitions[i].recognition : null) ?? undefined,
+        })),
+      },
+      () => payoutPostingContext(params.transactionId),
+    )
     journalEntryId = entry.id
   } catch (engineError) {
     return { ok: false, kind: 'error', error: engineError, stage: 'book' }

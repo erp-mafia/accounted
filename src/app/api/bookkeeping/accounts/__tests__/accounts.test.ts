@@ -3,7 +3,7 @@
  * /activate and /deactivate.
  *
  * The DELETE usage check is asserted with a call-capturing mock: the count
- * query must be scoped to the caller's company via the journal_entries join —
+ * query must be scoped to the caller's company via the journal_entries join:
  * without it, another company's use of the same BAS number (same user,
  * multiple memberships under RLS) wrongly blocks deletion.
  */

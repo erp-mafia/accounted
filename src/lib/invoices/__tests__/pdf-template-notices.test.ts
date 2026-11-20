@@ -8,7 +8,13 @@
  */
 import { describe, expect, it } from 'vitest'
 import { InvoicePDF, localizeVatNotice, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
-import { EU_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV, getVatRules } from '@/lib/invoices/vat-rules'
+import {
+  DOMESTIC_REVERSE_CHARGE_NOTICE,
+  EU_REVERSE_CHARGE_NOTICE,
+  EXPORT_NOTICE_SV,
+  getVatRules,
+  resolveInvoiceVatRules,
+} from '@/lib/invoices/vat-rules'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { treeText } from './pdf-tree'
 import type { InvoiceItem } from '@/types'
@@ -96,5 +102,54 @@ describe('invoice PDF statutory notices follow the document language', () => {
   it('stamps the shared constants at create time so the PDF match cannot drift', () => {
     expect(getVatRules('non_eu_business').reverseChargeText).toBe(EXPORT_NOTICE_SV)
     expect(getVatRules('eu_business', true, 'DE').reverseChargeText).toBe(EU_REVERSE_CHARGE_NOTICE)
+  })
+})
+
+describe('domestic reverse charge for construction services (crm#1007)', () => {
+  const buyer = (language: 'sv' | 'en') =>
+    makeCustomer({ language, country: 'SE', customer_type: 'swedish_business', vat_number: 'SE556677889901' })
+
+  /** A SEK invoice to a Swedish construction business, stamped as resolveInvoiceVatRules writes it. */
+  const byggInvoice = (): InvoicePdfInvoice =>
+    makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      document_type: 'invoice',
+      currency: 'SEK',
+      subtotal: 2500,
+      vat_rate: 0,
+      vat_amount: 0,
+      total: 2500,
+      vat_treatment: 'reverse_charge_domestic',
+      moms_ruta: '41',
+      reverse_charge_text: DOMESTIC_REVERSE_CHARGE_NOTICE,
+    })
+
+  const render = (language: 'sv' | 'en') =>
+    treeText(InvoicePDF({ invoice: byggInvoice(), customer: buyer(language), items, company, paymentQr: null })).replaceAll(
+      '\u00a0',
+      ' ',
+    )
+
+  it('prints "Omvänd betalningsskyldighet" and the buyer VAT number on a Swedish PDF (ML 17 kap. 24 §)', () => {
+    const text = render('sv')
+    expect(text).toContain(DOMESTIC_REVERSE_CHARGE_NOTICE)
+    expect(text).toContain('SE556677889901')
+  })
+
+  it('prints the English notation Skatteverket accepts on an English PDF', () => {
+    const text = render('en')
+    expect(text).toContain('Reverse charge, construction services')
+    expect(text).not.toContain(DOMESTIC_REVERSE_CHARGE_NOTICE)
+    expect(text).toContain('SE556677889901')
+  })
+
+  it('stamps the shared constant at create time so the PDF match cannot drift', () => {
+    const resolved = resolveInvoiceVatRules(
+      { customer_type: 'swedish_business', vat_number: 'SE556677889901', country: 'SE' },
+      { vat_treatment: 'reverse_charge_domestic', delivery_country: null },
+    )
+    expect(resolved.ok && resolved.rules.reverseChargeText).toBe(DOMESTIC_REVERSE_CHARGE_NOTICE)
+    expect(localizeVatNotice(DOMESTIC_REVERSE_CHARGE_NOTICE, 'sv')).toBe(DOMESTIC_REVERSE_CHARGE_NOTICE)
   })
 })

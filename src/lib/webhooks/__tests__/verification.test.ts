@@ -352,7 +352,7 @@ describe('attemptWebhookVerification', () => {
     const outcome = await attemptWebhookVerification({
       supabase: client,
       webhook: webhook(),
-      actor: { kind: 'api_key', userId: 'user-1', apiKeyId: 'ak_1' },
+      actor: { kind: 'api_key', userId: 'user-1', apiKeyId: 'ak_1', credential: { type: 'api_key', label: 'CI key' } },
       now: NOW,
       pinnedFetchImpl: echoingReceiver(),
     })
@@ -430,7 +430,7 @@ describe('verifyWebhookNow (manual)', () => {
     verification_last_attempt_at: null,
     ...overrides,
   })
-  const actor = { userId: 'user-1', apiKeyId: 'ak_1' }
+  const actor = { userId: 'user-1', apiKeyId: 'ak_1', credential: { type: 'api_key', label: 'CI key' } as const }
 
   it('reports not_found and disabled without contacting anything', async () => {
     const fetch = echoingReceiver()
@@ -499,7 +499,32 @@ describe('verifyWebhookNow (manual)', () => {
       user_id: 'user-1',
       actor_id: 'ak_1',
       actor_type: 'api_key',
+      actor_label: 'CI key',
     })
+  })
+
+  it('names an OAuth connector or a service account as what it is', async () => {
+    for (const credential of [
+      { type: 'mcp_oauth', label: 'Claude (Anthropic)' },
+      { type: 'service_account', label: 'Lönekörning' },
+    ] as const) {
+      const { client, calls } = makeSupabase({
+        'webhooks.select': [{ data: row() }],
+        'webhooks.update': [{ data: [{ id: WEBHOOK_ID }] }],
+      })
+      await verifyWebhookNow({
+        supabase: client,
+        companyId: COMPANY_ID,
+        webhookId: WEBHOOK_ID,
+        actor: { ...actor, credential },
+        now: NOW,
+        pinnedFetchImpl: echoingReceiver(),
+      })
+      expect(calls.find((c) => c.table === 'audit_log')!.payload).toMatchObject({
+        actor_type: credential.type,
+        actor_label: credential.label,
+      })
+    }
   })
 
   it('returns the failure reason on a wrong answer', async () => {

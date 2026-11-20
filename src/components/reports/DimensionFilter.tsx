@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -63,7 +63,7 @@ export function DimensionFilter({ value, onChange }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <Label className="field-label text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <Label className="field-label text-xs font-medium text-muted-foreground">
         Dimension
       </Label>
       <div className="flex flex-wrap items-center gap-2">
@@ -105,11 +105,11 @@ export function DimensionFilter({ value, onChange }: Props) {
         {value && (
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="icon"
             onClick={() => onChange(null)}
             aria-label="Rensa dimensionsfilter"
           >
-            <X className="h-4 w-4" />
+            <XMarkIcon className="h-4 w-4" />
           </Button>
         )}
       </div>

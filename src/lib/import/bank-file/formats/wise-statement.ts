@@ -23,13 +23,8 @@ import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
 import { roundOre } from '@/lib/money'
+import { parseSwedishAmount } from '@/lib/money'
 
-function parseWiseStatementAmount(value: string | undefined): number {
-  if (!value) return NaN
-  const cleaned = value.trim()
-  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return NaN
-  return Number.parseFloat(cleaned)
-}
 
 function wiseStatementDate(value: string | undefined): string | null {
   if (!value) return null
@@ -128,7 +123,7 @@ export const wiseStatementFormat: BankFileFormat = {
       const rowNumber = lineIndex + 1
       const wiseId = at(idx.id).trim()
       const rowLabel = wiseId || `row ${rowNumber}`
-      const amount = parseWiseStatementAmount(at(idx.amount))
+      const amount = parseSwedishAmount(at(idx.amount)) ?? NaN
       const currency = at(idx.currency).trim().toUpperCase()
       const date = wiseStatementDate(at(idx.date))
 
@@ -156,7 +151,7 @@ export const wiseStatementFormat: BankFileFormat = {
       }
 
       const rawBalance = at(idx.runningBalance).trim()
-      const parsedBalance = rawBalance ? parseWiseStatementAmount(rawBalance) : NaN
+      const parsedBalance = rawBalance ? (parseSwedishAmount(rawBalance) ?? NaN) : NaN
       let balance: number | null = null
       if (rawBalance && !Number.isFinite(parsedBalance)) {
         issues.push({
@@ -186,7 +181,7 @@ export const wiseStatementFormat: BankFileFormat = {
 
       const rawTotalFees = at(idx.totalFees).trim()
       if (rawTotalFees) {
-        const totalFees = parseWiseStatementAmount(rawTotalFees)
+        const totalFees = parseSwedishAmount(rawTotalFees) ?? NaN
         if (!Number.isFinite(totalFees) || totalFees < 0) {
           issues.push({
             row: rowNumber,

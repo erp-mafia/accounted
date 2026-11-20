@@ -1,10 +1,28 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import type {
+  AttestedToPayDue,
+  BankSwitchDue,
+  DocumentToSignDue,
+  ExpensePayoutDue,
+  PaymentFailedDue,
+  PaymentsToSignDue,
+  PaymentsVerificationDue,
+  SkattekontoPaymentDue,
+  SuggestedMatch,
+  SupplierPayeeChangeDue,
+} from './types'
 import type { WorklistCounts } from './types'
 import type { MissingUnderlagSample } from './missing-underlag'
+import { listOpenSuggestions } from '@/lib/suggestions/list'
+import type { OpenSuggestion } from '@/lib/suggestions/types'
 import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
+import { inboxHref, isInkorgV2Enabled } from '@/lib/inkorg/flag'
+import { inboxCompanionIds } from './inbox-companions'
 import {
+  countAttestedToPayDue,
+  countBankSwitchDue,
   countDeadlinesNeedingAction,
+  countDocumentsToSign,
   countExpensePayoutsDue,
   countFailedPeppolDeliveries,
   countInboxDocuments,
@@ -13,12 +31,21 @@ import {
   countDocumentFieldReviews,
   countMissedAgreementPayments,
   countArkivFindings,
-  countOverdueInvoices,
+  countCollectionAttention,
+  countCollectionSettlementsToBook,
+  countCollectedPaymentsToBook,
+  countCollectionDecisionsAndBatch,
+  countReminderBatchReady,
+  getOverdueInvoicesDue,
+  countPaymentsFailedDue,
+  countPaymentsToSignDue,
+  countPaymentsVerificationDue,
   countPendingOperations,
   countReconciliationDue,
   countSkattekontoPaymentDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
+  countSupplierPayeeChangesDue,
   countUnbookedSkattekontoRows,
   countUnbookedTransactions,
   countVerifikatMissingDocument,
@@ -61,6 +88,58 @@ export interface GetWorklistCountsOptions {
    * passing it replaces the count call rather than adding one.
    */
   missingUnderlag?: MissingUnderlagSample | Promise<MissingUnderlagSample>
+  /**
+   * The bank connections still to switch to Open Payments the caller is
+   * already fetching (Hem renders one row per connection): the count is the
+   * list's length instead of a second read of bank_connections.
+   */
+  bankSwitchDue?: BankSwitchDue[] | Promise<BankSwitchDue[]>
+  /**
+   * The payments verification to renew the caller is already fetching (Hem
+   * renders it as one row): the count is 1 or 0 from it instead of a second
+   * read. Pass null for "nothing due".
+   */
+  paymentsVerificationDue?: PaymentsVerificationDue | null | Promise<PaymentsVerificationDue | null>
+  /**
+   * The supplier invoices whose bank details wait for a decision the caller
+   * is already fetching (Hem renders one row each): the count is the list's
+   * length instead of a second read.
+   */
+  supplierPayeeChangesDue?: SupplierPayeeChangeDue[] | Promise<SupplierPayeeChangeDue[]>
+  /**
+   * The supplier invoices whose bank payment did not go through the caller
+   * is already fetching (Hem renders one row each): the count is the list's
+   * length instead of a second read.
+   */
+  paymentsFailedDue?: PaymentFailedDue[] | Promise<PaymentFailedDue[]>
+  /**
+   * The open suggestions the caller is already fetching (Hem renders one
+   * Förslag card each, at most three): the count is the list's length
+   * instead of a second read.
+   */
+  openSuggestions?: OpenSuggestion[] | Promise<OpenSuggestion[]>
+  /**
+   * The documents waiting for this person's signature the caller is already
+   * fetching (Hem renders one row each): the count is the list's length.
+   */
+  documentsToSign?: DocumentToSignDue[] | Promise<DocumentToSignDue[]>
+  /**
+   * The supplier invoices to pay the caller is already fetching
+   * (Hem renders them as one Betala row): the count is taken from it instead
+   * of a second read. Pass null for "nothing ready".
+   */
+  attestedToPayDue?: AttestedToPayDue | null | Promise<AttestedToPayDue | null>
+  /**
+   * The bank payments waiting for approval or signature the caller is already
+   * fetching (Hem renders them as one Signera row): the count is taken from it
+   * instead of a second read. Pass null for "none waits".
+   */
+  paymentsToSignDue?: PaymentsToSignDue | null | Promise<PaymentsToSignDue | null>
+  /**
+   * Whose per-person work to count when no list is passed (documents_to_sign:
+   * a signature asked of this user). Without it the per-person count is 0.
+   */
+  userId?: string | null
 }
 
 export async function getWorklistCounts(
@@ -72,6 +151,8 @@ export async function getWorklistCounts(
   // and Avtal: a row whose page is a 404 for this company is not counted.
   const section = isArkivSectionEnabled(companyId)
   const brain = isArkivBrainEnabled(companyId)
+  // The decision row and the daily batch row count an invoice once (lib/collections/batch.ts).
+  const collectionWork = countCollectionDecisionsAndBatch(supabase, companyId)
   const [
     bookTransaction,
     bookSkattekonto,
@@ -79,9 +160,10 @@ export async function getWorklistCounts(
     suggestedMatch,
     supplierInvoiceApproval,
     verifikatMissingDocument,
-    overdueInvoice,
+    overdueInvoices,
     deadlineAction,
     pendingOperations,
+    suggestion,
     reconciliationDue,
     expensePayout,
     skattekontoPaymentDue,
@@ -91,10 +173,23 @@ export async function getWorklistCounts(
     agreementPaymentMissed,
     arkivFinding,
     peppolDeliveryFailed,
+    collectionDecision,
+    collectionAttention,
+    collectionSettlementsToBook,
+    collectedPaymentsToBook,
+    collectionBatchReady,
+    reminderBatchReady,
+    bankSwitch,
+    paymentsVerificationRenewal,
+    supplierPayeeChange,
+    documentsToSign,
+    paymentFailed,
+    attestedToPay,
+    paymentsToSign,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
-    countInboxDocuments(supabase, companyId),
+    countInboxDocuments(supabase, companyId, { companionIds: inboxCompanionIds(supabase, companyId) }),
     options.suggestedMatches
       ? Promise.resolve(options.suggestedMatches).then((m) => m.length)
       : countSuggestedMatches(supabase, companyId),
@@ -102,9 +197,13 @@ export async function getWorklistCounts(
     options.missingUnderlag
       ? Promise.resolve(options.missingUnderlag).then((s) => s.total)
       : countVerifikatMissingDocument(supabase, companyId),
-    countOverdueInvoices(supabase, companyId),
+    // One read gives the grouped row's facts and its count.
+    getOverdueInvoicesDue(supabase, companyId),
     countDeadlinesNeedingAction(supabase, companyId),
     countPendingOperations(supabase, companyId),
+    options.openSuggestions
+      ? Promise.resolve(options.openSuggestions).then((s) => s.length)
+      : listOpenSuggestions(supabase, companyId).then((s) => s.length),
     countReconciliationDue(supabase, companyId),
     options.expensePayoutsDue
       ? Promise.resolve(options.expensePayoutsDue).then((p) => p.length)
@@ -118,7 +217,41 @@ export async function getWorklistCounts(
     brain ? countMissedAgreementPayments(supabase, companyId) : 0,
     brain ? countArkivFindings(supabase, companyId) : 0,
     countFailedPeppolDeliveries(supabase, companyId),
+    collectionWork.then((work) => work.decision),
+    countCollectionAttention(supabase, companyId),
+    countCollectionSettlementsToBook(supabase, companyId),
+    countCollectedPaymentsToBook(supabase, companyId),
+    collectionWork.then((work) => work.batchReady),
+    countReminderBatchReady(supabase, companyId),
+    options.bankSwitchDue
+      ? Promise.resolve(options.bankSwitchDue).then((b) => b.length)
+      : countBankSwitchDue(supabase, companyId),
+    options.paymentsVerificationDue !== undefined
+      ? Promise.resolve(options.paymentsVerificationDue).then((v) => (v ? 1 : 0))
+      : countPaymentsVerificationDue(supabase, companyId),
+    options.supplierPayeeChangesDue
+      ? Promise.resolve(options.supplierPayeeChangesDue).then((rows) => rows.length)
+      : countSupplierPayeeChangesDue(supabase, companyId),
+    options.documentsToSign
+      ? Promise.resolve(options.documentsToSign).then((rows) => rows.length)
+      : options.userId
+        ? countDocumentsToSign(supabase, companyId, options.userId)
+        : 0,
+    options.paymentsFailedDue
+      ? Promise.resolve(options.paymentsFailedDue).then((rows) => rows.length)
+      : countPaymentsFailedDue(supabase, companyId),
+    options.attestedToPayDue !== undefined
+      ? Promise.resolve(options.attestedToPayDue).then((due) => due?.count ?? 0)
+      : countAttestedToPayDue(supabase, companyId),
+    options.paymentsToSignDue !== undefined
+      ? Promise.resolve(options.paymentsToSignDue).then((due) => due?.count ?? 0)
+      : countPaymentsToSignDue(supabase, companyId),
   ])
+
+  // The overdue customer invoices are one grouped row (lib/worklist/types.ts
+  // OverdueInvoicesDue): the count says how many invoices, the total takes
+  // the row as one thing to do.
+  const overdueInvoice = overdueInvoices?.count ?? 0
 
   return {
     counts: {
@@ -131,6 +264,7 @@ export async function getWorklistCounts(
       overdue_invoice: overdueInvoice,
       deadline_action: deadlineAction,
       pending_operations: pendingOperations,
+      suggestion,
       reconciliation_due: reconciliationDue,
       expense_payout: expensePayout,
       skattekonto_payment_due: skattekontoPaymentDue,
@@ -140,6 +274,19 @@ export async function getWorklistCounts(
       agreement_payment_missed: agreementPaymentMissed,
       arkiv_finding: arkivFinding,
       peppol_delivery_failed: peppolDeliveryFailed,
+      collection_decision: collectionDecision,
+      collection_attention: collectionAttention,
+      collection_settlements_to_book: collectionSettlementsToBook,
+      collected_payments_to_book: collectedPaymentsToBook,
+      collection_batch_ready: collectionBatchReady,
+      reminder_batch_ready: reminderBatchReady,
+      bank_switch: bankSwitch,
+      payments_verification_renewal: paymentsVerificationRenewal,
+      supplier_payee_change: supplierPayeeChange,
+      documents_to_sign: documentsToSign,
+      payment_failed: paymentFailed,
+      attested_to_pay: attestedToPay,
+      payments_to_sign: paymentsToSign,
     },
     total:
       bookTransaction +
@@ -147,9 +294,10 @@ export async function getWorklistCounts(
       inboxDocument +
       supplierInvoiceApproval +
       verifikatMissingDocument +
-      overdueInvoice +
+      (overdueInvoice > 0 ? 1 : 0) +
       deadlineAction +
       pendingOperations +
+      suggestion +
       reconciliationDue +
       expensePayout +
       skattekontoPaymentDue +
@@ -158,6 +306,23 @@ export async function getWorklistCounts(
       documentFieldReview +
       agreementPaymentMissed +
       arkivFinding +
-      peppolDeliveryFailed,
+      peppolDeliveryFailed +
+      collectionDecision +
+      collectionAttention +
+      collectionSettlementsToBook +
+      collectedPaymentsToBook +
+      collectionBatchReady +
+      reminderBatchReady +
+      bankSwitch +
+      paymentsVerificationRenewal +
+      supplierPayeeChange +
+      documentsToSign +
+      paymentFailed +
+      // One payment run, however many invoices it pays (lib/worklist/types.ts).
+      (attestedToPay > 0 ? 1 : 0) +
+      // One visit to Betalningar, however many payments wait there.
+      (paymentsToSign > 0 ? 1 : 0),
+    overdueInvoices: overdueInvoice > 0 ? overdueInvoices : null,
+    inboxHref: inboxHref(isInkorgV2Enabled(companyId)),
   }
 }

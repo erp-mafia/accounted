@@ -4,7 +4,8 @@
  * Exercises the route through the real withRouteContext wrapper, mocking only
  * its auth/company dependencies and injecting a queued Supabase mock via
  * requireAuth. Covers: 401, the { data, count, limit, offset } happy-path
- * shape, the status filter, and the 500 path returning a Swedish error.
+ * shape, the narrow column list, the status filter, and the 500 path
+ * returning a Swedish error.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -90,6 +91,22 @@ describe('GET /api/import/sie', () => {
       ['created_at', { ascending: false }], ['id', { ascending: false }],
     ])
     expect(findCalls('sie_imports', 'range')).toContainEqual([0, 19])
+  })
+
+  it('selects only the columns the history renders, never the manifest or the whole job_result', async () => {
+    enqueue({ data: [makeImportRow({ repair_outcome: 'stopped' })], count: 1 })
+
+    const response = await GET(createMockRequest('/api/import/sie'), staticParams())
+    const { status, body } = await parseJsonResponse<{ data: { repair_outcome: string | null }[] }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data[0].repair_outcome).toBe('stopped')
+    const [columns, options] = findCalls('sie_imports', 'select')[0] as [string, { count: string }]
+    expect(columns.split(',').map((column) => column.trim())).toEqual([
+      'id', 'filename', 'fiscal_year_start', 'fiscal_year_end', 'transactions_count', 'status',
+      'job_state', 'job_kind', 'imported_at', 'created_at', 'repair_outcome:job_result->>repairOutcome',
+    ])
+    expect(options).toEqual({ count: 'exact' })
   })
 
   it('applies the status filter and custom limit/offset', async () => {

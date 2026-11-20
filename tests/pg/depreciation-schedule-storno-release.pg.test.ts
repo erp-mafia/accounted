@@ -20,8 +20,10 @@ import { seedCompany } from './fixtures'
 
 type Seed = { userId: string; companyId: string; fiscalPeriodId: string }
 
+// Opening snapshot 0 / no date: an asset without a migrated opening balance.
 const COMMIT_SQL = `SELECT * FROM public.commit_asset_depreciation(
-  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric, NULL::text, NULL::text
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric,
+  0::numeric, NULL::date, NULL::text, NULL::text
 )`
 
 const RELEASE_SQL = `UPDATE public.depreciation_schedules

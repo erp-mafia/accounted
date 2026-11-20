@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import { roundOre } from '@/lib/money'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import type { IncomeStatementReport, IncomeStatementSection, TrialBalanceRow } from '@/types'
 import {
   AKTIVERAT_ARBETE_RANGES,
@@ -151,15 +152,16 @@ export function buildIncomeStatementFromRows(
     periodMovements,
   )
 
-  // Financial sections (class 8): exclude 8999 "Årets resultat".
-  // 8999 is a closing account: when year-end posts "8999 debit → 2099 credit"
-  // to move the computed profit into equity, including 8999's debit balance
-  // here cancels out the revenue/expense difference and drives net_result to
-  // zero. The income statement shows the *computed* årets resultat as
-  // (revenue - expenses + financial), so 8999's own balance must stay out.
+  // Financial sections (class 8): exclude årets resultat (8990-8999).
+  // These are closing accounts: when an omföring posts "8999 debit → 2099
+  // credit" (or through 8990) to move the computed profit into equity,
+  // including that debit balance here cancels out the revenue/expense
+  // difference and drives net_result to zero. The income statement shows the
+  // *computed* årets resultat as (revenue - expenses + financial), so their
+  // own balance must stay out.
   const financialSections = buildSections(
     incomeExpenseRows.filter(
-      (r) => r.account_class === 8 && r.account_number !== '8999'
+      (r) => r.account_class === 8 && !isAretsResultatAccount(r.account_number)
     ),
     {
       '80': 'Resultat andelar koncernföretag',

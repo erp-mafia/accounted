@@ -1,6 +1,6 @@
 # Bostadsrättsförening support - research and gap analysis
 
-Status: research, 2026-09-15, written on top of the ekonomisk förening foundation branch (`docs/research/ekonomisk-forening-support-design.md`). This is not legal advice; every rule below is cited to its primary source and must be re-verified when implementation ships.
+Status: research, 2026-09-15, building on the ekonomisk förening design (`docs/research/ekonomisk-forening-support-design.md`). This is not legal advice; every rule below is cited to its primary source and must be re-verified when implementation ships.
 
 ## Executive summary
 
@@ -12,8 +12,6 @@ A bostadsrättsförening (BRF) is an ekonomisk förening whose purpose is to gra
 4. **Equity.** Bundet eget kapital holds insatser (2083), upplåtelseavgifter (ÅRL 3 kap. 10 b § treats them as insatser; BAS has no own account so practice renames 2087) and fond för yttre underhåll (2088), which K3 38.11 to 38.12 present as their own post and move by omföring between fritt and bundet eget kapital when the stämma or stadgar-based decision is executed, never through the income statement. The inre reparationsfond is a liability to members (2892).
 5. **Registers and members.** BRL 9 kap. 8 to 11 §§ require a medlemsförteckning and a lägenhetsförteckning with pantsättningar and the överlåtelseavtal attached, open to public extract. Every transfer triggers a KU55 to Skatteverket by 31 January with fields including överlåtelsepris, kapitaltillskott and the apartment's share (BRL and SFL). Fees (årsavgift, upplåtelseavgift, överlåtelseavgift, pantsättningsavgift, andrahandsupplåtelseavgift) are governed by BRL 7 kap. 14 § and the stadgar.
 6. **Operations.** A BRF's revenue is avisering of årsavgifter and hyror by andelstal to every apartment, monthly or quarterly, usually with autogiro; fastighetsavgift (2026: at most 1 784 kr per bostadslägenhet, capped at 0,3 % of taxeringsvärdet) and fastighetsskatt on lokaler; VAT that is mostly exempt with taxable islands (parking to non-members, lokaler under frivillig skattskyldighet, el and solar sales).
-
-Market size for context: about 31 000 active BRFs managing roughly 1,3 million homes (hittabrf.se statistics), most of them served by ekonomiska förvaltare (Nabo, SBC, HSB, Riksbyggen, Simpleko, Fastum) whose product is exactly the list above. That is the competitive bar for "support".
 
 ## Statutory map (primary sources)
 
@@ -42,9 +40,9 @@ From the ekonomisk förening branch:
 
 From the rest of the product:
 
-- K3 machinery: `lib/bokslut/assets/k3-components.ts`, the depreciation engine, K3 noter builder, K3 equity-changes statement, `generateKassaflodesanalys` (used by the K3 document). Paper filing for K3 is disabled ("granskningsutkast") and the K3 equity statement is AB-shaped.
-- Recurring invoice schedules (`lib/invoices/recurring-*`) with text rows and placeholders, e-invoice, reminders: the raw material for avisering.
-- Kontrolluppgifter module (`lib/salary/ku`) for KU10/KU20/KU31: the transport for KU55 exists, the record type does not.
+- K3 machinery: `src/lib/bokslut/assets/k3-components.ts`, the depreciation engine, K3 noter builder, K3 equity-changes statement, `generateKassaflodesanalys` (used by the K3 document). Paper filing for K3 is disabled ("granskningsutkast") and the K3 equity statement is AB-shaped.
+- Recurring invoice schedules (`src/lib/invoices/recurring-*`) with text rows and placeholders, e-invoice, reminders: the raw material for avisering.
+- No kontrolluppgifter module: the KU10 export was removed; only the KU deadline reminder and `src/lib/tax/ku-signal.ts` remain, so KU55 needs both a file transport and its record type.
 - Fastighetsavgift only as BAS accounts (5xxx), no calculation, no deadline.
 - No member register, no apartment register, no andelstal, no pant register, no autogiro (BG Autogiro / Bankgirot) integration.
 
@@ -67,7 +65,7 @@ Sizes: S (days), M (weeks), L (a quarter of one engineer). Order follows legal w
 
 - Tables: `brf_apartments` (beteckning, belägenhet, rumsantal, kvm, upplåten med bostadsrätt or hyresrätt, andelstal for årsavgift and for kapitaltillskott, insats, upplåtelseavgift, plan registration date), `brf_members` (person or company, admission and exit, share of apartment), `brf_ownership_history` (append-only transfers with agreement copy reference, price, date, kind: sale, gift, arv, bodelning), `brf_pledges` (pantsättning notices, creditor, date, released date), `brf_inre_fond` balances per apartment.
 - Outputs: medlemsförteckning and lägenhetsförteckning extracts (BRL 9 kap. 11 §), mäklarbild (the standard broker information sheet), KU55 file per transfer, the seven-year retention of agreements (WORM via `document_attachments`).
-- This is the same bounded context the ekonomisk förening design deferred (section 5), now with apartments as the unit. It is the largest piece and the one förvaltare compete on.
+- This is the same bounded context the ekonomisk förening design deferred (section 5), now with apartments as the unit. It is the largest piece.
 
 ### 4. Avisering and payments (L)
 
@@ -104,9 +102,9 @@ Sizes: S (days), M (weeks), L (a quarter of one engineer). Order follows legal w
 1. Ship the ekonomisk förening branch first: everything in it is a prerequisite and none of it changes for a BRF.
 2. Phase B1: legal form, äkta/oäkta profile, chart, templates, fond för yttre underhåll omföring, KU55 on a minimal apartment register, fastighetsavgift calculation, deadlines. This makes a small self-managed BRF bookable and declarable and lets an accountant do the rest.
 3. Phase B2: K3 document to fileable quality with the BRF förvaltningsberättelse, nyckeltal and kassaflödesanalys. This is the 2026 regulatory forcing function and the reason a BRF would switch tools now.
-4. Phase B3: avisering with autogiro and the member ledger, the full registers, mäklarbild. This is the förvaltare product; only worth building if Accounted wants to compete with Nabo and SBC rather than serve the accountant of a BRF.
+4. Phase B3: avisering with autogiro and the member ledger, the full registers, mäklarbild. This is a property-management surface, beyond what the accountant of a BRF needs.
 
-## Open questions for the founder
+## Open questions
 
 - Is the target the BRF's accountant (B1 plus B2) or the BRF itself (B3 as well)? The register and avisering modules are a different product surface from bookkeeping.
 - K3 quality: the K3 document is a draft today. BRF support means committing to K3 for real, which also benefits every fastighetsbolag that must leave K2 in 2026.

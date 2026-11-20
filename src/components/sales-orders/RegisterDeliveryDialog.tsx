@@ -17,8 +17,10 @@ import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
-import { formatQty, todayIso } from '@/components/sales-orders/labels'
+import { formatQty } from '@/components/sales-orders/labels'
 import type { SalesOrder, SalesOrderItem } from '@/types'
+import { parseDecimalInput } from '@/lib/money'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface RegisterDeliveryDialogProps {
   open: boolean
@@ -48,7 +50,7 @@ export default function RegisterDeliveryDialog({
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
-  const [deliveryDate, setDeliveryDate] = useState<string>(todayIso())
+  const [deliveryDate, setDeliveryDate] = useState<string>(todayIsoStockholm())
   const [quantities, setQuantities] = useState<Record<string, string>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -56,7 +58,7 @@ export default function RegisterDeliveryDialog({
   // changed since the last registration.
   useEffect(() => {
     if (!open) return
-    setDeliveryDate(todayIso())
+    setDeliveryDate(todayIsoStockholm())
     const seed: Record<string, string> = {}
     for (const item of productLines(order)) seed[item.id] = String(item.delivered_qty ?? 0)
     setQuantities(seed)
@@ -80,7 +82,7 @@ export default function RegisterDeliveryDialog({
           delivery_date: deliveryDate || undefined,
           lines: lines.map((item) => ({
             sales_order_item_id: item.id,
-            delivered_qty: Math.max(0, parseFloat((quantities[item.id] ?? '0').replace(',', '.')) || 0),
+            delivered_qty: Math.max(0, parseDecimalInput(quantities[item.id] ?? '0') ?? 0),
           })),
         }),
       })
@@ -109,7 +111,7 @@ export default function RegisterDeliveryDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !isSubmitting && onOpenChange(v)}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('delivery_dialog_title')}</DialogTitle>
           <DialogDescription>{t('delivery_dialog_description')}</DialogDescription>
@@ -165,7 +167,7 @@ export default function RegisterDeliveryDialog({
             </table>
           </div>
 
-          <Button type="button" variant="ghost" size="sm" onClick={deliverAll} className="text-muted-foreground">
+          <Button type="button" variant="ghost" onClick={deliverAll} className="text-muted-foreground">
             {t('deliver_all')}
           </Button>
         </div>

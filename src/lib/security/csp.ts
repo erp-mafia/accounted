@@ -24,7 +24,7 @@
  * two partition the path space.
  *
  * style-src keeps 'unsafe-inline' on purpose: React style attributes and the
- * inline styles of Radix, framer-motion and next/font need it, and a nonce in
+ * inline styles of Radix, Motion and next/font need it, and a nonce in
  * style-src would make browsers ignore 'unsafe-inline' for style attributes
  * as well.
  *
@@ -43,24 +43,31 @@ export const CSP_NONCE_HEADER = 'x-nonce'
  * `/((?!${PROXY_MATCHER_EXCLUSIONS}).*)` literally (Next.js reads the matcher
  * statically, so it cannot import this constant); a test holds the two
  * together.
+ *
+ * robots.txt and sitemap.xml are crawler files that never read a session:
+ * through the proxy every anonymous fetch of them was 307-bounced to /login
+ * (app/robots.ts serves the first; there is no sitemap, so the second is an
+ * honest 404). Anchored, so only the exact files skip the proxy.
  */
 export const PROXY_MATCHER_EXCLUSIONS =
-  '_next/static|_next/image|favicon.ico|\\.well-known|rl/|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$'
+  '_next/static|_next/image|favicon.ico|\\.well-known|rl/|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|robots\\.txt$|sitemap\\.xml$|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$'
 
 /**
  * API routes that serve stored documents and answer with a policy of their
  * own (OPAQUE_DOCUMENT_CSP for active content, and `frame-ancestors 'self'`
- * on the inline preview so the document sheet can frame it). The proxy
- * leaves their CSP to the headers() rules exactly as before the nonce
- * policy existed, so a document never ends up with the app's page policy in
- * place of the one its route chose.
+ * on the inline preview so the document sheet can frame it, and on the PDF
+ * a signer reads so the signing page can embed it). The proxy leaves their
+ * CSP to the headers() rules exactly as before the nonce policy existed, so
+ * a document never ends up with the app's page policy (frame-ancestors
+ * 'none') in place of the one its route chose.
  */
-const DOCUMENT_ROUTE_RE = /^\/api\/(?:storage(?:\/|$)|documents\/[^/]+\/inline$)/
+const DOCUMENT_ROUTE_RE = /^\/api\/(?:storage(?:\/|$)|documents\/[^/]+\/inline$|signera\/[^/]+\/document$|signing\/me\/[^/]+\/document$)/
 
 /**
  * headers() `source` for every path that carries the static policy: all
- * paths the proxy never sees, plus the storage proxy route. The inline
- * document route has its own rule in next.config.ts and matches neither.
+ * paths the proxy never sees, plus the storage proxy route. The embeddable
+ * document routes (inline preview, signing PDF) have their own rule in
+ * next.config.ts and match neither.
  */
 export const STATIC_POLICY_SOURCE = `/((?=${PROXY_MATCHER_EXCLUSIONS}|api/storage(?:/|$)).*)`
 

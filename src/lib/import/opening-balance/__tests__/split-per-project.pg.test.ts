@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PoolClient } from 'pg'
+import { types as pgTypes, type PoolClient } from 'pg'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 import {
@@ -41,6 +41,16 @@ import type { Logger } from '@/lib/logger'
  */
 
 const log: Logger = { info: () => {}, warn: () => {}, error: () => {}, child: () => log }
+
+/**
+ * PostgREST answers a date column as 'YYYY-MM-DD'; node-pg would turn it into
+ * a Date, which no caller of the real client ever sees.
+ */
+const DATE_OID = 1082
+const postgrestTypes = {
+  getTypeParser: ((oid: number, format?: 'text' | 'binary') =>
+    oid === DATE_OID ? (value: string) => value : pgTypes.getTypeParser(oid, format)) as typeof pgTypes.getTypeParser,
+}
 
 /** The Supabase surface the service uses, over one pg connection (real SQL, real RPCs). */
 function pgSupabase(client: PoolClient): SupabaseClient {
@@ -99,10 +109,11 @@ function pgSupabase(client: PoolClient): SupabaseClient {
             const { rows } = await client.query(`SELECT count(*)::int AS n FROM public.${ident(table)} ${clause}`, values)
             return resolve({ data: null, count: rows[0].n, error: null })
           }
-          const { rows } = await client.query(
-            `SELECT ${columns} FROM public.${ident(table)} ${clause} ${order.length ? `ORDER BY ${order.join(', ')}` : ''} OFFSET ${offset} ${limit === null ? '' : `LIMIT ${limit}`}`,
+          const { rows } = await client.query({
+            text: `SELECT ${columns} FROM public.${ident(table)} ${clause} ${order.length ? `ORDER BY ${order.join(', ')}` : ''} OFFSET ${offset} ${limit === null ? '' : `LIMIT ${limit}`}`,
             values,
-          )
+            types: postgrestTypes,
+          })
           return resolve({ data: single ? (rows[0] ?? null) : rows, error: null })
         } catch (error) {
           return reject ? reject(error) : resolve({ data: null, error })

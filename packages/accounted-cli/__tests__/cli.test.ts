@@ -464,7 +464,7 @@ describe('login', () => {
 })
 
 describe('logout', () => {
-  it('removes the sign-in and names the key to disconnect in Settings', async () => {
+  it('removes the sign-in and names the key to disconnect under Agents', async () => {
     saveLogin()
     const result = await run(['logout'])
     expect(result.code).toBe(0)

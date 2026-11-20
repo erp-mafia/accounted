@@ -7,13 +7,22 @@
  *     updateDraftEntry, which refuses anything but a draft (a posted entry
  *     is corrected with storno or inline rättelse, never edited);
  *   - the internal note (anteckning), annotation metadata the journal_entries
- *     immutability trigger allows on posted entries too.
+ *     immutability trigger allows on posted entries too;
+ *   - cancelling a DRAFT (v1 DELETE /journal-entries/{id} and the staged
+ *     gnubok_cancel_draft_entry) through the engine's cancelDraftEntry, which
+ *     refuses anything but a draft.
  *
  * Dry runs read and validate only: no header update, no line replacement, no
- * account backfill.
+ * account backfill, no cancel.
  */
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { assertLinesWellFormed, updateDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import {
+  assertLinesWellFormed,
+  cancelDraftEntry,
+  updateDraftEntry,
+  validateBalance,
+} from '@/lib/bookkeeping/engine'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import {
@@ -27,6 +36,7 @@ import {
 } from '@/lib/bookkeeping/errors'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { toError } from '@/lib/errors/to-error'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -52,7 +62,7 @@ export async function updateDraftJournalEntry(
     if (isBookkeepingError(err)) return typedFailure(err)
     // Untyped errors map to Swedish via getErrorMessage: the raw message is
     // logged and must never reach the user verbatim (issue #337).
-    ctx.log.error('failed to update draft journal entry', err instanceof Error ? err : new Error(String(err)), { entryId })
+    ctx.log.error('failed to update draft journal entry', toError(err), { entryId })
     return {
       ok: false,
       code: 'JOURNAL_ENTRY_UPDATE_FAILED',
@@ -144,6 +154,145 @@ async function previewDraftUpdate(
 }
 
 // ---------------------------------------------------------------------------
+// Draft cancel
+// ---------------------------------------------------------------------------
+
+/** The header v1 GET /journal-entries/{id} answers, without the lines. */
+export const CANCEL_DRAFT_HEADER_COLUMNS =
+  'id, fiscal_period_id, voucher_series, voucher_number, entry_date, description, status, source_type, source_id, notes, reverses_id, reversed_by_id, correction_of_id, created_at, updated_at'
+
+export interface JournalEntryHeader {
+  id: string
+  fiscal_period_id: string
+  voucher_series: string
+  voucher_number: number | null
+  entry_date: string
+  description: string
+  status: string
+  source_type: string
+  source_id: string | null
+  notes: string | null
+  reverses_id: string | null
+  reversed_by_id: string | null
+  correction_of_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Cancel an uncommitted DRAFT verifikat: status draft to cancelled through the
+ * engine (a compare-and-set on status, so a concurrent commit wins). A draft
+ * holds no voucher number, so nothing leaves the löpande nummerordning
+ * (BFL 5 kap 7 §) and no gap needs explaining; the row and its lines stay as
+ * cancelled evidence. A posted or reversed entry is refused with
+ * CANNOT_CANCEL_NON_DRAFT: storno is its only way out. A draft behind a period
+ * lock or the company lock date answers PERIOD_LOCKED, the verdict the lock
+ * triggers would reach, before any write. A draft that holds underlag answers
+ * DRAFT_HAS_DOCUMENTS and lists them: a cancelled draft's documents can never
+ * be linked to another verifikat.
+ *
+ * Already cancelled answers the entry unchanged, on a dry run too: it is the
+ * end state the caller asked for, not a conflict.
+ */
+/** How many of a draft's documents a DRAFT_HAS_DOCUMENTS refusal lists by id. */
+const DRAFT_DOCUMENTS_LISTED = 20
+
+export async function cancelDraftJournalEntry(
+  ctx: OperationContext,
+  entryId: string,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<JournalEntryHeader>> {
+  const { supabase, companyId } = ctx
+  const { data: existing, error: fetchError } = await supabase
+    .from('journal_entries')
+    .select(CANCEL_DRAFT_HEADER_COLUMNS)
+    .eq('company_id', companyId)
+    .eq('id', entryId)
+    .maybeSingle()
+  if (fetchError) return { ok: false, code: 'BOOKKEEPING_DATABASE_ERROR', error: fetchError }
+  if (!existing) return { ok: false, code: 'JOURNAL_ENTRY_NOT_FOUND' }
+  const entry = existing as unknown as JournalEntryHeader
+
+  if (entry.status === 'cancelled') return { ok: true, data: entry }
+  if (entry.status !== 'draft') {
+    return { ok: false, code: 'CANNOT_CANCEL_NON_DRAFT', details: { currentStatus: entry.status } }
+  }
+
+  // A draft can hold underlag, and enforce_document_journal_entry_immutability
+  // refuses re-pointing a document whose journal_entry_id is set (the
+  // correction relink covers posted entries only). Cancelled, the draft would
+  // keep its documents forever, and a re-upload dedups back to the stuck row.
+  const { data: docs, error: docsError, count: docCount } = await supabase
+    .from('document_attachments')
+    .select('id, file_name', { count: 'exact' })
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', entryId)
+    .eq('is_current_version', true)
+    .limit(DRAFT_DOCUMENTS_LISTED)
+  if (docsError) return { ok: false, code: 'BOOKKEEPING_DATABASE_ERROR', error: docsError }
+  const documents = ((docs ?? []) as Array<{ id: string; file_name: string | null }>).map((d) => ({
+    document_id: d.id,
+    file_name: d.file_name,
+  }))
+  const documentCount = Math.max(docCount ?? 0, documents.length)
+  if (documentCount > 0) {
+    return {
+      ok: false,
+      code: 'DRAFT_HAS_DOCUMENTS',
+      messageSv: `Utkastet har ${documentCount} ${documentCount === 1 ? 'bilaga' : 'bilagor'} som inte kan flyttas när utkastet har makulerats. Bokför utkastet, eller kontakta supporten.`,
+      details: { journal_entry_id: entryId, document_count: documentCount, documents },
+    }
+  }
+
+  // Checked before the dry-run branch so a preview never promises a cancel
+  // the lock triggers refuse.
+  const lock = await checkPeriodLock(supabase, companyId, entry.entry_date)
+  if (lock.locked) {
+    return {
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { reason: lock.reason, fiscal_period_id: lock.fiscal_period_id, entry_date: entry.entry_date },
+    }
+  }
+
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      preview: {
+        // `id` is the v1 dry-run key; journal_entry_id names it for agents.
+        id: entry.id,
+        journal_entry_id: entry.id,
+        voucher_series: entry.voucher_series,
+        entry_date: entry.entry_date,
+        description: entry.description,
+        source_type: entry.source_type,
+        status: 'cancelled',
+        current_status: entry.status,
+        would_release_voucher_number: false,
+      },
+    }
+  }
+
+  try {
+    const cancelled = await cancelDraftEntry(supabase, companyId, ctx.userId, entryId)
+    // Refetch the header columns so the answer has GET's shape rather than
+    // every column the engine selected.
+    const { data } = await supabase
+      .from('journal_entries')
+      .select(CANCEL_DRAFT_HEADER_COLUMNS)
+      .eq('company_id', companyId)
+      .eq('id', entryId)
+      .maybeSingle()
+    return { ok: true, data: (data ?? cancelled) as unknown as JournalEntryHeader }
+  } catch (err) {
+    if (isBookkeepingError(err)) return typedFailure(err)
+    ctx.log.error('cancel draft journal entry failed', toError(err), { entryId })
+    return { ok: false, code: 'BOOKKEEPING_DATABASE_ERROR', details: { step: 'cancel' } }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Note (anteckning)
 // ---------------------------------------------------------------------------
 
@@ -154,9 +303,36 @@ export interface JournalEntryNoteResult {
   notes: string | null
 }
 
-/** Whitespace-only clears the note, as the MCP set_voucher_note commit does. */
+/** Whitespace-only clears the note: the column never stores a visually empty annotation. */
 export function normalizeNote(notes: string | null): string | null {
   return typeof notes === 'string' && notes.trim() !== '' ? notes : null
+}
+
+/**
+ * A closed or locked period is read-only, the note included: the note lives
+ * on the verifikat row, and enforce_period_lock (migration 017) refuses every
+ * write to a row whose fiscal period is closed or locked, whatever changed
+ * (20260608120000 kept it that way on purpose). This is the refusal that
+ * trigger reaches, as a code and a sentence about the note, never "a
+ * verifikation cannot be created". The company lock date does not apply: its
+ * trigger fires on entry_date only, so a note behind it is written.
+ */
+function notePeriodLocked(
+  periodStatus: 'closed' | 'locked' | null,
+  details: Record<string, unknown>,
+): Failure {
+  return {
+    ok: false,
+    code: 'JOURNAL_ENTRY_NOTE_PERIOD_LOCKED',
+    messageSv:
+      periodStatus === 'closed'
+        ? 'Perioden är stängd, anteckningen kan inte ändras.'
+        : periodStatus === 'locked'
+          ? 'Perioden är låst, anteckningen kan inte ändras.'
+          : 'Perioden är stängd eller låst, anteckningen kan inte ändras.',
+    // period_status, not reason: v1 carries the Swedish sentence in details.reason.
+    details: { ...(periodStatus ? { period_status: periodStatus } : {}), ...details },
+  }
 }
 
 export async function setJournalEntryNote(
@@ -169,12 +345,30 @@ export async function setJournalEntryNote(
   if (options.dryRun) {
     const { data: entry, error } = await ctx.supabase
       .from('journal_entries')
-      .select('id, voucher_series, voucher_number, status, notes')
+      .select('id, voucher_series, voucher_number, entry_date, description, status, notes, fiscal_period_id')
       .eq('id', entryId)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
     if (error) return { ok: false, code: 'JOURNAL_ENTRY_NOTE_FAILED', messageSv: getErrorMessage(error) }
     if (!entry) return { ok: false, code: 'JOURNAL_ENTRY_NOT_FOUND' }
+    // The same verdict enforce_period_lock reaches at commit, read off the
+    // entry's own period (not the date's), so a staged note is one that can
+    // be approved.
+    const { data: period, error: periodError } = await ctx.supabase
+      .from('fiscal_periods')
+      .select('id, is_closed, locked_at')
+      .eq('id', entry.fiscal_period_id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle()
+    if (periodError) {
+      return { ok: false, code: 'JOURNAL_ENTRY_NOTE_FAILED', messageSv: getErrorMessage(periodError) }
+    }
+    if (period?.is_closed || period?.locked_at) {
+      return notePeriodLocked(period.is_closed ? 'closed' : 'locked', {
+        fiscal_period_id: period.id,
+        entry_date: entry.entry_date,
+      })
+    }
     return {
       ok: true,
       dryRun: true,
@@ -182,6 +376,8 @@ export async function setJournalEntryNote(
         journal_entry_id: entry.id,
         voucher_series: entry.voucher_series ?? null,
         voucher_number: entry.voucher_number ?? null,
+        entry_date: entry.entry_date ?? null,
+        description: entry.description ?? null,
         status: entry.status,
         old_notes: entry.notes ?? null,
         new_notes: notes,
@@ -190,7 +386,9 @@ export async function setJournalEntryNote(
   }
 
   // Notes-only UPDATE: the journal_entries immutability trigger allows
-  // exactly this on committed entries and raises on anything else.
+  // exactly this on committed entries and raises on anything else. The
+  // period lock trigger stays the authority here (a period can be closed
+  // between staging and approval); its refusal is put in the note's words.
   const { data, error } = await ctx.supabase
     .from('journal_entries')
     .update({ notes })
@@ -198,6 +396,7 @@ export async function setJournalEntryNote(
     .eq('company_id', ctx.companyId)
     .select('id, voucher_series, voucher_number')
     .maybeSingle()
+  if (error && isPeriodLockRefusal(error)) return notePeriodLocked(null, { journal_entry_id: entryId })
   if (error) return { ok: false, code: 'JOURNAL_ENTRY_NOTE_FAILED', messageSv: getErrorMessage(error) }
   // Zero rows = the entry doesn't exist in this company: report it instead
   // of a phantom success.

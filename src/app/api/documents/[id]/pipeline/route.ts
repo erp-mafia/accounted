@@ -1,17 +1,14 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { documentTitle } from '@/lib/arkiv/documents/title'
 import { runDocumentJobFor } from '@/lib/documents/jobs/queue'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-// Advancing a step classifies, which emits document.classified for the inbox extension's handler.
-ensureInitialized()
+import { withAiDeadline } from '@/lib/ai/call-limit'
 
 /**
  * GET /api/documents/[id]/pipeline?advance=1
@@ -21,6 +18,17 @@ ensureInitialized()
  * it land in seconds rather than on the cron's ticks.
  */
 export const maxDuration = 60
+
+/**
+ * No model call of an advanced step is still open past this point, counted
+ * from when the handler starts (lib/ai/call-limit.ts). A model call's own
+ * limit is two minutes, twice what this function lives: a step that needed
+ * more than the minute ended in the kill, its job left running with nobody
+ * able to take it over for ten minutes. Cut here, the step is settled and the
+ * worker cron, which has five minutes, takes it from there
+ * (runDocumentJobFor leaves a step that ran out of time alone).
+ */
+const MODEL_STOP_MS = 45_000
 
 export type PipelineStage = 'reading' | 'classifying' | 'landing' | 'landed' | 'failed'
 export type StepState = 'none' | 'queued' | 'running' | 'done' | 'failed'
@@ -45,7 +53,7 @@ const UNDERLAG_HREF = '/e/general/invoice-inbox'
 const querySchema = z.object({ advance: z.enum(['1', '0']).optional() })
 
 export const GET = withRouteContext('document.pipeline', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const startedAt = Date.now()
   const { id } = await params
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
@@ -55,7 +63,7 @@ export const GET = withRouteContext('document.pipeline', async (request, ctx, { 
 
   const service = createServiceClient()
   try {
-    if (parsed.data.advance === '1') await runDocumentJobFor(service, id, `pipeline:${ctx.user.id}`)
+    if (parsed.data.advance === '1') await withAiDeadline(startedAt + MODEL_STOP_MS, () => runDocumentJobFor(service, id, `pipeline:${ctx.user.id}`))
   } catch (err) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 })
   }

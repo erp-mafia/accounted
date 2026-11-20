@@ -28,6 +28,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+import { eventBus } from '@/lib/events/bus'
 import { POST } from '../import-existing/route'
 
 const request = () => createMockRequest('/api/dimensions/import-existing', { method: 'POST' })
@@ -50,6 +51,7 @@ describe('POST /api/dimensions/import-existing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    eventBus.clear()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
   })
 
@@ -86,20 +88,34 @@ describe('POST /api/dimensions/import-existing', () => {
     // Registry dims 1 & 6 exist (system dims).
     enqueue({
       data: [
-        { id: 'dim-1', sie_dim_no: 1 },
-        { id: 'dim-6', sie_dim_no: 6 },
+        { id: 'dim-1', sie_dim_no: 1, name: 'Kostnadsställe' },
+        { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' },
       ],
     })
     // Existing values: BUTIK is already registered under dim 1.
     enqueue({ data: [{ dimension_id: 'dim-1', code: 'BUTIK' }] })
     // Upsert of the two missing values succeeds: created counts returned rows.
-    enqueue({ data: [{ id: 'nv1' }, { id: 'nv2' }] })
+    const placeholder = { is_active: false, start_date: null, end_date: null }
+    enqueue({
+      data: [
+        { id: 'nv1', dimension_id: 'dim-1', code: 'KS01', name: 'KS01', ...placeholder },
+        { id: 'nv2', dimension_id: 'dim-6', code: 'P001', name: 'P001', ...placeholder },
+      ],
+    })
+    const created = vi.fn()
+    eventBus.on('dimension_value.created', created)
 
     const response = await POST(request(), noParams)
     const { status, body } = await parseJsonResponse<{ created: number }>(response)
 
     expect(status).toBe(200)
     expect(body.created).toBe(2) // KS01 + P001; BUTIK skipped (already registered)
+    // Each registered code is announced, archived, with its dimension.
+    expect(created.mock.calls.map(([payload]) => payload.dimensionValue)).toEqual([
+      expect.objectContaining({ id: 'nv1', sie_dim_no: 1, dimension_name: 'Kostnadsställe', code: 'KS01', is_active: false }),
+      expect.objectContaining({ id: 'nv2', sie_dim_no: 6, dimension_name: 'Projekt', code: 'P001', is_active: false }),
+    ])
+    expect(created.mock.calls[0][0]).toMatchObject({ companyId: 'company-1', userId: 'user-1' })
   })
 
   it('sanitizes candidate codes like the PR1 backfill and de-duplicates after sanitization', async () => {

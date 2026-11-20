@@ -53,12 +53,14 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { TargetPeriodLockedError } from '@/lib/bookkeeping/errors'
 import { POST as correctMetadata } from '../[id]/correct-metadata/route'
 import { POST as strikeLines } from '../[id]/strike-lines/route'
+import { POST as correctLines } from '../[id]/correct/route'
 import { POST as redate } from '../[id]/redate/route'
 import { PATCH as updateDraft } from '../[id]/route'
 import { PATCH as setNote } from '../[id]/notes/route'
 import { POST as setNoDoc, DELETE as clearNoDoc } from '../[id]/no-document-required/route'
 import { POST as batchNoDoc } from '../no-document-required/route'
 import { GET as rattelseLog } from '../[id]/rattelse-log/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -108,7 +110,7 @@ const BOOKS = new Set([
   'chart_of_accounts',
 ])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.table === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.table === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ENTRY_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
@@ -248,6 +250,9 @@ describe('POST /journal-entries/:id/correct-metadata', () => {
       p_description: 'Programvara Figma',
       p_entry_date: null,
       p_user_id: 'user-1',
+      // WHO beside the user: the API key that relayed the rättelse.
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
     })
     // Never a direct write to the posted verifikat.
     expect(client.calls.some((c) => c.table === 'journal_entries' && WRITES.has(c.method))).toBe(false)
@@ -288,6 +293,10 @@ describe('POST /journal-entries/:id/correct-metadata', () => {
       old_entry_date: '2026-09-10',
       new_entry_date: '2026-09-12',
     })
+    // The fields the filed-momsperiod note reads off the staged row
+    // (lib/pending-operations/filed-vat-note.ts): renamed, the note drops
+    // without a sound.
+    expect(body.data.preview.journal_entry_id).toBe(ENTRY_ID)
     expect(wrote(client)).toBe(false)
   })
 
@@ -398,6 +407,8 @@ describe('POST /journal-entries/:id/strike-lines', () => {
       p_strike_line_ids: [LINE_A],
       p_new_lines: [{ account_number: '5420', debit_amount: 500, credit_amount: 0, line_description: null, dimensions: {} }],
       p_user_id: 'user-1',
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
     })
     expect(client.calls.some((c) => c.table === 'journal_entry_lines' && WRITES.has(c.method))).toBe(false)
   })
@@ -430,6 +441,10 @@ describe('POST /journal-entries/:id/strike-lines', () => {
     expect(preview.added_lines).toEqual([expect.objectContaining({ account_number: '5420', debit_amount: 500 })])
     expect(preview.resulting_lines.map((l: { account_number: string }) => l.account_number)).toEqual(['2641', '1930', '5420'])
     expect(preview).toMatchObject({ total_debit: 625, total_credit: 625, changed_amount_sek: 500, would_seed_accounts: [] })
+    // The fields the filed-momsperiod note reads off the staged row
+    // (lib/pending-operations/filed-vat-note.ts): renamed, the note drops
+    // without a sound.
+    expect(preview).toMatchObject({ journal_entry_id: ENTRY_ID, entry_date: '2026-09-10' })
     expect(wrote(client)).toBe(false)
     expect(backfillMock).not.toHaveBeenCalled()
   })
@@ -518,6 +533,127 @@ describe('POST /journal-entries/:id/strike-lines', () => {
   })
 })
 
+// Importmoms keeps its ruta 50 base through an inline rättelse (#94), judged
+// on the kept and the added lines together: the RPC knows no momsrutor.
+describe('POST /journal-entries/:id/strike-lines: importmoms without its base', () => {
+  const post = (body: unknown, query = '') =>
+    strikeLines(
+      request(`${BASE}/${ENTRY_ID}/strike-lines${query}`, { method: 'POST', body: JSON.stringify(body) }),
+      entryParams,
+    )
+  const line = (id: string, account_number: string, debit_amount: number, credit_amount: number, sort_order: number) => ({
+    id, account_number, debit_amount, credit_amount, line_description: null, currency: 'SEK', dimensions: {}, sort_order,
+  })
+  const LINE_D = '55555555-5555-4555-8555-555555555555'
+  /** An EU purchase whose fiktiv moms sits on the pre-2015 2615 (ruta 60, no ruta 50). */
+  const EU_ON_2615 = [
+    line(LINE_A, '4515', 1000, 0, 0),
+    line(LINE_B, '2645', 250, 0, 1),
+    line(LINE_C, '2615', 0, 250, 2),
+    line(LINE_D, '1930', 0, 1000, 3),
+  ]
+  const committed = {
+    data: { log_id: LINE_C, struck_count: 1, added_count: 1, total_debit: 1250, total_credit: 1250 },
+    error: null,
+  }
+
+  it('400 IMPORT_VAT_WITHOUT_BASE when the rättelse keeps 2615 without a base, before the RPC', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      journal_entries: { data: { source_type: 'bank_transaction', lines: EU_ON_2615 }, error: null },
+      chart_of_accounts: { data: [], error: null },
+      'rpc:correct_entry_lines_inline': committed,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ strike_line_ids: [LINE_A], lines: [{ account_number: '5460', debit_amount: 1000 }] })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details).toMatchObject({ import_vat_accounts: ['2615'] })
+    expect(client.rpc).not.toHaveBeenCalledWith('correct_entry_lines_inline', expect.anything())
+    expect(backfillMock).not.toHaveBeenCalled()
+  })
+
+  it('commits a rättelse that moves the fiktiv moms from 2615 to 2614', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      journal_entries: { data: { source_type: 'bank_transaction', lines: EU_ON_2615 }, error: null },
+      'rpc:correct_entry_lines_inline': committed,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ strike_line_ids: [LINE_C], lines: [{ account_number: '2614', credit_amount: 250 }] })
+    expect(res.status).toBe(200)
+    expect(client.rpc).toHaveBeenCalledWith('correct_entry_lines_inline', expect.anything())
+  })
+
+  it('dry run: striking the base of a correct import leaves its importmoms without one, and is refused', async () => {
+    const IMPORT = [
+      line(LINE_A, '4545', 1000, 0, 0),
+      line(LINE_B, '4549', 0, 1000, 1),
+      line(LINE_C, '2645', 250, 0, 2),
+      line(LINE_D, '2615', 0, 250, 3),
+    ]
+    const client = makeClient(
+      strikePreviewTables({
+        journal_entry_lines: { data: IMPORT, error: null },
+        chart_of_accounts: [{ data: [{ account_number: '4010' }, { account_number: '2440' }], error: null }, { data: [], error: null }],
+      }),
+    )
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(
+      { strike_line_ids: [LINE_A, LINE_B], lines: [{ account_number: '4010', debit_amount: 1000 }, { account_number: '2440', credit_amount: 1000 }] },
+      '?dry_run=true',
+    )
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(wrote(client)).toBe(false)
+  })
+})
+
+// The storno + rättelse door gives the dry run the verdict correctEntry gives
+// at commit (#94): importmoms needs its ruta 50 base in the corrected lines.
+describe('POST /journal-entries/:id/correct: importmoms without its base', () => {
+  const post = (body: unknown, query = '') =>
+    correctLines(
+      request(`${BASE}/${ENTRY_ID}/correct${query}`, { method: 'POST', body: JSON.stringify(body) }),
+      entryParams,
+    )
+  const tables = () =>
+    makeClient({
+      company_members: OWNER,
+      journal_entries: { data: { ...POSTED, source_type: 'bank_transaction', correction_of_id: null, reverses_id: null }, error: null },
+      fiscal_periods: OPEN_PERIOD,
+      company_settings: NO_LOCK,
+      chart_of_accounts: { data: [], error: null },
+    })
+  const withVatOn = (account: string) => ({
+    lines: [
+      { account_number: '5460', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: account, debit_amount: 0, credit_amount: 250 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ],
+  })
+
+  it('dry run: 400 IMPORT_VAT_WITHOUT_BASE for 2615 credited with no 4545-4547 line', async () => {
+    const client = tables()
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(withVatOn('2615'), '?dry_run=true')
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details).toMatchObject({ import_vat_accounts: ['2615'] })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('dry run: the same purchase with its fiktiv moms on 2614 passes', async () => {
+    mockServiceClient.mockReturnValue(tables())
+    const res = await post(withVatOn('2614'), '?dry_run=true')
+    expect(res.status).toBe(200)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // redate
 // ---------------------------------------------------------------------------
@@ -596,6 +732,14 @@ describe('POST /journal-entries/:id/redate', () => {
     expect(preview).toMatchObject({ voucher: 'A42', old_entry_date: '2026-09-10', new_entry_date: '2025-09-10', total_debit: 625 })
     expect(preview.storno.lines[0]).toMatchObject({ account_number: '5410', debit_amount: 0, credit_amount: 500 })
     expect(preview.corrected.lines[0]).toMatchObject({ account_number: '5410', debit_amount: 500, credit_amount: 0 })
+    // The fields the filed-momsperiod note reads off the staged row
+    // (lib/pending-operations/filed-vat-note.ts): renamed, the note drops
+    // without a sound.
+    expect(preview).toMatchObject({
+      journal_entry_id: ENTRY_ID,
+      storno: { entry_date: '2026-09-10' },
+      corrected: { entry_date: '2025-09-10' },
+    })
     expect(recordateEntryMock).not.toHaveBeenCalled()
     expect(wrote(client)).toBe(false)
   })
@@ -798,6 +942,46 @@ describe('PATCH /journal-entries/:id/notes', () => {
     const res = await patch({ notes: 'Ny' }, '?dry_run=true')
     expect((await res.json()).data.preview).toMatchObject({ old_notes: 'Gammal', new_notes: 'Ny' })
     expect(wrote(client)).toBe(false)
+  })
+
+  it('409 JOURNAL_ENTRY_NOTE_PERIOD_LOCKED on a dry run in a closed period, nothing written (crm#1234)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      journal_entries: {
+        data: { id: ENTRY_ID, voucher_series: 'A', voucher_number: 42, status: 'posted', notes: null, entry_date: '2024-11-29', fiscal_period_id: PERIOD_ID },
+        error: null,
+      },
+      fiscal_periods: { data: { id: PERIOD_ID, is_closed: true, locked_at: '2025-02-01T00:00:00Z' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await patch({ notes: 'Ny' }, '?dry_run=true')
+    expect(res.status).toBe(409)
+    const { error } = await res.json()
+    expect(error.code).toBe('JOURNAL_ENTRY_NOTE_PERIOD_LOCKED')
+    expect(error.message).toBe('Perioden är stängd eller låst, anteckningen kan inte ändras.')
+    expect(error.details).toMatchObject({
+      period_status: 'closed',
+      fiscal_period_id: PERIOD_ID,
+      reason: 'Perioden är stängd, anteckningen kan inte ändras.',
+    })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 JOURNAL_ENTRY_NOTE_PERIOD_LOCKED when the period lock trigger refuses the write', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: OWNER,
+        journal_entries: {
+          data: null,
+          error: { code: 'P0001', message: 'Cannot write to locked/closed fiscal period "Räkenskapsår 2024" (is_closed=t, locked_at=<NULL>)' },
+        },
+      }),
+    )
+    const res = await patch({ notes: 'Ny' })
+    expect(res.status).toBe(409)
+    const { error } = await res.json()
+    expect(error.code).toBe('JOURNAL_ENTRY_NOTE_PERIOD_LOCKED')
+    expect(error.message).toBe('Perioden är stängd eller låst, anteckningen kan inte ändras.')
   })
 })
 

@@ -82,6 +82,8 @@ describe('ensureFiscalPeriod refusals reach the reader', () => {
     enqueueMany([
       { data: null, error: null }, // containing check, no match
       { data: [], error: null }, // overlapping check, none
+      { data: [], error: null }, // no other year
+      { data: { entity_type: 'aktiebolag' }, error: null }, // the legal form
     ])
 
     const err = await rejection(

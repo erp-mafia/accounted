@@ -1,7 +1,7 @@
 /**
  * Core ↔ Skatteverket-extension commit boundary.
  *
- * `lib/` cannot import from `@/extensions/` (CI guard, core-build.yml), so the
+ * `lib/` cannot import from `@/extensions/` (CI guard), so the
  * commit-side executors reach the Skatteverket extension only through the
  * registry-resolved `services` channel. This module defines the SHARED shape
  * the extension's commit services return and the recoverable-error class the
@@ -11,6 +11,7 @@
  */
 
 import type { SkattekontoBatchResult } from '@/types/skatteverket'
+import { maskPersonnummerInText } from '@/lib/salary/personnummer-format'
 
 /** Result returned by the extension's commitSubmitVatDeclaration / commitSubmitAgi. */
 export type SkvSubmitResult =
@@ -32,7 +33,32 @@ export type SkvSubmitResult =
        */
       recoverable: boolean
       error: string
+      /**
+       * Skatteverket's own answer behind a non-recoverable refusal, e.g.
+       * `{ kontrollrapport }` on an AGI rejected at kontroll. Persisted in
+       * result_data.details and returned to the approver, so the user (or
+       * agent) sees which fields Skatteverket refused. The dispatcher masks
+       * every personnummer in it before it leaves the server.
+       */
+      details?: Record<string, unknown>
     }
+
+/**
+ * Deep-copy `value` with every personnummer in every string masked to
+ * YYYYMMDD-XXXX. Applied by the dispatcher to SkvSubmitResult.details, which
+ * carries Skatteverket's free-text messages verbatim and can name an
+ * employee by personnummer.
+ */
+export function maskPersonnummerDeep<T>(value: T): T {
+  if (typeof value === 'string') return maskPersonnummerInText(value) as T
+  if (Array.isArray(value)) return value.map((v) => maskPersonnummerDeep(v)) as T
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, maskPersonnummerDeep(v)]),
+    ) as T
+  }
+  return value
+}
 
 /** The two functions a fully-wired skatteverket extension exposes on `services`. */
 export interface SkatteverketCommitServices {

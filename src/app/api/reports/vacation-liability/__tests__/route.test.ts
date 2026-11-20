@@ -65,6 +65,7 @@ const sampleReport = {
       vacationDaysEntitled: 25,
       vacationDaysTaken: 5,
       vacationDaysRemaining: 20,
+      vacationDaysOffRemaining: null,
       vacationDaysSaved: 0,
       accruedAmount: 4200,
       accruedAvgifter: 1319.64,
@@ -72,6 +73,14 @@ const sampleReport = {
       advanceVacationDebt: 0,
       totalLiability: 5519.64,
       netLiability: 5519.64,
+      liabilityChangeAccount: '7290' as const,
+      computedLiability: 6000,
+      computedAvgifter: 1885.2,
+      liabilityDays: 15,
+      dayValue: 400,
+      dayValueEstimated: false,
+      variablePay: 0,
+      earningPay: 0,
     },
   ],
   totals: {
@@ -80,10 +89,14 @@ const sampleReport = {
     advanceVacationDebt: 0,
     totalLiability: 5519.64,
     netLiability: 5519.64,
+    computedLiability: 6000,
+    computedAvgifter: 1885.2,
+    computedTotal: 7885.2,
   },
   asOfDate: '2026-12-31',
   vacationYearStart: '2026-01-01',
   closedYear: null,
+  remeasuredAt: null,
 }
 
 beforeEach(() => {
@@ -131,7 +144,21 @@ describe('GET /api/reports/vacation-liability', () => {
       booked2940: 1319.64,
       difference2920: 800,
       difference2940: 0,
+      computedDifference2920: 1000,
+      computedDifference2940: 565.56,
+      computedDifferenceTotal: 1565.56,
     })
+  })
+
+  it("takes the Swedish year when no date is given, also on New Year's night", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-31T23:30:00Z'))
+    try {
+      expect((await call('/api/reports/vacation-liability')).status).toBe(200)
+      expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', '2027-12-31')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps the legacy year parameter as December 31', async () => {

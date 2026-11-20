@@ -2,6 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { loadAiConnection } from '@/lib/onboarding/ai-clients.server'
+import { roundOre } from '@/lib/money'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
+import { filterOpenDeadlines } from '@/lib/deadlines/open'
+import { SKATTEKONTO_ACCOUNT_DEFAULT } from '@/lib/skatteverket/skattekonto-account'
 
 /**
  * Genomlysning: what the books act (issue #2438) can say about a company
@@ -47,8 +51,13 @@ export interface BooksFindings {
   }
   skv: {
     connected: boolean
-    /** Balance on 1630 (skattekonto) in the ledger, positive = asset. */
-    ledger1630: number | null
+    /**
+     * Balance on the skattekonto account in the ledger (1630, or 2012 for an
+     * enskild firma that runs it there), debit minus credit.
+     */
+    ledgerSkattekonto: number | null
+    /** That account: 1630 or 2012. */
+    skattekontoAccount: string
     nextDeadlines: { type: string; dueDate: string }[]
   }
   ai: {
@@ -66,11 +75,13 @@ interface BooksSummary {
   result: number | string | null
   vat_balance: number | string | null
   ledger_1630: number | string | null
+  /** Since 20261015030000; absent from a database before it (then 1630). */
+  skattekonto_account?: string | null
+  ledger_skattekonto?: number | string | null
 }
 
-const round2 = (x: number) => Math.round(x * 100) / 100
 /** -0 would survive JSON as 0 but not toBe(0); keep the API value canonical. */
-const toOre = (v: number | string) => round2(Number(v)) + 0
+const toOre = (v: number | string) => roundOre(Number(v)) + 0
 
 const TAX_DEADLINES_OF_INTEREST = ['moms_monthly', 'moms_quarterly', 'moms_yearly', 'arbetsgivardeklaration']
 
@@ -91,12 +102,14 @@ export async function loadBooksFindings(
       .select('id, name, period_start, period_end, is_closed, continuity_verified')
       .eq('company_id', companyId)
       .order('period_start', { ascending: true }),
-    supabase
-      .from('invoices')
-      .select('*', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'partially_paid', 'overdue'])
-      .lt('due_date', today),
+    // The Förfallna view's rows (lib/invoices/overdue.ts): the insight links there.
+    filterOverdueInvoices(
+      supabase
+        .from('invoices')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', companyId),
+      today,
+    ),
     supabase
       .from('transactions')
       .select('*', { count: 'exact', head: true })
@@ -117,13 +130,13 @@ export async function loadBooksFindings(
       .from('skatteverket_tokens')
       .select('status')
       .eq('company_id', companyId),
-    supabase
-      .from('deadlines')
-      .select('tax_deadline_type, due_date')
-      .eq('company_id', companyId)
-      .in('tax_deadline_type', TAX_DEADLINES_OF_INTEREST)
-      .eq('is_completed', false)
-      .is('dismissed_at', null)
+    filterOpenDeadlines(
+      supabase
+        .from('deadlines')
+        .select('tax_deadline_type, due_date')
+        .eq('company_id', companyId)
+        .in('tax_deadline_type', TAX_DEADLINES_OF_INTEREST),
+    )
       .gte('due_date', today)
       .order('due_date', { ascending: true })
       .limit(3),
@@ -186,7 +199,10 @@ export async function loadBooksFindings(
   const result = hasPeriod && summary.result !== null ? toOre(summary.result) : null
   const periodName = hasPeriod ? summary.period_name : null
   const vatBalance = hasBooks ? toOre(summary.vat_balance ?? 0) : null
-  const ledger1630 = hasBooks ? toOre(summary.ledger_1630 ?? 0) : null
+  const skattekontoAccount = summary.skattekonto_account ?? SKATTEKONTO_ACCOUNT_DEFAULT
+  const ledgerSkattekonto = hasBooks
+    ? toOre((summary.skattekonto_account ? summary.ledger_skattekonto : summary.ledger_1630) ?? 0)
+    : null
   const missingUnderlag = hasBooks ? underlag.total_count : 0
 
   const bank = (bankRows ?? [])[0] as
@@ -225,7 +241,8 @@ export async function loadBooksFindings(
     },
     skv: {
       connected: skvActive,
-      ledger1630,
+      ledgerSkattekonto,
+      skattekontoAccount,
       nextDeadlines: ((deadlineRows ?? []) as { tax_deadline_type: string; due_date: string }[]).map((d) => ({
         type: d.tax_deadline_type,
         dueDate: d.due_date,

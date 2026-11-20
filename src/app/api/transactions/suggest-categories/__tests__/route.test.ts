@@ -4,6 +4,9 @@
  * (issue #1643 problem 4). A learned template carries the ledger it was
  * learned on; replaying it after a broken reconnect would pre-fill a junk
  * balance-sheet account as the booking dialog's counter-account.
+ *
+ * Beside the proposals it names the rows a booked salary run already pays
+ * out (crm#1685), from the same matcher the MCP tool uses.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -34,6 +37,16 @@ vi.mock('@/lib/cash-accounts/service', () => ({
   loadCounterLegTopology: (...args: unknown[]) => loadCounterLegTopologyMock(...args),
 }))
 
+// The matcher has its own tests (lib/transactions/__tests__/salary-run-payouts.test.ts);
+// here only what the route does with its answer.
+const findSalaryRunPayoutsMock = vi.fn()
+vi.mock('@/lib/transactions/salary-run-payouts', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/salary-run-payouts')>()),
+  findSalaryRunPayouts: (...args: unknown[]) => findSalaryRunPayoutsMock(...args),
+}))
+
+const noPayouts = () => ({ links: new Map(), without_run: new Set() })
+
 /** Topology stub mirroring lib/cash-accounts/service: orphan set + per-row context. */
 function topology(
   orphaned: string[],
@@ -41,6 +54,7 @@ function topology(
 ) {
   return {
     orphaned: new Set(orphaned),
+    cardLedgers: [] as string[],
     contextFor: (cashAccountId: string | null | undefined) => {
       const ctx = cashAccountId ? contexts[cashAccountId] : undefined
       return ctx
@@ -84,6 +98,7 @@ function enqueueBaseQueries() {
   enqueue({ data: [{ id: TX_ID, amount: 217.04, currency: 'SEK', description: 'Ränta' }] }) // transactions
   enqueue({ data: [] }) // mapping_rules (company)
   enqueue({ data: [] }) // mapping_rules (global defaults)
+  enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
   enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
 }
 
@@ -96,6 +111,16 @@ function request() {
 
 type Body = {
   template_suggestions: Record<string, Array<{ template_id: string; debit_account: string; credit_account: string }>>
+  direct_booking?: { enabled: boolean }
+  salary_payouts?: Record<string, { journal_entry_id: string; salary_run_id: string; period: string }>
+}
+
+const PAYOUT = {
+  journal_entry_id: 'je-salary',
+  salary_run_id: 'run-1',
+  voucher: 'L12',
+  entry_date: '2026-10-25',
+  period: '2026-10',
 }
 
 describe('POST /api/transactions/suggest-categories', () => {
@@ -104,6 +129,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     loadCounterLegTopologyMock.mockResolvedValue(topology([]))
+    findSalaryRunPayoutsMock.mockResolvedValue(noPayouts())
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -114,6 +140,82 @@ describe('POST /api/transactions/suggest-categories', () => {
     })
     const response = await POST(request(), emptyParams)
     expect(response.status).toBe(401)
+  })
+
+  it('returns 400 without transaction ids', async () => {
+    const response = await POST(
+      createMockRequest('/api/transactions/suggest-categories', { method: 'POST', body: { transaction_ids: [] } }),
+      emptyParams,
+    )
+    expect(response.status).toBe(400)
+    expect(findSalaryRunPayoutsMock).not.toHaveBeenCalled()
+  })
+
+  describe('salary run payouts (crm#1685)', () => {
+    /** An outgoing row with no text the catalog knows, as an Open Payments payout lands. */
+    function enqueuePayoutRow(row: Record<string, unknown> = {}) {
+      enqueue({
+        data: [{ id: TX_ID, date: '2026-10-25', amount: -18500, currency: 'SEK', description: 'Okänd transaktion', cash_account_id: 'ca-1', ...row }],
+      })
+      enqueue({ data: [] }) // mapping_rules (company)
+      enqueue({ data: [] }) // mapping_rules (global defaults)
+      enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
+      enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
+      findCounterpartyTemplatesBatchMock.mockResolvedValue(new Map())
+    }
+
+    it("names the run's verifikat for a row a booked run pays out, whatever the row's text", async () => {
+      enqueuePayoutRow()
+      findSalaryRunPayoutsMock.mockResolvedValue({ links: new Map([[TX_ID, PAYOUT]]), without_run: new Set() })
+
+      const { status, body } = await parseJsonResponse<Body>(await POST(request(), emptyParams))
+
+      expect(status).toBe(200)
+      expect(body.salary_payouts).toEqual({ [TX_ID]: PAYOUT })
+      expect(findSalaryRunPayoutsMock).toHaveBeenCalledWith(
+        supabase,
+        'company-1',
+        [expect.objectContaining({ id: TX_ID, amount: -18500 })],
+      )
+      // The proposals still come: the payout is the row's match, not a booking.
+      expect(body.template_suggestions).toBeDefined()
+    })
+
+    it('names nothing for a row with no cash account: the match names the bank account', async () => {
+      enqueuePayoutRow({ cash_account_id: null })
+      findSalaryRunPayoutsMock.mockResolvedValue({ links: new Map([[TX_ID, PAYOUT]]), without_run: new Set() })
+
+      const { status, body } = await parseJsonResponse<Body>(await POST(request(), emptyParams))
+
+      expect(status).toBe(200)
+      expect(body.salary_payouts).toEqual({})
+    })
+
+    it('answers the proposals when the salary read fails', async () => {
+      enqueuePayoutRow()
+      findSalaryRunPayoutsMock.mockRejectedValue(new Error('salary_runs read failed'))
+
+      const { status, body } = await parseJsonResponse<Body>(await POST(request(), emptyParams))
+
+      expect(status).toBe(200)
+      expect(body.salary_payouts).toEqual({})
+      expect(body.template_suggestions[TX_ID]).toBeDefined()
+      expect(body.direct_booking).toEqual({ enabled: true })
+    })
+  })
+
+  it("answers the company's one-click switch with the proposals, read once (accounted#130)", async () => {
+    enqueue({ data: [{ id: TX_ID, amount: -100, currency: 'SEK', description: 'Kontorsbolaget' }] }) // transactions
+    enqueue({ data: [] }) // mapping_rules (company)
+    enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: false } }) // company_settings: the one-click switch
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(new Map())
+
+    const { status, body } = await parseJsonResponse<Body>(await POST(request(), emptyParams))
+
+    expect(status).toBe(200)
+    expect(body.direct_booking).toEqual({ enabled: false })
   })
 
   it('withholds a counterparty suggestion whose learned accounts hit an orphaned ledger', async () => {
@@ -138,6 +240,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-live' }] })
     enqueue({ data: [] }) // mapping_rules (company)
     enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
@@ -199,6 +302,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-orphan' }] })
     enqueue({ data: [] }) // mapping_rules (company)
     enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
@@ -213,6 +317,48 @@ describe('POST /api/transactions/suggest-categories', () => {
     expect(status).toBe(200)
     const suggestions = body.template_suggestions[TX_ID] ?? []
     expect(suggestions.some((s) => s.debit_account === '5010' && s.credit_account === '1931')).toBe(true)
+  })
+
+  it('offers a template learned on another own currency account on the transaction\'s own ledger (crm#1046)', async () => {
+    // A card fee learned on the GBP ledger 1934, matched on the EUR row: the
+    // booking credits 1932 (applySettlementAccount), so the review must show 1932.
+    enqueue({ data: [{ id: TX_ID, amount: -0.5, currency: 'EUR', description: 'Card fee', cash_account_id: 'ca-eur' }] })
+    enqueue({ data: [] }) // mapping_rules (company)
+    enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // company_settings
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '6570', credit_account: '1934' }), confidence: 0.9 }]]),
+    )
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology([], { 'ca-eur': { settlementLedger: '1932', twins: [] } }),
+    )
+
+    const response = await POST(request(), emptyParams)
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.some((s) => s.debit_account === '6570' && s.credit_account === '1932')).toBe(true)
+    expect(suggestions.some((s) => s.credit_account === '1934')).toBe(false)
+  })
+
+  it('keeps an own-account transfer suggestion\'s counter ledger (crm#1046)', async () => {
+    enqueue({ data: [{ id: TX_ID, amount: -200, currency: 'EUR', description: 'To GBP', cash_account_id: 'ca-eur' }] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: { entity_type: 'enskild_firma' } })
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(
+      new Map([[TX_ID, { template: makeTemplate({ debit_account: '1934', credit_account: '1932' }), confidence: 0.9 }]]),
+    )
+    loadCounterLegTopologyMock.mockResolvedValue(
+      topology([], { 'ca-eur': { settlementLedger: '1932', twins: [] } }),
+    )
+
+    const response = await POST(request(), emptyParams)
+    const { body } = await parseJsonResponse<Body>(response)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    expect(suggestions.some((s) => s.debit_account === '1934' && s.credit_account === '1932')).toBe(true)
   })
 
   it('keeps a counterparty suggestion whose accounts are clean', async () => {

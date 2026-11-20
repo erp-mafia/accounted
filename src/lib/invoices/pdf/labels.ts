@@ -1,4 +1,4 @@
-import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { DOMESTIC_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import type { PdfLang } from '@/lib/invoices/pdf/format'
 
 // Customer-facing labels. Statutory chapter references (ML 17 kap 24§, ML 3 kap.)
@@ -44,10 +44,12 @@ export const PDF_LABELS = {
     yourReference: 'Er referens:',
     ourReference: 'Vår referens:',
     invoiceMarking: 'Märkning:',
+    deliveryAddress: 'Leveransadress:',
     custNo: 'Kundnr:',
     orgNo: 'Org.nr:',
     vat: 'VAT:',
     // Table columns
+    colArticleNumber: 'Art.nr',
     colDescription: 'Beskrivning',
     colQty: 'Antal',
     colUnitPrice: 'à-pris',
@@ -91,9 +93,12 @@ export const PDF_LABELS = {
     quoteNotice: 'Detta är en offert och utgör ingen faktura eller betalningsanmodan.',
     exemptNotice: 'Undantag från skatteplikt, ML 3 kap.',
     exportNotice: EXPORT_NOTICE_SV,
+    domesticReverseChargeNotice: DOMESTIC_REVERSE_CHARGE_NOTICE,
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Footer
     orgNoLong: 'Org.nr:',
+    // Säte of a legal person (seller-registered-office.ts, crm#1604).
+    registeredOffice: 'Säte:',
     vatRegNo: 'Momsreg.nr:',
     fSkatt: 'Godkänd för F-skatt',
   },
@@ -127,9 +132,11 @@ export const PDF_LABELS = {
     yourReference: 'Your reference:',
     ourReference: 'Our reference:',
     invoiceMarking: 'Buyer reference:',
+    deliveryAddress: 'Delivery address:',
     custNo: 'Customer no.:',
     orgNo: 'Reg. no.:',
     vat: 'VAT:',
+    colArticleNumber: 'Item no.',
     colDescription: 'Description',
     colQty: 'Qty',
     colUnitPrice: 'Unit price',
@@ -164,8 +171,11 @@ export const PDF_LABELS = {
     quoteNotice: 'This is a quote and is not an invoice or a request for payment.',
     exemptNotice: 'Exempt from VAT (ML 3 kap., Swedish VAT Act).',
     exportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
+    // Skatteverket accepts "Reverse charge" as the English notation (dnr 8-724682).
+    domesticReverseChargeNotice: 'Reverse charge, construction services: the buyer accounts for the VAT (ML 16 kap. 13 §, Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     orgNoLong: 'Reg. no.:',
+    registeredOffice: 'Registered office:',
     vatRegNo: 'VAT reg. no.:',
     // The F-skatt approval must be stated on the invoice, but ML sets no
     // language requirement for invoice text (swedish-invoice-compliance,
@@ -190,6 +200,7 @@ export const PDF_LABELS = {
  */
 export function localizeVatNotice(text: string, lang: PdfLang): string {
   if (text === EXPORT_NOTICE_SV) return PDF_LABELS[lang].exportNotice
+  if (text === DOMESTIC_REVERSE_CHARGE_NOTICE) return PDF_LABELS[lang].domesticReverseChargeNotice
   return text
 }
 

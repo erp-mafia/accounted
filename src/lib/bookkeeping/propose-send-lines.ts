@@ -27,6 +27,13 @@ export interface ProposeSendLinesInput {
   /** The invoice row with its items, as the dialog holds it. */
   invoice: InvoiceRegistrationLinesSource & { credited_invoice_id?: string | null }
   entityType: EntityType
+  /**
+   * A credit note of a kontantmetod ROT/RUT invoice on the two steps: the
+   * kronor of Skatteverket's share its payout booked, 0 before any
+   * (getDeductionShareBookedByPayout). The credit reverses the customer's
+   * share and that part, as issueCreditNote books it.
+   */
+  deductionBookedSek?: number | null
 }
 
 function toFormAmount(n: number): string {
@@ -57,7 +64,7 @@ export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
   let lines: CreateJournalEntryLineInput[]
   try {
     lines = invoice.credited_invoice_id
-      ? buildCreditNoteLines(invoice, entityType)
+      ? buildCreditNoteLines(invoice, entityType, undefined, { deductionBookedSek: input.deductionBookedSek })
       : buildInvoiceRegistrationLines(invoice, entityType)
   } catch (err) {
     // A foreign invoice with no SEK source: the builders refuse rather than

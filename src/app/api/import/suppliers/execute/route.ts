@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { SupplierImportExecuteSchema } from '@/lib/api/schemas'
 import { orgNumberKey } from '@/lib/invariants/org-number'
-import { createRegisterMatcher, supplierOrgKey } from '@/lib/import/shared/register-match'
+import { createRegisterMatcher } from '@/lib/import/shared/register-match'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { recordRegisterImportRun, snapshotRowsForUndo } from '@/lib/import/register-runs'
@@ -12,8 +11,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Supplier } from '@/types'
 import type { SupplierImportExecuteResult } from '@/lib/import/suppliers/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
+import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
 
 interface ExistingSupplier {
   id: string
@@ -53,7 +51,7 @@ export const POST = withRouteContext(
 
       // Org number, then e-mail, or a same-name supplier the user confirmed
       // (lib/import/shared/register-match.ts).
-      const matcher = createRegisterMatcher(existing, { orgKey: supplierOrgKey })
+      const matcher = createRegisterMatcher(existing)
 
       const created: Supplier[] = []
       const updated: Supplier[] = []
@@ -86,7 +84,7 @@ export const POST = withRouteContext(
           if (row.bank_account) merged.bank_account = row.bank_account
           if (row.iban) merged.iban = row.iban
           if (row.bic) merged.bic = row.bic
-          if (row.default_payment_terms) merged.default_payment_terms = row.default_payment_terms
+          if (row.default_payment_terms !== null) merged.default_payment_terms = row.default_payment_terms
           if (row.default_currency) merged.default_currency = row.default_currency
           if (row.notes) merged.notes = row.notes
 
@@ -136,7 +134,7 @@ export const POST = withRouteContext(
             bank_account: row.bank_account,
             iban: row.iban,
             bic: row.bic,
-            default_payment_terms: row.default_payment_terms || 30,
+            default_payment_terms: supplierPaymentTermsDays(row.default_payment_terms),
             default_currency: row.default_currency || 'SEK',
             notes: row.notes,
           })

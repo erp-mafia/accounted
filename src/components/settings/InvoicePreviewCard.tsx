@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Eye } from 'lucide-react'
+import { EyeIcon } from '@/components/icons'
 import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -10,11 +10,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { createClient } from '@/lib/supabase/client'
+import { useCustomers } from '@/lib/reference-data/hooks'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { readPdfPreviewMeta } from '@/lib/invoices/editor/preview-request'
+import { PdfCanvasPreview, useDrawsPdfInPage } from '@/components/invoices/PdfCanvasPreview'
 import type { CompanySettings } from '@/types'
 
 interface InvoicePreviewCardProps {
@@ -27,18 +29,26 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
   const { company } = useCompany()
   const [open, setOpen] = useState(false)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  // The same PDF's bytes for PdfCanvasPreview, which cannot fetch the blob:
+  // URL back under the app's connect-src (accounted#178).
+  const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // The preview renders without payment details (X-Invoice-Missing: payee)
   // instead of refusing: say what a real invoice would lack above the PDF.
   const [payeeNotice, setPayeeNotice] = useState<string | null>(null)
   const currentUrlRef = useRef<string | null>(null)
+  // Safari and every iOS browser leave the <object> blank for a blob: PDF
+  // (crm#1689): there the page draws the PDF itself.
+  const drawsInPage = useDrawsPdfInPage()
 
   const sampleItemDescription = t('sample_item_description')
+  // The sample invoice's customer: the first of the cached register.
+  const { customers } = useCustomers()
+  const sampleCustomerId = customers[0]?.id ?? null
 
   useEffect(() => {
     if (!open || !company?.id) return
-    const companyId = company.id
 
     let cancelled = false
     const controller = new AbortController()
@@ -55,17 +65,6 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
       setError(null)
 
       try {
-        const supabase = createClient()
-        const { data: customer, error: customerError } = await supabase
-          .from('customers')
-          .select('id')
-          .eq('company_id', companyId)
-          .is('archived_at', null)
-          .limit(1)
-          .maybeSingle()
-
-        if (customerError) throw customerError
-        if (cancelled) return
 
         // Non-momsregistrerade säljare ska inte få en exempel-rad med 25 %
         // VAT: förhandsvisningen är hårdkodad sample-data, inte ett val
@@ -78,7 +77,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
           body: JSON.stringify({
-            customer_id: customer?.id,
+            customer_id: sampleCustomerId ?? undefined,
             // Sample number, the placeholder the route uses for its mock
             // customer. Without one the bank-app QR (and the Swish message)
             // cannot be built, so the preview beside "QR-kod på fakturan"
@@ -130,6 +129,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current)
         currentUrlRef.current = url
         setBlobUrl(url)
+        setPdfBlob(blob)
         setIsLoading(false)
       } catch (err) {
         if (cancelled) return
@@ -144,7 +144,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [open, settings, company?.id, sampleItemDescription, locale])
+  }, [open, settings, company?.id, sampleItemDescription, locale, sampleCustomerId])
 
   useEffect(() => {
     return () => {
@@ -157,18 +157,15 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      {/* Quiet header-action trigger (Fönster): the preview lives in the
-          section header's action slot, not as a card in the page flow. */}
+      {/* The trigger sits in the settings top bar (the section header's
+          action slot), so it takes the top bar's 32px outline button. */}
       <DialogTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
-        >
-          <Eye className="h-3.5 w-3.5" />
+        <Button variant="outline" size="toolbar">
+          <EyeIcon className="h-4 w-4" aria-hidden />
           {t('preview_button')}
-        </button>
+        </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-3xl">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
         </DialogHeader>
@@ -181,7 +178,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         )}
 
         {!isLoading && error && (
-          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 px-6 text-center">
+          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg px-6 text-center bg-control shadow-raised">
             <p className="text-sm text-destructive">{t('error')}: {error}</p>
           </div>
         )}
@@ -190,7 +187,24 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           <p className="text-xs text-muted-foreground">{payeeNotice}</p>
         )}
 
-        {!isLoading && !error && blobUrl && (
+        {!isLoading && !error && blobUrl && pdfBlob && drawsInPage && (
+          <PdfCanvasPreview
+            file={pdfBlob}
+            fit="width"
+            title={t('iframe_title')}
+            className="h-[70vh] w-full"
+            fallback={
+              <p className="p-4 text-sm text-muted-foreground">
+                {t('error')}:{' '}
+                <a href={blobUrl} target="_blank" rel="noreferrer" className="underline">
+                  {t('iframe_title')}
+                </a>
+              </p>
+            }
+          />
+        )}
+
+        {!isLoading && !error && blobUrl && !drawsInPage && (
           // <object> + type="application/pdf" invokes Chrome's PDF plugin
           // directly. <iframe> went through Chrome's frame pipeline first
           // and intermittently surfaced "Det här innehållet har blockerats"
@@ -204,7 +218,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
             data={blobUrl}
             type="application/pdf"
             title={t('iframe_title')}
-            className="w-full h-[70vh] rounded-lg border border-border"
+            className="w-full h-[70vh] rounded-lg bg-control shadow-raised"
           >
             <p className="p-4 text-sm text-muted-foreground">
               {t('error')}:{' '}

@@ -22,16 +22,8 @@
  */
 
 import { z } from 'zod'
-import { renderToBuffer } from '@react-pdf/renderer'
-import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
-import {
-  buildPayslipData,
-  payslipFileName,
-  type PayslipAudience,
-} from '@/lib/salary/payslips/build-payslip-data'
-import { issuePayslipSections } from '@/lib/salary/payslips/section-snapshot'
+import { loadPayslip, preparePayslip, renderPayslipPdf } from '@/lib/salary/payslips/load-payslip'
 import { contentDisposition } from '@/lib/api/content-disposition'
-import { getCompanyDisplayName } from '@/lib/company/context'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { hasScope } from '@/lib/auth/api-keys'
@@ -104,101 +96,45 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string; 
       })
     }
 
-    const { data: run, error: runErr } = await ctx.supabase
-      .from('salary_runs')
-      .select('*')
-      .eq('id', runParse.data)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    if (runErr) {
-      return v1ErrorResponse(runErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!run) {
-      return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-
-    const { data: sre, error: sreErr } = await ctx.supabase
-      .from('salary_run_employees')
-      .select(
-        '*, employee:employees(first_name, last_name, personnummer, personnummer_last4, employment_type, tax_table_number, tax_column, clearing_number, bank_account_number), line_items:salary_line_items(*)',
-      )
-      .eq('salary_run_id', runParse.data)
-      .eq('employee_id', empParse.data)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    if (sreErr) {
-      return v1ErrorResponse(sreErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!sre) {
+    // Loading, the audience and the PDF are the one payslip render path
+    // (lib/salary/payslips/load-payslip.ts), shared with the dashboard and
+    // the token link.
+    const loaded = await loadPayslip(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId: runParse.data,
+      employeeId: empParse.data,
+    })
+    if (!loaded.ok) {
+      if (loaded.reason === 'db_error') return v1ErrorResponse(loaded.error, ctx.log, { requestId: ctx.requestId })
+      if (loaded.reason === 'run_not_found') {
+        return v1ErrorResponseFromCode('SALARY_RUN_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,
-        details: { resource: 'salary_run_employee', employee_id: empParse.data },
+        details:
+          loaded.reason === 'employee_not_found'
+            ? { resource: 'salary_run_employee', employee_id: empParse.data }
+            : { resource: 'company' },
       })
     }
 
-    const { data: company, error: companyErr } = await ctx.supabase
-      .from('companies')
-      .select('name, org_number')
-      .eq('id', ctx.companyId!)
-      .maybeSingle()
-    if (companyErr || !company) {
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'company' },
-      })
-    }
-
-    const emp = sre.employee as {
-      first_name: string; last_name: string; personnummer: string; personnummer_last4: string;
-      employment_type: string; tax_table_number: number | null; tax_column: number;
-      clearing_number: string | null; bank_account_number: string | null;
-    }
-
-    let audience: PayslipAudience = { kind: 'employer' }
-    let renderRun = run
-    if (queryParse.data.audience === 'employee') {
-      const { data: sectionSettings, error: settingsErr } = await ctx.supabase
-        .from('company_settings')
-        .select('salary_payslip_show_employer_cost, salary_payslip_show_breakdown')
-        .eq('company_id', ctx.companyId!)
-        .maybeSingle()
-      if (settingsErr) {
-        return v1ErrorResponse(settingsErr, ctx.log, { requestId: ctx.requestId })
-      }
-      audience = { kind: 'employee', settings: sectionSettings }
-      // Only a payroll writer hands the copy out and fixes its sections on
-      // the run; a read-only caller renders from the run as stored (its
-      // snapshot when issued, else the switches) and writes nothing.
-      // A test key is simulation-only and a dry run persists nothing.
-      const mayIssue =
-        hasScope(ctx.scopes, 'payroll:write') && ctx.companyWritable && ctx.mode === 'live' && !ctx.dryRun
-      if (mayIssue) {
-        const issued = await issuePayslipSections(ctx.supabase, {
-          companyId: ctx.companyId!,
-          run,
-          settings: sectionSettings,
-        })
-        if (!issued.ok) {
-          return v1ErrorResponse(issued.error, ctx.log, { requestId: ctx.requestId })
-        }
-        renderRun = { ...run, ...issued.snapshot }
-      }
-    }
+    // Only a payroll writer hands the copy out and fixes its sections on the
+    // run; a read-only caller renders from the run as stored (its snapshot
+    // when issued, else the switches) and writes nothing. A test key is
+    // simulation-only and a dry run persists nothing.
+    const mayIssue =
+      hasScope(ctx.scopes, 'payroll:write') && ctx.companyWritable && ctx.mode === 'live' && !ctx.dryRun
+    const prepared = await preparePayslip(ctx.supabase, loaded.payslip, {
+      companyId: ctx.companyId!,
+      audience: queryParse.data.audience ?? 'employer',
+      mayIssue,
+    })
+    if (!prepared.ok) return v1ErrorResponse(prepared.error, ctx.log, { requestId: ctx.requestId })
 
     let pdfBuffer: Buffer
-    let fileName: string
+    const fileName = prepared.fileName
     try {
-      const displayName = await getCompanyDisplayName(ctx.supabase, ctx.companyId!)
-      const data = buildPayslipData({
-        run: renderRun,
-        sre,
-        employee: emp,
-        company: { name: displayName ?? company.name, org_number: company.org_number },
-        audience,
-      })
-      fileName = payslipFileName(run, emp)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      pdfBuffer = await renderToBuffer(PayslipPDF({ data }) as any)
+      pdfBuffer = await renderPayslipPdf(prepared.data)
     } catch (err) {
       ctx.log.error('salary-runs.payslip.pdf: render failed', err as Error, {
         salaryRunId: runParse.data,

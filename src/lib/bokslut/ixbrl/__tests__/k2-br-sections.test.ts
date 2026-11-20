@@ -15,6 +15,7 @@ import {
   K2_BR_MAPPINGS_EKONOMISK_FORENING,
   k2BrSectionForAccount,
   k2LegalFormFor,
+  k2LegalFormOf,
   mapTrialBalancesToK2,
   type K2BrHeading,
   type K2BrSection,
@@ -206,5 +207,14 @@ describe('k2LegalFormFor', () => {
     expect(k2LegalFormFor('aktiebolag')).toBe('aktiebolag')
     expect(k2LegalFormFor('enskild_firma')).toBe('aktiebolag')
     expect(k2LegalFormFor('ideell_forening')).toBe('aktiebolag')
+  })
+})
+
+describe('k2LegalFormOf', () => {
+  it("reads the report's entity_type, a form not set ('unknown') on the share-capital table", () => {
+    expect(k2LegalFormOf('ekonomisk_forening')).toBe('ekonomisk_forening')
+    expect(k2LegalFormOf('aktiebolag')).toBe('aktiebolag')
+    expect(k2LegalFormOf('enskild_firma')).toBe('aktiebolag')
+    expect(k2LegalFormOf('unknown')).toBe('aktiebolag')
   })
 })

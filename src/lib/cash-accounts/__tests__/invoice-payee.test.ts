@@ -2,13 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { CashAccount } from '@/types'
 import {
-  cashAccountPayee,
-  createManualBankAccount,
-  isBankCashAccount,
-  isUsableInvoicePayee,
+  insertManualBankAccount,
+  planManualBankAccount,
   propagateLegacyPayeeWrite,
+  setTypedAccountIdentity,
   updateCashAccountPayee,
 } from '../invoice-payee'
+import {
+  blankPrimaryPayeeAccount,
+  cashAccountPayee,
+  isBankCashAccount,
+  isUsableInvoicePayee,
+} from '../invoice-payee-rules'
 
 vi.mock('@/lib/import/account-sync', () => ({
   syncMappedAccounts: vi.fn().mockResolvedValue({ error: null }),
@@ -105,6 +110,56 @@ describe('isBankCashAccount', () => {
   })
 })
 
+describe('blankPrimaryPayeeAccount (crm#1270: adding a bank account fills in the seeded 1930 first)', () => {
+  it('picks the enabled primary bank account while it prints nothing', () => {
+    const primary = account({ id: 'primary', invoice_payee: false })
+    const other = account({ id: 'other', is_primary: false, ledger_account: '1940' })
+    expect(blankPrimaryPayeeAccount([primary, other])?.id).toBe('primary')
+    // A bank name alone prints nothing either: still the account to fill in.
+    expect(blankPrimaryPayeeAccount([account({ bank_name: 'SEB' })])?.ledger_account).toBe('1930')
+  })
+
+  it('answers null once the primary prints something, so adding creates a new account', () => {
+    expect(blankPrimaryPayeeAccount([account({ bankgiro: '5050-1234' })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([account({ payee_iban: 'SE4550000000058398257466' })])).toBeNull()
+    // The bank-identity iban never prints: a connected primary with no payee details is still blank.
+    expect(blankPrimaryPayeeAccount([account({ iban: 'SE4550000000058398257466' })])?.id).toBe('ca-1')
+  })
+
+  it('never a non-primary, disabled or non-bank account', () => {
+    expect(blankPrimaryPayeeAccount([account({ is_primary: false })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([account({ enabled: false })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([account({ ledger_account: '1910' })])).toBeNull()
+    expect(blankPrimaryPayeeAccount([])).toBeNull()
+  })
+})
+
+describe('setTypedAccountIdentity', () => {
+  it('writes only iban, and only on a disabled manual row no bank connection holds', async () => {
+    enqueue({ data: account({ id: 'ca-dup', enabled: false, is_primary: false, ledger_account: '1931' }) })
+    const row = await setTypedAccountIdentity(supabase as never, 'company-1', 'ca-dup', null)
+    expect(row?.id).toBe('ca-dup')
+    const [update] = findCalls('cash_accounts', 'update')
+    expect(update[0]).toEqual({ iban: null })
+    const eqCalls = findCalls('cash_accounts', 'eq')
+    expect(eqCalls).toContainEqual(['company_id', 'company-1'])
+    expect(eqCalls).toContainEqual(['id', 'ca-dup'])
+    expect(eqCalls).toContainEqual(['source', 'manual'])
+    expect(eqCalls).toContainEqual(['enabled', false])
+    expect(findCalls('cash_accounts', 'is')).toContainEqual(['bank_connection_id', null])
+  })
+
+  it('answers null when the row no longer qualifies (a bank took it over, or it was turned on)', async () => {
+    enqueue({ data: null })
+    await expect(setTypedAccountIdentity(supabase as never, 'company-1', 'ca-dup', null)).resolves.toBeNull()
+  })
+
+  it('throws on a database error instead of reporting success', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(setTypedAccountIdentity(supabase as never, 'company-1', 'ca-dup', null)).rejects.toThrow(/identity update failed/)
+  })
+})
+
 describe('updateCashAccountPayee', () => {
   it('writes only the supplied keys, clears with null, normalises IBAN/BIC', async () => {
     enqueue({ data: account({ bankgiro: '5050-1234' }) })
@@ -130,15 +185,18 @@ describe('updateCashAccountPayee', () => {
   })
 })
 
-describe('createManualBankAccount', () => {
+describe('planManualBankAccount + insertManualBankAccount (the typed-in bank account, lib/cash-accounts/manage.ts)', () => {
   it('allocates a free 19xx slot past every row the company already holds, syncs the chart, and inserts a manual payee row', async () => {
     enqueue({ data: [{ ledger_account: '1930' }] })   // existing rows (the seeded manual 1930)
     enqueue({ data: account({ id: 'ca-new', ledger_account: '1931', source: 'manual', bankgiro: '5050-1234' }) })
-    const created = await createManualBankAccount(supabase as never, 'company-1', 'user-1', {
+    const input = {
       name: 'Sparkonto',
       currency: 'sek',
       payee: { bankgiro: '5050-1234', iban: ' se45 5000 0000 0583 9825 7466 ' },
-    })
+    }
+    const planned = await planManualBankAccount(supabase as never, 'company-1', input)
+    if (!planned.ok) throw new Error(`refused: ${planned.reason}`)
+    const created = await insertManualBankAccount(supabase as never, 'company-1', 'user-1', input, planned.plan)
     expect(created.id).toBe('ca-new')
     const [insert] = findCalls('cash_accounts', 'insert')
     expect(insert[0]).toMatchObject({
@@ -162,9 +220,9 @@ describe('createManualBankAccount', () => {
 
   it('refuses a requested ledger account another row already holds', async () => {
     enqueue({ data: [{ ledger_account: '1930' }, { ledger_account: '1931' }] })
-    await expect(createManualBankAccount(supabase as never, 'company-1', 'user-1', {
-      name: 'X', currency: 'SEK', ledger_account: '1931',
-    })).rejects.toThrow(/already a cash account/)
+    await expect(planManualBankAccount(supabase as never, 'company-1', {
+      currency: 'SEK', ledger_account: '1931',
+    })).resolves.toEqual({ ok: false, reason: 'ledger_taken', ledger_account: '1931' })
     expect(findCalls('cash_accounts', 'insert')).toHaveLength(0)
   })
 })

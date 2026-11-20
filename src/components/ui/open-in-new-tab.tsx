@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -38,6 +38,10 @@ export function OpenInNewTab({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
+      // The new tab starts its own router, so a prefetch here is never used:
+      // it only cost every visible row a full render and auth round trip of
+      // the record's page (eight per verifikat list load in production).
+      prefetch={false}
       // Named by the visually-hidden text below rather than aria-label, so the
       // title renders a tooltip for sighted users without screen readers
       // announcing the same string twice.
@@ -60,7 +64,7 @@ export function OpenInNewTab({
         className,
       )}
     >
-      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+      <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
       <span className="sr-only">{text}</span>
     </Link>
   )

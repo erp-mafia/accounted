@@ -49,6 +49,20 @@ describe('ensureDocumentRead', () => {
     expect(enqueueDocumentJob).toHaveBeenCalledWith(expect.anything(), 'company-1', 'doc-1', 'classify')
   })
 
+  it('reads a document given up on when someone asks for its text: a question or an agent is a try of its own', async () => {
+    // Given up on after five readings without an answer: still unread, read_error says why.
+    enqueue({ data: { ...doc, read_error: 'read_failed: gave up' } })
+    enqueue({ data: null, count: 0 })
+    readAndStoreDocument.mockResolvedValue({ status: 'read', pages: 3 })
+    const out = await ensureDocumentRead(supabase as never, 'company-1', 'doc-1')
+    expect(out).toEqual({ status: 'read', pages: 3 })
+    expect(readAndStoreDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'doc-1', read_error: 'read_failed: gave up' }),
+      expect.objectContaining({ allowModel: true }),
+    )
+  })
+
   it('never looks for pages of a document already stamped as read', async () => {
     enqueue({ data: { ...doc, pages_read_at: '2026-09-01T10:00:00Z' } })
     const out = await ensureDocumentRead(supabase as never, 'company-1', 'doc-1')

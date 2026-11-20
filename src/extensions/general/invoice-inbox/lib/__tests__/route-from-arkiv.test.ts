@@ -1,4 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+const matchSupplierMock = vi.fn()
+vi.mock('@/lib/suppliers/match-supplier', () => ({
+  matchSupplierId: (...args: unknown[]) => matchSupplierMock(...args),
+  supplierIdentityFrom: (raw: { name?: string } | null) => ({ orgNumber: null, vatNumber: null, name: raw?.name ?? null }),
+}))
+const bankMatchMock = vi.fn()
+vi.mock('@/lib/operations/inbox-bank-match', () => ({
+  proposeBankMatchForInboxItem: (...args: unknown[]) => bankMatchMock(...args),
+}))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
@@ -30,6 +40,8 @@ const savedSection = process.env.ARKIV_COMPANY_IDS
 
 beforeEach(() => {
   reset()
+  vi.clearAllMocks()
+  matchSupplierMock.mockResolvedValue(null)
   // co-1 sees the Dokument section unless a test says otherwise.
   process.env.ARKIV_COMPANY_IDS = 'co-1'
 })
@@ -54,6 +66,30 @@ describe('routeClassifiedDocument', () => {
     expect(await classified('supplier_invoice')).toBe('queued')
   })
 
+  // crm#1848: an agent archived the underlag of a posted verifikat and links it next (archive_only on the MCP
+  // upload). Arkiv types it within minutes, before the link is approved.
+  it('files nothing for an archive-only upload the model typed as a receipt', async () => {
+    enqueue({ data: { ...doc, extracted_data: null, extraction_model: 'skipped:archive_only', created_at: new Date().toISOString() } })
+    enqueue({ data: [] })
+    expect(await classified('receipt', 'admitted', 'model')).toBe('left')
+    expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+  })
+
+  it('queues an archive-only upload when a person types it in Dokument', async () => {
+    enqueue({ data: { ...doc, extracted_data: null, extraction_model: 'skipped:archive_only', created_at: new Date().toISOString() } })
+    enqueue({ data: [] })
+    enqueue({})
+    expect(await retypedByPerson('receipt')).toBe('queued')
+    expect(findCall('invoice_inbox_items', 'insert')).toBeDefined()
+  })
+
+  it('queues a loose upload whose reading was skipped for any other reason', async () => {
+    enqueue({ data: { ...doc, extracted_data: null, extraction_model: 'skipped:opted_out', created_at: new Date().toISOString() } })
+    enqueue({ data: [] })
+    enqueue({})
+    expect(await classified('receipt', 'admitted', 'model')).toBe('queued')
+  })
+
   it("queues a receipt that arrived any other way, with the Underlag reader's read when it ran", async () => {
     enqueue({ data: doc })
     enqueue({ data: [] })
@@ -64,11 +100,86 @@ describe('routeClassifiedDocument', () => {
       user_id: 'user-1',
       status: 'received',
       source: 'upload',
+      channel_context: { intake_source: 'upload' },
       document_id: 'doc-1',
       kind_hint: 'receipt',
       extracted_data: { lineItems: [] },
       extraction_skipped: false,
     })
+  })
+
+  it.each([
+    ['file_upload', 'upload', 'upload'],
+    ['camera', 'upload', 'upload'],
+    ['scan', 'upload', 'upload'],
+    ['api', 'upload', 'partner_api'],
+    ['email', 'email', 'intake_email'],
+    ['mail_hunt', 'mail_hunt', 'mailbox'],
+    ['whatsapp', 'whatsapp', 'whatsapp'],
+    ['e_invoice', 'peppol', 'peppol'],
+    ['system', 'upload', 'system'],
+    [null, 'upload', 'upload'],
+  ])('keeps the door a %s document came through: source %s, intake_source %s', async (uploadSource, source, intakeSource) => {
+    enqueue({ data: { ...doc, upload_source: uploadSource, file_name: 'kvitto.pdf' } })
+    enqueue({ data: [] })
+    enqueue({})
+    expect(await classified('receipt')).toBe('queued')
+    expect(findCall('invoice_inbox_items', 'insert')?.[0]).toMatchObject({ source, channel_context: { intake_source: intakeSource } })
+  })
+
+  describe('a byte-identical copy of a document already booked or queued', () => {
+    const hashed = { ...doc, sha256_hash: 'hash-1' }
+
+    it('does not queue a copy of a document booked on a verifikat (double-booking risk)', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'doc-booked', journal_entry_id: 'je-1' }] })
+      expect(await classified('receipt')).toBe('duplicate_of_queued_or_booked')
+      expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+    })
+
+    it('does not queue a copy of a document that already has an inbox item', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'doc-queued', journal_entry_id: null }] })
+      enqueue({ data: [{ id: 'item-9' }] })
+      expect(await classified('receipt')).toBe('duplicate_of_queued_or_booked')
+      expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+    })
+
+    it('queues it when the copy is neither booked nor queued', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'doc-loose', journal_entry_id: null }] })
+      enqueue({ data: [] })
+      enqueue({})
+      expect(await classified('receipt')).toBe('queued')
+      expect(findCall('invoice_inbox_items', 'insert')?.[0]).toMatchObject({ document_id: 'doc-1' })
+    })
+
+    it('queues it when no other document of the company has the same content', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [] })
+      enqueue({})
+      expect(await classified('receipt')).toBe('queued')
+    })
+
+    it('throws when the lookup fails, so the handler logs it instead of queueing blind', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: null, error: { message: 'boom' } })
+      await expect(classified('receipt')).rejects.toThrow('duplicate lookup failed: boom')
+      expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+    })
+  })
+
+  it('reads the upload door from the document row it fetched', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [] })
+    enqueue({})
+    await classified('receipt')
+    expect(findCall('document_attachments', 'select')?.[0]).toContain('upload_source')
   })
 
   it('queues a credit note as a supplier document whose reading says credit note (issue #2980)', async () => {
@@ -88,6 +199,52 @@ describe('routeClassifiedDocument', () => {
     enqueue({})
     expect(await classified('credit_note')).toBe('queued')
     expect(findCall('invoice_inbox_items', 'insert')?.[0]).toMatchObject({ extracted_data: null, extraction_skipped: true })
+  })
+
+  // PH 101: the reading usually lands after the item is filed (the reader fills it then); one that landed between the
+  // fetch and the insert found no item, so the queue looks once more after filing.
+  it('fills an item it queued unread when the reading landed meanwhile, with the supplier match and a bank check', async () => {
+    matchSupplierMock.mockResolvedValue('sup-1')
+    enqueue({ data: { ...doc, extracted_data: null } })
+    enqueue({ data: [] })
+    enqueue({}) // the insert
+    enqueue({ data: { extracted_data: { supplier: { name: 'Elgiganten' } } } }) // the look after filing
+    enqueue({ data: [{ id: 'item-new' }] }) // the item it just filed, still unread
+    enqueue({ data: { doc_type: 'receipt' } })
+    enqueue({ data: [{ id: 'item-new', matched_supplier_id: null }] }) // the fill
+    enqueue({}) // the supplier write
+    expect(await classified('receipt')).toBe('queued')
+    const updates = findCalls('invoice_inbox_items', 'update')
+    expect(updates[0][0]).toEqual({ extracted_data: { supplier: { name: 'Elgiganten' } }, extraction_skipped: false })
+    expect(updates[1][0]).toEqual({ matched_supplier_id: 'sup-1' })
+    expect(bankMatchMock).toHaveBeenCalledWith(supabase, 'co-1', 'item-new')
+  })
+
+  it('leaves an item it queued unread for the reader when the document is still being read', async () => {
+    enqueue({ data: { ...doc, extracted_data: null } })
+    enqueue({ data: [] })
+    enqueue({})
+    enqueue({ data: { extracted_data: null } })
+    expect(await classified('receipt')).toBe('queued')
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
+    expect(bankMatchMock).not.toHaveBeenCalled()
+  })
+
+  it('queues even when the look after filing fails', async () => {
+    enqueue({ data: { ...doc, extracted_data: null } })
+    enqueue({ data: [] })
+    enqueue({})
+    enqueue({ data: { extracted_data: { supplier: { name: 'Elgiganten' } } } })
+    enqueue({ error: { message: 'boom' } })
+    expect(await classified('receipt')).toBe('queued')
+  })
+
+  it('does not look again for an item queued with its reading', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [] })
+    enqueue({})
+    await classified('receipt')
+    expect(findCalls('document_attachments', 'select')).toHaveLength(1)
   })
 
   it('leaves a receipt alone when it is already queued, booked, or attached to a voucher', async () => {
@@ -362,6 +519,12 @@ describe('requeueHiddenRoutedItems', () => {
 })
 
 describe('inboxSawABill: where the readers disagree, the item stays in Underlag', () => {
+  it("keeps the company's own invoice in Underlag, whatever Arkiv typed it (crm#1830)", () => {
+    const own = { documentKind: 'other', sellerIsOwnCompany: true, supplier: { name: null }, totals: { total: null } }
+    expect(inboxSawABill(own, 'customer_invoice')).toBe(true)
+    expect(inboxSawABill({ ...own, sellerIsOwnCompany: undefined }, 'customer_invoice')).toBe(false)
+  })
+
   it('keeps what the inbox read as a receipt or supplier invoice, whatever Arkiv typed it', () => {
     expect(inboxSawABill({ documentKind: 'supplier_invoice' }, 'customer_invoice')).toBe(true)
     expect(inboxSawABill({ documentKind: 'receipt' }, 'other')).toBe(true)
@@ -371,6 +534,16 @@ describe('inboxSawABill: where the readers disagree, the item stays in Underlag'
   it('keeps an amount on a government letter (a congestion-tax bill) or on a document Arkiv could only call other (a credit note)', () => {
     expect(inboxSawABill({ documentKind: 'government_letter', totals: { total: 86 } }, 'decision.skatteverket')).toBe(true)
     expect(inboxSawABill({ documentKind: 'other', totals: { total: 16.4 } }, 'other')).toBe(true)
+  })
+
+  it('keeps an amount paid out: a negative total is an amount too (crm#1887)', () => {
+    // A bank's advice of a payout, a refund decision, a credit the reader could not name.
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: -1500 } }, 'other')).toBe(true)
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: '-1500' } }, 'other')).toBe(true)
+    expect(inboxSawABill({ documentKind: 'government_letter', totals: { total: -86 } }, 'decision.skatteverket')).toBe(true)
+    // Still only where the readers leave it open: a typed document goes to its page.
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: -1500 } }, 'minutes.board')).toBe(false)
+    expect(inboxSawABill({ documentKind: 'other', totals: { total: 0 } }, 'other')).toBe(false)
   })
 
   it('lets go of a letter with nothing to pay, an agreement with an amount in it, and anything the inbox never read', () => {
@@ -388,11 +561,29 @@ describe('routing a bill the inbox saw', () => {
     expect(findCall('invoice_inbox_items', 'update')).toBeUndefined()
   })
 
+  // crm#1887: a bank's advice of a dividend paid out, typed "other" by Arkiv, left Underlag as if nothing
+  // were to be booked, because its amount is negative.
+  it('leaves a payout advice Arkiv could only call other in the queue', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [item({ extracted_data: { documentKind: 'other', totals: { total: -1500 } } })] })
+    expect(await classified('other')).toBe('left')
+    expect(findCall('invoice_inbox_items', 'update')).toBeUndefined()
+  })
+
+  it('still routes an other document with no amount on it', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [item({ extracted_data: { documentKind: 'other', totals: { total: null } } })] })
+    enqueue({})
+    expect(await classified('other')).toBe('routed_to_arkiv')
+    expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ routed_to_arkiv_at: expect.any(String), routed_doc_type: 'other' })
+  })
+
   it('is left in the queue by the nightly catch-up too', async () => {
     enqueue({
       data: [
         { id: 'bill', document_id: 'd1', extracted_data: { documentKind: 'receipt' }, document_attachments: { doc_type: 'other', admission_state: 'admitted' } },
         { id: 'deal', document_id: 'd2', extracted_data: { documentKind: 'other' }, document_attachments: { doc_type: 'agreement.loan', admission_state: 'admitted' } },
+        { id: 'payout', document_id: 'd3', extracted_data: { documentKind: 'other', totals: { total: -1500 } }, document_attachments: { doc_type: 'other', admission_state: 'admitted' } },
       ],
     })
     enqueue({})

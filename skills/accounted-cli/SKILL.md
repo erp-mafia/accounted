@@ -41,7 +41,7 @@ EOF
 
 ## Writes: stage, show, ask, approve
 
-A tool that changes the books stages a pending operation instead of booking. The result has `staged: true`, an `operation_id`, a `risk_level`, a `preview` of what would be booked, and a `message` that may carry a WARNING. On stderr the CLI prints the exact approve command and the `/pending` link.
+A tool that changes the books stages a pending operation instead of booking. The result has `staged: true`, an `operation_id`, a `risk_level`, a `preview` of what would be booked, and a `message` that may carry a WARNING. On stderr the CLI prints the `/pending` link and, when the sign-in has the Approve permission, the exact approve command.
 
 1. Show the person the preview in plain words: what will be booked, on which accounts, the amounts and dates, and every warning.
 2. Ask. Run the printed `accounted call approve_pending_operation '{...}'` only after the person has said yes to that operation in this conversation.
@@ -49,7 +49,7 @@ A tool that changes the books stages a pending operation instead of booking. The
 4. Never approve in a loop, in bulk, or "the rest too" without the person's explicit go for exactly that set. A yes covers what you showed, nothing more.
 5. If approving fails because the sign-in lacks the permission to approve, tell the person to approve under `/pending` in the app.
 
-`accounted call list_pending_operations` shows what is waiting. To drop one the person does not want: `accounted call reject_pending_operation '{"operation_id": "..."}'`.
+`accounted call list_pending_operations` shows what is waiting. To drop one the person does not want: `accounted call reject_pending_operation '{"operation_id": "..."}'` (needs the Approve permission). Without it, take back an operation you staged yourself: `accounted call withdraw_pending_operation '{"operation_id": "...", "reason": "..."}'`.
 
 ## Companies
 

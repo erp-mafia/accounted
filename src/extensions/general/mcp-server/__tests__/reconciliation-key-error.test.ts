@@ -1,7 +1,7 @@
 /**
  * The reconciliation services answer null for an account key they cannot
  * resolve, and the MCP tools used to turn every null into the same
- * `Unknown account_key` string. Easy Online Stores (brief 2026-09-16, F6)
+ * `Unknown account_key` string. An agent evaluation (brief 2026-09-16, F6)
  * hit it for "skattekonto" before Skatteverket was connected and had to guess
  * why. One helper now explains the null: the skattekonto cause by name, and
  * for any other key the keys that do exist.
@@ -108,6 +108,30 @@ describe('unknownAccountKeyError', () => {
     const error = await unknownAccountKeyError(supabase, COMPANY, '1930')
     expect(error.message).toBe(
       'Unknown account_key "1930" for this company. Format: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". No reconciliation accounts yet: connect a bank or Skatteverket, or use manual:<BAS>.',
+    )
+    expect(envelope(error).code).toBe('VALIDATION_ERROR')
+  })
+
+  it('no account_key at all: says it is required and lists the keys, never "undefined"', async () => {
+    // Replays gnubok_reconcile_match / gnubok_list_reconciliation_items called
+    // without account_key (15 calls, 2026-10-29..11-12).
+    listMock.mockResolvedValue([{ account_key: BANK_KEY }, { account_key: 'skattekonto' }])
+    for (const missing of [undefined, null, '', '  ']) {
+      const error = await unknownAccountKeyError(supabase, COMPANY, missing)
+      expect(error.message).toBe(
+        `account_key is required. Format: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Known keys: ${BANK_KEY}, skattekonto.`,
+      )
+      expect(error.message).not.toContain('undefined')
+      expect(envelope(error)).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false })
+    }
+    expect(tokenMock).not.toHaveBeenCalled()
+  })
+
+  it('an account_key that is no string is named as sent, not as missing', async () => {
+    listMock.mockResolvedValue([{ account_key: BANK_KEY }])
+    const error = await unknownAccountKeyError(supabase, COMPANY, 1930)
+    expect(error.message).toBe(
+      `account_key must be a string (got 1930). Format: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Known keys: ${BANK_KEY}.`,
     )
     expect(envelope(error).code).toBe('VALIDATION_ERROR')
   })

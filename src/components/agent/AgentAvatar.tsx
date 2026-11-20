@@ -1,6 +1,6 @@
 'use client'
 
-import { MessageCircle } from 'lucide-react'
+import { ChatBubbleOvalLeftIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { getAvatarUrl } from './avatars'
 
@@ -33,7 +33,7 @@ export default function AgentAvatar({ avatarId, size = 'sm', className, alt }: P
         )}
         aria-label={altText}
       >
-        <MessageCircle className={dim.icon} />
+        <ChatBubbleOvalLeftIcon className={dim.icon} />
       </span>
     )
   }

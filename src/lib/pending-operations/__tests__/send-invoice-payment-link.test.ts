@@ -13,6 +13,12 @@ import { eventBus } from '@/lib/events'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import type { Invoice, PendingOperation } from '@/types'
 
+// The sandbox read in front of a paid operation: an ordinary company here.
+vi.mock('@/lib/sandbox/guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/sandbox/guard')>()),
+  isSandboxCompany: vi.fn().mockResolvedValue(false),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/entitlements/has-capability')>()),
   hasCapability: vi.fn().mockResolvedValue(true),
@@ -56,6 +62,12 @@ vi.mock('@/lib/email/invoice-templates', async (importOriginal) => ({
   generateInvoiceEmailHtml: mocks.generateInvoiceEmailHtml,
   generateInvoiceEmailText: vi.fn().mockReturnValue('text'),
   generateInvoiceEmailSubject: vi.fn().mockReturnValue('Faktura'),
+}))
+
+// The invoice carries no files of its own here (crm#1269).
+vi.mock('@/lib/invoices/invoice-attachments', () => ({
+  linkInvoiceAttachments: vi.fn(),
+  loadInvoiceEmailAttachments: vi.fn(async () => ({ ok: true, value: [] })),
 }))
 
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({

@@ -33,7 +33,7 @@ Response `200`:
 ```ts
 {
   data: {
-    articles: { id: string, article_number: string | null, name: string, name_en: string | null, type: "vara" | "tjanst", unit: string, price_excl_vat: number, currency: string, vat_rate: number, revenue_account: string | null, cost_price: number | null, ean: string | null, housework_type: string | null, notes: string | null, active: boolean, created_at: string, updated_at: string }[]
+    articles: { id: string, handle?: string, article_number: string | null, name: string, name_en: string | null, type: "vara" | "tjanst", unit: string, price_excl_vat: number, currency: string, vat_rate: number, revenue_account: string | null, cost_price: number | null, ean: string | null, housework_type: string | null, notes: string | null, active: boolean, created_at: string, updated_at: string }[]
   },
   meta: {
     request_id: string,
@@ -108,7 +108,7 @@ Returns active customers in created-first order. Pass ?include_archived=true to 
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, party_id?: string | null, archived_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, party_id?: string | null, archived_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -163,6 +163,7 @@ Creates a new customer for the company. Requires Idempotency-Key (UUID). Support
 - A personnummer-shaped org_number on customer_type=individual is treated as the personnummer submitted in the wrong field: it is stored encrypted as personal_number, returned masked (********-1234), and org_number is left empty. Prefer passing it as personal_number. Next to a different personal_number in the same body it is a 400.
 - An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: a sole trader (enskild firma) has no separate org number, so its owner's personnummer is the firm's identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business, which cannot have one.
 - personal_number is accepted only for customer_type=individual, stored encrypted, and returned in the masked form ********-1234.
+- An individual has no org number: an org_number on customer_type=individual that is not a personnummer is a 400. Leave it empty, or use customer_type=swedish_business for a business.
 - If default_payment_terms is omitted, it defaults to the company setting invoice_default_days, falling back to 30.
 - VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.
 
@@ -186,12 +187,15 @@ Request body:
   address_line2?: string,
   postal_code?: string,
   city?: string,
+  address_state?: string,
   country?: string,
   org_number?: string,
   vat_number?: string,
   personal_number?: string | null,
   language?: "sv" | "en",
   default_payment_terms?: number,
+  invoice_reference?: string | null,
+  invoice_marking?: string | null,
   notes?: string
 }
 ```
@@ -212,6 +216,7 @@ Response `200`:
 {
   data: {
     id: string | null,
+    handle?: string,
     name: string,
     customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business",
     customer_number: string | null,
@@ -224,13 +229,18 @@ Response `200`:
     address_line2: string | null,
     postal_code: string | null,
     city: string | null,
+    address_state: string | null,
     country: string,
     org_number: string | null,
     vat_number: string | null,
     vat_number_validated: boolean,
     personal_number: string | null,
+    language: "sv" | "en",
     default_payment_terms: number,
+    invoice_reference: string | null,
+    invoice_marking: string | null,
     notes: string | null,
+    party_id: string | null,
     archived_at: string | null,
     created_at: string | null,
     updated_at: string | null
@@ -276,7 +286,7 @@ Example response `200`:
 **Retrieve a single customer by id.**
 `scope:customers:read · risk:low · idempotent`
 
-Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.
+Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response; each carries the status the invoice endpoints report, so a sent invoice past its due_date with remaining_amount > 0 reads overdue. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.
 
 **Use when:** You need the full customer record: address, payment terms, VAT validation status, contact details: before invoicing or syncing to another system.
 **Do not use for:** Listing customers (use the list endpoint). Looking up arbitrary supplier or employee records (different resources).
@@ -297,6 +307,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     customer_type: string,
     customer_number: string | null,
@@ -309,18 +320,22 @@ Response `200`:
     address_line2: string | null,
     postal_code: string | null,
     city: string | null,
+    address_state: string | null,
     country: string,
     org_number: string | null,
     vat_number: string | null,
     vat_number_validated: boolean,
     personal_number: string | null,
+    language: "sv" | "en",
     default_payment_terms: number,
+    invoice_reference: string | null,
+    invoice_marking: string | null,
     notes: string | null,
     party_id: string | null,
-    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
     archived_at: string | null,
     created_at: string,
-    updated_at: string
+    updated_at: string,
+    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null
   },
   meta: {
     request_id: string,
@@ -365,17 +380,19 @@ Example response `200`:
 **Partially update a customer.**
 `scope:customers:write · risk:low · idempotent · dry-run · reversible`
 
-Patches the customer with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable. When vat_number changes on an eu_business customer, VIES re-validation runs on commit (best-effort).
+Patches the customer with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable: the dry run answers the would-be record with `changes` (each changed field, from and to). When vat_number changes on an eu_business customer, VIES re-validation runs on commit (best-effort).
 
 **Use when:** You need to change a customer's contact details, payment terms, address, or VAT registration. Use dry-run first to confirm the merged record before committing.
 **Do not use for:** Archiving a customer (use DELETE: sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory; calls without it return 400.
+- An empty body returns 400 VALIDATION_ERROR; an unknown id returns 404 CUSTOMER_NOT_FOUND.
 - org_number uniqueness is enforced at DB level: 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.
 - VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.
 - personal_number: a plaintext value is stored encrypted (individual customers only); the masked form a read returned (********-1234) means "leave unchanged" and is never stored; null clears it. Changing customer_type away from individual clears any stored personal_number.
 - An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: an enskild firma has no separate org number, so it is the firm's identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business (400 CUSTOMER_ORG_NUMBER_IS_PERSONAL). On an individual it is the personnummer in the wrong field: it is stored encrypted as personal_number and org_number is cleared; next to a different personal_number in the same body it is 400 CUSTOMER_PERSONAL_NUMBER_CONFLICT.
+- An individual has no org number: any other non-empty org_number on customer_type=individual, including one the row would keep through a type change, is 400 CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL. Send org_number "" with the type change to clear it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -390,7 +407,7 @@ Request body:
   customer_type?: "individual" | "swedish_business" | "eu_business" | "non_eu_business",
   customer_number?: string | null,
   contact_person?: string | null,
-  email?: string,
+  email?: string | null,
   phone?: string,
   invoice_email_cc_addresses?: string[] | null,
   invoice_email_bcc_addresses?: string[] | null,
@@ -398,12 +415,15 @@ Request body:
   address_line2?: string,
   postal_code?: string,
   city?: string,
+  address_state?: string,
   country?: string,
   org_number?: string,
   vat_number?: string,
   personal_number?: string | null,
   language?: "sv" | "en",
   default_payment_terms?: number,
+  invoice_reference?: string | null,
+  invoice_marking?: string | null,
   notes?: string
 }
 ```
@@ -421,6 +441,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     customer_type: string,
     customer_number: string | null,
@@ -433,18 +454,22 @@ Response `200`:
     address_line2: string | null,
     postal_code: string | null,
     city: string | null,
+    address_state: string | null,
     country: string,
     org_number: string | null,
     vat_number: string | null,
     vat_number_validated: boolean,
     personal_number: string | null,
+    language: "sv" | "en",
     default_payment_terms: number,
+    invoice_reference: string | null,
+    invoice_marking: string | null,
     notes: string | null,
     party_id: string | null,
-    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
     archived_at: string | null,
     created_at: string,
-    updated_at: string
+    updated_at: string,
+    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null
   },
   meta: {
     request_id: string,
@@ -488,7 +513,7 @@ Sets archived_at on the customer; the record is preserved (invoices and audit hi
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- A customer with any open invoice (sent / partially_paid / overdue) cannot be archived: returns 409 CUSTOMER_HAS_INVOICES. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.
+- A customer who still owes on an invoice (sent / partially_paid / overdue with an amount remaining) cannot be archived: returns 409 CUSTOMER_HAS_INVOICES. Credit notes and fully credited invoices do not count. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.
 - 204 No Content is returned on success: there is no response body to parse.
 
 | Parameter | In | Type | Required | Notes |
@@ -525,7 +550,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create. Each customer is validated
 Request body:
 ```ts
 {
-  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string | null, contact_person?: string | null, email?: string, phone?: string, invoice_email_cc_addresses?: string[] | null, invoice_email_bcc_addresses?: string[] | null, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, personal_number?: string | null, language?: "sv" | "en", default_payment_terms?: number, notes?: string }[],
+  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string | null, contact_person?: string | null, email?: string, phone?: string, invoice_email_cc_addresses?: string[] | null, invoice_email_bcc_addresses?: string[] | null, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, address_state?: string, country?: string, org_number?: string, vat_number?: string, personal_number?: string | null, language?: "sv" | "en", default_payment_terms?: number, invoice_reference?: string | null, invoice_marking?: string | null, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```
@@ -593,6 +618,169 @@ Example response `200`:
       "total": 2,
       "succeeded": 2,
       "failed": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/customers/merge`
+
+**Merge duplicate customers into one.**
+`scope:customers:write · risk:medium · idempotent · dry-run · reversible`
+
+Moves every invoice (quotes, proformas and credit notes included), sales order, recurring invoice, deadline and import source mapping of the merged customers to the survivor in one transaction, then archives the merged customers (kept, never deleted: issued invoices named them). Nothing on the survivor changes and no verifikat is touched. Refuses customers that state different org numbers, VAT numbers or personal numbers. The dry run answers the same counts and writes nothing. Requires Idempotency-Key.
+
+**Use when:** One buyer has two or more customer cards, e.g. a card created by hand before an import from Fortnox or Visma, and its invoice history is split between them. Dry-run first and check the counts.
+**Do not use for:** Two different buyers that share an org number (departments of one authority): those are separate customers. Merging counterparties (Motparter), which have their own merge in the dashboard. Correcting a customer's details (PATCH the customer).
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+- The survivor must be an active customer; a merged customer may already be archived.
+- Issued invoices show the survivor's name and address from now on: pick the card whose details are right, or correct it first.
+- Archived merged customers stay in the register for the retention period and cannot be hard-deleted.
+- Undo is in the dashboard for 30 days (the toast after the merge).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ survivor_customer_id: string, merged_customer_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "survivor_customer_id": "7c1e…",
+  "merged_customer_ids": [
+    "9a42…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    survivor: { customer_id: string, name: string, customer_number: string | null },
+    merged: { customer_id: string, name: string, customer_number: string | null, merge_id: string | null, was_archived: boolean, invoices: number, sales_orders: number, recurring_invoice_schedules: number, deadlines: number, source_records: number }[],
+    totals: { invoices: number, sales_orders: number, recurring_invoice_schedules: number, deadlines: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "survivor": {
+      "customer_id": "7c1e…",
+      "name": "Exempel AB",
+      "customer_number": "120"
+    },
+    "merged": [
+      {
+        "customer_id": "9a42…",
+        "name": "Exempel AB",
+        "customer_number": "120",
+        "merge_id": "3f0d…",
+        "was_archived": false,
+        "invoices": 1,
+        "sales_orders": 0,
+        "recurring_invoice_schedules": 0,
+        "deadlines": 0,
+        "source_records": 0
+      }
+    ],
+    "totals": {
+      "invoices": 1,
+      "sales_orders": 0,
+      "recurring_invoice_schedules": 0,
+      "deadlines": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/customers/merges/{mergeId}/undo`
+
+**Undo a customer merge.**
+`scope:customers:write · risk:medium · idempotent · dry-run · reversible`
+
+Within 30 days of a merge: moves the invoices, sales orders, recurring invoices, deadlines and import source mappings the merge moved back to the merged customer, where they still point at the survivor, and restores the merged customer's archived state. Rows written to the survivor after the merge stay. The dry run checks the merge exists and can be undone. Requires Idempotency-Key.
+
+**Use when:** A merge joined two customers that are not the same buyer.
+**Do not use for:** Splitting rows that were on the survivor before the merge: only what the merge moved comes back.
+
+**Pitfalls:**
+- merge_id is merged[].merge_id from the merge's answer.
+- Refused with CUSTOMER_MERGE_UNDO_BLOCKED while the survivor has since been merged into another customer: undo that merge first.
+- After 30 days: CUSTOMER_MERGE_UNDO_EXPIRED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `mergeId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    merge_id: string,
+    survivor_customer_id: string,
+    restored_customer_id: string,
+    restored: { invoices: number, sales_orders: number, recurring_invoice_schedules: number, deadlines: number, source_records: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "merge_id": "3f0d…",
+    "survivor_customer_id": "7c1e…",
+    "restored_customer_id": "9a42…",
+    "restored": {
+      "invoices": 1,
+      "sales_orders": 0,
+      "recurring_invoice_schedules": 0,
+      "deadlines": 0,
+      "source_records": 0
     }
   },
   "meta": {

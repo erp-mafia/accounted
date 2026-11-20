@@ -4,6 +4,7 @@ import { mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
 const mocks = vi.hoisted(() => ({ rows: vi.fn(), hydrate: vi.fn(), refresh: vi.fn(), link: vi.fn(), list: vi.fn() }))
 vi.mock('@/lib/supabase/fetch-all', () => ({ fetchAllRows: mocks.rows }))
+vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: vi.fn() }))
 vi.mock('@/lib/providers/provider-data-fetcher', () => ({ hydrateSupplierInvoices: mocks.hydrate, fetchSupplierInvoicesDirect: mocks.list }))
 vi.mock('../lib/refresh-migrated-payment-state', () => ({ refreshMigratedSupplierPaymentState: mocks.refresh }))
 vi.mock('@/lib/invoices/link-migrated-registration-vouchers', () => ({ linkMigratedRegistrationVouchers: mocks.link }))
@@ -11,7 +12,8 @@ vi.mock('@/lib/documents/voucher-ref-resolver', () => ({
   fetchVouchersForNumbers: vi.fn().mockResolvedValue([]), fetchFiscalPeriods: vi.fn().mockResolvedValue([]),
   buildVoucherIndex: vi.fn(), resolveDatedRef: vi.fn().mockReturnValue('local-entry'),
 }))
-import { completeBokioSupplierInvoices, type BokioSupplierSnapshot } from '../lib/complete-bokio-supplier-invoices'
+import { resolveConsent } from '@/lib/providers/resolve-consent'
+import { completeBokioSupplierInvoices, runBokioSupplierCompletion, type BokioSupplierSnapshot } from '../lib/complete-bokio-supplier-invoices'
 
 function snapshot() {
   const dto = mapBokioToSupplierInvoice({ id: 'source', invoiceNumber: '1001', invoiceDate: '2026-01-02', currency: 'SEK',
@@ -24,13 +26,13 @@ function snapshot() {
   mocks.hydrate.mockResolvedValue({ invoices: [hydrated], unhydratedIds: new Set(), hydration: {} })
   return { connection: { accessToken: 'token', providerCompanyId: 'provider-company', consent: { provider: 'bokio' } }, invoices: [dto] } as BokioSupplierSnapshot
 }
-function database() {
+function database(progress: { invoice_id: string; next_attempt_at: string; outcome: string; created_at: string }[] = []) {
   const row = { id: 'invoice', user_id: 'user', supplier_id: 'supplier', supplier_invoice_number: '1001', invoice_date: '2026-01-02',
     total: 1250, total_sek: 1250, subtotal: 1250, vat_amount: 0, currency: 'SEK', is_credit_note: false,
     status: 'registered', paid_at: null, created_at: '2026-01-03', updated_at: '2026-01-03', document_id: null,
     registration_journal_entry_id: null, payment_journal_entry_id: null, supplier_invoice_items: [] }
   mocks.rows.mockResolvedValueOnce([row]).mockResolvedValueOnce([{ id: 'supplier', name: 'Supplier' }])
-    .mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([row])
+    .mockResolvedValueOnce([]).mockResolvedValueOnce(progress).mockResolvedValueOnce([row])
   const rpc = vi.fn(async (name: string) => ({ data: name === 'claim_bokio_supplier_completion'
     ? { claimed: true } : { outcome: 'completed', changed: true, rows: 1 }, error: null }))
   return { rpc, supabase: { rpc } as unknown as SupabaseClient }
@@ -84,5 +86,61 @@ describe('Bokio completion orchestration', () => {
     expect(await completeBokioSupplierInvoices({ supabase: db.supabase, companyId: 'company', consentId: 'consent', deadline: Date.now() - 1 }))
       .toMatchObject({ partial: true, attempted: 0 })
     expect(db.rpc).not.toHaveBeenCalled(); expect(mocks.list).not.toHaveBeenCalled()
+  })
+})
+
+describe('Bokio completion end condition (unattended pass)', () => {
+  const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString()
+  const tried = (outcome: string, created: string, next: string) => ({ invoice_id: 'invoice', outcome, created_at: created, next_attempt_at: next })
+
+  it('retires an invoice tried for a week and says the company has no work left', async () => {
+    const db = database([tried('unmatched_or_ambiguous', daysAgo(30), daysAgo(1))])
+    const result = await completeBokioSupplierInvoices({ supabase: db.supabase, companyId: 'company', consentId: 'consent',
+      snapshot: snapshot(), dryRun: false, retireAfterDays: 7 })
+    expect(result).toMatchObject({ attempted: 0, retired: 1, pending: 0, nextAttemptAt: 'infinity' })
+    expect(db.rpc).not.toHaveBeenCalledWith('complete_bokio_supplier_invoice', expect.anything())
+  })
+  it('keeps a short deferral open and names when it is due', async () => {
+    const next = new Date(Date.now() + 10 * 60_000).toISOString()
+    const db = database([tried('provider_evidence_deferred', daysAgo(30), next)])
+    const result = await completeBokioSupplierInvoices({ supabase: db.supabase, companyId: 'company', consentId: 'consent',
+      snapshot: snapshot(), dryRun: false, retireAfterDays: 7 })
+    expect(result).toMatchObject({ attempted: 0, retired: 0, nextAttemptAt: next })
+  })
+  it('still tries an invoice first tried within the week', async () => {
+    const db = database([tried('unmatched_or_ambiguous', daysAgo(3), daysAgo(0.01))])
+    const result = await completeBokioSupplierInvoices({ supabase: db.supabase, companyId: 'company', consentId: 'consent',
+      snapshot: snapshot(), dryRun: false, retireAfterDays: 7 })
+    expect(result).toMatchObject({ attempted: 1, retired: 0, nextAttemptAt: null })
+  })
+  it('retries everything when a person asks (no retirement outside the cron)', async () => {
+    const db = database([tried('unmatched_or_ambiguous', daysAgo(30), daysAgo(1))])
+    const result = await completeBokioSupplierInvoices({ supabase: db.supabase, companyId: 'company', consentId: 'consent',
+      snapshot: snapshot(), dryRun: false, start: true })
+    expect(result).toMatchObject({ attempted: 1, retired: 0, nextAttemptAt: null })
+  })
+  it('parks a company with nothing left after the release, and only while no run holds it', async () => {
+    database([tried('unmatched_or_ambiguous', daysAgo(30), daysAgo(1))])
+    const source = snapshot()
+    vi.mocked(resolveConsent).mockResolvedValue(source.connection)
+    mocks.list.mockResolvedValue(source.invoices)
+    const update = vi.fn(); const is = vi.fn()
+    const builder = (result: unknown) => {
+      const chain: Record<string, unknown> = {}
+      for (const method of ['select', 'not', 'lte', 'order', 'limit', 'eq', 'abortSignal']) chain[method] = () => chain
+      chain.update = (values: unknown) => { update(values); return chain }
+      chain.is = (column: string, value: unknown) => { is(column, value); return chain }
+      chain.then = (resolve: (v: unknown) => unknown) => resolve(result)
+      return chain
+    }
+    const from = vi.fn()
+      .mockReturnValueOnce(builder({ data: [{ company_id: 'company', consent_id: 'consent' }], error: null }))
+      .mockReturnValueOnce(builder({ error: null }))
+    const rpc = vi.fn(async () => ({ data: { claimed: true }, error: null }))
+    const results = await runBokioSupplierCompletion({ rpc, from } as unknown as SupabaseClient, Date.now() + 60_000)
+    expect(results).toHaveLength(1)
+    expect(rpc).toHaveBeenLastCalledWith('claim_bokio_supplier_completion', expect.objectContaining({ p_release: true }))
+    expect(update).toHaveBeenCalledWith({ next_attempt_at: 'infinity' })
+    expect(is).toHaveBeenCalledWith('run_id', null)
   })
 })

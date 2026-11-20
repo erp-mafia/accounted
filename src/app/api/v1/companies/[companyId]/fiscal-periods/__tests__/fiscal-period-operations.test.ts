@@ -35,6 +35,8 @@ import { PATCH as updatePeriod } from '../[id]/route'
 import { POST as unlockPeriod } from '../[id]/unlock/route'
 import { POST as closeExternal } from '../[id]/close-external/route'
 import { POST as reopenExternal } from '../[id]/reopen-external/route'
+import { POST as lockPeriodRoute } from '../[id]/lock/route'
+import { POST as closePeriodRoute } from '../[id]/close/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -48,7 +50,8 @@ interface TableResp {
 /** Per-table queue mock that also records every (table, method, args). */
 function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
   const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
+  const tables = { companies: { data: { entity_type: 'aktiebolag' }, error: null }, ...byTable }
+  for (const [t, val] of Object.entries(tables)) queues.set(t, Array.isArray(val) ? [...val] : [val])
   const calls: Array<{ table: string; method: string; args: unknown[] }> = []
   const buildChain = (key: string): unknown =>
     new Proxy(
@@ -226,6 +229,24 @@ describe('POST /api/v1/companies/:companyId/fiscal-periods', () => {
     expect(json.error.details.months).toBe(24)
   })
 
+  it('400 FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR for an enskild firma outside the calendar year', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      companies: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await createPeriod(
+      request(BASE, { method: 'POST', body: '{"name":"X","period_start":"2027-01-01","period_end":"2027-06-30"}' }),
+      companyParams,
+    )
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+    expect(json.error.details.rule).toBe('end_31_december')
+    expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
+  })
+
   it('409 FISCAL_PERIOD_OVERLAP', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({
@@ -259,6 +280,72 @@ describe('POST /api/v1/companies/:companyId/fiscal-periods', () => {
     expect(json.data.preview).toMatchObject({ previous_period_id: PRIOR_ID, relinks_period_id: null })
     expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
     expect(client.rpc).not.toHaveBeenCalled()
+  })
+
+  // crm#1982: a hole of 36 months between an imported old year and the
+  // current one. No single year closes it, so it is filled from its oldest end.
+  describe('a gap longer than one räkenskapsår', () => {
+    const OLD_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const OLD = { id: OLD_ID, period_start: '2022-10-01', period_end: '2023-09-30', is_closed: true }
+    const CURRENT = { id: PRIOR_ID, period_start: '2026-10-01', period_end: '2027-09-30', is_closed: false }
+
+    it('a dry run (the MCP staging preview) accepts the first fill year and relinks nothing yet', async () => {
+      const client = makeClient({
+        company_members: MEMBER,
+        fiscal_periods: [
+          { data: [OLD, CURRENT], error: null },
+          { data: [], error: null }, // overlap
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await createPeriod(
+        request(`${BASE}?dry_run=true`, {
+          method: 'POST',
+          body: '{"name":"Räkenskapsår 2023/2024","period_start":"2023-10-01","period_end":"2024-09-30"}',
+        }),
+        companyParams,
+      )
+      expect(res.status).toBe(200)
+      const json = await res.json()
+      expect(json.data.preview).toMatchObject({ previous_period_id: OLD_ID, relinks_period_id: null })
+      expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+    })
+
+    it('400 FISCAL_PERIOD_NOT_CONTIGUOUS for a year in the middle says where the fill starts and that it takes one year at a time', async () => {
+      const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: [OLD, CURRENT], error: null } })
+      mockServiceClient.mockReturnValue(client)
+      const res = await createPeriod(
+        request(BASE, { method: 'POST', body: '{"name":"X","period_start":"2024-10-01","period_end":"2025-09-30"}' }),
+        companyParams,
+      )
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+      expect(json.error.details).toMatchObject({
+        expected_start: '2023-10-01',
+        gap_end: '2026-09-30',
+        following_period_id: PRIOR_ID,
+      })
+      expect(json.error.details.reason).toContain('skapa först ett år som börjar 2023-10-01')
+      expect(json.error.recovery_hint).toContain('one year at a time')
+      expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
+    })
+
+    it('400 FISCAL_PERIOD_TOO_LONG for one year over the whole gap carries the same way forward', async () => {
+      const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: [OLD, CURRENT], error: null } })
+      mockServiceClient.mockReturnValue(client)
+      const res = await createPeriod(
+        request(BASE, { method: 'POST', body: '{"name":"X","period_start":"2023-10-01","period_end":"2026-09-30"}' }),
+        companyParams,
+      )
+      expect(res.status).toBe(400)
+      const json = await res.json()
+      expect(json.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
+      expect(json.error.details).toMatchObject({ months: 36, expected_start: '2023-10-01', gap_end: '2026-09-30' })
+      expect(json.error.details.reason).toContain('fylls ett räkenskapsår i taget')
+      expect(json.error.recovery_hint).toContain('details.expected_start')
+      expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
+    })
   })
 })
 
@@ -327,11 +414,72 @@ describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {
     expect((await res.json()).error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
   })
 
-  it('409 FISCAL_PERIOD_HAS_POSTED_ENTRIES when dates move under posted verifikat', async () => {
+  // crm#1140: the one edit a closed year allows is moving the start of the
+  // company's earliest year within its month (to the registration day). The
+  // RPC re-checks it and still refuses on whatever depends on the start.
+  it('corrects the start of a closed first year within its month through redate_fiscal_period', async () => {
+    const closedFirst = periodRow({
+      name: 'Räkenskapsår 2025/2026',
+      period_start: '2025-03-01',
+      period_end: '2026-02-28',
+      is_closed: true,
+      locked_at: '2026-03-20T10:00:00Z',
+      previous_period_id: null,
+    })
     const client = makeClient({
       company_members: MEMBER,
-      fiscal_periods: { data: periodRow(), error: null },
-      journal_entries: { count: 3, data: null, error: null },
+      fiscal_periods: [
+        { data: closedFirst, error: null }, // the period
+        { count: 0, data: null, error: null }, // no earlier period: the earliest year
+        { data: [], error: null }, // overlap, then neighbours
+      ],
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      rpc: { data: { ok: true, changed: true, period: { ...closedFirst, period_start: '2025-03-17' } }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updatePeriod(
+      request(`${BASE}/${PERIOD_ID}`, { method: 'PATCH', body: '{"period_start":"2025-03-17"}' }),
+      periodParams,
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.period_start).toBe('2025-03-17')
+    expect(client.rpc).toHaveBeenCalledWith(
+      'redate_fiscal_period',
+      expect.objectContaining({ p_period_start: '2025-03-17', p_period_end: '2026-02-28', p_user_id: 'user-1' }),
+    )
+    // The service never writes the row itself: only the RPC does.
+    expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
+  })
+
+  // crm#1010: posted verifikat no longer freeze the dates. What the year
+  // holds is decided by redate_fiscal_period (tests/pg/redate-fiscal-period
+  // .pg.test.ts), named per blocker; the door only maps its verdict.
+  it('409 FISCAL_PERIOD_DATES_BLOCKED when the re-date would leave posted verifikat outside', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: [
+        { data: periodRow(), error: null }, // the period
+        { count: 1, data: null, error: null }, // earlier periods
+        { data: [], error: null }, // overlap, then neighbours
+      ],
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      rpc: {
+        data: {
+          ok: false,
+          code: 'FISCAL_PERIOD_DATES_BLOCKED',
+          blockers: [
+            {
+              code: 'entries_outside',
+              message_sv:
+                '3 bokförda verifikationer ligger utanför de nya datumen: A12 (2027-07-02), A13 (2027-08-15), A14 (2027-12-20).',
+              count: 3,
+              first_date: '2027-07-02',
+              last_date: '2027-12-20',
+            },
+          ],
+        },
+        error: null,
+      },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await updatePeriod(
@@ -340,21 +488,29 @@ describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {
     )
     expect(res.status).toBe(409)
     const json = await res.json()
-    expect(json.error.code).toBe('FISCAL_PERIOD_HAS_POSTED_ENTRIES')
-    expect(json.error.details.entry_count).toBe(3)
+    expect(json.error.code).toBe('FISCAL_PERIOD_DATES_BLOCKED')
+    // The v1 envelope keeps the registry sentence as message and carries the
+    // specific Swedish refusal in details.reason.
+    expect(json.error.details.reason).toContain('A12 (2027-07-02)')
+    expect(json.error.details.blockers[0]).toMatchObject({ code: 'entries_outside', count: 3 })
+    // Service-role door: the API key's user is named as the actor.
+    expect(client.rpc).toHaveBeenCalledWith(
+      'redate_fiscal_period',
+      expect.objectContaining({ p_period_end: '2027-06-30', p_dry_run: false, p_user_id: 'user-1' }),
+    )
     expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
   })
 
-  it('a dry run of a re-date runs every check and writes nothing', async () => {
+  it('a dry run of a re-date asks the RPC in dry-run mode and writes nothing', async () => {
     const client = makeClient({
       company_members: MEMBER,
       fiscal_periods: [
         { data: periodRow(), error: null }, // the period
         { count: 1, data: null, error: null }, // earlier periods
-        { data: [], error: null }, // overlap
+        { data: [], error: null }, // overlap, then neighbours
       ],
-      journal_entries: { count: 0, data: null, error: null },
       companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      rpc: { data: { ok: true, changed: true, dry_run: true }, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await updatePeriod(
@@ -364,6 +520,7 @@ describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.data.preview).toMatchObject({ fiscal_period_id: PERIOD_ID, changes: { period_end: '2027-06-30' } })
+    expect(client.rpc).toHaveBeenCalledWith('redate_fiscal_period', expect.objectContaining({ p_dry_run: true }))
     expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
   })
 })
@@ -522,5 +679,82 @@ describe('POST /api/v1/companies/:companyId/fiscal-periods/:id/reopen-external',
     expect(res.status).toBe(200)
     expect((await res.json()).data.preview).toMatchObject({ fiscal_period_id: PERIOD_ID, will_reopen: true })
     expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+})
+
+// crm#1029: a year an SIE import, or its undo, still holds is not locked or
+// klarmarkerat. Before, the database guard's English refusal reached v1 as a
+// 500 INTERNAL_ERROR.
+describe('a year an SIE import still holds', () => {
+  const HELD = { period_start: '2024-01-01', period_end: '2024-12-31', name: 'Räkenskapsår 2024', import_hold: 'imp-1' }
+
+  it('POST /lock answers 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT and writes nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: { data: periodRow(HELD), error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await lockPeriodRoute(request(`${BASE}/${PERIOD_ID}/lock`, { method: 'POST' }), periodParams)
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(json.error.message).toContain('Räkenskapsår 2024 kan inte låsas')
+    expect(json.error.recovery_hint).toMatch(/gnubok_sie_import_status/)
+    expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+
+  it('a close-external dry run answers the same code', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: { data: periodRow(HELD), error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await closeExternal(
+      request(`${BASE}/${PERIOD_ID}/close-external?dry_run=true`, { method: 'POST' }),
+      periodParams,
+    )
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+})
+
+// F1 (one classifyError): lock and close answer the code period-service
+// throws, the same one the dashboard and MCP answer. Before, each route matched
+// the service's message text and mapped it to CONFLICT or its own choice.
+describe('POST /lock and /close answer the service code', () => {
+  async function call(route: typeof lockPeriodRoute, action: 'lock' | 'close', row: Record<string, unknown>) {
+    const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: periodRow(row), error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await route(request(`${BASE}/${PERIOD_ID}/${action}`, { method: 'POST' }), periodParams)
+    const json = await res.json()
+    return { status: res.status, code: json.error?.code as string, hint: json.error?.recovery_hint as string | undefined, client }
+  }
+
+  it.each([
+    ['lock', { locked_at: '2028-01-31T10:00:00Z' }, 409, 'PERIOD_LOCK_ALREADY_LOCKED'],
+    ['lock', { is_closed: true, locked_at: '2028-01-31T10:00:00Z' }, 409, 'PERIOD_ALREADY_CLOSED'],
+    ['close', { is_closed: true, locked_at: '2028-01-31T10:00:00Z' }, 409, 'PERIOD_ALREADY_CLOSED'],
+    ['close', {}, 400, 'PERIOD_NOT_LOCKED'],
+    ['close', { locked_at: '2028-01-31T10:00:00Z' }, 400, 'YEAR_END_NOT_RUN'],
+  ] as const)('%s on %j answers %i %s and writes nothing', async (action, row, status, code) => {
+    const result = await call(action === 'lock' ? lockPeriodRoute : closePeriodRoute, action, row)
+    expect(result.status).toBe(status)
+    expect(result.code).toBe(code)
+    expect(writesTo(result.client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+
+  it('points a close before the year-end run at the year-end', async () => {
+    const result = await call(closePeriodRoute, 'close', { locked_at: '2028-01-31T10:00:00Z' })
+    expect(result.hint).toMatch(/year-end/)
+  })
+
+  it('answers 404 PERIOD_NOT_FOUND for a period the company does not have', async () => {
+    const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: null, error: { code: 'PGRST116', message: 'no rows' } } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await closePeriodRoute(request(`${BASE}/${PERIOD_ID}/close`, { method: 'POST' }), periodParams)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('PERIOD_NOT_FOUND')
   })
 })

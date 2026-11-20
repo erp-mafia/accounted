@@ -32,6 +32,13 @@ const RATE_BEARING: ReadonlySet<string> = new Set<VatTreatment>([
   'reduced_6',
 ])
 
+/** Whether a treatment carries Swedish moms at a rate of its own. */
+export function isRateBearing(
+  treatment: string | null | undefined,
+): treatment is 'standard_25' | 'reduced_12' | 'reduced_6' {
+  return !!treatment && RATE_BEARING.has(treatment)
+}
+
 export function isNotVatRegistered(vatRegistered: VatRegistration): boolean {
   return vatRegistered === false
 }
@@ -47,7 +54,7 @@ export function vatTreatmentForRegistration<T extends string | null | undefined>
   vatRegistered: VatRegistration,
 ): T | typeof NO_VAT_TREATMENT {
   if (!isNotVatRegistered(vatRegistered)) return treatment
-  return treatment && RATE_BEARING.has(treatment) ? NO_VAT_TREATMENT : treatment
+  return isRateBearing(treatment) ? NO_VAT_TREATMENT : treatment
 }
 
 /**

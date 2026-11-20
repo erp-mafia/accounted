@@ -35,7 +35,7 @@ describe('payslip token primitives', () => {
   })
 })
 
-// Minimal purpose-built client mocks — the chains used by links.ts are
+// Minimal purpose-built client mocks - the chains used by links.ts are
 // narrow enough that hand-rolling beats the generic queued mock here.
 function resolveClient(row: unknown) {
   const updates: Array<Record<string, unknown>> = []

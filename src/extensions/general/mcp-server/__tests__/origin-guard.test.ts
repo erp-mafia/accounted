@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest'
 import { isForbiddenOrigin, forbiddenOriginResponse } from '../origin-guard'
 import type { mcpServerExtension as McpServerExtension } from '../index'
+import { testRoutes } from '@/tests/helpers'
+import { FLYTT_EXTENSION_ID, FLYTT_EXTENSION_ORIGIN } from '@/lib/auth/flytt-extension'
 
 const ENDPOINT = 'https://app.gnubok.se/api/extensions/ext/mcp-server/mcp'
 
@@ -85,6 +87,24 @@ describe('isForbiddenOrigin', () => {
       isForbiddenOrigin(makeRequest({ origin: 'not a url', host: 'app.gnubok.se' })),
     ).toBe(true)
   })
+
+  it("allows Accounted's own browser extension, by its whole origin", () => {
+    expect(
+      isForbiddenOrigin(makeRequest({ origin: FLYTT_EXTENSION_ORIGIN, host: 'app.gnubok.se' })),
+    ).toBe(false)
+  })
+
+  it('rejects every other extension origin', () => {
+    for (const origin of [
+      'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      `${FLYTT_EXTENSION_ORIGIN}x`,
+      `${FLYTT_EXTENSION_ORIGIN}/`,
+      `moz-extension://${FLYTT_EXTENSION_ID}`,
+      `https://${FLYTT_EXTENSION_ID}`,
+    ]) {
+      expect(isForbiddenOrigin(makeRequest({ origin, host: 'app.gnubok.se' }))).toBe(true)
+    }
+  })
 })
 
 describe('forbiddenOriginResponse', () => {
@@ -101,17 +121,17 @@ describe('forbiddenOriginResponse', () => {
 })
 
 describe('mcp-server apiRoutes origin enforcement', () => {
-  // The dynamic import pulls in the full 9k-line server module; that parse can
-  // take several seconds under full-suite parallel load. It is import-bound,
-  // not logic-bound, so warm it once in beforeAll (with generous headroom)
-  // instead of letting an individual test's clock absorb the import cost.
+  // The extension entry no longer loads ./server (a POST loads it lazily, after
+  // the origin check), so these foreign-Origin requests never parse it. The
+  // import still runs once in beforeAll with headroom so a slow cold import
+  // under full-suite parallel load cannot eat an individual test's clock.
   let mcpServerExtension: typeof McpServerExtension
   beforeAll(async () => {
     ;({ mcpServerExtension } = await import('../index'))
   }, 60_000)
 
   it('rejects foreign-Origin requests on every /mcp method before dispatch', async () => {
-    const routes = (mcpServerExtension.apiRoutes ?? []).filter((r) => r.path === '/mcp')
+    const routes = testRoutes(mcpServerExtension).filter((r) => r.path === '/mcp')
     expect(routes.map((r) => r.method).sort()).toEqual(['DELETE', 'GET', 'POST'])
 
     for (const route of routes) {

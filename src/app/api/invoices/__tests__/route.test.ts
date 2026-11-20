@@ -28,14 +28,12 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 const mockGetVatRules = vi.fn()
-const mockCalculateVat = vi.fn()
 const mockGetAvailableVatRates = vi.fn()
 vi.mock('@/lib/invoices/vat-rules', async () => {
   const actual = await vi.importActual<typeof import('@/lib/invoices/vat-rules')>('@/lib/invoices/vat-rules')
   return {
     getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
     deriveInvoiceVatHeader: actual.deriveInvoiceVatHeader,
-    calculateVat: (...args: unknown[]) => mockCalculateVat(...args),
     getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
     // The builder gates on the permitted set (taxed-where-performed exceptions);
     // these route tests only care that the gate reads the stubbed rates.
@@ -54,7 +52,6 @@ vi.mock('@/lib/invoices/vat-rules', async () => {
             permittedRates: mockGetAvailableVatRates(customer.customer_type, customer.vat_number_validated, customer.country),
             explainFromCustomer: true,
           },
-    calculateTotal: vi.fn(),
     // Real: the warnings channel is what the response-shape test below pins.
     explainVatTreatment: actual.explainVatTreatment,
   }
@@ -139,12 +136,14 @@ describe('GET /api/invoices', () => {
   })
 
   it('reports invoice-register coverage alongside the list', async () => {
-    // List, then the coverage helper's two lookups: earliest register
-    // invoice + a posted AR verifikat predating it (migrated/backfilled
-    // invoice history living only as journal entries).
+    // List, then the coverage read (get_invoice_register_coverage): the
+    // register starts 2026-07-19 and a posted AR verifikat predates it
+    // (migrated/backfilled invoice history living only as journal entries).
     enqueue({ data: [makeInvoice()], error: null, count: 1 })
-    enqueue({ data: { invoice_date: '2026-07-19' }, error: null })
-    enqueue({ data: { id: 'line-1' }, error: null })
+    enqueue({
+      data: { covers_from: '2026-07-19', has_pre_register_invoices: true, pre_register_in_period: false },
+      error: null,
+    })
 
     const request = createMockRequest('/api/invoices')
     const response = await GET(request, { params: Promise.resolve({}) })
@@ -245,7 +244,6 @@ describe('POST /api/invoices (create invoice)', () => {
       details: { cash_account_id: VALID_UUID_2, currency: 'SEK', reason: 'not_payee' },
     })
     mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '10', reverseChargeText: null })
-    mockCalculateVat.mockReturnValue(250)
 
     const request = createMockRequest('/api/invoices', {
       method: 'POST',
@@ -311,7 +309,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -356,6 +353,112 @@ describe('POST /api/invoices (create invoice)', () => {
     )
   })
 
+  // Leveransadress from the invoice editor (crm#1547): the form sends every
+  // part as a string, '' for one left empty. Made-up address.
+  const EDITOR_DELIVERY_ADDRESS = {
+    name: ' Exempelbutiken Centrum ',
+    address_line1: 'Provgatan 12',
+    address_line2: '',
+    postal_code: '111 22',
+    city: 'Exempelstad',
+    country: 'NO',
+  }
+
+  it('stores the delivery address the editor sends, trimmed and with empty parts unset (crm#1547)', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+    mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '10', reverseChargeText: null })
+    mockGetAvailableVatRates.mockReturnValue([{ rate: 25, label: '25%', treatment: 'standard_25' }])
+
+    enqueue({ data: customer, error: null }) // customer
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: createdInvoice, error: null }) // insert invoice
+    enqueue({ data: null, error: null }) // insert items
+    enqueue({ data: '2026001', error: null }) // generate_invoice_number
+    enqueue({ data: { ...createdInvoice, invoice_number: '2026001', customer, items: [] }, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        delivery_address: EDITOR_DELIVERY_ADDRESS,
+        items: [{ description: 'Varor', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const { status } = await parseJsonResponse(await POST(request, createMockRouteParams({})))
+
+    expect(status).toBe(200)
+    expect(findCall('invoices', 'insert')?.[0]).toMatchObject({
+      delivery_address: {
+        name: 'Exempelbutiken Centrum',
+        address_line1: 'Provgatan 12',
+        address_line2: null,
+        postal_code: '111 22',
+        city: 'Exempelstad',
+        country: 'NO',
+      },
+    })
+  })
+
+  it('stores no delivery address when the editor sends the fields empty', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+    mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '10', reverseChargeText: null })
+    mockGetAvailableVatRates.mockReturnValue([{ rate: 25, label: '25%', treatment: 'standard_25' }])
+
+    enqueue({ data: customer, error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: '2026001', error: null })
+    enqueue({ data: { ...createdInvoice, invoice_number: '2026001', customer, items: [] }, error: null })
+
+    const empty = Object.fromEntries(Object.keys(EDITOR_DELIVERY_ADDRESS).map((key) => [key, '']))
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        delivery_address: empty,
+        items: [{ description: 'Varor', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const { status } = await parseJsonResponse(await POST(request, createMockRouteParams({})))
+
+    expect(status).toBe(200)
+    expect(findCall('invoices', 'insert')?.[0]).toMatchObject({ delivery_address: null })
+  })
+
+  it.each([
+    ['a country that is not an ISO code', { ...EDITOR_DELIVERY_ADDRESS, country: 'Norge' }],
+    ['an unknown part', { ...EDITOR_DELIVERY_ADDRESS, street: 'Provgatan 12' }],
+    ['a postal code longer than 20 characters', { ...EDITOR_DELIVERY_ADDRESS, postal_code: '1'.repeat(21) }],
+  ])('returns 400 for a delivery address with %s, before reading anything', async (_label, deliveryAddress) => {
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        delivery_address: deliveryAddress,
+        items: [{ description: 'Varor', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const { status, body } = await parseJsonResponse<{ errors: Array<{ field: string }> }>(
+      await POST(request, createMockRouteParams({})),
+    )
+
+    expect(status).toBe(400)
+    expect(body.errors.some((e) => e.field.startsWith('delivery_address'))).toBe(true)
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
   it('creates the invoice with 25 % for an EU business without a validated VAT number and says why (#2749)', async () => {
     const customer = makeCustomer({
       id: VALID_UUID,
@@ -367,7 +470,6 @@ describe('POST /api/invoices (create invoice)', () => {
     const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
 
     mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '05', reverseChargeText: null })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 0, label: '0% (momsfri)', treatment: 'exempt' },
@@ -416,7 +518,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -468,7 +569,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -512,7 +612,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -547,6 +646,132 @@ describe('POST /api/invoices (create invoice)', () => {
 
     expect(status).toBe(500)
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+  })
+
+  it('removes the unnumbered row when the series already has a higher number: nothing was used up', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+
+    mockGetVatRules.mockReturnValue({
+      treatment: 'standard_25',
+      rate: 25,
+      momsRuta: '10',
+      reverseChargeText: null,
+    })
+    mockGetAvailableVatRates.mockReturnValue([{ rate: 25, label: '25%', treatment: 'standard_25' }])
+
+    enqueue({ data: customer, error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null }) // items
+    enqueue({
+      data: null,
+      error: {
+        code: 'PT409',
+        message: 'INVOICE_NUMBER_SERIES_BEHIND',
+        details: JSON.stringify({ prefix: '', next_invoice_number: 1, highest_number: 114647, first_allowed: 114648 }),
+      },
+    })
+    enqueue({ data: null, error: null }) // delete of the unnumbered draft
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        items: [{ description: 'Test', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_NUMBER_SERIES_BEHIND')
+    expect(body.error.message).toContain('114648 eller högre')
+    expect(body.error.details).toEqual({ prefix: '', highest_number: 114647, first_allowed: 114648 })
+    const removal = findCall('invoices', 'delete')
+    expect(removal).toBeDefined()
+    // Never a soft-cancelled leftover: the row had no number to keep.
+    expect(findCall('invoices', 'update')).toBeUndefined()
+  })
+
+  // accounted#33: the delivery-note branch ignored the RPC error and
+  // inserted a note with a null number.
+  describe('delivery note numbering (#33)', () => {
+    function deliveryNoteRequest() {
+      return createMockRequest('/api/invoices', {
+        method: 'POST',
+        body: {
+          customer_id: VALID_UUID,
+          invoice_date: '2024-06-15',
+          due_date: '2024-07-15',
+          document_type: 'delivery_note',
+          currency: 'SEK',
+          items: [{ description: 'Leverans', quantity: 2, unit: 'st', unit_price: 500 }],
+        },
+      })
+    }
+
+    beforeEach(() => {
+      mockGetVatRules.mockReturnValue({
+        treatment: 'standard_25',
+        rate: 25,
+        momsRuta: '10',
+        reverseChargeText: null,
+      })
+      mockGetAvailableVatRates.mockReturnValue([
+        { rate: 25, label: '25%', treatment: 'standard_25' },
+      ])
+    })
+
+    it('numbers the note from the FS-series at insert', async () => {
+      const customer = makeCustomer({ id: VALID_UUID })
+      const createdNote = makeInvoice({
+        id: 'dn-1',
+        invoice_number: 'FS-20241000',
+        document_type: 'delivery_note',
+      })
+      // Fetch customer
+      enqueue({ data: customer, error: null })
+      // company_settings.vat_registered gate
+      enqueue({ data: { vat_registered: true }, error: null })
+      // generate_delivery_note_number RPC
+      enqueue({ data: 'FS-20241000', error: null })
+      // Insert note
+      enqueue({ data: createdNote, error: null })
+      // Insert items
+      enqueue({ data: null, error: null })
+      // Fetch complete note
+      enqueue({ data: { ...createdNote, customer, items: [] }, error: null })
+
+      const response = await POST(deliveryNoteRequest(), { params: Promise.resolve({}) })
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockSupabase.rpc).toHaveBeenCalledWith('generate_delivery_note_number', { p_company_id: 'company-1' })
+      const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.invoice_number).toBe('FS-20241000')
+      expect(inserted.document_type).toBe('delivery_note')
+    })
+
+    it('returns 500 and inserts nothing when the number cannot be allocated', async () => {
+      const customer = makeCustomer({ id: VALID_UUID })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: { vat_registered: true }, error: null })
+      // generate_delivery_note_number RPC fails
+      enqueue({ data: null, error: { message: 'Company settings not found', code: 'P0001' } })
+
+      const response = await POST(deliveryNoteRequest(), { params: Promise.resolve({}) })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(500)
+      expect(body.error.code).toBe('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      expect(findCall('invoices', 'insert')).toBeUndefined()
+    })
   })
 })
 
@@ -619,11 +844,46 @@ describe('POST /api/invoices (create credit note)', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_SENT')
   })
 
+  // A credit note is document_type 'invoice' too: crediting it would post a
+  // second reversal of the same sale. Every credit door refuses it
+  // (creditNoteRefusal, lib/invoices/credit-invoice.ts).
+  it('returns 400 INVOICE_CREDIT_NOT_INVOICE for a credit note', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'sent', credited_invoice_id: VALID_UUID_2 })
+    enqueue({ data: original, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_INVOICE')
+  })
+
+  // accounted#58: imported at a system change, a credit note often has no
+  // credited_invoice_id and, from older imports, status 'paid'.
+  it('returns 400 INVOICE_CREDIT_NOT_INVOICE for an imported credit note with no link to its original', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'paid', subtotal: -1000, vat_amount: -250, total: -1250, credited_invoice_id: null })
+    enqueue({ data: original, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_INVOICE')
+  })
+
   // Documents a KNOWN GAP, not a rule. ML (2023:200) 17 kap 22-23 SS permits an
   // aendringsfaktura against a part-paid invoice; the app refuses it because
   // issueCreditNote() cannot flip a 'partially_paid' original to 'credited' and
   // would strand a posted reversing verifikat (see the comment on the guard in
-  // route.ts and the DECISIONS.md entry). This test exists so lifting the gap
+  // lib/invoices/credit-invoice.ts and the DECISIONS.md entry). This test exists so lifting the gap
   // fails here and forces the coordinated change rather than passing silently.
   it('refuses a partially paid invoice (known gap: needs issue-credit-note.ts too)', async () => {
     const original = makeInvoice({ id: VALID_UUID, status: 'partially_paid' })
@@ -940,7 +1200,6 @@ describe('POST /api/invoices (create credit note)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },

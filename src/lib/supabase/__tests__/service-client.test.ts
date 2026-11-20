@@ -53,7 +53,8 @@ describe('createServiceRoleClient', () => {
       { db?: unknown; global?: unknown },
     ]
     expect(options.db).toEqual({ schema: 'public' })
-    expect(options.global).toEqual({ headers: { 'x-test': '1' } })
+    // global keeps the caller's headers; its fetch is the actor-header one.
+    expect(options.global).toEqual({ headers: { 'x-test': '1' }, fetch: expect.any(Function) })
   })
 
   it('refuses to let a caller re-enable the ticker', () => {

@@ -59,6 +59,9 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
   }
   // Payloads handed to `.update()`, per table: what a PATCH actually writes.
   const updates: Record<string, unknown[]> = {}
+  // Payloads handed to `.insert()` and `.eq()` filters, per table.
+  const inserts: Record<string, unknown[]> = {}
+  const eqs: Record<string, unknown[][]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -71,13 +74,15 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
         }
         return (...args: unknown[]) => {
           if (prop === 'update') (updates[table] ??= []).push(args[0])
+          if (prop === 'insert') (inserts[table] ??= []).push(args[0])
+          if (prop === 'eq') (eqs[table] ??= []).push(args)
           return buildChain(table)
         }
       },
     }
     return new Proxy({}, handler)
   }
-  return { updates, from: vi.fn((table: string) => buildChain(table)) }
+  return { updates, inserts, eqs, from: vi.fn((table: string) => buildChain(table)) }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -129,6 +134,7 @@ const SAMPLE_EMPLOYEE = {
   last_name: 'Andersson',
   personnummer: SAMPLE_PERSONNUMMER,
   employment_type: 'employee',
+  personnel_category: 'tjansteman',
   employment_start: '2024-01-15',
   employment_end: null,
   employment_degree: 100,
@@ -180,7 +186,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
     expect(body.data).toHaveLength(1)
     expect(body.data[0].first_name).toBe('Anna')
     // GDPR Art.5(1)(c): birthdate visible, last-4 hidden.
-    expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101-XXXX')
     // The full personnummer must NEVER appear in the response, even in
     // unrelated fields.
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -224,7 +230,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
 
   it('decrypts an encrypted-at-rest row and masks it birthdate-visible', async () => {
     // Rows are stored encrypted; the list must decrypt before masking so the
-    // mask is YYYYMMDDXXXX (not fully redacted). Neither the ciphertext nor
+    // mask is YYYYMMDD-XXXX (not fully redacted). Neither the ciphertext nor
     // the plaintext may leak in the response.
     const encRow = { ...SAMPLE_EMPLOYEE, personnummer: encryptPersonnummer(SAMPLE_PERSONNUMMER) }
     mockServiceClient.mockReturnValue(
@@ -241,7 +247,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101-XXXX')
     expect(JSON.stringify(body)).not.toContain(encRow.personnummer)
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -267,6 +273,32 @@ describe('GET /api/v1/companies/:companyId/employees/:id', () => {
     // Detail endpoint deliberately returns the full personnummer: the
     // caller already has read scope and the id.
     expect(body.data.personnummer).toBe(SAMPLE_PERSONNUMMER)
+  })
+
+  it('refuses to put an enskild firma\'s owner on payroll with VALIDATION_ERROR on employment_type, like the dashboard and MCP (#782)', async () => {
+    // The v1 PATCH used to skip this rule; the database trigger then refused
+    // the write with a 500.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ employment_type: 'company_owner' }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('employment_type')
   })
 
   it('returns 404 EMPLOYEE_NOT_FOUND when the row is missing', async () => {
@@ -354,7 +386,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(res.status).toBe(201)
     const body = await res.json()
     expect(body.data.first_name).toBe('Anna')
-    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer_masked).toBe('19000101-XXXX')
     // Response shape never contains the raw personnummer.
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -512,7 +544,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     // The dry-run preview must mask personnummer the same way the live
     // response shape does: never echo back the supplied identifier.
     const body = await res.json()
-    expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.preview.personnummer_masked).toBe('19000101-XXXX')
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
 
@@ -706,7 +738,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(body.data.monthly_salary).toBe(38000)
     // GDPR Art.5(1)(c): PATCH success response masks personnummer (write
     // shape): the full value is only echoed by the GET drill-in.
-    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer_masked).toBe('19000101-XXXX')
     expect(body.data.personnummer).toBeUndefined()
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -1101,7 +1133,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     const body = await res.json()
-    expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.preview.personnummer_masked).toBe('19000101-XXXX')
     expect(body.data.preview.personnummer).toBeUndefined()
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -1226,6 +1258,176 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id clearing fields (#300
   })
 })
 
+/**
+ * is_active on PATCH (crm#1133). The DELETE docs and the MCP tool both named
+ * PATCH is_active=true as the way back from a soft delete, but the key was
+ * missing from UpdateEmployeeSchema: Zod stripped it and the PATCH answered
+ * 200 with the employee still inactive. true reactivates; false is the write
+ * DELETE makes.
+ */
+describe('PATCH /api/v1/companies/:companyId/employees/:id is_active (crm#1133)', () => {
+  const INACTIVE = { ...SAMPLE_EMPLOYEE, is_active: false }
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`
+
+  function patch(body: Record<string, unknown>, query = '') {
+    return updateEmployee(
+      makeRequest(`${url}${query}`, { method: 'PATCH', body: JSON.stringify(body) }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+  }
+
+  function useRows(existing: Record<string, unknown> | null, updated: Record<string, unknown> | null = existing) {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [{ data: existing, error: null }, { data: updated, error: null }],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+    return mock.updates
+  }
+
+  it('reactivates an inactive employee: writes is_active true and nothing else', async () => {
+    const updates = useRows(INACTIVE, { ...INACTIVE, is_active: true })
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ is_active: true }])
+    const body = await res.json()
+    expect(body.data.is_active).toBe(true)
+    // Write shape: the personnummer stays masked, as on every other PATCH.
+    expect(body.data.personnummer_masked).toBe('19000101-XXXX')
+    expect(body.data.personnummer).toBeUndefined()
+  })
+
+  it('deactivates an active employee: the same single-column write DELETE makes', async () => {
+    const updates = useRows(SAMPLE_EMPLOYEE, INACTIVE)
+
+    const res = await patch({ is_active: false })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ is_active: false }])
+    const body = await res.json()
+    expect(body.data.is_active).toBe(false)
+  })
+
+  it('writes the flag together with an unrelated field in the same PATCH', async () => {
+    const updates = useRows(INACTIVE, { ...INACTIVE, is_active: true, phone: '0700000000' })
+
+    const res = await patch({ is_active: true, phone: '0700000000' })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ is_active: true, phone: '0700000000' }])
+  })
+
+  it('still saves an unrelated field on its own and leaves the flag out of the write', async () => {
+    const updates = useRows(INACTIVE, { ...INACTIVE, phone: '0700000000' })
+
+    const res = await patch({ phone: '0700000000' })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ phone: '0700000000' }])
+    const body = await res.json()
+    expect(body.data.phone).toBe('0700000000')
+    expect(body.data.is_active).toBe(false)
+  })
+
+  it('previews the reactivation under ?dry_run=true and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+
+    const res = await patch({ is_active: true }, '?dry_run=true')
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.is_active).toBe(true)
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 400 VALIDATION_ERROR naming is_active for a value that is not a boolean, and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+
+    for (const value of [null, 'true', 1]) {
+      const res = await patch({ is_active: value })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(JSON.stringify(body.error.details)).toContain('is_active')
+    }
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 404 EMPLOYEE_NOT_FOUND when the row is missing, and writes nothing', async () => {
+    const updates = useRows(null)
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('EMPLOYEE_NOT_FOUND')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 401 UNAUTHORIZED for a key that does not validate, and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body.error.code).toBe('UNAUTHORIZED')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 403 INSUFFICIENT_SCOPE without payroll:write, and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'read only',
+      scopes: ['payroll:read'],
+      mode: 'live',
+    })
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('answers the jämkning CHECK refusal of a legacy incomplete row as a 400, not a 500', async () => {
+    // employees_jamkning_dates_check is NOT VALID: it is checked on the row's
+    // next UPDATE whatever column it names, the reactivation included.
+    const legacy = { ...INACTIVE, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null }
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [
+        { data: legacy, error: null },
+        {
+          data: null,
+          error: {
+            code: '23514',
+            message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+          },
+        },
+      ],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('jamkning_valid_to')
+    expect(body.error.details.message).toContain(JAMKNING_END_REQUIRED)
+  })
+})
+
 describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
   it('soft-deletes via is_active=false (no hard delete)', async () => {
     mockServiceClient.mockReturnValue(
@@ -1347,5 +1549,312 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
     const body = await res.json()
     expect(body.data).toEqual({ dry_run: true, preview: { id: EMPLOYEE_ID, is_active: false } })
     expect(mock.updates.employees).toBeUndefined()
+  })
+})
+
+describe('förhöjt skatteavdrag on the v1 employee doors', () => {
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`
+  const NONE = { ...SAMPLE_EMPLOYEE, extra_tax_amount: null, extra_tax_percentage: null }
+
+  function patch(body: Record<string, unknown>) {
+    return updateEmployee(
+      makeRequest(url, { method: 'PATCH', body: JSON.stringify(body) }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+  }
+
+  function useRows(existing: Record<string, unknown> | null, updated: Record<string, unknown> | null = existing) {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [{ data: existing, error: null }, { data: updated, error: null }],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+    return mock.updates
+  }
+
+  it('401 for a key that does not validate, and writes nothing', async () => {
+    const updates = useRows(NONE)
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(401)
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it.each([
+    ['both forms at once', { extra_tax_amount: 500, extra_tax_percentage: 45 }],
+    ['fractional kronor', { extra_tax_amount: 500.5 }],
+    ['101 %', { extra_tax_percentage: 101 }],
+  ])('400 VALIDATION_ERROR for %s, and writes nothing', async (_name, body) => {
+    const updates = useRows(NONE)
+
+    const res = await patch(body)
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('400 when a percentage is sent while kronor are stored', async () => {
+    const updates = useRows({ ...NONE, extra_tax_amount: 500 })
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(JSON.stringify(body.error)).toContain('extra_tax_percentage')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('404 EMPLOYEE_NOT_FOUND when the row is missing', async () => {
+    const updates = useRows(null)
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('EMPLOYEE_NOT_FOUND')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('200 and writes only the percentage (happy path)', async () => {
+    const updates = useRows(NONE, { ...NONE, extra_tax_percentage: 45 })
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ extra_tax_percentage: 45 }])
+    expect((await res.json()).data.extra_tax_percentage).toBe(45)
+  })
+
+  it('400 on create with both forms', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({
+          first_name: 'Anna',
+          last_name: 'Andersson',
+          personnummer: SAMPLE_PERSONNUMMER,
+          employment_start: '2024-01-15',
+          salary_type: 'monthly',
+          monthly_salary: 35000,
+          tax_table_number: 33,
+          tax_municipality: 'Stockholm',
+          extra_tax_amount: 500,
+          extra_tax_percentage: 45,
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(JSON.stringify((await res.json()).error)).toContain('extra_tax_percentage')
+  })
+})
+
+describe('personnel_category on the v1 employees doors', () => {
+  const createBody = {
+    first_name: 'Anna',
+    last_name: 'Andersson',
+    personnummer: SAMPLE_PERSONNUMMER,
+    employment_start: '2024-01-15',
+    salary_type: 'monthly' as const,
+    monthly_salary: 35000,
+    tax_table_number: 33,
+    tax_municipality: 'Stockholm',
+  }
+
+  it('lists the category and filters on it', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: [{ ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await listEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees?personnel_category=arbetare`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0].personnel_category).toBe('arbetare')
+    expect(supabase.eqs.employees).toContainEqual(['personnel_category', 'arbetare'])
+  })
+
+  it('rejects an unknown category filter with 400 VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: [], error: null },
+      }),
+    )
+    const res = await listEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees?personnel_category=kollektiv`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns the category on the detail endpoint', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: { ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }, error: null },
+      }),
+    )
+    const res = await getEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.personnel_category).toBe('arbetare')
+  })
+
+  it('creates a tjänsteman when the category is left out', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: SAMPLE_EMPLOYEE, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify(createBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(supabase.inserts.employees?.[0]).toMatchObject({ personnel_category: 'tjansteman' })
+  })
+
+  it('creates an arbetare', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: { ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({ ...createBody, personnel_category: 'arbetare' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(supabase.inserts.employees?.[0]).toMatchObject({ personnel_category: 'arbetare' })
+    expect((await res.json()).data.personnel_category).toBe('arbetare')
+  })
+
+  it('rejects an unknown category on create with 400 and inserts nothing', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({ ...createBody, personnel_category: 'kollektiv' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(supabase.inserts.employees).toBeUndefined()
+  })
+
+  it('changes the category with a PATCH that writes only that key', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [
+        { data: SAMPLE_EMPLOYEE, error: null },
+        { data: { ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }, error: null },
+      ],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ personnel_category: 'arbetare' }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(supabase.updates.employees).toEqual([{ personnel_category: 'arbetare' }])
+    expect((await res.json()).data.personnel_category).toBe('arbetare')
+  })
+
+  it('refuses null on the category (NOT NULL) with 400 and writes nothing', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: SAMPLE_EMPLOYEE, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ personnel_category: null }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(supabase.updates.employees).toBeUndefined()
+  })
+
+  it('returns 404 EMPLOYEE_NOT_FOUND for a category change on a missing employee', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ personnel_category: 'arbetare' }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('EMPLOYEE_NOT_FOUND')
+  })
+
+  it('returns 401 for a key that does not validate', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+
+    const res = await listEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees?personnel_category=arbetare`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(401)
   })
 })

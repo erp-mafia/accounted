@@ -145,7 +145,7 @@ export function fallbackNarrative(inputs: ComposerInputs): string {
     if (label) {
       parts.push(`${name}. Företagsform: ${label}.`)
     } else {
-      parts.push(`${name} är ett företag i gnubok.`)
+      parts.push(`${name} är ett företag i Accounted.`)
     }
   }
   parts.push(

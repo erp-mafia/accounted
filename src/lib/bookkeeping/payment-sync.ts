@@ -1,8 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { invoiceCustomerOutstanding } from '@/lib/invoices/customer-share'
+import { invoiceCustomerOutstanding } from '@/lib/bookkeeping/customer-share'
 import type { JournalEntry } from '@/types'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
+import { isPastDue, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('payment-sync')
 
@@ -40,7 +42,7 @@ export function isCustomerPaymentSourceType(sourceType: string | null | undefine
  */
 export interface PaymentEntryLinks {
   /** This invoice's payment rows on the entry (one in practice; summed). */
-  paymentRows: Array<{ id: string; amount: number; transaction_id: string | null }>
+  paymentRows: Array<{ id: string; amount: number; transaction_id: string | null; source?: string | null }>
   /** Bank rows whose journal_entry_id pointer names the entry. */
   transactionIds: string[]
 }
@@ -66,12 +68,22 @@ export async function loadPaymentEntryLinks(
   // Scoped to THIS invoice: a batch voucher (match_batch_allocate) carries one
   // payment row per invoice under the same journal_entry_id, and this call only
   // restores the source invoice's status (PR #666 review, SOC 2 CC6.3).
-  const { data: paymentRows, error: paymentRowsError } = await supabase
-    .from(isSupplier ? 'supplier_invoice_payments' : 'invoice_payments')
-    .select('id, amount, transaction_id')
-    .eq('journal_entry_id', entry.id)
-    .eq(isSupplier ? 'supplier_invoice_id' : 'invoice_id', entry.source_id)
-    .eq('company_id', companyId)
+  // source (who collected the payment, e.g. 'collections') exists on
+  // invoice_payments only; asking supplier_invoice_payments for it is a
+  // PostgREST 42703 that would fail every supplier payment storno's mirror.
+  const { data: paymentRows, error: paymentRowsError } = isSupplier
+    ? await supabase
+        .from('supplier_invoice_payments')
+        .select('id, amount, transaction_id')
+        .eq('journal_entry_id', entry.id)
+        .eq('supplier_invoice_id', entry.source_id)
+        .eq('company_id', companyId)
+    : await supabase
+        .from('invoice_payments')
+        .select('id, amount, transaction_id, source')
+        .eq('journal_entry_id', entry.id)
+        .eq('invoice_id', entry.source_id)
+        .eq('company_id', companyId)
   // An unread link is not an absent one: treated as empty, the sync would
   // revert the whole paid_amount and strand the row once the entry is gone.
   if (paymentRowsError) throw paymentRowsError
@@ -106,7 +118,15 @@ export async function syncInvoiceStatusFromPaymentEntry(
   supabase: SupabaseClient,
   companyId: string,
   entry: Pick<JournalEntry, 'id' | 'source_type' | 'source_id'>,
-  links?: PaymentEntryLinks | null
+  links?: PaymentEntryLinks | null,
+  options: {
+    /**
+     * Leave the payment rows the collections provider collected (source
+     * 'collections'): the collections rebook removes them itself, inside the
+     * window block_delete_collected_payment opens for it.
+     */
+    leaveCollectedPaymentRows?: boolean
+  } = {},
 ): Promise<void> {
   if (!isPaymentSourceType(entry.source_type) || !entry.source_id) return
 
@@ -182,7 +202,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       let newStatus: string
       if (newPaidAmount > 0) {
         newStatus = 'partially_paid'
-      } else if (supplierInvoice.due_date && new Date(supplierInvoice.due_date) < new Date()) {
+      } else if (supplierInvoice.due_date && isPastDue(supplierInvoice.due_date, todayIsoStockholm())) {
         newStatus = 'overdue'
       } else {
         newStatus = 'approved'
@@ -222,7 +242,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
   } else {
     const { data: customerInvoice, error: customerInvoiceError } = await supabase
       .from('invoices')
-      .select('paid_amount, total, due_date, deduction_total, deduction_reclaimed_total')
+      .select('paid_amount, total, due_date, deduction_total, deduction_reclaimed_total, credited_invoice_id')
       .eq('id', entry.source_id)
       .eq('company_id', companyId)
       .single()
@@ -238,7 +258,30 @@ export async function syncInvoiceStatusFromPaymentEntry(
       return
     }
 
-    if (customerInvoice) {
+    if (customerInvoice && (customerInvoice as { credited_invoice_id?: string | null }).credited_invoice_id) {
+      // A refund of a kreditfaktura (lib/invoices/refund-credit-note.ts): the
+      // credit note keeps its status, and its paid_amount (negative, like its
+      // total) moves back by the refund's row, so the reskontra shows the
+      // credit as owed again exactly when 1510 does. Without a row there is
+      // no refund to undo.
+      if (reversedAmount !== null) {
+        const restoredPaid = Math.min(0, roundOre(Number(customerInvoice.paid_amount ?? 0) - reversedAmount))
+        const { error: creditNoteUpdateError } = await supabase
+          .from('invoices')
+          .update({ paid_amount: restoredPaid, paid_at: null })
+          .eq('id', entry.source_id)
+          .eq('company_id', companyId)
+          .in('status', ['sent', 'overdue'])
+        if (creditNoteUpdateError) {
+          log.error('Failed to restore credit note for refund reversal: aborting status sync', creditNoteUpdateError, {
+            companyId,
+            journalEntryId: entryId,
+            invoiceId: entry.source_id,
+          })
+          return
+        }
+      }
+    } else if (customerInvoice) {
       // For a partial reversal we take the exact amount from the payment row.
       // The fallback (full paid_amount) only applies when no payment row exists:
       // true for invoice_cash_payment, which is only ever booked on a FULL
@@ -262,7 +305,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // once mark-paid started comparing the net customer settlement against
       // remaining (a net payment can never reach a gross remaining, and the
       // cash-partial block rejects the "partial"). The share comes from the
-      // one shared definition (lib/invoices/customer-share.ts); the
+      // one shared definition (lib/bookkeeping/customer-share.ts); the
       // Math.max(0, ...) mirrors the guard's GREATEST(0, ...) because this
       // value is persisted into the column.
       // A refused deduction that a rot_rut_reclaim voucher moved back onto
@@ -284,7 +327,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       )
       const revertStatus = newPaidAmount > 0
         ? 'partially_paid'
-        : customerInvoice.due_date && new Date(customerInvoice.due_date) < new Date()
+        : customerInvoice.due_date && isPastDue(customerInvoice.due_date, todayIsoStockholm())
           ? 'overdue'
           : 'sent'
 
@@ -313,7 +356,12 @@ export async function syncInvoiceStatusFromPaymentEntry(
     // re-match of the same bank line doesn't trip the (transaction_id,
     // invoice_id) / (journal_entry_id, invoice_id) unique indexes on
     // invoice_payments. By id, for the same reason as the supplier branch.
-    await deletePaymentRows(supabase, companyId, 'invoice_payments', paymentRowIds, entryId)
+    const removedPaymentRowIds = options.leaveCollectedPaymentRows
+      ? resolved.paymentRows.filter((r) => r.source !== 'collections').map((r) => r.id)
+      : paymentRowIds
+    await deletePaymentRows(supabase, companyId, 'invoice_payments', removedPaymentRowIds, entryId)
+    // A removed payment on an invoice under collection must be dropped at the provider too.
+    if (removedPaymentRowIds.length > 0) scheduleCollectionForwardDrain(companyId)
 
     await releaseLinkedTransactions(supabase, companyId, entryId, releaseTransactionIds, 'invoice_id')
   }

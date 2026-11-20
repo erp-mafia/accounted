@@ -5,7 +5,7 @@
  * v1 and MCP run the same rules.
  *
  * The rules themselves (eligibility, debtor resolution, the transactional
- * create RPC, the deterministic pain.001 render) stay in ./batch-service.ts
+ * create RPC, the deterministic pain.001 or LB render) stay in ./batch-service.ts
  * and ./batch-eligibility.ts; this file adds the doors' needs: dry runs that
  * write nothing, the not-found / already-cancelled answers as registry
  * codes, and the reads shared by the list and detail views.
@@ -24,15 +24,19 @@ import { decodeDefaultCursor, nextCursorFromPage } from '@/lib/api/v1/pagination
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 import {
+  batchFileBytes,
   createSupplierPaymentBatch,
+  LB_BANK_ACCOUNT_PAYEE,
   payeeFingerprint,
   planSupplierPaymentBatch,
   renderSupplierPaymentBatchFile,
+  SWEDBANK_ISO2_GIRO_PAYEE,
   type CreateBatchInput,
   type CreateBatchResult,
   type SupplierPaymentBatchPlan,
 } from './batch-service'
 import { formatPayeeLabel, type SupplierPayee } from './supplier-payee'
+import { payingAccountMissingSv } from './paying-account'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -40,8 +44,40 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 function createFailure(result: Exclude<CreateBatchResult, { ok: true }>): Failure {
   switch (result.code) {
     case 'debtor_incomplete':
+      // An IBAN or BIC refusal names the paying account and where to fill it in.
+      if (result.account && (result.missing === 'iban' || result.missing === 'bic')) {
+        return {
+          ok: false,
+          code: 'SI_BATCH_DEBTOR_INCOMPLETE',
+          messageSv: payingAccountMissingSv(result.missing, result.account),
+          details: { missing: result.missing, account: result.account },
+        }
+      }
       return { ok: false, code: 'SI_BATCH_DEBTOR_INCOMPLETE', details: { missing: result.missing } }
     case 'ineligible':
+      // Only the Swedbank ISO 2.0 refusal says what to do instead; any other
+      // reason keeps the registry sentence that points at the details.
+      if (result.details.every((line) => line.reason === SWEDBANK_ISO2_GIRO_PAYEE)) {
+        return {
+          ok: false,
+          code: 'SI_BATCH_INELIGIBLE_INVOICE',
+          messageSv:
+            'Swedbanks ISO 2.0-avtal betalar bara till bankkonton, inte till bankgiro eller plusgiro. ' +
+            'Betalningar dit kräver Swedbanks ISO 1.0-avtal för leverantörsbetalningar, och betalfiler för det avtalet kan inte skapas här ännu. ' +
+            'Ta bort de fakturorna ur betalfilen och betala dem med Betala via banken eller i internetbanken.',
+          details: { invoices: result.details },
+        }
+      }
+      if (result.details.every((line) => line.reason === LB_BANK_ACCOUNT_PAYEE)) {
+        return {
+          ok: false,
+          code: 'SI_BATCH_INELIGIBLE_INVOICE',
+          messageSv:
+            'Företagets bank tar bara emot Bankgirots LB-fil, och LB-filen härifrån betalar bara till bankgiro och plusgiro. ' +
+            'Ta bort fakturorna till bankkonton ur betalfilen och betala dem i internetbanken.',
+          details: { invoices: result.details },
+        }
+      }
       return { ok: false, code: 'SI_BATCH_INELIGIBLE_INVOICE', details: { invoices: result.details } }
     case 'invalid_amount':
       return { ok: false, code: 'SI_BATCH_INVALID_AMOUNT', details: { invoices: result.details } }
@@ -77,9 +113,9 @@ function stagedPayeeLabel(payee: SupplierPayee): string {
 }
 
 /** The dry-run answer for a create: the batch the commit would write, without id or MsgId. */
-function planPreview(plan: SupplierPaymentBatchPlan, format: string): Record<string, unknown> {
+function planPreview(plan: SupplierPaymentBatchPlan): Record<string, unknown> {
   return {
-    format,
+    format: plan.format,
     currency: 'SEK',
     item_count: plan.items.length,
     total_amount: plan.total_amount,
@@ -98,8 +134,9 @@ function planPreview(plan: SupplierPaymentBatchPlan, format: string): Record<str
       warnings: plan.warnings[index] ?? [],
     })),
     note:
-      'Nothing is created yet. The live call re-checks every invoice, creates the batch and mints its pain.001 MsgId; ' +
-      'the file is then downloaded and uploaded to the bank, where the payment is signed. No verifikat is posted.',
+      'Nothing is created yet. The live call re-checks every invoice, creates the batch and mints its MsgId; ' +
+      `the file (${plan.format === 'bg_lb' ? 'a Bankgirot LB file, the only form the company\'s bank takes' : 'pain.001'}) ` +
+      'is then downloaded and uploaded to the bank, where the payment is signed. No verifikat is posted.',
   }
 }
 
@@ -116,7 +153,7 @@ export async function createPaymentBatch(
   if (options.dryRun) {
     const planned = await planSupplierPaymentBatch(ctx.supabase, ctx.companyId, input)
     if (!planned.ok) return createFailure(planned)
-    return { ok: true, dryRun: true, preview: planPreview(planned.plan, input.format) }
+    return { ok: true, dryRun: true, preview: planPreview(planned.plan) }
   }
   const result = await createSupplierPaymentBatch(ctx.supabase, ctx.companyId, ctx.userId, input)
   if (!result.ok) return createFailure(result)
@@ -326,6 +363,9 @@ export interface DownloadedBatchFile {
   content: string
   contentType: string
   filename: string
+  /** How `content` becomes the bytes the bank takes: UTF-8 for pain.001, ISO 8859-1 for an LB file. */
+  charset: 'utf-8' | 'iso-8859-1'
+  /** Over the bytes as encoded for the bank. */
   sha256: string
   downloadCount: number
 }
@@ -382,7 +422,8 @@ export async function downloadPaymentBatchFile(
       content: rendered.content,
       contentType: rendered.contentType,
       filename: rendered.filename,
-      sha256: createHash('sha256').update(rendered.content, 'utf8').digest('hex'),
+      charset: rendered.charset,
+      sha256: createHash('sha256').update(batchFileBytes(rendered)).digest('hex'),
       downloadCount,
     },
   }

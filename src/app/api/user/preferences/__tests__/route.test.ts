@@ -22,7 +22,7 @@ function unauthed() {
 }
 
 function authedForGet(
-  row: { hide_assistant_fab?: boolean; auto_logout?: boolean } | null,
+  row: { hide_assistant_fab?: boolean; auto_logout?: boolean; ui_state?: Record<string, unknown> } | null,
 ) {
   const maybeSingle = vi.fn().mockResolvedValue({ data: row, error: null })
   const supabase = {
@@ -63,14 +63,24 @@ describe('GET /api/user/preferences', () => {
     const res = await GET()
     const { status, body } = await parseJsonResponse<{ data: unknown }>(res)
     expect(status).toBe(200)
-    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: true })
+    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: true, support_fab_hidden: false })
   })
 
   it('defaults to false when no preferences row exists', async () => {
     authedForGet(null)
     const res = await GET()
     const { body } = await parseJsonResponse<{ data: unknown }>(res)
-    expect(body.data).toEqual({ hide_assistant_fab: false, auto_logout: false })
+    expect(body.data).toEqual({ hide_assistant_fab: false, auto_logout: false, support_fab_hidden: false })
+  })
+
+  it('reads the support button choice out of the ui state, apart from the assistant one', async () => {
+    authedForGet({ hide_assistant_fab: true, auto_logout: false, ui_state: { support_fab_hidden: true } })
+    const { body } = await parseJsonResponse<{ data: unknown }>(await GET())
+    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: false, support_fab_hidden: true })
+
+    authedForGet({ hide_assistant_fab: true, auto_logout: false, ui_state: {} })
+    const second = await parseJsonResponse<{ data: { support_fab_hidden: boolean } }>(await GET())
+    expect(second.body.data.support_fab_hidden).toBe(false)
   })
 })
 

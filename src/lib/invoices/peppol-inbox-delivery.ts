@@ -23,6 +23,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { roundOre } from '@/lib/money'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
+import { linkArrivalOutputs, recordArrival, type ArrivalOutputInput } from '@/lib/intake/arrivals'
 import {
   PEPPOL_INBOUND_AWAITING_OWNER,
   PEPPOL_INBOUND_AWAITING_XML,
@@ -140,6 +141,69 @@ function safeFilename(base: string, extension: string): string {
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+}
+
+/**
+ * The arrival of one inbound e-invoice. The original is the exact received
+ * XML, which the delivery has already archived as a document: the arrival
+ * points at that document's bytes instead of storing them twice. Best
+ * effort: never throws, never holds the delivery.
+ */
+export async function recordPeppolArrival(
+  service: SupabaseClient,
+  args: {
+    delivery: PeppolInboundDelivery
+    xmlDocumentId: string | null
+    pdfDocumentId: string | null
+    inboxItemId: string
+  },
+): Promise<void> {
+  const { row, companyId, document } = args.delivery
+  type ArchivedXml = { storage_path: string | null; sha256_hash: string | null; mime_type: string | null; file_size_bytes: number | null }
+  let xml: ArchivedXml | null = null
+  if (args.xmlDocumentId) {
+    const { data } = await service
+      .from('document_attachments')
+      .select('storage_path, sha256_hash, mime_type, file_size_bytes')
+      .eq('id', args.xmlDocumentId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    xml = (data as ArchivedXml | null) ?? null
+  }
+  const recorded = await recordArrival(service, {
+    companyId,
+    source: 'peppol',
+    sourceRef: row.provider_document_id,
+    receivedAt: row.received_at,
+    sender: {
+      name: document.supplier.name,
+      endpoint: document.supplier.endpoint
+        ? `${document.supplier.endpoint.scheme}:${document.supplier.endpoint.identifier}`
+        : null,
+      org_number: document.supplier.orgNumber,
+      vat_number: document.supplier.vatNumber,
+    },
+    fetchedBy: { type: 'system', label: 'peppol-inbound' },
+    sourceMeta: {
+      provider: row.provider,
+      peppol_inbound_document_id: row.id,
+      document_type: document.documentType,
+      invoice_number: document.documentId || null,
+      xml_document_id: args.xmlDocumentId,
+      xml_sha256: row.xml_sha256,
+    },
+    originalRef: xml?.storage_path
+      ? { path: xml.storage_path, sha256: xml.sha256_hash, mime: xml.mime_type, size: xml.file_size_bytes }
+      : undefined,
+  })
+  if (!recorded) return
+  const shown: 'rendering' | 'xml' = args.pdfDocumentId ? 'rendering' : 'xml'
+  const outputs: ArrivalOutputInput[] = [
+    ...(args.xmlDocumentId ? [{ kind: 'document' as const, id: args.xmlDocumentId, role: 'xml' as const }] : []),
+    ...(args.pdfDocumentId ? [{ kind: 'document' as const, id: args.pdfDocumentId, role: 'rendering' as const }] : []),
+    { kind: 'inbox_item', id: args.inboxItemId, role: shown },
+  ]
+  await linkArrivalOutputs(service, recorded.arrival, outputs)
 }
 
 /** Who the inbox row belongs to: the member who registered, else the company's first owner. */
@@ -294,5 +358,11 @@ export async function deliverPeppolDocumentToInbox(
     }
     throw new Error(`Failed to create inbox item for inbound Peppol document: ${error.message}`)
   }
-  return { inboxItemId: (item as { id: string }).id, xmlDocumentId }
+  const inboxItemId = (item as { id: string }).id
+  try {
+    await recordPeppolArrival(service, { delivery, xmlDocumentId, pdfDocumentId, inboxItemId })
+  } catch {
+    // recordArrival logs its own failures; the delivery stands either way.
+  }
+  return { inboxItemId, xmlDocumentId }
 }

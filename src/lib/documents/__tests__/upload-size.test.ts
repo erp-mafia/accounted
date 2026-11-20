@@ -2,7 +2,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   HOSTED_MAX_UPLOAD_BYTES,
   HOSTED_REQUEST_BODY_LIMIT_BYTES,
+  DOCUMENT_MAX_UPLOAD_BYTES,
   INBOX_MAX_UPLOAD_BYTES,
+  documentTooLargeMessage,
   exceedsHostedUploadLimit,
   exceedsInboxUploadLimit,
   formatMegabytes,
@@ -10,7 +12,7 @@ import {
   isShrinkableImage,
   tooLargeMessage,
 } from '../upload-size'
-import { prepareForMultipartUpload, shrinkImageForUpload } from '../shrink-image'
+import { prepareDocumentUpload, shrinkImageForUpload } from '../shrink-image'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -97,9 +99,11 @@ describe('shrinkImageForUpload', () => {
 })
 
 // crm#203: a phone photo sent as a new version of a voucher's underlag died as
-// a platform 413 and surfaced as a bare "network error". Every multipart
-// document upload now goes through this gate first.
-describe('prepareForMultipartUpload', () => {
+// a platform 413 and surfaced as a bare "network error". Every document upload
+// goes through this gate first; a file over the platform ceiling then goes
+// straight to Storage (postDocumentForm), so only the archive's own ceiling
+// refuses.
+describe('prepareDocumentUpload', () => {
   function fakeFile(size: number, type: string): File {
     return { size, type, name: 'kvitto.jpg', lastModified: 0 } as File
   }
@@ -107,10 +111,10 @@ describe('prepareForMultipartUpload', () => {
   it('passes a file that fits through untouched', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
     const file = fakeFile(1024, 'application/pdf')
-    expect(await prepareForMultipartUpload(file)).toEqual({ ok: true, file })
+    expect(await prepareDocumentUpload(file)).toEqual({ ok: true, file })
   })
 
-  it('shrinks an oversized phone photo so it fits the platform ceiling', async () => {
+  it('still shrinks an oversized phone photo on hosted', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
     vi.stubGlobal('createImageBitmap', async () => ({ width: 4000, height: 3000, close: () => {} }))
     vi.stubGlobal('document', {
@@ -119,7 +123,7 @@ describe('prepareForMultipartUpload', () => {
         toBlob: (resolve: (b: Blob) => void) => resolve(new Blob([new Uint8Array(1024)], { type: 'image/jpeg' })),
       }),
     })
-    const result = await prepareForMultipartUpload(fakeFile(8 * 1024 * 1024, 'image/jpeg'))
+    const result = await prepareDocumentUpload(fakeFile(8 * 1024 * 1024, 'image/jpeg'))
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.file.size).toBeLessThanOrEqual(HOSTED_MAX_UPLOAD_BYTES)
@@ -127,15 +131,24 @@ describe('prepareForMultipartUpload', () => {
     }
   })
 
-  it('refuses an oversized PDF with its size instead of sending it into a 413', async () => {
+  it('lets a PDF over the platform ceiling through: it goes straight to Storage', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
-    const result = await prepareForMultipartUpload(fakeFile(6 * 1024 * 1024, 'application/pdf'))
-    expect(result).toEqual({ ok: false, message: tooLargeMessage(6 * 1024 * 1024) })
+    const file = fakeFile(6 * 1024 * 1024, 'application/pdf')
+    expect(await prepareDocumentUpload(file)).toEqual({ ok: true, file })
   })
 
-  it('sends anything as-is on self-hosted, where no proxy caps the body', async () => {
-    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
-    const file = fakeFile(8 * 1024 * 1024, 'application/pdf')
-    expect(await prepareForMultipartUpload(file)).toEqual({ ok: true, file })
+  it('refuses a file over the archive ceiling with its size, on any deployment', async () => {
+    for (const selfHosted of ['', 'true']) {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', selfHosted)
+      const size = DOCUMENT_MAX_UPLOAD_BYTES + 1
+      const result = await prepareDocumentUpload(fakeFile(size, 'application/pdf'))
+      expect(result).toEqual({ ok: false, message: documentTooLargeMessage(size) })
+    }
+  })
+
+  it('names both the size and the archive ceiling', () => {
+    const message = documentTooLargeMessage(12 * 1024 * 1024)
+    expect(message).toContain('12,0 MB')
+    expect(message).toContain(formatMegabytes(DOCUMENT_MAX_UPLOAD_BYTES))
   })
 })

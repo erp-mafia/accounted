@@ -54,10 +54,10 @@ interface DoorOptions {
   service?: SupabaseClient
 }
 
-function resolveTransport(): { transport: PeppolTransport; provider: string } | null {
-  const availability = getPeppolTransportAvailability()
+async function resolveTransport(): Promise<{ transport: PeppolTransport; provider: string } | null> {
+  const availability = await getPeppolTransportAvailability()
   if (!availability.available) return null
-  const transport = getPeppolTransport(availability.provider)
+  const transport = await getPeppolTransport(availability.provider)
   return transport ? { transport, provider: availability.provider } : null
 }
 
@@ -80,8 +80,8 @@ export async function getPeppolRegistrationStatus(
 ): Promise<OperationOutcome<PeppolRegistrationStatus>> {
   const { supabase, companyId } = ctx
   const service = options.service ?? supabase
-  const availability = getPeppolTransportAvailability()
-  const resolved = resolveTransport()
+  const availability = await getPeppolTransportAvailability()
+  const resolved = await resolveTransport()
   try {
     const registration = resolved
       ? await getPeppolRegistration({ supabase, companyId, provider: resolved.provider })
@@ -146,7 +146,7 @@ export async function registerPeppolParticipant(
     if (denied) return denied
   }
 
-  const resolved = resolveTransport()
+  const resolved = await resolveTransport()
   if (!resolved) return { ok: false, code: 'PEPPOL_TRANSPORT_UNAVAILABLE' }
   if (await isSandboxCompany(supabase, companyId)) return { ok: false, code: 'PEPPOL_SANDBOX_NOT_ALLOWED' }
 
@@ -322,7 +322,7 @@ async function notifyOperators(
 ): Promise<void> {
   const { companyId, userId, log } = ctx
   const { company, note, wantsReceiving, requesterEmail } = args
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   if (!emailService.isConfigured()) {
     log.warn('peppol access request: e-mail service not configured, request recorded only', { companyId })
     return

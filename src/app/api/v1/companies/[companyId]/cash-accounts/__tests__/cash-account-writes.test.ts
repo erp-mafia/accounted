@@ -45,6 +45,7 @@ import { POST as createCashAccount } from '../route'
 import { PATCH as updateCashAccount } from '../[id]/route'
 import { POST as setPrimary } from '../[id]/set-primary/route'
 import { PUT as setPayeeDefault } from '../payee-defaults/route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -88,7 +89,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['cash_accounts', 'invoice_payee_defaults', 'chart_of_accounts'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CA_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -217,7 +218,7 @@ describe('POST /api/v1/companies/:companyId/cash-accounts', () => {
     })
   })
 
-  it('409 CASH_ACCOUNT_IBAN_DUPLICATE when another row already carries the IBAN (Grönsinka), writing nothing', async () => {
+  it('409 CASH_ACCOUNT_IBAN_DUPLICATE when another row already carries the IBAN, writing nothing', async () => {
     const client = makeClient({
       company_members: OWNER,
       cash_accounts: { data: [{ id: OTHER_ID, ledger_account: '1930', iban: IBAN, payee_iban: null }], error: null },
@@ -328,6 +329,193 @@ describe('PATCH /api/v1/companies/:companyId/cash-accounts/:id', () => {
     expect(wrote(client)).toBe(false)
   })
 
+  it('409 between two enabled accounts when the other one prints the IBAN, writing nothing', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      cash_accounts: [
+        { data: { id: CA_ID, ledger_account: '1930', iban: null, payee_iban: null, enabled: true, source: 'manual', bank_connection_id: null }, error: null },
+        { data: [{ id: OTHER_ID, iban: null, payee_iban: IBAN }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await patch({ iban: IBAN.replace(/(.{4})/g, '$1 ').toLowerCase() })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('CASH_ACCOUNT_IBAN_DUPLICATE')
+    expect(body.error.details).toEqual({ existing_cash_account_id: OTHER_ID })
+    expect(wrote(client)).toBe(false)
+  })
+
+  describe('a duplicate typed in by mistake and turned off (crm#1270)', () => {
+    const disabledTypedDuplicate = {
+      id: CA_ID, ledger_account: '1931', iban: IBAN, payee_iban: null, enabled: false, source: 'manual', bank_connection_id: null,
+    }
+    const seededPrimary = {
+      id: CA_ID, ledger_account: '1930', iban: null, payee_iban: null, enabled: true, source: 'manual', bank_connection_id: null,
+    }
+    const updatesOf = (client: ReturnType<typeof makeClient>) =>
+      client.calls
+        .filter((c) => c.table === 'cash_accounts' && c.method === 'update')
+        .map((c) => c.args[0] as Record<string, unknown>)
+
+    it('still refuses its IBAN on the real account: a bank connection would land on the disabled row', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: seededPrimary, error: null },
+          { data: [{ id: OTHER_ID, iban: IBAN, payee_iban: null }], error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await patch({ iban: IBAN })
+      expect(res.status).toBe(409)
+      expect((await res.json()).error.code).toBe('CASH_ACCOUNT_IBAN_DUPLICATE')
+      expect(wrote(client)).toBe(false)
+    })
+
+    it('clearing its IBAN also clears its bank identity, which frees the IBAN for the real account', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: disabledTypedDuplicate, error: null },
+          { data: [{ id: OTHER_ID, iban: null, payee_iban: null }], error: null },
+          { data: row({ iban: IBAN, enabled: false }), error: null },
+          { data: row({ iban: null, enabled: false }), error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await patch({ iban: '' })
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.iban).toBeNull()
+      const updates = updatesOf(client)
+      expect(updates).toHaveLength(2)
+      expect(updates[0]).toMatchObject({ payee_iban: null })
+      expect(updates[1]).toEqual({ iban: null })
+      // The identity write re-checks the row in the UPDATE itself.
+      expect(client.calls).toContainEqual({ table: 'cash_accounts', method: 'eq', args: ['source', 'manual'] })
+      expect(client.calls).toContainEqual({ table: 'cash_accounts', method: 'eq', args: ['enabled', false] })
+      expect(client.calls).toContainEqual({ table: 'cash_accounts', method: 'is', args: ['bank_connection_id', null] })
+    })
+
+    it('then the real account takes the IBAN, and its own (empty) identity is left alone', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: seededPrimary, error: null },
+          { data: [{ id: OTHER_ID, iban: null, payee_iban: null }], error: null },
+          { data: row({ ledger_account: '1930', payee_iban: IBAN, is_primary: true }), error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await patch({ iban: IBAN })
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.payee.iban).toBe(IBAN)
+      const updates = updatesOf(client)
+      expect(updates).toHaveLength(1)
+      expect(updates[0]).toMatchObject({ payee_iban: IBAN })
+      expect(updates[0].iban).toBeUndefined()
+    })
+
+    it('turning it off and clearing the IBAN in one request does both, the identity last', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: { ...disabledTypedDuplicate, enabled: true }, error: null },
+          { data: [{ id: OTHER_ID, iban: null, payee_iban: null }], error: null },
+          { data: { id: CA_ID, is_primary: false, bank_connection_id: null }, error: null },
+          { data: row({ iban: IBAN }), error: null },
+          { data: row({ iban: IBAN, enabled: false }), error: null },
+          { data: row({ iban: null, enabled: false }), error: null },
+        ],
+        transactions: { data: [], error: null },
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await patch({ iban: '', enabled: false })
+      expect(res.status).toBe(200)
+      expect((await res.json()).data).toMatchObject({ enabled: false, iban: null })
+      const updates = updatesOf(client)
+      expect(updates).toHaveLength(3)
+      expect(updates[1]).toEqual({ enabled: false })
+      expect(updates[2]).toEqual({ iban: null })
+    })
+
+    it('an account still in use keeps its identity when only its printed IBAN is cleared', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: { ...disabledTypedDuplicate, enabled: true }, error: null },
+          { data: row({ iban: IBAN }), error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      expect((await patch({ iban: '' })).status).toBe(200)
+      const updates = updatesOf(client)
+      expect(updates).toHaveLength(1)
+      expect(updates[0].iban).toBeUndefined()
+    })
+
+    it('an identity another row shares (the twin of a bank-fed account) stays the bank\'s word', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: disabledTypedDuplicate, error: null },
+          { data: [{ id: OTHER_ID, iban: IBAN, payee_iban: IBAN }], error: null },
+          { data: row({ iban: IBAN, enabled: false }), error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      expect((await patch({ iban: '' })).status).toBe(200)
+      expect(updatesOf(client)).toHaveLength(1)
+    })
+
+    it('never takes on an identity another row already carries', async () => {
+      const OTHER_IBAN = 'SE7280000810340009783242'
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          // Re-saving the IBAN it already prints: no twin check, so the identity rule checks itself.
+          { data: { ...disabledTypedDuplicate, payee_iban: OTHER_IBAN }, error: null },
+          { data: [{ id: OTHER_ID, iban: OTHER_IBAN, payee_iban: null }], error: null },
+          { data: row({ iban: IBAN, payee_iban: OTHER_IBAN, enabled: false }), error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      expect((await patch({ iban: OTHER_IBAN })).status).toBe(200)
+      expect(updatesOf(client)).toHaveLength(1)
+    })
+
+    it('never a row a bank connection held: its identity is the bank\'s', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: { ...disabledTypedDuplicate, source: 'enable_banking' }, error: null },
+          { data: row({ iban: IBAN, enabled: false, source: 'enable_banking' }), error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      expect((await patch({ iban: '' })).status).toBe(200)
+      expect(updatesOf(client)).toHaveLength(1)
+    })
+
+    it('a dry run names the identity change and writes nothing', async () => {
+      const client = makeClient({
+        company_members: OWNER,
+        cash_accounts: [
+          { data: disabledTypedDuplicate, error: null },
+          { data: [], error: null },
+        ],
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await patch({ iban: '' }, '?dry_run=true')
+      expect(res.status).toBe(200)
+      expect((await res.json()).data.preview).toEqual({
+        cash_account_id: CA_ID,
+        changes: { iban: null, bank_identity_iban: null },
+      })
+      expect(wrote(client)).toBe(false)
+    })
+  })
+
   it('400 CASH_ACCOUNT_DISABLE_PRIMARY: the primary cannot be turned off', async () => {
     const client = makeClient({
       company_members: OWNER,
@@ -372,7 +560,7 @@ describe('POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary', () =
     const client = makeClient({ company_members: MEMBER })
     mockServiceClient.mockReturnValue(client)
     expect((await post()).status).toBe(403)
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
   })
 
   it('400 CASH_ACCOUNT_PRIMARY_INELIGIBLE when the RPC refuses', async () => {
@@ -398,7 +586,7 @@ describe('POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary', () =
     const refused = await post('?dry_run=true')
     expect(refused.status).toBe(400)
     expect((await refused.json()).error.details.reason).toBe('not_sek')
-    expect(eur.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(eur.rpc)).toEqual([])
 
     const sek = makeClient({ company_members: OWNER, cash_accounts: { data: row(), error: null } })
     mockServiceClient.mockReturnValue(sek)

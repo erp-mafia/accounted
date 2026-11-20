@@ -5,13 +5,16 @@ import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { useTranslations, useLocale } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import type { SkattekontoTaxDoubleCandidate } from '@/lib/transactions/skattekonto-tax-double'
+import SkattekontoTaxDoubleDialog from './SkattekontoTaxDoubleDialog'
 
 /** The bank transaction being booked, as much as the caller knows about it.
  *  Enables the "Matcha mot verifikatet" action for ledger-only candidates. */
@@ -62,6 +65,7 @@ export default function DuplicateBookingDialog({
   matchTransaction,
   onMatched,
   onIgnored,
+  subject,
 }: {
   /** The already-booked sibling, or null to keep the dialog closed. */
   candidate: BookedDuplicateCandidate | null
@@ -81,6 +85,12 @@ export default function DuplicateBookingDialog({
    *  The caller owns the refresh and closes the dialog by clearing
    *  `candidate`. Omit to hide the ignore action. */
   onIgnored?: (transactionId: string) => void
+  /**
+   * What is being booked, in the caller's words, for a caller whose dialog
+   * does not open on the row itself (Granskning names the proposal: its
+   * approvals run in a queue, so the dialog can arrive a few rows later).
+   */
+  subject?: string
 }) {
   const t = useTranslations('transactions')
   const locale = useLocale() as ErrorLocale
@@ -92,13 +102,17 @@ export default function DuplicateBookingDialog({
   // the target is either a duplicate import (ignore), the second leg of an
   // N:1 settlement (match), or a genuinely separate identical event (book).
   const isSiblingCandidate = candidate !== null && candidate.transaction_id !== null
+  // A samlingsverifikat that holds the row's day and still has an unlinked
+  // part (issue #101): the row is most likely already in it, so it is linked
+  // there (match) or left out (ignore), and booked only if it is not in it.
+  const covering = candidate?.covering ?? null
 
   // Matching links THIS bank line to the existing voucher instead of minting a
   // second verifikat (one affärshändelse, one verifikat). Offered for both
   // candidate kinds: for ledger-only vouchers it is the right default, and for
   // sibling candidates manualLink explicitly permits N:1 links.
   const canMatch = candidate !== null && !!matchTransaction && !!onMatched
-  const canIgnore = isSiblingCandidate && !!matchTransaction && !!onIgnored
+  const canIgnore = (isSiblingCandidate || covering !== null) && !!matchTransaction && !!onIgnored
 
   // Session-cached (lib/reference-data); an empty list resolves to 1930 and
   // the link route re-validates the account either way.
@@ -184,6 +198,21 @@ export default function DuplicateBookingDialog({
 
   const busy = processing || matching || ignoring
 
+  // Issue #50: the skattekonto already booked this tax. Nothing to match or
+  // ignore (the verifikat found has no bank leg): the payment belongs on the
+  // skattekonto account, so the dialog says that and offers book anyway.
+  const skattekonto = (candidate as Partial<SkattekontoTaxDoubleCandidate> | null)?.skattekonto
+  if (candidate && skattekonto) {
+    return (
+      <SkattekontoTaxDoubleDialog
+        candidate={{ ...candidate, skattekonto }}
+        processing={busy}
+        onBookAnyway={onBookAnyway}
+        onCancel={onCancel}
+      />
+    )
+  }
+
   return (
     <Dialog
       open={candidate !== null}
@@ -193,22 +222,44 @@ export default function DuplicateBookingDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('dialog_duplicate_title')}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          {/* Sibling candidates get the "vill du matcha i stället?" copy: the
-              generic body's "en annan transaktion eller en befintlig
+          {/* The body states one fact; what to do about it sits behind the
+              "?" (convention 7). Sibling candidates get the "matcha hellre"
+              help: the generic "en annan transaktion eller en befintlig
               verifikation" hedge reads as noise once the twin is known. The
               ignore hint renders only when the action itself does (callers
               without onIgnored, e.g. the manual booking form and the bulk
               dialog, must not have copy pointing at a button that is not
               there). */}
+          <div className="flex items-center gap-2">
+            <DialogTitle>{t('dialog_duplicate_title')}</DialogTitle>
+            <HelpPopover className="shrink-0">
+              {covering
+                ? t('dialog_duplicate_help_covering')
+                : isSiblingCandidate
+                  ? t('dialog_duplicate_help_sibling')
+                  : t('dialog_duplicate_help')}
+              {canIgnore && (
+                <> {covering ? t('dialog_duplicate_ignore_hint_covering') : t('dialog_duplicate_ignore_hint')}</>
+              )}
+            </HelpPopover>
+          </div>
+        </DialogHeader>
+        <div className="space-y-4">
+          {/* data-ph-mask: a proposal's title carries counterparty and amount. */}
+          {subject && (
+            <p className="break-words text-sm" data-ph-mask="">
+              {subject}
+            </p>
+          )}
           <p className="text-sm text-muted-foreground">
-            {isSiblingCandidate ? t('dialog_duplicate_body_sibling') : t('dialog_duplicate_body')}
-            {canIgnore && <> {t('dialog_duplicate_ignore_hint')}</>}
+            {covering
+              ? t('dialog_duplicate_body_covering', { unlinked: formatCurrency(covering.unlinked, 'SEK') })
+              : isSiblingCandidate
+                ? t('dialog_duplicate_body_sibling')
+                : t('dialog_duplicate_body')}
           </p>
           {candidate && (
-            <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
+            <div className="space-y-1 rounded-lg p-3 bg-control shadow-raised">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="font-medium">
                   {candidate.voucher_label
@@ -269,7 +320,7 @@ export default function DuplicateBookingDialog({
                   null amount already shows dialog_duplicate_amount_unknown. */}
               {candidate.amount == null && candidate.currency && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_sek_unavailable', { currency: candidate.currency })}
                   </p>
@@ -281,7 +332,7 @@ export default function DuplicateBookingDialog({
                   match rests on date + account + direction alone. */}
               {candidate.amount != null && !candidate.amount_verified && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_amount_unverified')}
                   </p>

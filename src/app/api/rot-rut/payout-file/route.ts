@@ -3,11 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { RotRutPayoutFileSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
-import { uploadDocument } from '@/lib/core/documents/document-service'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { archiveRotRutPayoutFile, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
 
 /**
  * POST /api/rot-rut/payout-file
@@ -62,19 +58,11 @@ export const POST = withRouteContext(
     // and can re-generate; a failed archive must not orphan the begäran.
     let fileDocumentId: string | null = null
     try {
-      const buffer = new TextEncoder().encode(result.file.xml!).buffer as ArrayBuffer
-      const doc = await uploadDocument(
-        supabase,
-        user.id,
-        companyId!,
-        { name: result.file.file_name, buffer },
-        { upload_source: 'system' },
-      )
-      fileDocumentId = doc.id
-      await supabase
-        .from('rot_rut_payout_requests')
-        .update({ file_document_id: doc.id })
-        .eq('id', result.request.id as string)
+      const archived = await archiveRotRutPayoutFile(supabase, user.id, companyId!, result.request.id as string, {
+        xml: result.file.xml!,
+        file_name: result.file.file_name,
+      })
+      fileDocumentId = archived.documentId
     } catch (docError) {
       log.error('failed to archive rot/rut payout file document', docError as Error)
     }

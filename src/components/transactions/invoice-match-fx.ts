@@ -30,6 +30,7 @@
  */
 import { isValidExchangeRate } from '@/lib/utils'
 import { MATCH_INVOICE_BOOKING_RATE_MISSING } from '@/lib/bookkeeping/invoice-payment-lines'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 export { MATCH_INVOICE_BOOKING_RATE_MISSING }
 
@@ -111,7 +112,9 @@ export function isInvoiceBookingRateMissing(input: InvoiceBookingRateInput): boo
 export function previewedFxGainSek(
   lines: { account_number: string; debit_amount: number; credit_amount: number }[],
 ): number {
-  const fxLine = lines.find((l) => l.account_number === '3960' || l.account_number === '7960')
+  const gainAccount = resolveAccountRole(PINNED_JURISDICTION, 'operating_fx_gain')
+  const lossAccount = resolveAccountRole(PINNED_JURISDICTION, 'operating_fx_loss')
+  const fxLine = lines.find((l) => l.account_number === gainAccount || l.account_number === lossAccount)
   if (!fxLine) return 0
-  return fxLine.account_number === '3960' ? fxLine.credit_amount : -fxLine.debit_amount
+  return fxLine.account_number === gainAccount ? fxLine.credit_amount : -fxLine.debit_amount
 }

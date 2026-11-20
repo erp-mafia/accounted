@@ -14,6 +14,7 @@
  * preview, validates with reads.
  */
 import { z } from 'zod'
+import { peppolOutcomeUnreported } from '@/lib/invoices/peppol-attention'
 import type { PeppolDeliverySummary } from '@/lib/invoices/peppol-delivery'
 import {
   getInvoicePeppolReadiness,
@@ -32,6 +33,7 @@ import {
   type PeppolRegistrationRow,
 } from '@/lib/invoices/peppol-registration'
 import type { PeppolAccessSummary } from '@/lib/invoices/peppol-access'
+import { createServiceClient } from '@/lib/supabase/server'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -47,9 +49,9 @@ const Access = z.object({
   status: z.enum(['none', 'requested', 'enabled', 'disabled']),
   send_enabled: z.boolean(),
   receive_enabled: z.boolean().optional(),
-  max_sends: z.number().nullable(),
-  sent_count: z.number(),
-  remaining_sends: z.number().nullable(),
+  max_sends: z.number().nullable().describe('Cap on sends per calendar month (Europe/Stockholm); null means no cap.'),
+  sent_count: z.number().describe('Sends this calendar month.'),
+  remaining_sends: z.number().nullable().describe('Sends left this calendar month; the cap resets on the 1st.'),
 })
 
 function toAccess(summary: PeppolAccessSummary) {
@@ -82,6 +84,8 @@ const Delivery = z.object({
   status_detail: z.string().nullable(),
   submitted_at: z.string().nullable(),
   terminal_at: z.string().nullable(),
+  outcome_unreported: z.literal(true).optional().describe('Only when submission_accepted for over 24 h: the access point reports no outcome. Not a failure.'),
+  outcome_hint: z.string().optional().describe('Set with outcome_unreported: what it means and what to do.'),
 })
 
 function toDelivery(d: PeppolDeliverySummary): z.infer<typeof Delivery> {
@@ -98,6 +102,8 @@ function toDelivery(d: PeppolDeliverySummary): z.infer<typeof Delivery> {
     status_detail: d.status_detail,
     submitted_at: d.submitted_at,
     terminal_at: d.terminal_at,
+    // The invoice page's rule, so an agent reads the same state the user sees.
+    ...peppolOutcomeUnreported(d, Date.now()),
   }
 }
 
@@ -226,6 +232,7 @@ export const invoicesSendPeppol = defineOperation({
       '409 PEPPOL_DUPLICATE_INVOICE_NUMBER: the access point already holds an invoice with this number for this recipient (ends the delivery). 409 PEPPOL_BUSINESS_REJECTED: the buyer refused the invoice via Peppol; it is not sent again, credit it and create a new invoice. 409 CONNECTOR_PEPPOL_RESEND_NOT_FAILED: a resend was refused because the access point has not reported the earlier delivery as failed (nothing is sent).',
       'A draft whose verifikat the engine refuses (400 MANDATORY_DIMENSION_MISSING or DIMENSION_VALIDATION_FAILED, a locked period, ...) is not transmitted: the engine\'s error comes back and the invoice stays in draft. If the network then fails to take a draft that was booked on issue, the invoice stays issued (details.invoice_status sent) and can be resent.',
       'An invoice date outside every fiscal year answers 422 PEPPOL_FISCAL_PERIOD_MISSING (the delivery needs its retention basis).',
+      'Files attached to the invoice in Accounted travel inside the e-faktura as embedded PDFs (AdditionalDocumentReference; the dry run lists them under preview.attachments). A file that is not a PDF, or more than 5 MB together, answers 400 VALIDATION_ERROR naming it (details.issues: PEPPOL_ATTACHMENT_NOT_PDF, PEPPOL_ATTACHMENTS_TOO_LARGE) before anything is issued or sent.',
       SCOPE_PITFALL,
     ],
     example: {
@@ -281,6 +288,7 @@ export const invoicesSendPeppol = defineOperation({
     'INVOICE_SEND_PAYMENT_ACCOUNT_INVALID',
     'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
     'INVOICE_CREATE_NUMBER_ASSIGN_FAILED',
+    'INVOICE_NUMBER_SERIES_BEHIND',
     'VALIDATION_ERROR',
     'PEPPOL_FISCAL_PERIOD_MISSING',
     'PEPPOL_LOOKUP_FAILED',
@@ -311,7 +319,10 @@ export const invoicesSendPeppol = defineOperation({
     },
   },
   run: async (ctx, { invoice_id }, { dryRun }) => {
-    const outcome = await sendInvoiceViaPeppol(ctx, invoice_id, { dryRun })
+    // Approved under Att göra, this runs as the person, whose JWT reaches no
+    // peppol_deliveries row: the send counts, reads and stages through a
+    // service-role client on every door (crm#1641).
+    const outcome = await sendInvoiceViaPeppol(ctx, invoice_id, { dryRun, service: createServiceClient() })
     if (!outcome.ok || outcome.dryRun) return outcome
     const r = outcome.data
     return {
@@ -349,6 +360,7 @@ export const invoicesPeppolDeliveries = defineOperation({
     doNotUseFor: 'Checking whether an invoice can be sent (GET /invoices/{id}/peppol) or email deliveries.',
     pitfalls: [
       'submission_accepted means the access point took the document, not that the buyer received it; transport_succeeded and business_accepted come later.',
+      'outcome_unreported=true (submission_accepted for over 24 hours) means the access point has not reported an outcome back. It is not a failed delivery: do not resend, and ask the buyer when certainty is needed.',
       'A delivery in retryable_failure, failed or no_route can be resent with POST /invoices/{id}/send-peppol (a failed one as a new delivery that replaces its submission); a business_rejected one cannot: the buyer refused the invoice.',
     ],
     example: {

@@ -63,7 +63,11 @@ export function resolveVatTreatmentRuta(
   if (treatment === 'reverse_charge_eu_services') return { box: 'ruta21', side: 'debit' }
   if (treatment === 'reverse_charge_non_eu_services') return { box: 'ruta22', side: 'debit' }
   if (treatment === 'reverse_charge_domestic') {
-    const isKnownServiceAccount = accountNumber != null && /^442[567]$/.test(accountNumber)
+    // BAS 2026 splits group 44 by what is bought: 4410 and 4415-4417 are
+    // råvaror och material (ruta 23), 4420 and 4425-4427 are tjänster (ruta
+    // 24). 4420 is the tjänster account without a stated sats; leaving it out
+    // of this check filed its basis as varor in ruta 23 (crm#1754).
+    const isKnownServiceAccount = accountNumber != null && /^442[0567]$/.test(accountNumber)
     return { box: accountClass === 4 && !isKnownServiceAccount ? 'ruta23' : 'ruta24', side: 'debit' }
   }
   return null
@@ -132,9 +136,21 @@ export function isAccountVatTreatment(value: unknown): value is AccountVatTreatm
  * OUTSIDE_UNION must be tested before UNION everywhere, since "utanför EU"
  * also satisfies UNION. Its trailing \b keeps "utanför Europa" from reading
  * as a sale outside the union.
+ *
+ * A negated union name says the same thing as "utanför": "IT-tjänster
+ * utlandet (ej EU)", "icke-EU", "exkl. EG" (crm#1146). Such a label used to
+ * miss OUTSIDE_UNION, hit UNION on the bare word and file a purchase from
+ * outside the union in ruta 21 instead of ruta 22. The negation has to sit
+ * directly in front of the union word, separated only by a space or a hyphen:
+ * "Inköp tjänster EU, ej avdragsgill moms" negates the deduction, not the
+ * union, and stays an EU label. So does "exkl. EU-moms", where the union
+ * word is half of a compound and it is the moms that is excluded. The
+ * lookbehind is the word boundary on the left, spelled with the Swedish
+ * letters \b does not know, so "Canon EU" does not read as "non EU".
  */
 const UNION = /\b(?:eu|eg)\b/
-const OUTSIDE_UNION = /utanför\s+(?:eu|eg)\b/
+const OUTSIDE_UNION =
+  /utanför\s+(?:eu|eg)\b|(?<![a-zåäö])(?:(?:ej|inte|icke|utom|non|exklusive|exkl)[\s-]+|exkl\.\s*)(?:eu|eg)\b(?!-moms)/
 
 export interface SuggestedVatTreatment {
   treatment: AccountVatTreatment
@@ -172,12 +188,11 @@ export function vatRateFromLabel(label: string): 0.25 | 0.12 | 0.06 | null {
  * elsewhere in the union or by the buyer, or a margin scheme. The specific
  * rules in suggestVatTreatment run first and give most of these their own
  * treatment; this only stops a leftover from being filed in ruta 05 on the
- * strength of its percentage. Mirrors CONTRADICTING_ACCOUNT_NAME in
- * lib/reports/vat-revenue-accounts.ts, which guards the same inference on the
- * declaration side.
+ * strength of its percentage. The one veto of the import suggestion and of
+ * the declaration's inference (inferDomesticSalesRate).
  */
-const NOT_DOMESTIC_SALE =
-  /momsfri|utan moms|\bej moms|undantag|momsbefri|omvänd|\bvmb\b|vinstmarginal|export|utanför|unionsintern|\boss\b|(?<![\d,.])\b0\s*%/
+export const NOT_DOMESTIC_SALE =
+  /momsfri|utan moms|\bej moms|undantag|momsbefri|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\boss\b|(?<![\d,.])\b0\s*%/i
 
 /**
  * Renting out premises or a dwelling is exempt; it carries moms only under

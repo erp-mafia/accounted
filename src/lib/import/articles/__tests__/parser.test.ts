@@ -10,14 +10,14 @@ function buildXlsx(rows: (string | number)[][]): ArrayBuffer {
 }
 
 describe('parseArticlesFile', () => {
-  it('parses a basic Swedish article register', () => {
+  it('parses a basic Swedish article register', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Artikelnummer', 'Pris', 'Moms', 'Enhet', 'Typ'],
       ['Konsulttimme', 'A-100', '950', '25', 'tim', 'tjänst'],
       ['Skruv', 'A-200', '2,50', '25', 'st', 'vara'],
     ])
 
-    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+    const result = await parseArticlesFile(buffer, 'artiklar.xlsx')
 
     expect(result.total_rows).toBe(2)
     expect(result.rows[0].name).toBe('Konsulttimme')
@@ -33,13 +33,13 @@ describe('parseArticlesFile', () => {
     expect(result.rows[0].vat_rate_adjusted).toBe(false)
   })
 
-  it('detects Fortnox-style export headers', () => {
+  it('detects Fortnox-style export headers', async () => {
     const buffer = buildXlsx([
       ['Artikelnummer', 'Benämning', 'Försäljningspris', 'Momskod', 'Försäljningskonto', 'Enhet'],
       ['100', 'Webdesign', '1 200', '25', '3001', 'st'],
     ])
 
-    const result = parseArticlesFile(buffer, 'fortnox.xlsx')
+    const result = await parseArticlesFile(buffer, 'fortnox.xlsx')
     const r = result.rows[0]
     expect(r.article_number).toBe('100')
     expect(r.name).toBe('Webdesign')
@@ -48,7 +48,7 @@ describe('parseArticlesFile', () => {
     expect(r.revenue_account).toBe('3001')
   })
 
-  it('parses Swedish decimal prices', () => {
+  it('parses Swedish decimal prices', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris'],
       ['A', '1 234,56'],
@@ -56,13 +56,13 @@ describe('parseArticlesFile', () => {
       ['C', '500'],
     ])
 
-    const result = parseArticlesFile(buffer, 'priser.xlsx')
+    const result = await parseArticlesFile(buffer, 'priser.xlsx')
     expect(result.rows[0].price_excl_vat).toBe(1234.56)
     expect(result.rows[1].price_excl_vat).toBe(1234.5)
     expect(result.rows[2].price_excl_vat).toBe(500)
   })
 
-  it('snaps VAT to the nearest statutory rate and warns', () => {
+  it('snaps VAT to the nearest statutory rate and warns', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Moms'],
       ['A', '25%'],
@@ -70,7 +70,7 @@ describe('parseArticlesFile', () => {
       ['C', ''],    // → 25 default
     ])
 
-    const result = parseArticlesFile(buffer, 'moms.xlsx')
+    const result = await parseArticlesFile(buffer, 'moms.xlsx')
     expect(result.rows[0].vat_rate).toBe(25)
     expect(result.rows[1].vat_rate).toBe(6)
     expect(result.rows[2].vat_rate).toBe(25)
@@ -82,19 +82,19 @@ describe('parseArticlesFile', () => {
     expect(result.rows[2].vat_rate_adjusted).toBe(false) // empty → default 25
   })
 
-  it('defaults an unparseable momskod to 25 with a warning', () => {
+  it('defaults an unparseable momskod to 25 with a warning', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Momskod'],
       ['A', 'MP1'],
     ])
 
-    const result = parseArticlesFile(buffer, 'momskod.xlsx')
+    const result = await parseArticlesFile(buffer, 'momskod.xlsx')
     expect(result.rows[0].vat_rate).toBe(25)
     expect(result.rows[0].vat_rate_adjusted).toBe(true)
     expect(result.warnings.some((w) => w.toLowerCase().includes('moms'))).toBe(true)
   })
 
-  it('normalizes article type and falls back to tjanst', () => {
+  it('normalizes article type and falls back to tjanst', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Typ'],
       ['A', 'Produkt'],
@@ -102,22 +102,22 @@ describe('parseArticlesFile', () => {
       ['C', ''],
     ])
 
-    const result = parseArticlesFile(buffer, 'typ.xlsx')
+    const result = await parseArticlesFile(buffer, 'typ.xlsx')
     expect(result.rows[0].type).toBe('vara')
     expect(result.rows[1].type).toBe('tjanst')
     expect(result.rows[2].type).toBe('tjanst')
   })
 
-  it('falls back to "st" when no unit is given', () => {
+  it('falls back to "st" when no unit is given', async () => {
     const buffer = buildXlsx([
       ['Benämning'],
       ['A'],
     ])
-    const result = parseArticlesFile(buffer, 'unit.xlsx')
+    const result = await parseArticlesFile(buffer, 'unit.xlsx')
     expect(result.rows[0].unit).toBe('st')
   })
 
-  it('keeps class 1-3 posting accounts and drops a class-4 account', () => {
+  it('keeps class 1-3 posting accounts and drops a class-4 account', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Försäljningskonto'],
       ['A', '3001'],
@@ -125,76 +125,76 @@ describe('parseArticlesFile', () => {
       ['C', '4000'],
     ])
 
-    const result = parseArticlesFile(buffer, 'konto.xlsx')
+    const result = await parseArticlesFile(buffer, 'konto.xlsx')
     expect(result.rows[0].revenue_account).toBe('3001')
     expect(result.rows[1].revenue_account).toBe('1930')
     expect(result.rows[2].revenue_account).toBeNull()
     expect(result.warnings.some((w) => w.toLowerCase().includes('bokföringskonto'))).toBe(true)
   })
 
-  it('treats a blank cost price as null (not 0)', () => {
+  it('treats a blank cost price as null (not 0)', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Inköpspris'],
       ['A', ''],
       ['B', '100'],
     ])
-    const result = parseArticlesFile(buffer, 'cost.xlsx')
+    const result = await parseArticlesFile(buffer, 'cost.xlsx')
     expect(result.rows[0].cost_price).toBeNull()
     expect(result.rows[1].cost_price).toBe(100)
   })
 
-  it('warns when the price column looks incl-VAT', () => {
+  it('warns when the price column looks incl-VAT', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris inkl moms'],
       ['A', '125'],
     ])
-    const result = parseArticlesFile(buffer, 'brutto.xlsx')
+    const result = await parseArticlesFile(buffer, 'brutto.xlsx')
     expect(result.warnings.some((w) => w.toLowerCase().includes('inkl'))).toBe(true)
   })
 
-  it('skips rows with empty name and preserves row_index', () => {
+  it('skips rows with empty name and preserves row_index', async () => {
     const buffer = buildXlsx([
       ['Benämning'],
       ['A'],
       [''],
       ['C'],
     ])
-    const result = parseArticlesFile(buffer, 'sparse.xlsx')
+    const result = await parseArticlesFile(buffer, 'sparse.xlsx')
     expect(result.total_rows).toBe(2)
     expect(result.rows.map((r) => r.name)).toEqual(['A', 'C'])
     expect(result.rows[0].row_index).toBe(2)
     expect(result.rows[1].row_index).toBe(4)
   })
 
-  it('flags a negative price as invalid', () => {
+  it('flags a negative price as invalid', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris'],
       ['A', '-50'],
     ])
-    const result = parseArticlesFile(buffer, 'neg.xlsx')
+    const result = await parseArticlesFile(buffer, 'neg.xlsx')
     expect(result.rows[0].is_valid).toBe(false)
     expect(result.rows[0].validation_errors).toContain('Priset kan inte vara negativt')
   })
 
-  it('returns a warning when zero rows match', () => {
+  it('returns a warning when zero rows match', async () => {
     const buffer = buildXlsx([['Benämning']])
-    const result = parseArticlesFile(buffer, 'empty.xlsx')
+    const result = await parseArticlesFile(buffer, 'empty.xlsx')
     expect(result.total_rows).toBe(0)
     expect(result.warnings.length).toBeGreaterThan(0)
   })
 
-  it('preserves Swedish characters when reading a UTF-8 CSV', () => {
+  it('preserves Swedish characters when reading a UTF-8 CSV', async () => {
     const csv = new TextEncoder().encode(
       'Benämning,Enhet\nMöbel,st\nKärra,st\n',
     ).buffer
-    const result = parseArticlesFile(csv, 'artiklar.csv')
+    const result = await parseArticlesFile(csv, 'artiklar.csv')
     expect(result.rows[0].name).toBe('Möbel')
     expect(result.rows[1].name).toBe('Kärra')
   })
 })
 
 describe('parseArticlesFile currency (Valuta) column', () => {
-  it('parses and normalizes a Valuta column', () => {
+  it('parses and normalizes a Valuta column', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Försäljningspris', 'Valuta'],
       ['EU-konsulting', '950', 'eur'],
@@ -202,7 +202,7 @@ describe('parseArticlesFile currency (Valuta) column', () => {
       ['Utan valuta', '100', ''],
     ])
 
-    const result = parseArticlesFile(buffer, 'valuta.xlsx')
+    const result = await parseArticlesFile(buffer, 'valuta.xlsx')
 
     expect(result.detected_columns.currency_col).toBe(2)
     expect(result.rows[0].currency).toBe('EUR')
@@ -212,27 +212,27 @@ describe('parseArticlesFile currency (Valuta) column', () => {
     expect(result.warnings).toEqual([])
   })
 
-  it('drops malformed currency codes with a warning', () => {
+  it('drops malformed currency codes with a warning', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris', 'Valuta'],
       ['A', '100', 'EURO'],
       ['B', '200', 'EUR'],
     ])
 
-    const result = parseArticlesFile(buffer, 'valuta.xlsx')
+    const result = await parseArticlesFile(buffer, 'valuta.xlsx')
 
     expect(result.rows[0].currency).toBeNull()
     expect(result.rows[1].currency).toBe('EUR')
     expect(result.warnings.some((w) => w.includes('valutakod'))).toBe(true)
   })
 
-  it('does not let Valuta steal the price or VAT columns', () => {
+  it('does not let Valuta steal the price or VAT columns', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Valuta', 'Försäljningspris', 'Moms %'],
       ['A', 'EUR', '100', '25'],
     ])
 
-    const result = parseArticlesFile(buffer, 'valuta.xlsx')
+    const result = await parseArticlesFile(buffer, 'valuta.xlsx')
 
     expect(result.detected_columns.currency_col).toBe(1)
     expect(result.rows[0].price_excl_vat).toBe(100)
@@ -241,19 +241,19 @@ describe('parseArticlesFile currency (Valuta) column', () => {
 })
 
 describe('parseArticlesFile ROT/RUT (housework) column', () => {
-  it('normalizes work-type codes and bare kinds, and drops boolean-style values', () => {
+  it('normalizes work-type codes and bare kinds, and drops boolean-style values', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris', 'Husarbete'],
       ['Städning', '450', 'stad'],
       ['Fönsterputs', '500', 'RUT'],
       // A boolean "Rot"/"Husarbete" column exported by other systems: '1'/'0'
       // are not values the invoice editor can interpret, so they must not be
-      // stored (this is what produced 178 junk rows on prod).
+      // stored (this is what produced 178 junk rows in production).
       ['Bygg', '600', '1'],
       ['Skruv', '2', '0'],
     ])
 
-    const result = parseArticlesFile(buffer, 'husarbete.xlsx')
+    const result = await parseArticlesFile(buffer, 'husarbete.xlsx')
 
     expect(result.detected_columns.housework_type_col).toBe(2)
     expect(result.rows[0].housework_type).toBe('STAD')
@@ -264,7 +264,7 @@ describe('parseArticlesFile ROT/RUT (housework) column', () => {
     expect(result.warnings.some((w) => w.includes('2 rader hade ett ROT/RUT-värde'))).toBe(true)
   })
 
-  it('drops ROT/RUT on goods rows and counts them: the deduction is on labor only', () => {
+  it('drops ROT/RUT on goods rows and counts them: the deduction is on labor only', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris', 'Typ', 'Husarbete'],
       ['Montering', '650', 'tjänst', 'VVS'],
@@ -275,7 +275,7 @@ describe('parseArticlesFile ROT/RUT (housework) column', () => {
       ['Skruv', '2', 'vara', '1'],
     ])
 
-    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+    const result = await parseArticlesFile(buffer, 'artiklar.xlsx')
 
     expect(result.rows.map((r) => [r.name, r.type, r.housework_type])).toEqual([
       ['Montering', 'tjanst', 'VVS'],
@@ -298,27 +298,27 @@ describe('parseArticlesFile ROT/RUT (housework) column', () => {
     })
   })
 
-  it('keeps ROT/RUT on rows without a type column (they import as tjänst)', () => {
+  it('keeps ROT/RUT on rows without a type column (they import as tjänst)', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris', 'Husarbete'],
       ['Takläggning', '700', 'BYGG'],
     ])
 
-    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+    const result = await parseArticlesFile(buffer, 'artiklar.xlsx')
 
     expect(result.rows[0].type).toBe('tjanst')
     expect(result.rows[0].housework_type).toBe('BYGG')
     expect(result.notices?.some((n) => n.code === 'articles_housework_on_goods_dropped')).toBe(false)
   })
 
-  it('emits structured notices beside the warning strings', () => {
+  it('emits structured notices beside the warning strings', async () => {
     const buffer = buildXlsx([
       ['Benämning', 'Pris inkl. moms', 'Moms', 'Valuta'],
       ['Konsulttimme', '1187,50', '25', 'EURO'],
       ['Fika', '30', '13', 'SEK'],
     ])
 
-    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+    const result = await parseArticlesFile(buffer, 'artiklar.xlsx')
 
     // The VAT-inclusive price column is money-relevant: an action, and the
     // only one, so it becomes the single attention sentence.

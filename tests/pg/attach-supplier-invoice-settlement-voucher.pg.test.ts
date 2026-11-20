@@ -22,6 +22,7 @@ import {
   insertPostedJournalEntry,
   seedCompany,
   type PostedJournalEntryLine,
+  setActiveCompany,
 } from './fixtures'
 
 let arrivalSeq = 0
@@ -37,15 +38,6 @@ async function seedCompanyWithMethod(method: 'cash' | 'accrual'): Promise<Seeded
     [company.userId, company.companyId, method],
   )
   return company
-}
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
 }
 
 async function seedSupplierInvoice(params: {

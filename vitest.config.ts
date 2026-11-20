@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config'
 import path from 'path'
+import { workerCount } from './tests/pg/parallel'
 
 const alias = {
   '@/tests': path.resolve(__dirname, 'tests'),
@@ -33,11 +34,15 @@ const unitProject = {
       '**/node_modules/**',
       '**/*.pg.test.ts',
       '**/*.tool.test.ts',
+      '**/*.sim.test.ts',
       '**/.claude/**',
       '**/.next/**',
     ],
+    setupFiles: ['tests/unit/setup.ts'],
   },
 }
+
+const pgRealWorkers = workerCount()
 
 const pgRealProject = {
   resolve: { alias },
@@ -49,10 +54,16 @@ const pgRealProject = {
     // `.next/standalone` holds a traced copy of these files after a local
     // build; 128 of them match this project's glob.
     exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**'],
-    setupFiles: ['tests/pg/setup.ts'],
-    // One-connection-at-a-time to avoid cross-file DB contention.
-    fileParallelism: false,
-    testTimeout: 15000,
+    // worker-database.ts first: it decides which database setup.ts opens.
+    setupFiles: ['tests/pg/worker-database.ts', 'tests/pg/setup.ts'],
+    globalSetup: ['tests/pg/global-setup.ts'],
+    // The files commit rows, so each needs a database to itself: one file at
+    // a time, or with PG_REAL_WORKERS set, one worker per copy of the
+    // database (tests/pg/parallel.ts).
+    fileParallelism: pgRealWorkers > 0,
+    // Side by side every test waits longer for the server and the processor,
+    // so the limits double: they are there to end a hang, not to time a test.
+    ...(pgRealWorkers > 0 ? { maxWorkers: pgRealWorkers, testTimeout: 30000, hookTimeout: 20000 } : { testTimeout: 15000 }),
   },
 }
 
@@ -77,14 +88,32 @@ const toolPgProject = {
   },
 }
 
+// Reports judged against the simulated company: reads a company `npm run
+// sim:build` put in the tool-pg stack, never writes. See tests/sim/.
+const simProject = {
+  resolve: { alias },
+  test: {
+    name: 'sim',
+    globals: true,
+    environment: 'node' as const,
+    include: ['**/*.sim.test.ts'],
+    exclude: ['**/node_modules/**', '**/.claude/**', '**/.next/**'],
+    setupFiles: ['tests/sim/setup.ts'],
+    fileParallelism: false,
+    testTimeout: 60000,
+  },
+}
+
 // Only register the pg-real project when DATABASE_URL is set. Local devs
 // running a bare `vitest run` would otherwise hit the schema sanity check
 // against a non-existent DB. `npm run test:pg` is the opt-in entry point, and
-// `npm run test:tools` is the equivalent for tool-pg.
+// `npm run test:tools` and `npm run test:sim` are the equivalents for tool-pg
+// and the simulated company.
 const projects = [
   unitProject,
   ...(process.env.DATABASE_URL ? [pgRealProject] : []),
   ...(process.env.TOOL_PG_REST_URL ? [toolPgProject] : []),
+  ...(process.env.SIM_TESTS ? [simProject] : []),
 ]
 
 export default defineConfig({

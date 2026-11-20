@@ -13,7 +13,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import {
   Select,
   SelectContent,
@@ -37,6 +38,8 @@ interface ClaimRow {
   amount_sek: number | string
   expense_date: string
   description: string
+  /** Registered and on no payslip: the server's answer (lib/salary/expense-claim-payout-state.ts). */
+  awaits_payout: boolean
 }
 
 interface Props {
@@ -58,6 +61,10 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
   const { toast } = useToast()
   const [claims, setClaims] = useState<ClaimRow[]>([])
   const [loading, setLoading] = useState(false)
+  // The claims could not be read: said in place of them (never "no open
+  // claims"), with "Försök igen".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [personKey, setPersonKey] = useState<string>('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [submitting, setSubmitting] = useState(false)
@@ -70,10 +77,18 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
     setLoading(true)
     setSelected(new Set())
     fetch('/api/expense-claims?status=registered')
-      .then((res) => (res.ok ? res.json() : { data: [] }))
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status))
+        return res.json()
+      })
       .then((json) => {
         if (cancelled) return
-        const rows = ((json?.data ?? []) as ClaimRow[]).filter((r) => r.liability_account !== '2018')
+        setLoadFailed(false)
+        // A claim on a salary run is repaid with that salary: it is no
+        // transfer to match, and the booking would refuse it.
+        const rows = ((json?.data ?? []) as ClaimRow[]).filter(
+          (r) => r.awaits_payout && r.liability_account !== '2018',
+        )
         setClaims(rows)
         const people = groupExpenseClaimsByPerson(rows)
         // Preselect the person (and all their receipts) when one person's
@@ -84,7 +99,10 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
         setSelected(new Set(exact ? exact.claim_ids : []))
       })
       .catch(() => {
-        if (!cancelled) setClaims([])
+        if (!cancelled) {
+          setClaims([])
+          setLoadFailed(true)
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -92,7 +110,7 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
     return () => {
       cancelled = true
     }
-  }, [open, transferOre])
+  }, [open, transferOre, attempt])
 
   const people: ExpensePayoutDue[] = useMemo(() => groupExpenseClaimsByPerson(claims), [claims])
   const personClaims = useMemo(
@@ -149,21 +167,23 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
 
   return (
     <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
-      <DialogContent className="max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
 
         {loading ? (
-          <div className="space-y-2 py-2">
+          <LateReveal className="space-y-2 py-2">
             <Skeleton className="h-4 w-1/3" />
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
-          </div>
+          </LateReveal>
+        ) : loadFailed ? (
+          <LoadError onRetry={() => setAttempt((n) => n + 1)} />
         ) : people.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('no_claims')}</p>
+          <EmptyState title={t('no_claims')} />
         ) : (
           <div className="space-y-4">
             {people.length > 1 && (
@@ -190,11 +210,11 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
               </div>
             )}
 
-            <div className="rounded-lg border border-border">
+            <div className="rounded-lg bg-control shadow-raised">
               {personClaims.map((c) => (
                 <label
                   key={c.id}
-                  className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2.5 text-[13px] last:border-b-0 hover:bg-secondary/35"
+                  className="flex cursor-pointer items-center gap-3 border-b-hairline px-3 py-2.5 text-[13px] last:border-b-0 hover:bg-secondary/35"
                 >
                   <Checkbox
                     checked={selected.has(c.id)}

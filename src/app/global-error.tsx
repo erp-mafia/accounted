@@ -63,14 +63,17 @@ export default function GlobalError({
       </head>
       <body>
         {phase === "fallback" ? (
-          <div className="flex min-h-dvh items-center justify-center p-8">
-            <div className="text-center space-y-4">
-              <h2 className="text-xl">Något gick fel</h2>
-              <p className="text-muted-foreground">
+          // The standalone frame by hand: nothing above this boundary
+          // survives (no providers, no brand context), so it draws the same
+          // column and panel with plain elements.
+          <div className="flex min-h-dvh flex-col items-center bg-background pt-4 sm:bg-frame sm:px-4 sm:py-8">
+            <main className="w-full px-4 pb-8 pt-4 sm:max-w-[400px] sm:rounded-xl sm:bg-background sm:p-6 sm:shadow-panel">
+              <h1 className="text-xl text-strong">Något gick fel</h1>
+              <p className="mt-1 text-sm text-foreground">
                 Ett oväntat fel inträffade. Försök igen eller{" "}
                 <a
                   href={`mailto:${SUPPORT_EMAIL}?subject=Oväntat fel`}
-                  className="underline underline-offset-4 hover:text-foreground"
+                  className="font-medium text-strong underline decoration-foreground/25 underline-offset-[3px] hover:decoration-foreground/60"
                 >
                   kontakta support
                 </a>{" "}
@@ -78,11 +81,11 @@ export default function GlobalError({
               </p>
               <button
                 onClick={() => window.location.reload()}
-                className="rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+                className="mt-5 flex h-11 w-full items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
               >
                 Försök igen
               </button>
-            </div>
+            </main>
           </div>
         ) : null}
       </body>

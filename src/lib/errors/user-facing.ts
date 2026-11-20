@@ -25,7 +25,7 @@
  * the marker is how an author says "I wrote this one for the reader".
  *
  * Swedish in both locales, like the bookkeeping engine's other domain errors:
- * `.claude/rules/i18n.md` keeps regulatory wording untranslated because the
+ * Regulatory wording stays untranslated because the
  * English equivalents are ambiguous ("verifikat", "klarmarkerad", "räkenskapsår").
  */
 

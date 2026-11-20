@@ -8,6 +8,7 @@
  */
 
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Last day of the month (1-indexed result, 0-indexed month). */
 export function lastDayOfMonth(year: number, monthIndex0: number): number {
@@ -46,9 +47,37 @@ export function runDateMatchesDayOfMonth(iso: string, dayOfMonth: number): boole
 }
 
 /**
+ * The first date on or after `fromIso` that sits on the schedule grid for
+ * day_of_month: this month's occurrence if it has not passed, otherwise next
+ * month's (31 -> 28/29/30 in shorter months). The one definition of "the
+ * first run date for a day of the month": computeInitialRunDate (create
+ * route, MCP staging and commit) and the create dialog both derive from it,
+ * passing Stockholm's today, or the start of a later month the user picked.
+ */
+export function firstRunDateOnOrAfter(fromIso: string, dayOfMonth: number): string {
+  const from = parseIsoDate(fromIso)
+  if (!from) throw new Error(`invalid date: ${fromIso}`)
+  if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+    throw new Error(`invalid day_of_month: ${dayOfMonth}`)
+  }
+  const { year, month0, day } = from
+  const thisMonthDay = Math.min(dayOfMonth, lastDayOfMonth(year, month0))
+  if (day <= thisMonthDay) return isoFromParts(year, month0, thisMonthDay)
+  const nextYear = month0 === 11 ? year + 1 : year
+  const nextMonth0 = (month0 + 1) % 12
+  return isoFromParts(
+    nextYear,
+    nextMonth0,
+    Math.min(dayOfMonth, lastDayOfMonth(nextYear, nextMonth0)),
+  )
+}
+
+/**
  * Same year-month as `iso`, day moved onto the schedule grid for
- * day_of_month. Used by the dialog to keep the date field in step when the
- * user edits the day. Returns `iso` unchanged when it is not parseable.
+ * day_of_month. Used by the edit dialog to keep the date field in step when
+ * the user edits the day (the stored month is the schedule's phase; the
+ * server recomputes a day-only edit). Returns `iso` unchanged when it is not
+ * parseable.
  */
 export function alignRunDateToDay(iso: string, dayOfMonth: number): string {
   const parsed = parseIsoDate(iso)
@@ -90,21 +119,9 @@ export function projectRunDates(
  * dialog runs in whatever zone the browser is in, but users pick dates and a
  * send hour in Swedish local time, so every surface asks "what day and hour
  * is it in Sweden right now" through this one function. Uses Intl (DST-aware,
- * no extra dependency); en-CA + hourCycle 'h23' guarantees zero-padded
- * ISO-shaped parts and a 0-23 hour.
+ * no extra dependency); hourCycle 'h23' guarantees a 0-23 hour.
  */
 export function getStockholmDateHour(instant: Date): { date: string; hour: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(instant)
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
-  return {
-    date: `${get('year')}-${get('month')}-${get('day')}`,
-    hour: Number(get('hour')),
-  }
+  const hour = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Stockholm', hour: '2-digit', hourCycle: 'h23' }).format(instant)
+  return { date: todayIsoStockholm(instant), hour: Number(hour) }
 }

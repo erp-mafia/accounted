@@ -63,7 +63,7 @@ registerEndpoint({
   },
   scope: 'webhooks:manage',
   risk: 'low',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: false,
   response: { success: dataEnvelope(VerifyResponse) },
@@ -80,7 +80,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         supabase: ctx.supabase,
         companyId: ctx.companyId!,
         webhookId: id,
-        actor: { userId: ctx.userId, apiKeyId: ctx.apiKeyId ?? null },
+        actor: { userId: ctx.userId, apiKeyId: ctx.apiKeyId ?? null, credential: ctx.actor },
       })
     } catch (err) {
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })

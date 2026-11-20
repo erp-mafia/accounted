@@ -1,20 +1,19 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
-import { ReskontraPDF } from '@/lib/reports/reskontra-pdf-template'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { parseLedgerAsOfDate } from '@/lib/reports/ledger-as-of'
+import { ledgerAsOfRefusal } from '@/lib/reports/ledger-as-of-refusal'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
 import type { CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { fileResponse } from '@/lib/api/file-response'
 
-export const GET = withRouteContext('report.supplier_ledger.pdf', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('report.supplier_ledger.pdf', async (request, { supabase, companyId, log, requestId }) => {
   const { searchParams } = new URL(request.url)
-  const asOfParam = searchParams.get('as_of_date')
-
-  if (asOfParam && !/^\d{4}-\d{2}-\d{2}$/.test(asOfParam)) {
-    return NextResponse.json({ error: 'as_of_date måste vara på formatet ÅÅÅÅ-MM-DD' }, { status: 400 })
-  }
-  const asOfDate = asOfParam ?? new Date().toISOString().slice(0, 10)
+  const asOf = parseLedgerAsOfDate(searchParams.get('as_of_date'))
+  if (!asOf.ok) return ledgerAsOfRefusal(asOf, log, requestId)
+  const asOfDate = asOf.asOfDate ?? todayIsoStockholm()
 
   const { data: companyRow } = await supabase
     .from('company_settings')
@@ -29,6 +28,10 @@ export const GET = withRouteContext('report.supplier_ledger.pdf', async (request
   try {
     const ledger = await generateSupplierLedger(supabase, companyId, asOfDate)
 
+    const [{ renderToBuffer }, { ReskontraPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/reports/reskontra-pdf-template'),
+    ])
     const pdfBuffer = await renderToBuffer(
       ReskontraPDF({
         title: 'Leverantörsreskontra',
@@ -63,12 +66,7 @@ export const GET = withRouteContext('report.supplier_ledger.pdf', async (request
     const parts = ['leverantorsreskontra', companySlug, asOfDate.replace(/-/g, '')].filter(Boolean)
     const filename = `${parts.join('-')}.pdf`
 
-    return new Response(new Uint8Array(pdfBuffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(pdfBuffer), { filename: filename, contentType: 'application/pdf' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera leverantörsreskontra' },

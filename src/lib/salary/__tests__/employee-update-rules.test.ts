@@ -6,14 +6,21 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED,
   HOURLY_RATE_REQUIRED,
   MONTHLY_SALARY_REQUIRED,
+  SAMMALONEREGELN_DEGREE_CHANGED,
+  sammaloneregelnDegreeChange,
   TAX_TABLE_REQUIRED,
+  VACATION_DAYS_MINIMUM,
   VAXA_START_REQUIRED,
   validateEmployeeUpdate,
 } from '../employee-update-rules'
 import { JAMKNING_END_REQUIRED } from '../jamkning-rules'
-import { BANK_ISSUE_MESSAGES_SV } from '../payment/bank-account'
+import { EXTRA_TAX_ONE_FORM } from '../extra-tax'
+import { FORA_FOK_EMPLOYEE_ONLY, FORA_FOK_START_REQUIRED } from '../fora/markup'
+import { BANK_ISSUE_MESSAGES_SV } from '@/lib/payments/bank-account'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const VALID_ROW = {
   salary_type: 'monthly',
@@ -127,5 +134,150 @@ describe('validateEmployeeUpdate', () => {
       'vaxa_stod_start',
       'bank_account_number',
     ])
+  })
+})
+
+describe('validateEmployeeUpdate: vacation days (agent feedback seq 828138)', () => {
+  const ROW = { ...VALID_ROW, vacation_rule: 'procentregeln', vacation_days_per_year: 25 }
+
+  it('lets an employee on vacation_rule none drop to 0 days', () => {
+    expect(validateEmployeeUpdate({ ...ROW, vacation_rule: 'none' }, { vacation_days_per_year: 0 })).toEqual([])
+  })
+
+  it('lets the same patch switch to none and set 0 days', () => {
+    expect(validateEmployeeUpdate(ROW, { vacation_rule: 'none', vacation_days_per_year: 0 })).toEqual([])
+  })
+
+  it('refuses fewer than 25 days for an employee under another rule', () => {
+    expect(validateEmployeeUpdate(ROW, { vacation_days_per_year: 20 })).toEqual([
+      { field: 'vacation_days_per_year', message: VACATION_DAYS_MINIMUM },
+    ])
+  })
+
+  it('refuses leaving none while 0 days are stored', () => {
+    expect(
+      validateEmployeeUpdate({ ...ROW, vacation_rule: 'none', vacation_days_per_year: 0 }, { vacation_rule: 'procentregeln' }),
+    ).toEqual([{ field: 'vacation_days_per_year', message: VACATION_DAYS_MINIMUM }])
+  })
+
+  it('does not block an unrelated edit', () => {
+    expect(validateEmployeeUpdate({ ...ROW, vacation_days_per_year: 20 }, { email: 'x@example.test' })).toEqual([])
+  })
+})
+
+describe('validateEmployeeUpdate: förhöjt skatteavdrag', () => {
+  it('refuses a percentage sent while kronor are stored', () => {
+    expect(validateEmployeeUpdate({ ...VALID_ROW, extra_tax_amount: 500 }, { extra_tax_percentage: 45 })).toEqual([
+      { field: 'extra_tax_percentage', message: EXTRA_TAX_ONE_FORM },
+    ])
+  })
+
+  it('accepts switching the form in one patch', () => {
+    expect(
+      validateEmployeeUpdate({ ...VALID_ROW, extra_tax_amount: 500 }, { extra_tax_amount: null, extra_tax_percentage: 45 }),
+    ).toEqual([])
+  })
+
+  it('does not look at the extra tax on an unrelated edit', () => {
+    expect(validateEmployeeUpdate({ ...VALID_ROW, extra_tax_amount: 500 }, { email: 'a@b.se' })).toEqual([])
+  })
+})
+
+/**
+ * Semesterlagen 16 § andra stycket 3-4: procentregeln applies to an employee
+ * whose sysselsättningsgrad varied in the intjänandeår or changed before the
+ * semestertillfälle. A changed employment_degree on a sammalöneregeln row
+ * needs the switch to procentregeln (16 § första stycket) or the
+ * kollektivavtal confirmation (2 a § andra stycket) in the same update (#31).
+ */
+describe('validateEmployeeUpdate: Fora code', () => {
+  const CODED = { ...VALID_ROW, employment_type: 'employee', fora_fok_id: 'FOK306834', fora_fok_start_date: '2024-01-01' }
+
+  it('sets and clears a code with its start date', () => {
+    expect(validateEmployeeUpdate(VALID_ROW, { fora_fok_id: 'FOK306834', fora_fok_start_date: '2024-01-01' })).toEqual([])
+    expect(validateEmployeeUpdate(CODED, { fora_fok_id: null, fora_fok_start_date: null })).toEqual([])
+    expect(validateEmployeeUpdate(CODED, { fora_fok_id: 'FOK301123' })).toEqual([])
+  })
+
+  it('refuses clearing the start date of a stored code', () => {
+    expect(validateEmployeeUpdate(CODED, { fora_fok_start_date: null })).toEqual([
+      { field: 'fora_fok_start_date', message: FORA_FOK_START_REQUIRED },
+    ])
+  })
+
+  it('refuses turning a coded employee into an owner unless the code goes too', () => {
+    expect(validateEmployeeUpdate(CODED, { employment_type: 'company_owner' })).toEqual([
+      { field: 'fora_fok_id', message: FORA_FOK_EMPLOYEE_ONLY },
+    ])
+    expect(validateEmployeeUpdate(CODED, { employment_type: 'company_owner', fora_fok_id: null, fora_fok_start_date: null })).toEqual([])
+  })
+
+  it('leaves a stored row alone on unrelated edits', () => {
+    expect(validateEmployeeUpdate({ ...VALID_ROW, fora_fok_id: 'FOK306834', fora_fok_start_date: null }, { phone: '070' })).toEqual([])
+  })
+})
+
+describe('validateEmployeeUpdate: sammalöneregeln and a changed employment degree', () => {
+  const SAMMALONE = { ...VALID_ROW, vacation_rule: 'sammaloneregeln', employment_degree: 100, workdays_per_week: 5, hours_per_week: 40 }
+  const REFUSAL = {
+    field: 'vacation_rule',
+    message: SAMMALONEREGELN_DEGREE_CHANGED,
+    code: EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED,
+  }
+
+  it('refuses a changed degree that keeps sammalöneregeln', () => {
+    expect(validateEmployeeUpdate(SAMMALONE, { employment_degree: 80 })).toEqual([REFUSAL])
+  })
+
+  it('lets the same update switch to procentregeln', () => {
+    expect(validateEmployeeUpdate(SAMMALONE, { employment_degree: 80, vacation_rule: 'procentregeln' })).toEqual([])
+  })
+
+  it('lets the change through on a kollektivavtal confirmation', () => {
+    expect(
+      validateEmployeeUpdate(SAMMALONE, { employment_degree: 80 }, { sammaloneregelnKollektivavtal: true }),
+    ).toEqual([])
+  })
+
+  it('does not fire on a degree sent unchanged (the dashboard form always sends it)', () => {
+    expect(validateEmployeeUpdate(SAMMALONE, { employment_degree: 100, phone: '0700000000' })).toEqual([])
+  })
+
+  it('compares the stored numeric as a number', () => {
+    expect(validateEmployeeUpdate({ ...SAMMALONE, employment_degree: '100' }, { employment_degree: 100 })).toEqual([])
+  })
+
+  it('does not fire on a schedule change alone: workdays and hours are not the sysselsättningsgrad', () => {
+    expect(validateEmployeeUpdate(SAMMALONE, { workdays_per_week: 4, hours_per_week: 32 })).toEqual([])
+  })
+
+  it('does not fire for an employee on procentregeln', () => {
+    expect(validateEmployeeUpdate({ ...SAMMALONE, vacation_rule: 'procentregeln' }, { employment_degree: 50 })).toEqual([])
+  })
+
+  it('refuses moving to sammalöneregeln in the same update that changes the degree', () => {
+    expect(
+      validateEmployeeUpdate({ ...SAMMALONE, vacation_rule: 'procentregeln' }, { employment_degree: 50, vacation_rule: 'sammaloneregeln' }),
+    ).toEqual([REFUSAL])
+  })
+
+  it('is reported beside other issues as one more validation issue', () => {
+    expect(validateEmployeeUpdate(SAMMALONE, { employment_degree: 80, monthly_salary: null })).toEqual([
+      { field: 'monthly_salary', message: MONTHLY_SALARY_REQUIRED },
+      REFUSAL,
+    ])
+  })
+
+  it('names the change it would keep', () => {
+    expect(sammaloneregelnDegreeChange(SAMMALONE, { employment_degree: 75 })).toEqual({ from: 100, to: 75 })
+    expect(sammaloneregelnDegreeChange(SAMMALONE, { employment_degree: 75, vacation_rule: 'none' })).toBeNull()
+    expect(sammaloneregelnDegreeChange(SAMMALONE, {})).toBeNull()
+  })
+
+  it('says the same as the registered error code', () => {
+    const entry = getErrorEntry(EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED)
+    expect(entry?.httpStatus).toBe(400)
+    expect(entry?.message_sv).toBe(`${SAMMALONEREGELN_DEGREE_CHANGED}.`)
+    expect(entry?.message_en).toContain('sammaloneregeln_kollektivavtal_confirmed')
   })
 })

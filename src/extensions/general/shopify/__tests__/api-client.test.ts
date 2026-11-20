@@ -5,7 +5,10 @@ import {
   shopifyGraphQL,
   listOrdersPage,
   isRevokedCredentialsError,
+  testConnectionAndFetchShopInfo,
+  fetchGrantedScopes,
   ShopifyApiError,
+  ShopifyConnectError,
   SHOPIFY_API_VERSION,
   SHOPIFY_PAGE_SIZE,
   INVALID_SHOP_DOMAIN_CODE,
@@ -256,5 +259,279 @@ describe('listOrdersPage', () => {
       after: 'cursor-1',
       query: "updated_at:>='2026-05-01T00:00:00.000Z'",
     })
+    expect(page.addressesWithheld).toBe(false)
+  })
+
+  const OPTIONS = { updatedAtMin: '2026-05-01T00:00:00.000Z', after: null }
+
+  function sentQuery(call: number): string {
+    return JSON.parse((fetchMock.mock.calls[call][1] as RequestInit).body as string).query
+  }
+
+  function ordersData(nodes: unknown[]) {
+    return { orders: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } }
+  }
+
+  it('asks for the country codes only, nothing else from the addresses', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([
+          {
+            legacyResourceId: '1042',
+            shippingAddress: { countryCodeV2: 'NO' },
+            billingAddress: { countryCodeV2: 'SE' },
+          },
+        ]),
+      }),
+    )
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders[0].shippingAddress).toEqual({ countryCodeV2: 'NO' })
+    expect(page.orders[0].billingAddress).toEqual({ countryCodeV2: 'SE' })
+    expect(sentQuery(0)).toContain('shippingAddress { countryCodeV2 }')
+    expect(sentQuery(0)).toContain('billingAddress { countryCodeV2 }')
+    // Each line's physical-product flag decides whether billing may stand in (#98).
+    expect(sentQuery(0)).toMatch(/lineItems\([^)]*\) \{[\s\S]*requiresShipping/)
+    expect(sentQuery(0)).not.toMatch(/address1|address2|zip|city|province|email|phone|customer|firstName|lastName/)
+  })
+
+  it('tolerates the documented protected-data refusal: null field plus a field-scoped error', async () => {
+    // Shopify's documented shape for a field the app may not read: HTTP 200,
+    // the field null in data, an errors entry whose path points at it.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([
+          { legacyResourceId: '1042', shippingAddress: null, billingAddress: null },
+          { legacyResourceId: '1043', shippingAddress: null, billingAddress: null },
+        ]),
+        errors: [
+          {
+            message:
+              'This app is not approved to access the MailingAddress object. See https://partners.shopify.com/1/apps/2/customer_data for more details.',
+            path: ['orders', 'nodes', 0, 'shippingAddress'],
+            extensions: { code: 'ACCESS_DENIED' },
+          },
+          {
+            message: 'This app is not approved to use the countryCodeV2 field.',
+            path: ['orders', 'nodes', 1, 'shippingAddress', 'countryCodeV2'],
+          },
+          {
+            message:
+              'This app is not approved to access the MailingAddress object. See https://partners.shopify.com/1/apps/2/customer_data for more details.',
+            path: ['orders', 'nodes', 0, 'billingAddress'],
+            extensions: { code: 'ACCESS_DENIED' },
+          },
+        ],
+      }),
+    )
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders).toHaveLength(2)
+    expect(page.addressesWithheld).toBe(true)
+    // Answered in place: no retry, and nothing classified as revoked.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('tolerates a withheld billing address on its own (a digital order never fails the page)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([{ legacyResourceId: '2001', shippingAddress: null, billingAddress: null }]),
+        errors: [
+          {
+            message: 'This app is not approved to access the MailingAddress object.',
+            path: ['orders', 'nodes', 0, 'billingAddress'],
+            extensions: { code: 'ACCESS_DENIED' },
+          },
+        ],
+      }),
+    )
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders).toHaveLength(1)
+    expect(page.addressesWithheld).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries once without the address when the whole query is refused, so the sync keeps working', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          errors: [{ message: 'Access denied', extensions: { code: 'ACCESS_DENIED' } }],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: ordersData([{ legacyResourceId: '1042' }]) }))
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders).toHaveLength(1)
+    expect(page.addressesWithheld).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sentQuery(0)).toContain('shippingAddress')
+    expect(sentQuery(0)).toContain('billingAddress')
+    // The retry asks for exactly the fields that worked before the
+    // addresses were added: no address and no shipping flag.
+    expect(sentQuery(1)).not.toMatch(/shippingAddress|billingAddress|requiresShipping/)
+  })
+
+  it('still classifies as revoked when the query is refused without the address too (read_orders missing)', async () => {
+    const denied = () =>
+      jsonResponse({ errors: [{ message: 'Access denied', extensions: { code: 'ACCESS_DENIED' } }] })
+    fetchMock.mockResolvedValueOnce(denied()).mockResolvedValueOnce(denied())
+    const error = await listOrdersPage(SESSION, OPTIONS).catch((e) => e)
+    expect(isRevokedCredentialsError(error)).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('still fails on an error outside the shipping address, even next to a tolerated one', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([{ legacyResourceId: '1042', shippingAddress: null }]),
+        errors: [
+          { message: 'withheld', path: ['orders', 'nodes', 0, 'shippingAddress'] },
+          { message: 'Internal error', path: ['orders', 'nodes', 0, 'taxLines'] },
+        ],
+      }),
+    )
+    const error = await listOrdersPage(SESSION, OPTIONS).catch((e) => e)
+    expect(error).toBeInstanceOf(ShopifyApiError)
+    expect((error as ShopifyApiError).message).toContain('Internal error')
+    expect(isRevokedCredentialsError(error)).toBe(false)
+  })
+
+  it('leaves the addresses out when the caller stopped asking for them', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: ordersData([]) }))
+    const page = await listOrdersPage(SESSION, { ...OPTIONS, includeAddresses: false })
+    expect(sentQuery(0)).not.toMatch(/shippingAddress|billingAddress|requiresShipping/)
+    expect(page.addressesWithheld).toBe(false)
+  })
+})
+
+describe('testConnectionAndFetchShopInfo', () => {
+  const TOKEN = () => jsonResponse({ access_token: 'token-1', scope: 'read_orders', expires_in: 86399 })
+  // Shopify's answer to the probe on a token without read_orders (PH 161).
+  const ORDERS_DENIED = () =>
+    jsonResponse({
+      errors: [{ message: 'Access denied for orders field.', extensions: { code: 'ACCESS_DENIED' } }],
+    })
+  const grantedScopes = (...handles: string[]) =>
+    jsonResponse({
+      data: { currentAppInstallation: { accessScopes: handles.map((handle) => ({ handle })) } },
+    })
+
+  function sentQuery(call: number): string {
+    return JSON.parse((fetchMock.mock.calls[call][1] as RequestInit).body as string).query
+  }
+
+  async function connectError(): Promise<ShopifyConnectError> {
+    const error = await testConnectionAndFetchShopInfo(CREDS).catch((e) => e)
+    expect(error).toBeInstanceOf(ShopifyConnectError)
+    return error as ShopifyConnectError
+  }
+
+  it('returns the shop info and asks nothing more on a working store', async () => {
+    fetchMock
+      .mockResolvedValueOnce(TOKEN())
+      .mockResolvedValueOnce(
+        jsonResponse({ data: { shop: { name: 'Butiken', currencyCode: 'sek' }, orders: { nodes: [] } } }),
+      )
+    await expect(testConnectionAndFetchShopInfo(CREDS)).resolves.toEqual({
+      name: 'Butiken',
+      currency: 'SEK',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sentQuery(1)).toContain('query ConnectProbe')
+  })
+
+  it('names read_orders as not granted on the store when the active version has it but the store never approved it (PH 161)', async () => {
+    fetchMock
+      .mockResolvedValueOnce(TOKEN())
+      .mockResolvedValueOnce(ORDERS_DENIED())
+      .mockResolvedValueOnce(grantedScopes('read_products'))
+    const error = await connectError()
+    expect(error.kind).toBe('orders_scope_not_granted')
+    expect(error.grantedScopes).toEqual(['read_products'])
+    // The granted set is read from the installation, not from the token
+    // response's scope field (a readback of the version's declared scopes).
+    expect(sentQuery(2)).toContain('currentAppInstallation')
+    expect(error.underlying).toBeInstanceOf(ShopifyApiError)
+    expect(error.message).toContain('Access denied for orders field.')
+  })
+
+  it('reports an installation with no granted scopes as read_orders not granted', async () => {
+    fetchMock
+      .mockResolvedValueOnce(TOKEN())
+      .mockResolvedValueOnce(ORDERS_DENIED())
+      .mockResolvedValueOnce(grantedScopes())
+    const error = await connectError()
+    expect(error.kind).toBe('orders_scope_not_granted')
+    expect(error.grantedScopes).toEqual([])
+  })
+
+  it('blames protected customer data when read_orders (or write_orders) is granted yet orders are refused', async () => {
+    for (const scope of ['read_orders', 'write_orders']) {
+      fetchMock.mockReset()
+      fetchMock
+        .mockResolvedValueOnce(TOKEN())
+        .mockResolvedValueOnce(ORDERS_DENIED())
+        .mockResolvedValueOnce(grantedScopes('read_products', scope))
+      const error = await connectError()
+      expect(error.kind).toBe('orders_protected_data')
+    }
+  })
+
+  it('stays honest when the granted scopes cannot be read either', async () => {
+    fetchMock
+      .mockResolvedValueOnce(TOKEN())
+      .mockResolvedValueOnce(ORDERS_DENIED())
+      .mockResolvedValueOnce(
+        jsonResponse({ errors: [{ message: 'Access denied', extensions: { code: 'ACCESS_DENIED' } }] }),
+      )
+    const error = await connectError()
+    expect(error.kind).toBe('orders_access_denied')
+    expect(error.grantedScopes).toBeNull()
+  })
+
+  it('says the app is not installed when the token exchange says so', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { error: 'invalid_request', error_description: 'The application is not installed on this shop.' },
+        400,
+      ),
+    )
+    const error = await connectError()
+    expect(error.kind).toBe('app_not_installed')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('says the app and store are in different organizations on shop_not_permitted', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { error: 'shop_not_permitted', error_description: 'Client credentials cannot be performed on this shop.' },
+        400,
+      ),
+    )
+    expect((await connectError()).kind).toBe('other_organization')
+  })
+
+  it('says the credentials were rejected on invalid_client', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'invalid_client' }, 400))
+    expect((await connectError()).kind).toBe('credentials_rejected')
+  })
+
+  it('reports a Shopify-side failure as unreachable, not as a permission problem', async () => {
+    fetchMock.mockResolvedValueOnce(TOKEN()).mockResolvedValueOnce(jsonResponse({}, 500))
+    expect((await connectError()).kind).toBe('unreachable')
+  })
+})
+
+describe('fetchGrantedScopes', () => {
+  it('lists the handles and never throws', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: { currentAppInstallation: { accessScopes: [{ handle: 'read_orders' }, null, { handle: '' }] } },
+      }),
+    )
+    await expect(fetchGrantedScopes(SESSION)).resolves.toEqual(['read_orders'])
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: { currentAppInstallation: null } }))
+    await expect(fetchGrantedScopes(SESSION)).resolves.toBeNull()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({}, 401))
+    await expect(fetchGrantedScopes(SESSION)).resolves.toBeNull()
   })
 })

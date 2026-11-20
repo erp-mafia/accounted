@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { currentStagingBatchId } from '@/lib/pending-operations/batch-context'
+import { currentAgentReason } from '@/lib/pending-operations/agent-reason'
 import { eventBus } from '@/lib/events/bus'
 
 const DEFAULT_COMPANY_ID = '11111111-1111-4111-8111-111111111111'
@@ -22,10 +23,10 @@ vi.mock('@/lib/portfolio/scope', () => ({
   resolveCompanyScope: (...args: unknown[]) => mocks.resolveCompanyScope(...args),
   SCOPE_MAX_COMPANIES: 25,
 }))
-vi.mock('@/lib/portfolio/overview', () => ({
-  fetchPortfolioOverview: (...args: unknown[]) => mocks.fetchPortfolioOverview(...args),
-  DEADLINE_KIND_FILTERS: ['vat', 'agi', 'f_skatt', 'inkomstdeklaration', 'arsredovisning', 'any'],
-}))
+vi.mock('@/lib/portfolio/overview', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/portfolio/overview')>()
+  return { ...actual, fetchPortfolioOverview: (...args: unknown[]) => mocks.fetchPortfolioOverview(...args) }
+})
 vi.mock('@/lib/pending-operations/commit', () => ({
   commitPendingOperation: (...args: unknown[]) => mocks.commit(...args),
 }))
@@ -45,7 +46,7 @@ vi.mock('@/lib/entitlements/multi-user', async (importOriginal) => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'entitled', graceEndsAt: null }) }
 })
 
-import { tools } from '../server'
+import { tools, withAgentReasonArg } from '../server'
 
 const scoped = (companyId: string, name: string, role = 'owner') => ({
   companyId,
@@ -57,7 +58,7 @@ const scoped = (companyId: string, name: string, role = 'owner') => ({
 })
 
 function scopeOf(...companies: Array<ReturnType<typeof scoped>>) {
-  return { companies, truncated: false, remainingCompanyIds: [], unresolved: [], team: null }
+  return { companies, truncated: false, remainingCompanyIds: [], unresolved: [], dormant: [], team: null }
 }
 
 /**
@@ -99,11 +100,22 @@ function supabaseDouble(pendingRows: Array<Record<string, unknown>> = []) {
   const settingsChain = {
     select: vi.fn(() => ({ in: vi.fn(() => ({ order: vi.fn(() => ({ range: vi.fn().mockResolvedValue({ data: [], error: null }) })) })) })),
   }
+  // A draft invoice for gnubok_delete_draft_invoice, a high-risk staging tool.
+  const invoiceChain: Record<string, ReturnType<typeof vi.fn>> = {}
+  Object.assign(invoiceChain, {
+    select: vi.fn(() => invoiceChain),
+    eq: vi.fn(() => invoiceChain),
+    single: vi.fn(async () => ({
+      data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 100, currency: 'SEK', customer: { name: 'Kund AB' } },
+      error: null,
+    })),
+  })
   const supabase = {
     from: vi.fn((table: string) => {
       if (table === 'company_members') return membershipChain
       if (table === 'pending_operations') return pendingChain
       if (table === 'company_settings') return settingsChain
+      if (table === 'invoices') return invoiceChain
       throw new Error(`Unexpected table: ${table}`)
     }),
     auth: { admin: { getUserById: vi.fn().mockResolvedValue({ data: { user: { email: 'a@b.se' } } }) } },
@@ -126,7 +138,7 @@ const fakeRead = {
   description: 'test read',
   inputSchema: { type: 'object', additionalProperties: false, properties: { limit: { type: 'number' } } },
   outputSchema: { type: 'object' },
-  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  annotations: { effect: 'read_only' as const, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   execute: vi.fn(),
 }
 const fakeStaged = {
@@ -134,10 +146,13 @@ const fakeStaged = {
   description: 'test staged write',
   inputSchema: { type: 'object', additionalProperties: false, properties: { note: { type: 'string' }, dry_run: { type: 'boolean' } } },
   outputSchema: stagedSchema,
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  annotations: { effect: 'additive' as const, readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   execute: vi.fn(),
 }
 tools.push(fakeRead as never, fakeStaged as never)
+// A staging tool as the tool list assembles it: with the agent's reason.
+const fakeReasoned = withAgentReasonArg({ ...fakeStaged, name: 'gnubok_fake_reasoned', execute: vi.fn() } as never)
+tools.push(fakeReasoned)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -183,13 +198,20 @@ describe('gnubok_client_overview', () => {
           companyId: DEFAULT_COMPANY_ID,
           name: 'Default AB',
           orgNumber: '559000-0001',
+          clientNumber: null,
           entityType: 'AB',
           role: 'owner',
           teamId: null,
           unbookedCount: 3,
           inboxCount: 0,
-          nextDeadline: { title: 'Moms', dueDate: '2026-10-12', taxDeadlineType: 'moms_quarterly', urgency: 'action_needed' },
+          // The earliest open deadline of any kind is the AGI; the row
+          // matched deadline_kind vat on the later VAT deadline.
+          nextDeadline: { title: 'AGI', dueDate: '2026-10-12', taxDeadlineType: 'arbetsgivardeklaration', urgency: 'action_needed' },
           lastBookedDate: '2026-09-01',
+          deadlines: [
+            { title: 'AGI', dueDate: '2026-10-12', taxDeadlineType: 'arbetsgivardeklaration', urgency: 'action_needed' },
+            { title: 'Moms', dueDate: '2026-10-26', taxDeadlineType: 'moms_quarterly', urgency: 'upcoming' },
+          ],
         },
       ],
     })
@@ -213,13 +235,19 @@ describe('gnubok_client_overview', () => {
         company_id: DEFAULT_COMPANY_ID,
         name: 'Default AB',
         org_number: '559000-0001',
+        client_number: null,
         entity_type: 'AB',
         role: 'owner',
         team_id: null,
         unbooked_count: 3,
         inbox_count: 0,
-        next_deadline: { title: 'Moms', due_date: '2026-10-12', tax_deadline_type: 'moms_quarterly', urgency: 'action_needed' },
+        next_deadline: { title: 'AGI', due_date: '2026-10-12', tax_deadline_type: 'arbetsgivardeklaration', urgency: 'action_needed' },
         last_booked_date: '2026-09-01',
+        // The same row shape as v1: the deadline that matched the filter is readable.
+        deadlines: [
+          { title: 'AGI', due_date: '2026-10-12', tax_deadline_type: 'arbetsgivardeklaration', urgency: 'action_needed' },
+          { title: 'Moms', due_date: '2026-10-26', tax_deadline_type: 'moms_quarterly', urgency: 'upcoming' },
+        ],
       },
     ])
     expect(result.scope).toEqual({ resolved: 1, truncated: false, remaining_company_ids: [], unresolved: [], dormant: [], team: null })
@@ -331,11 +359,46 @@ describe('gnubok_run_across_companies', () => {
       supabase as never
     )) as { results: Array<{ ok: boolean; error?: { code: string } }> }
     expect(result.results[0].ok).toBe(false)
+    // The paywall's own code, as on a direct call: it read as UNKNOWN_ERROR.
+    expect(result.results[0].error?.code).toBe('capability_blocked')
     expect(mocks.hasCapability).toHaveBeenCalledWith(supabase, DEFAULT_COMPANY_ID, MCP_TOOL_CAPABILITY_MAP[gated.name])
   })
 })
 
 describe('gnubok_stage_across_companies', () => {
+  it("hands each company's staging the agent's reason from arguments, split off the tool's own arguments", async () => {
+    mocks.resolveCompanyScope.mockResolvedValue(
+      scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB'), scoped(OTHER_COMPANY_ID, 'Other AB', 'admin'))
+    )
+    const { supabase } = supabaseDouble()
+    vi.mocked(fakeReasoned.execute).mockImplementation(async (args: Record<string, unknown>, companyId: string) => ({
+      staged: true,
+      operation_id: `op-${companyId.slice(0, 2)}`,
+      risk_level: 'low',
+      message: 'staged',
+      preview: { args, reason: currentAgentReason() },
+    }))
+
+    const result = (await stageTool.execute(
+      {
+        tool: 'gnubok_fake_reasoned',
+        arguments: { note: 'shared', reason: '  The same year-end rule for every client.  ' },
+        per_company_arguments: { [OTHER_COMPANY_ID]: { reason: 'This client books it on 2990 instead.' } },
+        scope: { companies: 'all' },
+        __keyScopes: ['companies:read'],
+      },
+      '',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as { results: Array<{ preview?: { args: Record<string, unknown>; reason: string | null } }> }
+
+    expect(result.results.map((r) => r.preview)).toEqual([
+      { args: { note: 'shared' }, reason: 'The same year-end rule for every client.' },
+      { args: { note: 'shared' }, reason: 'This client books it on 2990 instead.' },
+    ])
+  })
+
   it('stages once per company under one batch id, sequentially, with per-company overrides', async () => {
     mocks.resolveCompanyScope.mockResolvedValue(
       scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB'), scoped(OTHER_COMPANY_ID, 'Other AB', 'admin'))
@@ -376,7 +439,6 @@ describe('gnubok_stage_across_companies', () => {
   it('refuses high-risk tools, non-staging tools, unresolved ids and dry_run on tools without it', async () => {
     const { supabase } = supabaseDouble()
     mocks.resolveCompanyScope.mockResolvedValue(scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB')))
-    await expect(stageTool.execute({ tool: 'gnubok_run_year_end' }, '', 'user-1', supabase as never)).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
     await expect(stageTool.execute({ tool: 'gnubok_fake_read' }, '', 'user-1', supabase as never)).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
     expect(fakeStaged.execute).not.toHaveBeenCalled()
 
@@ -398,6 +460,30 @@ describe('gnubok_stage_across_companies', () => {
       await expect(
         stageTool.execute({ tool: noDryRun.name, dry_run: true }, '', 'user-1', supabase as never)
       ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    }
+  })
+
+  it('refuses a high-risk staging tool by its risk tier, once, staging nothing and skipping the rest', async () => {
+    mocks.resolveCompanyScope.mockResolvedValue(
+      scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB'), scoped(OTHER_COMPANY_ID, 'Other AB'))
+    )
+    const { supabase } = supabaseDouble()
+    for (const dryRun of [false, true]) {
+      supabase.from.mockClear()
+      await expect(
+        stageTool.execute(
+          { tool: 'gnubok_delete_draft_invoice', arguments: { invoice_id: 'inv-1' }, dry_run: dryRun },
+          '',
+          'user-1',
+          supabase as never
+        )
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: expect.stringMatching(/gnubok_delete_draft_invoice stages delete_draft_invoice, a high-risk operation/),
+      })
+      expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+      // The first company's refusal stopped the batch: one invoice read only.
+      expect(supabase.from.mock.calls.filter(([table]) => table === 'invoices')).toHaveLength(1)
     }
   })
 
@@ -479,12 +565,12 @@ describe('gnubok_approve_pending_operation with batch_id', () => {
     })
   })
 
-  it('requires exactly one of operation_id and batch_id', async () => {
+  it('requires exactly one of operation_id, operation_ids and batch_id', async () => {
     const { supabase } = supabaseDouble()
-    await expect(approveTool.execute({}, DEFAULT_COMPANY_ID, 'user-1', supabase as never)).rejects.toThrow(/operation_id or batch_id/)
+    await expect(approveTool.execute({}, DEFAULT_COMPANY_ID, 'user-1', supabase as never)).rejects.toThrow(/operation_id, operation_ids or batch_id/)
     await expect(
       approveTool.execute({ operation_id: 'x', batch_id: BATCH_ID }, DEFAULT_COMPANY_ID, 'user-1', supabase as never)
-    ).rejects.toThrow(/not both/)
+    ).rejects.toThrow(/only one of/)
   })
 })
 

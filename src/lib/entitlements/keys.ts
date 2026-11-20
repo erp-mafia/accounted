@@ -20,11 +20,11 @@ export const CAPABILITY = {
   org_lookup: 'org_lookup',
   /** EU VAT-number validation (VIES). NOT gated: identity/lookup is always free. */
   vat_validation: 'vat_validation',
-  /** Riksbanken FX auto-fetch. NOT gated at launch (kept free); manual rate entry is always allowed. */
+  /** Riksbanken FX auto-fetch. Not gated; manual rate entry is always allowed. */
   currency_rates: 'currency_rates',
-  /** Cloud backup to Google Drive. NOT gated at launch (kept free: never hold a customer's data hostage). */
+  /** Cloud backup to Google Drive. Not gated. */
   cloud_backup: 'cloud_backup',
-  /** Migration import from other systems (Fortnox/Visma/Bokio/BL/Briox). Kept open so new payers can migrate IN. */
+  /** Migration import from other systems (Fortnox/Visma/Bokio/BL/Briox). Not gated. */
   migration: 'migration',
   /** Bolagsverket iXBRL årsredovisning filing. Reserved (extension not yet enabled). */
   bolagsverket: 'bolagsverket',
@@ -53,26 +53,49 @@ export const CAPABILITY = {
    * mail keeps leaving from the platform sender.
    */
   custom_sender_domain: 'custom_sender_domain',
-  /** Peppol e-invoicing (send/receive via a Peppol Access Point). Free on hosted (Arcim's own AP); on self-host brokered through the connector: Arcim's Qvalia AP with a per-key one-address + volume quota. */
+  /**
+   * Peppol e-invoicing (send/receive via a Peppol Access Point). Never free:
+   * on hosted it needs a paid account plus the operator-granted Peppol access
+   * on top of the plan; on a self-host it is brokered through the connector
+   * (with a per-key one-address and volume quota).
+   */
   peppol: 'peppol',
+  /**
+   * Reminders, debt collection and invoice delivery through a provider the
+   * company activates itself (lib/collections; the provider is described at
+   * runtime by the Connect catalogue, never named here). In
+   * PAID_CAPABILITIES like every other paid service: the Stripe subscription
+   * sync, operator grants and, since 2026-10-22, the trial write it. The
+   * grant gates START paths only (activation, handover, delivery, the daily
+   * batch): a lapsed plan or trial never stops the duties toward a case
+   * already open at the provider (lib/collections/flags.ts).
+   */
+  collections: 'collections',
+  /**
+   * BankID signing of archive documents (lib/signing): sending a PDF for
+   * signing, from the app, v1 or MCP, and the board's BankID signatures on a
+   * locked årsredovisning. Part of the paid plan and the trial, no fee per
+   * document. The grant
+   * gates START paths only (creating a request): a lapsed plan never stops
+   * a signer finishing a request already sent, nor anyone reading the
+   * signed copy and evidence package.
+   */
+  signing: 'signing',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
 
 /**
- * The set actually withheld from non-payers (manual tier) at the 2026-07-07
- * cutover. Founder decision (2026-06-28): gate the high-value recurring external
- * services only.
+ * The set withheld on the manual tier since the 2026-07-07 cutover: the
+ * recurring external services only.
  *
- * KEPT FREE on purpose:
- *   - identity & lookup: TIC org_lookup, VIES vat_validation, BankID login:
- *     they aid onboarding/data quality; gating them is friction in the wrong place.
+ * NOT gated:
+ *   - identity & lookup: TIC org_lookup, VIES vat_validation, BankID login.
  *   - currency_rates (FX auto-fetch) and cloud_backup.
  * Internal bookkeeping is always fully usable on the manual tier.
  *
- * NOTE: bank_sync and skatteverket stay PAID even though their flows use BankID
- * as an auth step: what's charged for is the bank data sync and the VAT/AGI
- * filing service, not the identity check.
+ * NOTE: bank_sync and skatteverket are paid capabilities even though their
+ * flows use BankID as an auth step.
  */
 export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.ai,
@@ -88,14 +111,38 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   // 2026-09-10 (issue #2494): the key is kept and granted so the gate can
   // be re-armed by env, but nothing withholds extra users today.
   CAPABILITY.multi_user,
+  // Trial-seeded since 2026-10-22 (paid plan only before).
+  CAPABILITY.collections,
+  // Trial-seeded and Stripe-synced since 20261028130000.
+  CAPABILITY.signing,
 ] as const
+
+/**
+ * Paid capabilities a trial never includes: only a paying subscription (the
+ * Stripe sync) or an operator grant
+ * unlocks them. Empty since 2026-10-22: collections was the only one and is
+ * now part of the trial (migration 20261022120000); a lapsed trial still
+ * finishes the cases it opened.
+ */
+export const PAID_PLAN_ONLY_CAPABILITIES: readonly CapabilityKey[] = [] as const
+
+/**
+ * What the company-creation trial seeds: PAID_CAPABILITIES minus the paid-plan
+ * only keys. The VALUES list in seed_trial_capability_grants() (latest body in
+ * supabase/migrations/20261028130000_signing_capability.sql) must match this
+ * list; tests/pg/trial-suppression-byra.pg.test.ts pins it.
+ */
+export const TRIAL_CAPABILITIES: readonly CapabilityKey[] = PAID_CAPABILITIES.filter(
+  (key) => !PAID_PLAN_ONLY_CAPABILITIES.includes(key),
+)
 
 /**
  * Capabilities that a SELF-HOSTED instance cannot provide on its own because
  * they run on services Accounted operates (the PSD2/AISP bank connection,
  * the Skatteverket API client, the TIC lookup contract, the migration
- * gateway). On hosted these follow the normal paywall (bank_sync and
- * skatteverket are in PAID_CAPABILITIES; org_lookup and migration are free).
+ * gateway, the collections providers). On hosted these follow the normal
+ * paywall (bank_sync, skatteverket and collections are in PAID_CAPABILITIES;
+ * org_lookup and migration are free).
  * On a self-host every other capability is always on, and exactly these fall
  * through to the grant lookup: the hourly connector sync writes
  * `source = 'connector'` grants for them from the instance's connector key
@@ -112,6 +159,9 @@ export const CONNECTOR_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.org_lookup,
   CAPABILITY.migration,
   CAPABILITY.peppol,
+  // The provider runs behind Accounted Connect only (no own-credentials form):
+  // a self-host needs the `collections` scope on its connector key.
+  CAPABILITY.collections,
 ] as const
 
 export function isConnectorCapability(key: CapabilityKey): boolean {
@@ -126,10 +176,11 @@ export function isConnectorCapability(key: CapabilityKey): boolean {
  * read/local SKV tools (generate_agi, vat_declaration_validate/status, agi_status)
  * stay free: the §4 carve-out forbids blocking a statutory filing obligation.
  *
- * The document upload tools invoke AI (Bedrock document OCR via
- * extractInvoiceFields), so they are gated on CAPABILITY.ai: the same paywall
- * the HTTP inbox upload/attach/retry paths enforce. Without these entries a
- * free-tier API key could trigger paid AI extraction. bank_sync gates
+ * The document upload tools are not gated: like the HTTP inbox upload they
+ * store the underlag on any tier and run the paid AI OCR (Bedrock, via
+ * extractInvoiceFields) only when the company has CAPABILITY.ai, checked at
+ * the OCR call, so a free-tier key can archive underlag but never trigger
+ * paid extraction. bank_sync gates
  * gnubok_connect_bank (the onboarding connect link) and gnubok_sync_bank
  * (the agent-triggered PSD2 sync, a paid Enable Banking call per account).
  */
@@ -144,10 +195,12 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
   // Agent-triggered PSD2 sync: a paid Enable Banking call per account.
   gnubok_sync_bank: CAPABILITY.bank_sync,
   gnubok_connect_skatteverket: CAPABILITY.skatteverket,
-  // AI document OCR (Bedrock): the inbox's paid extraction, reachable via MCP.
-  gnubok_create_document_upload: CAPABILITY.ai,
-  gnubok_complete_document_upload: CAPABILITY.ai,
-  gnubok_upload_document: CAPABILITY.ai,
+  // Sending a document for BankID signing (createSigningRequest re-checks it).
+  gnubok_request_signature: CAPABILITY.signing,
+  gnubok_request_arsredovisning_signatures: CAPABILITY.signing,
+  // The MCP document uploads are not here: they archive the underlag on any
+  // tier and skip only the paid OCR without `ai` (createDocumentInboxItem in
+  // the MCP server), as the dashboard upload and v1 POST /documents do.
 } as const
 
 /**
@@ -161,8 +214,12 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
 export const PAID_OPERATION_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   send_invoice: CAPABILITY.email_send,
   send_payslips: CAPABILITY.email_send,
+  // The approved reminder batch emails the company's customers, like an invoice send.
+  reminder_daily_batch: CAPABILITY.email_send,
   submit_vat_declaration: CAPABILITY.skatteverket,
   submit_agi: CAPABILITY.skatteverket,
+  request_signature: CAPABILITY.signing,
+  request_arsredovisning_signatures: CAPABILITY.signing,
 } as const
 
 /**

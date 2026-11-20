@@ -1,25 +1,23 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
-
-// `createClient()` returns a fresh object on every call, so we keep the
-// instance creation inside the effect: listing it as a dep would re-fire
-// the fetch on every render and create an infinite loop.
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Loader2, Search, ArrowDownRight } from 'lucide-react'
+import {
+  searchUnmatchedOutgoingTransactions,
+  type UnmatchedOutgoingTransaction,
+} from '@/lib/transactions/outgoing-transaction-search'
+import { ArrowDownRightIcon, MagnifyingGlassIcon } from '@/components/icons'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 
-interface BankTransaction {
-  id: string
-  date: string
-  description: string
-  amount: number
-  currency: string
-}
+/** Pause after the last keystroke before the search goes to the database. */
+const SEARCH_DEBOUNCE_MS = 250
 
 interface BankTransactionPickerProps {
   open: boolean
@@ -47,14 +45,26 @@ export default function BankTransactionPicker({
   onPick,
 }: BankTransactionPickerProps) {
   const { company } = useCompany()
-  const [transactions, setTransactions] = useState<BankTransaction[]>([])
+  const supabase = useMemo(() => createClient(), [])
+  const [transactions, setTransactions] = useState<UnmatchedOutgoingTransaction[]>([])
+  const tCommon = useTranslations('common')
   const [isLoading, setIsLoading] = useState(false)
+  // The rows could not be read: said in place of them, with "Försök igen".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [searchTerm, setSearchTerm] = useState('')
+  // The term the database was asked for, trailing the input by a short pause.
+  const [appliedSearch, setAppliedSearch] = useState('')
+
+  useEffect(() => {
+    const handle = setTimeout(() => setAppliedSearch(searchTerm.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(handle)
+  }, [searchTerm])
 
   useEffect(() => {
     if (!open || !company) return
+    const companyId = company.id
     let cancelled = false
-    const supabase = createClient()
 
     ;(async () => {
       setIsLoading(true)
@@ -64,33 +74,32 @@ export default function BankTransactionPicker({
       // would see "no matches" if we filtered to the invoice currency.
       // Cross-currency amount diff is hidden in the row below so the user
       // isn't shown a misleading "Diff X kr" against a USD target.
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('id, date, description, amount, currency')
-        .eq('company_id', company.id)
-        .lt('amount', 0)
-        .is('journal_entry_id', null)
-        .is('supplier_invoice_id', null)
-        .is('invoice_id', null)
-        .order('date', { ascending: false })
-        .limit(200)
-
-      if (!cancelled) {
-        if (!error) setTransactions(data || [])
-        setIsLoading(false)
+      // The search runs in the database across every unmatched outgoing row:
+      // the newest-first list is capped, so filtering it here could never
+      // find an older payment.
+      try {
+        const { rows } = await searchUnmatchedOutgoingTransactions(supabase, companyId, appliedSearch)
+        if (!cancelled) {
+          setTransactions(rows)
+          setLoadFailed(false)
+        }
+      } catch {
+        if (!cancelled) {
+          setTransactions([])
+          setLoadFailed(true)
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false)
       }
     })()
 
     return () => {
       cancelled = true
     }
-  }, [open, company])
+  }, [open, company, supabase, appliedSearch, attempt])
 
   const filtered = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase()
-    const matches = transactions.filter((t) =>
-      term === '' ? true : (t.description || '').toLowerCase().includes(term),
-    )
+    const matches = [...transactions]
     // Rank by amount proximity only when currencies match: comparing a USD
     // target to a SEK transaction numerically would produce a meaningless
     // ranking. Cross-currency rows fall back to date-desc order.
@@ -103,11 +112,11 @@ export default function BankTransactionPicker({
       const db = Math.abs(Math.abs(b.amount) - targetAmount)
       return da - db
     })
-  }, [transactions, searchTerm, targetAmount, targetCurrency])
+  }, [transactions, targetAmount, targetCurrency])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
+      <DialogContent size="wide" className="flex flex-col">
         <DialogHeader>
           <DialogTitle>Välj banktransaktion</DialogTitle>
           <DialogDescription>
@@ -116,7 +125,7 @@ export default function BankTransactionPicker({
         </DialogHeader>
 
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             autoFocus
             placeholder="Sök på beskrivning..."
@@ -128,17 +137,24 @@ export default function BankTransactionPicker({
 
         <div className="flex-1 overflow-y-auto space-y-2 -mx-1 px-1">
           {isLoading ? (
-            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              Laddar transaktioner…
-            </div>
+            <LateReveal aria-label="Laddar transaktioner" className="space-y-2">
+              {[1, 2, 3, 4].map((i) => (
+                <Skeleton key={i} className="h-12 w-full rounded-lg" />
+              ))}
+            </LateReveal>
+          ) : loadFailed ? (
+            <LoadError onRetry={() => setAttempt((n) => n + 1)} />
           ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-sm text-muted-foreground">
-              <ArrowDownRight className="h-8 w-8 mb-2" />
-              {transactions.length === 0
-                ? 'Inga okategoriserade utgifts­transaktioner hittades.'
-                : `Inga transaktioner matchar "${searchTerm}".`}
-            </div>
+            appliedSearch === '' ? (
+              <EmptyState icon={ArrowDownRightIcon} title="Inga okategoriserade utgifts­transaktioner hittades." />
+            ) : (
+              <div className="flex flex-wrap items-center gap-x-3 py-3 text-[13px] text-muted-foreground">
+                <span data-ph-mask="">{`Inga transaktioner matchar "${appliedSearch}".`}</span>
+                <Button variant="link" onClick={() => setSearchTerm('')}>
+                  {tCommon('clear_search')}
+                </Button>
+              </div>
+            )
           ) : (
             filtered.map((tx) => {
               const sameCurrency = tx.currency === targetCurrency
@@ -150,7 +166,7 @@ export default function BankTransactionPicker({
                   key={tx.id}
                   type="button"
                   onClick={() => onPick(tx.id)}
-                  className="w-full text-left rounded-lg border p-3 hover:border-primary/50 hover:bg-secondary/60 transition-colors"
+                  className="w-full text-left rounded-lg p-3 hover:border-primary/50 hover:bg-secondary/60 transition-colors bg-control shadow-raised"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">

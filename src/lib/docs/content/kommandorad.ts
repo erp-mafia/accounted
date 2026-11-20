@@ -30,17 +30,17 @@ Kräver Node.js 20 eller senare. \`npx accounted\` fungerar också utan installa
 accounted login
 \`\`\`
 
-Webbläsaren öppnar Accounteds inloggning, och adressen skrivs också ut i terminalen ifall ingen webbläsare öppnas. Logga in med BankID eller e-post, så kommer godkännandesidan. Det är samma sida som Claude- och ChatGPT-anslutningarna visar: alla behörigheter är förvalda, och du kan bocka ur rader under **Behörigheter** eller välja **Endast läs** för att bara ge läsrätt. Har du flera bolag väljer du dessutom för varje bolag **Läsa och skriva**, **Bara läsa** eller **Ingen åtkomst**. Godkänn, så skriver terminalen \`Signed in\`.
+Webbläsaren öppnar Accounteds inloggning, och adressen skrivs också ut i terminalen ifall ingen webbläsare öppnas. Logga in med BankID eller e-post, så kommer godkännandesidan. Det är samma sida som Claude- och ChatGPT-anslutningarna visar: alla behörigheter utom **Godkänn** är förvalda, och du kan bocka ur rader under **Behörigheter**, välja **Endast läs** för att bara ge läsrätt, eller bocka i **Godkänn** om kommandoraden ska få godkänna det den lägger upp. Har du flera bolag väljer du dessutom för varje bolag **Läsa och skriva**, **Bara läsa** eller **Ingen åtkomst**. Godkänn, så skriver terminalen \`Signed in\`.
 
 **Logga in själv, i din egen terminal.** En agent ska aldrig logga in åt dig. I Claude Code kan du skriva \`! accounted login\` i prompten när webbläsaren körs på samma dator.
 
 Över SSH eller i en container når webbläsaren inte datorn där kommandot körs. Öppna den utskrivna adressen i valfri webbläsare och godkänn. Webbläsaren hamnar då på en sida som inte går att ladda: kopiera hela adressen till den sidan, klistra in den i terminalen och tryck Enter. \`accounted login --no-browser\` hoppar över webbläsaren och går direkt till inklistringen. Inloggningen väntar i 5 minuter.
 
-Inloggningen sparas i \`~/.config/accounted/credentials.json\` (under \`$XDG_CONFIG_HOME\` om den är satt, i \`%APPDATA%\\accounted\` på Windows), och bara din användare kan läsa filen. Den syns som en anslutning under **Inställningar › API och MCP** (\`/settings/api\`).
+Inloggningen sparas i \`~/.config/accounted/credentials.json\` (under \`$XDG_CONFIG_HOME\` om den är satt, i \`%APPDATA%\\accounted\` på Windows), och bara din användare kan läsa filen. Den syns som en anslutning under **Agenter › Koppla en agent** (\`/settings/api\`).
 
 - \`accounted status\` visar servern, inloggningen och vilka bolag den når. Kommandot avslutas med kod 3 om du inte är inloggad.
-- \`accounted logout\` tar bort inloggningen från den här datorn, men bara här. Nyckeln fungerar tills du kopplar från den under Inställningar › API och MCP, och logout skriver ut nyckelns prefix så att du hittar rätt rad.
-- \`accounted login --force\` byter ut inloggningen, till exempel för att ge andra behörigheter. Koppla sedan från den gamla nyckeln i inställningarna.
+- \`accounted logout\` tar bort inloggningen från den här datorn, men bara här. Nyckeln fungerar tills du kopplar från den under Agenter › Koppla en agent, och logout skriver ut nyckelns prefix så att du hittar rätt rad.
+- \`accounted login --force\` byter ut inloggningen, till exempel för att ge andra behörigheter. Koppla sedan från den gamla nyckeln under Agenter › Koppla en agent.
 
 ## Hitta och kör verktyg
 
@@ -74,6 +74,8 @@ Staged for approval: operation 9a44..., risk medium. Nothing is booked yet.
 When the user approves it, run: accounted call approve_pending_operation '{"operation_id":"9a44...","company_id":"..."}'
 Or approve it in the browser: https://app.accounted.se/pending
 \`\`\`
+
+Raden \`When the user approves it, run:\` skrivs bara ut när inloggningen har behörigheten **Godkänn**. Utan den skriver kommandoraden ut första och sista raden, och du godkänner under **/pending**.
 
 Läs förhandsvisningen och godkänn sedan med kommandot eller under **/pending** i appen. En agent ska visa dig förhandsvisningen och fråga dig innan den kör godkännandet.
 
@@ -123,7 +125,7 @@ En nyckel får som standard göra 100 anrop i minuten. Vid gränsen avslutas kom
 
 ## API-nyckel för CI och servrar
 
-Där ingen kan öppna en webbläsare använder du en API-nyckel i stället för en inloggning. Skapa den under **Inställningar › API och MCP** (\`/settings/api\`), spara den bland CI-tjänstens hemligheter och sätt den som \`ACCOUNTED_API_KEY\`:
+Där ingen kan öppna en webbläsare använder du en API-nyckel i stället för en inloggning. Skapa den under **Agenter › Koppla en agent** (\`/settings/api\`), spara den bland CI-tjänstens hemligheter och sätt den som \`ACCOUNTED_API_KEY\`:
 
 \`\`\`bash
 export ACCOUNTED_API_KEY=gnubok_sk_...
@@ -149,7 +151,7 @@ accounted call create_customer '@customer.json'
 - **Kod 3, "Not signed in".** Kör \`accounted login\` i din egen terminal.
 - **En agent i en sandlåda får kod 3.** En agent i en sandlåda kan varken spara eller förnya en inloggning ("Cannot save the sign-in", "cannot be written here"). Kör \`accounted login\`, eller \`accounted status\` som förnyar en inloggning som behöver det, i din egen terminal och låt sedan agenten fortsätta.
 - **"Already signed in".** Kör \`accounted login --force\` för att byta inloggning, eller \`accounted logout\` först.
-- **"The sign-in has ended".** Anslutningen har kopplats från i inställningarna eller gäller inte längre. Kör \`accounted login\` igen.
+- **"The sign-in has ended".** Anslutningen har kopplats från under Agenter › Koppla en agent eller gäller inte längre. Kör \`accounted login\` igen.
 - **Kod 4, "Rate limited".** Vänta det antal sekunder som visas och fortsätt sedan.
 - **"The server redirected to ...".** Ange den adressen med \`--url\`.
 - **Bakom en proxy.** \`HTTPS_PROXY\` och andra proxyinställningar stöds inte i version 0.1: kommandoraden ansluter direkt till servern.

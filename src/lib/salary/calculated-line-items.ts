@@ -17,12 +17,37 @@ import type { SalaryLineItemType, ShiftPremiumItemType } from '@/types'
 
 export const VACATION_COMPENSATION_SOURCE = 'vacation_compensation'
 
-/** True for the semesterersättning row the engine itself derived. */
+/**
+ * Provenance of the vacation rows the calculation derives from vacation days
+ * taken (lib/salary/vacation-days-pay.ts, issue #85): the semestertillägg,
+ * the semesterlön and semesterlöneavdrag, and the deduction for obetalda
+ * dagar. Always on item_type 'vacation' (the DB CHECK of migration
+ * 20261023142500), with no quantity: the days are on the operator's own
+ * vacation line, which the vacation ledger counts.
+ */
+export const VACATION_PAY_SOURCE = 'vacation_pay'
+
+/**
+ * True for the semesterersättning row the engine itself derived. Two rows
+ * carry the provenance, never on the same payslip: the per-run
+ * semesterersättning under vacation_rule 'semesterersattning', and under
+ * sammalöneregeln the semesterlön of the rörliga lönedelar paid after the
+ * semesterår (lib/salary/variable-vacation-pay.ts). Both are deleted and
+ * derived again on every calculation.
+ */
 export function isAutomaticVacationLine(line: {
   item_type?: unknown
   calculation_source?: unknown
 }): boolean {
   return line.item_type === 'semesterersattning' && line.calculation_source === VACATION_COMPENSATION_SOURCE
+}
+
+/** True for a vacation row the engine derived from the days on a vacation line. */
+export function isDerivedVacationPayLine(line: {
+  item_type?: unknown
+  calculation_source?: unknown
+}): boolean {
+  return line.item_type === 'vacation' && line.calculation_source === VACATION_PAY_SOURCE
 }
 
 /** Item types the calculator derives from per-day absence records. */
@@ -38,7 +63,10 @@ export const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
 /**
  * Item types the calculator derives from shift_premium_rules + worked days.
  * These are wiped at the start of each per-employee pass and regenerated so
- * the displayed line items always match the latest rules.
+ * the displayed line items always match the latest rules. Each derived row
+ * names the rule that won its minutes (source_premium_rule_id) and freezes
+ * the rule as used (premium_basis, migration 20261027213119); the type, not
+ * that provenance, is what marks the row as calculated.
  */
 export const DERIVED_PREMIUM_TYPES: ShiftPremiumItemType[] = [
   'overtime_50',
@@ -66,7 +94,7 @@ export function isCalculatedLineType(itemType: unknown): boolean {
 /**
  * A line the calculation deletes and writes again on every run: a calculated
  * type, a förmån or recurring-line row, the engine's own semesterersättning
- * row, or the öresavrundning row. Editing or deleting one by hand is undone by
+ * row, a vacation row derived from vacation days, or the öresavrundning row. Editing or deleting one by hand is undone by
  * the next calculation, which every run needs before it can be booked; the
  * change belongs in the source (absence, worked hours and premium rules, the
  * förmån, the recurring line). run-calculation.ts reads its manual lines as
@@ -83,6 +111,7 @@ export function isCalculatedLine(line: {
     Boolean(line.source_benefit_id) ||
     Boolean(line.source_recurring_line_id) ||
     isAutomaticVacationLine(line) ||
+    isDerivedVacationPayLine(line) ||
     line.item_type === 'oresavrundning'
   )
 }

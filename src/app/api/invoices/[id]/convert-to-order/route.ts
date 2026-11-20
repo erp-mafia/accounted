@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { convertToSalesOrder } from '@/lib/sales-orders/convert-to-sales-order'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/convert-to-order: proforma or offert -> draft

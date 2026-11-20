@@ -50,7 +50,7 @@ function liveLink() {
   }
 }
 
-// Distinct valid-format tokens per test — the route's rate-limit map is
+// Distinct valid-format tokens per test - the route's rate-limit map is
 // module-level state shared across this file.
 const token = (c: string) => c.repeat(43)
 

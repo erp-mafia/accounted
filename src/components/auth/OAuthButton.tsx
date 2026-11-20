@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { startOAuthSignIn } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
-import { KeyRound } from 'lucide-react'
+import { KeyIcon } from '@/components/icons'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { GitHubMark, GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import type { ResolvedProvider } from '@/lib/auth/gotrue-providers'
@@ -17,7 +17,7 @@ function ProviderMark({ provider }: { provider: ResolvedProvider }) {
   if (provider.id === 'google') return <GoogleMark />
   else if (provider.id === 'azure') return <MicrosoftMark />
   else if (provider.id === 'github') return <GitHubMark />
-  else return <KeyRound className="h-4 w-4 text-muted-foreground" />
+  else return <KeyIcon className="h-4 w-4 text-muted-foreground" />
 }
 
 /**
@@ -27,7 +27,9 @@ function ProviderMark({ provider }: { provider: ResolvedProvider }) {
  * name; for custom OIDC providers it shows "Sign in with SSO" style text.
  *
  * Kicks off the Supabase OAuth redirect, with flow=oauth so
- * /auth/callback can tag failures.
+ * /auth/callback can tag failures. The server starts the flow
+ * (POST /api/auth/oauth), so its PKCE verifier is an HttpOnly cookie, and
+ * answers the provider URL this button then navigates to.
  */
 export function OAuthButton({
   provider,
@@ -48,26 +50,19 @@ export function OAuthButton({
   next?: string
 }) {
   const [isRedirecting, setIsRedirecting] = useState(false)
-  const supabase = createClient()
   const tAuth = useTranslations('auth')
   const errorLocale = useLocale() as ErrorLocale
 
   const handleClick = async () => {
     setIsRedirecting(true)
     try {
-      const callback = new URL('/auth/callback', window.location.origin)
-      callback.searchParams.set('flow', 'oauth')
-      if (next && next !== '/') callback.searchParams.set('next', next)
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: provider.id as Parameters<typeof supabase.auth.signInWithOAuth>[0]['provider'],
-        options: {
-          redirectTo: callback.toString(),
-        },
-      })
-      if (error) {
+      const { url, error } = await startOAuthSignIn(provider.id, next)
+      if (error || !url) {
         onError(getErrorMessage(error, { context: 'auth', locale: errorLocale }))
         setIsRedirecting(false)
+        return
       }
+      window.location.assign(url)
     } catch (error) {
       onError(getErrorMessage(error, { context: 'auth', locale: errorLocale }))
       setIsRedirecting(false)
@@ -80,7 +75,8 @@ export function OAuthButton({
     <Button
       type="button"
       variant="outline"
-      size={compact ? 'default' : 'lg'}
+      // One height for every way in on the auth pages; compact only shortens the label.
+      size="lg"
       className="w-full"
       onClick={handleClick}
       loading={isRedirecting}

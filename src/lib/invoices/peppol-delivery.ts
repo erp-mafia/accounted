@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  isPeppolPreviewXml,
   PEPPOL_BIS_BILLING_CUSTOMIZATION_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
   type PeppolInvoiceResult,
@@ -56,12 +57,24 @@ export function isFiscalPeriodMissingError(err: unknown): boolean {
   return code === 'P0002' && typeof message === 'string' && /fiscal period retention basis/i.test(message)
 }
 
+/**
+ * A draft preview (accounted#44) carries a placeholder invoice number and OCR:
+ * it is for reading, never for a delivery row, and so never for the network
+ * (every send stages first). Checked on the flag and on the XML itself.
+ */
+function refusePreviewDocument(document: GeneratedPeppolInvoice): void {
+  if (document.preview || isPeppolPreviewXml(document.xml)) {
+    throw new Error('A Peppol draft preview cannot be staged for delivery')
+  }
+}
+
 export async function stagePeppolDelivery(args: {
   supabase: SupabaseClient
   companyId: string
   invoiceId: string
   document: GeneratedPeppolInvoice
 }): Promise<StagedPeppolDelivery> {
+  refusePreviewDocument(args.document)
   const { data, error } = await args.supabase.rpc('stage_peppol_delivery', {
     p_company_id: args.companyId,
     p_invoice_id: args.invoiceId,
@@ -92,6 +105,7 @@ export async function stagePeppolDeliveryAsActor(args: {
   actorId: string
   document: GeneratedPeppolInvoice
 }): Promise<StagedPeppolDelivery> {
+  refusePreviewDocument(args.document)
   const { data, error } = await args.supabase.rpc('stage_peppol_delivery_as_actor', {
     p_actor_id: args.actorId,
     p_company_id: args.companyId,
@@ -113,8 +127,8 @@ export async function stagePeppolDeliveryAsActor(args: {
 /**
  * The deliveries of one invoice, newest first, read with a service-role
  * client (peppol_deliveries is not granted to authenticated). The caller has
- * already established membership; the company filter is explicit. Same
- * columns as list_peppol_delivery_summaries: never the XML payload.
+ * already established membership; the company filter is explicit. Never
+ * the XML payload.
  */
 export async function listPeppolDeliveriesForInvoice(args: {
   service: SupabaseClient
@@ -172,21 +186,6 @@ export async function findReplaceableSubmission(args: {
   return latest?.provider_submission_id && SUPERSEDED_DELIVERY_STATUSES.has(latest.status)
     ? latest.provider_submission_id
     : null
-}
-
-export async function listPeppolDeliverySummaries(args: {
-  supabase: SupabaseClient
-  companyId: string
-  invoiceId: string
-}): Promise<PeppolDeliverySummary[]> {
-  const { data, error } = await args.supabase.rpc('list_peppol_delivery_summaries', {
-    p_company_id: args.companyId,
-    p_invoice_id: args.invoiceId,
-  })
-  if (error) {
-    throw new Error(`Failed to list Peppol deliveries: ${error.message}`)
-  }
-  return (data ?? []) as PeppolDeliverySummary[]
 }
 
 export async function persistVerifiedPeppolEvent(args: {

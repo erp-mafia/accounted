@@ -1,12 +1,21 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Dialog,
   DialogContent,
@@ -20,18 +29,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
-import { EmptyState } from '@/components/ui/empty-state'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { PageHeader } from '@/components/ui/page-header'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { isEntityType } from '@/lib/company/entity-type'
+import { mileageCounterAccounts, type MileageCounterAccount } from '@/lib/mileage/counter-accounts'
 import { applyRoutePrefill, locationSuggestions } from '@/lib/mileage/route-memory'
 import type { RoutePrefill } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Car, Copy, Download, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  EllipsisHorizontalIcon,
+  MapIcon,
+  PencilIcon,
+  PlusIcon,
+  Square2StackIcon,
+  TrashIcon,
+} from '@/components/icons'
 import type { MileageTrip, MileageVehicleType } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { parseDecimalInput } from '@/lib/money'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 interface TripFormState {
   trip_date: string
@@ -48,8 +74,17 @@ interface TripFormState {
   notes: string
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10)
+/** A payroll run that still accepts lines, as the push-to-salary dialog lists it. */
+interface OpenSalaryRun {
+  id: string
+  period_year: number
+  period_month: number
+  status: 'draft' | 'review'
+}
+
+interface RunEmployeeOption {
+  id: string
+  name: string
 }
 
 function monthBounds(month: string): { from: string; to: string } {
@@ -60,7 +95,7 @@ function monthBounds(month: string): { from: string; to: string } {
 
 function emptyForm(): TripFormState {
   return {
-    trip_date: today(),
+    trip_date: todayIsoStockholm(),
     vehicle_type: 'own_car',
     vehicle_registration: '',
     odometer_start: '',
@@ -84,7 +119,7 @@ function formFromTrip(trip: MileageTrip, keepDate: boolean): TripFormState {
   const displayKm =
     !keepDate && trip.is_round_trip ? Number(trip.distance_km) / 2 : Number(trip.distance_km)
   return {
-    trip_date: keepDate ? trip.trip_date : today(),
+    trip_date: keepDate ? trip.trip_date : todayIsoStockholm(),
     vehicle_type: trip.vehicle_type,
     vehicle_registration: trip.vehicle_registration ?? '',
     odometer_start: keepDate && trip.odometer_start != null ? String(trip.odometer_start) : '',
@@ -101,11 +136,16 @@ function formFromTrip(trip: MileageTrip, keepDate: boolean): TripFormState {
 
 export default function MileagePage() {
   const t = useTranslations('mileage')
+  const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
   const [trips, setTrips] = useState<MileageTrip[]>([])
   const [loading, setLoading] = useState(true)
+  // The last read failed. With no trips on screen the list says so in place
+  // of them; trips already on screen stay, with one line above them.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [month, setMonth] = useState<string>('all')
 
   const [formOpen, setFormOpen] = useState(false)
@@ -124,25 +164,48 @@ export default function MileagePage() {
   const [bookOpen, setBookOpen] = useState(false)
   const [bookFrom, setBookFrom] = useState('')
   const [bookTo, setBookTo] = useState('')
-  const [bookEntryDate, setBookEntryDate] = useState(today())
-  const [counterAccount, setCounterAccount] = useState<'2820' | '2893' | '1930'>('2820')
+  const [bookEntryDate, setBookEntryDate] = useState(todayIsoStockholm())
+  const [counterChoice, setCounterChoice] = useState<MileageCounterAccount | null>(null)
+  const entityType = useCompanyOptional()?.company?.entity_type ?? null
   const [booking, setBooking] = useState(false)
+
+  // Push to salary: the unbooked trips become a tax-free milersättning line on
+  // one employee's row in a draft or review payroll run (POST
+  // /api/mileage/salary-push), instead of a separate verifikat.
+  const tSalary = useTranslations('salary')
+  const [pushOpen, setPushOpen] = useState(false)
+  const [pushRuns, setPushRuns] = useState<OpenSalaryRun[] | null>(null)
+  // A failed read of the runs or of a run's employees says so in the dialog,
+  // where the picker would be, instead of reading as "none".
+  const [pushRunsFailed, setPushRunsFailed] = useState(false)
+  const [pushEmployeesFailed, setPushEmployeesFailed] = useState(false)
+  const [pushRunId, setPushRunId] = useState('')
+  const [pushEmployees, setPushEmployees] = useState<RunEmployeeOption[] | null>(null)
+  const [pushEmployeeId, setPushEmployeeId] = useState('')
+  const [pushFrom, setPushFrom] = useState('')
+  const [pushTo, setPushTo] = useState('')
+  const [pushIncludeUnassigned, setPushIncludeUnassigned] = useState(true)
+  const [pushing, setPushing] = useState(false)
+  // Only the latest run's employee lookup may land: switching runs while one
+  // is in flight must not show the previous run's employees.
+  const pushEmployeesRequest = useRef(0)
 
   const loadTrips = useCallback(async () => {
     try {
       const res = await fetch('/api/mileage/trips')
       if (!res.ok) {
-        toast({ title: t('load_error'), variant: 'destructive' })
+        setLoadFailed(true)
         return
       }
       const body = await res.json()
       setTrips(body.data || [])
+      setLoadFailed(false)
     } catch {
-      toast({ title: t('load_error'), variant: 'destructive' })
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
-  }, [t, toast])
+  }, [])
 
   useEffect(() => {
     loadTrips()
@@ -150,7 +213,7 @@ export default function MileagePage() {
 
   const months = useMemo(() => {
     const set = new Set(trips.map((trip) => trip.trip_date.slice(0, 7)))
-    set.add(today().slice(0, 7))
+    set.add(todayIsoStockholm().slice(0, 7))
     return [...set].sort().reverse()
   }, [trips])
 
@@ -169,6 +232,18 @@ export default function MileagePage() {
   )
 
   const suggestions = useMemo(() => locationSuggestions(trips), [trips])
+
+  // The credit side depends on the legal form and on whose trips these are:
+  // an enskild firma owner's own trips credit 2018, never skuld till anställda.
+  const counterOptions = useMemo(() => {
+    if (!isEntityType(entityType)) return []
+    const ownerTrips = trips
+      .filter((trip) => trip.status === 'draft' && trip.trip_date >= bookFrom && trip.trip_date <= bookTo)
+      .every((trip) => !trip.employee_id)
+    return mileageCounterAccounts(entityType, ownerTrips)
+  }, [entityType, trips, bookFrom, bookTo])
+  const counterAccount =
+    counterChoice && counterOptions.includes(counterChoice) ? counterChoice : (counterOptions[0] ?? null)
 
   const openCreate = () => {
     setEditingId(null)
@@ -275,7 +350,7 @@ export default function MileagePage() {
   }
 
   const submitForm = async () => {
-    const km = Number(form.distance_km.replace(',', '.'))
+    const km = parseDecimalInput(form.distance_km) ?? 0
     if (!(km > 0) || !form.from_location.trim() || !form.to_location.trim() || !form.purpose.trim()) {
       toast({ title: t('form_incomplete'), variant: 'destructive' })
       return
@@ -305,8 +380,7 @@ export default function MileagePage() {
       })
       if (!res.ok) {
         const body = await res.json().catch(() => null)
-        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-        toast({ title: message || t('save_error'), variant: 'destructive' })
+          toast({ title: getErrorMessage(body, { locale: errorLocale, fallback: t('save_error') }), variant: 'destructive' })
         return
       }
       setFormOpen(false)
@@ -330,11 +404,11 @@ export default function MileagePage() {
   }
 
   const openBook = () => {
-    const base = month === 'all' ? today().slice(0, 7) : month
+    const base = month === 'all' ? todayIsoStockholm().slice(0, 7) : month
     const bounds = monthBounds(base)
     setBookFrom(bounds.from)
     setBookTo(bounds.to)
-    setBookEntryDate(bounds.to <= today() ? bounds.to : today())
+    setBookEntryDate(bounds.to <= todayIsoStockholm() ? bounds.to : todayIsoStockholm())
     setBookOpen(true)
   }
 
@@ -348,19 +422,18 @@ export default function MileagePage() {
           from: bookFrom,
           to: bookTo,
           entry_date: bookEntryDate,
-          counter_account: counterAccount,
+          ...(counterAccount ? { counter_account: counterAccount } : {}),
         }),
       })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
-        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-        toast({ title: message || t('book_error'), variant: 'destructive' })
+          toast({ title: getErrorMessage(body, { locale: errorLocale, fallback: t('book_error') }), variant: 'destructive' })
         return
       }
       setBookOpen(false)
       toast({
         title: t('booked_title', {
-          voucher: `${body.data.voucher_series ?? ''}${body.data.voucher_number ?? ''}`,
+          voucher: formatVoucher(body.data),
         }),
         description: t('booked_description', {
           count: body.data.trip_count,
@@ -375,6 +448,112 @@ export default function MileagePage() {
     }
   }
 
+  const loadRunEmployees = async (runId: string) => {
+    const generation = ++pushEmployeesRequest.current
+    setPushEmployees(null)
+    setPushEmployeeId('')
+    setPushEmployeesFailed(false)
+    try {
+      const res = await fetch(`/api/salary/runs/${runId}`)
+      const body = await res.json().catch(() => null)
+      if (generation !== pushEmployeesRequest.current) return
+      if (!res.ok) {
+        setPushEmployeesFailed(true)
+        setPushEmployees([])
+        return
+      }
+      const rows: Array<{
+        employee_id: string
+        employee: { first_name?: string | null; last_name?: string | null } | null
+      }> = body?.data?.employees ?? []
+      const options = rows.map((row) => ({
+        id: row.employee_id,
+        name:
+          [row.employee?.first_name, row.employee?.last_name].filter(Boolean).join(' ') ||
+          row.employee_id,
+      }))
+      setPushEmployees(options)
+      if (options.length === 1) setPushEmployeeId(options[0].id)
+    } catch {
+      if (generation !== pushEmployeesRequest.current) return
+      setPushEmployeesFailed(true)
+      setPushEmployees([])
+    }
+  }
+
+  const selectPushRun = (runId: string) => {
+    setPushRunId(runId)
+    void loadRunEmployees(runId)
+  }
+
+  const openPush = async () => {
+    const base = month === 'all' ? todayIsoStockholm().slice(0, 7) : month
+    const bounds = monthBounds(base)
+    setPushFrom(bounds.from)
+    setPushTo(bounds.to)
+    setPushIncludeUnassigned(true)
+    setPushRuns(null)
+    setPushRunsFailed(false)
+    setPushRunId('')
+    setPushEmployees(null)
+    setPushEmployeeId('')
+    pushEmployeesRequest.current += 1
+    setPushOpen(true)
+    try {
+      const res = await fetch('/api/salary/runs')
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        setPushRunsFailed(true)
+        setPushRuns([])
+        return
+      }
+      const open = ((body?.data ?? []) as OpenSalaryRun[]).filter(
+        (run) => run.status === 'draft' || run.status === 'review'
+      )
+      setPushRuns(open)
+      if (open.length === 1) selectPushRun(open[0].id)
+    } catch {
+      setPushRunsFailed(true)
+      setPushRuns([])
+    }
+  }
+
+  const submitPush = async () => {
+    if (!pushRunId || !pushEmployeeId) return
+    setPushing(true)
+    try {
+      const res = await fetch('/api/mileage/salary-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          run_id: pushRunId,
+          employee_id: pushEmployeeId,
+          from: pushFrom,
+          to: pushTo,
+          include_unassigned: pushIncludeUnassigned,
+        }),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+          toast({ title: getErrorMessage(body, { locale: errorLocale, fallback: t('push_error') }), variant: 'destructive' })
+        return
+      }
+      setPushOpen(false)
+      toast({
+        title: t('pushed_title'),
+        description: t('booked_description', {
+          count: body.data.trip_count,
+          amount: formatCurrency(body.data.total_amount),
+        }),
+      })
+      await loadTrips()
+    } catch {
+      toast({ title: t('push_error'), variant: 'destructive' })
+    } finally {
+      setPushing(false)
+    }
+  }
+
   const exportHref = useMemo(() => {
     if (month === 'all') return '/api/mileage/export'
     const bounds = monthBounds(month)
@@ -382,17 +561,52 @@ export default function MileagePage() {
   }, [month])
 
   const monthLabel = month === 'all' ? t('all_months') : month
+  // One primary in the top bar (Ny resa); settling the drafts (book them, or
+  // send them to a payroll run instead) and the CSV export sit in its menu,
+  // each behind the same gate as before.
+  const canSettle = canWrite && draftTrips.length > 0
+  const canExport = trips.length > 0
 
   return (
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
         action={
-          canWrite ? (
-            <Button size="sm" onClick={openCreate}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t('new_trip')}
-            </Button>
+          canWrite || canExport ? (
+            <div className="flex items-center gap-2">
+              {(canSettle || canExport) && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon-toolbar" aria-label={tCommon('more_options')}>
+                      <EllipsisHorizontalIcon className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {canSettle && (
+                      <>
+                        <DropdownMenuItem onSelect={openBook}>{t('book_period')}</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => void openPush()}>{t('push_to_salary')}</DropdownMenuItem>
+                      </>
+                    )}
+                    {canSettle && canExport && <DropdownMenuSeparator />}
+                    {canExport && (
+                      <DropdownMenuItem asChild>
+                        <a href={exportHref} download>
+                          <ArrowDownTrayIcon className="h-4 w-4" />
+                          {t('export_csv')}
+                        </a>
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+              {canWrite && (
+                <Button size="toolbar" onClick={openCreate}>
+                  <PlusIcon className="h-4 w-4" />
+                  {t('new_trip')}
+                </Button>
+              )}
+            </div>
           ) : undefined
         }
       />
@@ -404,19 +618,6 @@ export default function MileagePage() {
           </p>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {canWrite && draftTrips.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={openBook}>
-              {t('book_period')}
-            </Button>
-          )}
-          {trips.length > 0 && (
-            <Button size="sm" variant="ghost" asChild>
-              <a href={exportHref} download>
-                <Download className="mr-2 h-4 w-4" />
-                {t('export_csv')}
-              </a>
-            </Button>
-          )}
           <ContextPicker
             items={[
               { id: 'all', label: t('all_months') },
@@ -430,15 +631,31 @@ export default function MileagePage() {
         </div>
       </div>
 
+      {loadFailed && trips.length > 0 && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void loadTrips() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      )}
+
       {loading ? (
-        <div className="space-y-2" role="status">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-        </div>
+        <LateReveal role="status">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="hidden h-3.5 w-48 sm:block" />
+              <Skeleton className="ml-auto h-3.5 w-10" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
+        </LateReveal>
+      ) : loadFailed && trips.length === 0 ? (
+        <LoadError title={t('load_error')} onRetry={() => void loadTrips()} />
+      ) : visibleTrips.length === 0 && trips.length > 0 ? (
+        <p className="py-3 text-[13px] text-muted-foreground">{t('no_trips_in_month')}</p>
       ) : visibleTrips.length === 0 ? (
         <EmptyState
-          icon={Car}
+          icon={MapIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('new_trip') : undefined}
@@ -448,7 +665,7 @@ export default function MileagePage() {
         // One-line rows (convention 4): purpose truncates with the full text
         // in the tooltip and steps aside on a phone; the wrapper scrolls
         // instead of the page.
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -495,7 +712,7 @@ export default function MileagePage() {
                         aria-label={t('copy_trip')}
                         onClick={() => openCopy(trip)}
                       >
-                        <Copy className="h-4 w-4" />
+                        <Square2StackIcon className="h-4 w-4" />
                       </Button>
                       {trip.status === 'draft' && (
                         <>
@@ -505,7 +722,7 @@ export default function MileagePage() {
                             aria-label={t('edit_trip')}
                             onClick={() => openEdit(trip)}
                           >
-                            <Pencil className="h-4 w-4" />
+                            <PencilIcon className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -513,7 +730,7 @@ export default function MileagePage() {
                             aria-label={t('delete_trip')}
                             onClick={() => deleteTrip(trip)}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <TrashIcon className="h-4 w-4" />
                           </Button>
                         </>
                       )}
@@ -534,7 +751,7 @@ export default function MileagePage() {
           setFormOpen(open)
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent size="form">
           <DialogHeader>
             <DialogTitle>{editingId ? t('edit_trip') : t('new_trip')}</DialogTitle>
           </DialogHeader>
@@ -685,7 +902,7 @@ export default function MileagePage() {
               className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors duration-150"
               onClick={() => setShowMore(!showMore)}
             >
-              {showMore ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {showMore ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
               {t('more_fields')}
             </button>
             {showMore && (
@@ -750,7 +967,7 @@ export default function MileagePage() {
       </Dialog>
 
       <Dialog open={bookOpen} onOpenChange={setBookOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('book_period')}</DialogTitle>
           </DialogHeader>
@@ -784,22 +1001,26 @@ export default function MileagePage() {
                 onChange={(e) => setBookEntryDate(e.target.value)}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="counter_account">{t('field_counter_account')}</Label>
-              <Select
-                value={counterAccount}
-                onValueChange={(v) => setCounterAccount(v as '2820' | '2893' | '1930')}
-              >
-                <SelectTrigger id="counter_account">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2820">{t('counter_2820')}</SelectItem>
-                  <SelectItem value="2893">{t('counter_2893')}</SelectItem>
-                  <SelectItem value="1930">{t('counter_1930')}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {counterAccount && (
+              <div className="space-y-2">
+                <Label htmlFor="counter_account">{t('field_counter_account')}</Label>
+                <Select
+                  value={counterAccount}
+                  onValueChange={(v) => setCounterChoice(v as MileageCounterAccount)}
+                >
+                  <SelectTrigger id="counter_account">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {counterOptions.map((account) => (
+                      <SelectItem key={account} value={account}>
+                        {t(`counter_${account}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <p className="text-sm text-muted-foreground">{t('book_explainer')}</p>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setBookOpen(false)}>
@@ -808,6 +1029,127 @@ export default function MileagePage() {
               <Button onClick={submitBook} disabled={booking}>
                 {booking ? t('booking') : t('confirm_book')}
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pushOpen} onOpenChange={setPushOpen}>
+        <DialogContent size="confirm">
+          <DialogHeader>
+            <DialogTitle>{t('push_title')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {pushRuns === null ? (
+              <LateReveal className="space-y-2" role="status">
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
+              </LateReveal>
+            ) : pushRunsFailed ? (
+              <LoadError title={t('runs_load_error')} onRetry={() => void openPush()} />
+            ) : pushRuns.length === 0 ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">{t('push_no_runs')}</p>
+                <Button variant="outline" asChild>
+                  <Link href="/salary">{t('push_go_to_salary')}</Link>
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="push_run">{t('field_salary_run')}</Label>
+                  <Select value={pushRunId} onValueChange={selectPushRun}>
+                    <SelectTrigger id="push_run">
+                      <SelectValue placeholder={t('push_choose')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {pushRuns.map((run) => (
+                        <SelectItem key={run.id} value={run.id}>
+                          {t('run_option', {
+                            period: `${run.period_year}-${String(run.period_month).padStart(2, '0')}`,
+                            status: tSalary(run.status === 'draft' ? 'status_draft' : 'status_review'),
+                          })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {pushRunId && (
+                  <div className="space-y-2">
+                    <Label htmlFor="push_employee">{t('field_employee')}</Label>
+                    {pushEmployees === null ? (
+                      <LateReveal>
+                        <Skeleton className="h-9 w-full" />
+                      </LateReveal>
+                    ) : pushEmployeesFailed ? (
+                      <div className="flex flex-wrap items-center gap-x-3 text-sm text-muted-foreground" role="alert">
+                        <span>{t('runs_load_error')}</span>
+                        <Button variant="link" onClick={() => void loadRunEmployees(pushRunId)}>
+                          {tCommon('retry')}
+                        </Button>
+                      </div>
+                    ) : pushEmployees.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">{t('push_no_employees')}</p>
+                    ) : (
+                      <Select value={pushEmployeeId} onValueChange={setPushEmployeeId}>
+                        <SelectTrigger id="push_employee">
+                          <SelectValue placeholder={t('push_choose')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {pushEmployees.map((employee) => (
+                            <SelectItem key={employee.id} value={employee.id}>
+                              {employee.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="push_from">{t('field_period_from')}</Label>
+                    <Input
+                      id="push_from"
+                      type="date"
+                      value={pushFrom}
+                      onChange={(e) => setPushFrom(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="push_to">{t('field_period_to')}</Label>
+                    <Input
+                      id="push_to"
+                      type="date"
+                      value={pushTo}
+                      onChange={(e) => setPushTo(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <label className="flex cursor-pointer items-start gap-3 text-sm">
+                  <Checkbox
+                    checked={pushIncludeUnassigned}
+                    onCheckedChange={(v) => setPushIncludeUnassigned(v === true)}
+                    className="mt-0.5"
+                  />
+                  <span>{t('push_include_unassigned')}</span>
+                </label>
+                <p className="text-sm text-muted-foreground">{t('push_explainer')}</p>
+              </>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setPushOpen(false)}>
+                {t('cancel')}
+              </Button>
+              {pushRuns !== null && pushRuns.length > 0 && (
+                <Button
+                  onClick={submitPush}
+                  loading={pushing}
+                  disabled={!pushRunId || !pushEmployeeId}
+                >
+                  {t('confirm_push')}
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>

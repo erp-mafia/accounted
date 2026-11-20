@@ -27,6 +27,7 @@ vi.mock('../dimension-rules', async (importOriginal) => ({
 import { cancelDraftEntry, commitEntry, createDraftEntry } from '../engine'
 import { fetchActiveDimensionRules } from '../dimension-rules'
 import { DimensionValidationError, MandatoryDimensionMissingError } from '../dimension-errors'
+import { AccrualDraftPostedByScheduleError } from '../errors'
 import { createJournalEntries } from '../journal-entry-batch'
 
 const supabase = {} as never
@@ -105,6 +106,17 @@ describe('createJournalEntries: one business event, all vouchers or none', () =>
     await expect(createJournalEntries(supabase, 'co-1', 'user-1', SET)).rejects.toBeInstanceOf(
       MandatoryDimensionMissingError,
     )
+    expect(createDraftEntry).not.toHaveBeenCalled()
+    expect(commitEntry).not.toHaveBeenCalled()
+  })
+
+  it('a periodisering voucher in the set refuses the whole set before anything is drafted', async () => {
+    const set = [SET[0]!, voucher('Periodisering', ['5010', '1790'], { source_type: 'accrual', voucher_series: 'A' })]
+
+    await expect(createJournalEntries(supabase, 'co-1', 'user-1', set)).rejects.toBeInstanceOf(
+      AccrualDraftPostedByScheduleError,
+    )
+    // Not left to commitEntry, which would refuse it only after the first voucher was posted.
     expect(createDraftEntry).not.toHaveBeenCalled()
     expect(commitEntry).not.toHaveBeenCalled()
   })
@@ -195,6 +207,41 @@ describe('createJournalEntries: one business event, all vouchers or none', () =>
       expect.any(Error),
       expect.objectContaining({ entityId: 'draft-1' }),
     )
+  })
+
+  it('without an event link, drafts every voucher with exactly the four arguments it always had', async () => {
+    await createJournalEntries(supabase, 'co-1', 'user-1', SET)
+    for (const [i, call] of vi.mocked(createDraftEntry).mock.calls.entries()) {
+      expect(call).toHaveLength(4)
+      expect(call[3]).toBe(SET[i])
+    }
+  })
+
+  it('with an event link (posting port), every draft carries it and every link is written before the first commit', async () => {
+    const link = { id: 'ev-1', role: 'produced' as const, onFailure: 'abort' as const }
+    await createJournalEntries(supabase, 'co-1', 'user-1', SET, { businessEvent: link })
+    expect(vi.mocked(createDraftEntry).mock.calls.map((call) => call.slice(3))).toEqual(
+      SET.map((input) => [input, { businessEvent: link }]),
+    )
+    // The commits are the ones they always were: the link went with the drafts.
+    expect(vi.mocked(commitEntry).mock.calls.every((call) => call.length === 4)).toBe(true)
+    expect(Math.max(...vi.mocked(createDraftEntry).mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...vi.mocked(commitEntry).mock.invocationCallOrder),
+    )
+  })
+
+  it('a link refused on a later voucher (strict) stops the whole set before any number: the earlier drafts are cancelled', async () => {
+    const link = { id: 'ev-1', role: 'produced' as const, onFailure: 'abort' as const }
+    const refused = new Error('link_business_event refused')
+    vi.mocked(createDraftEntry)
+      .mockResolvedValueOnce({ id: 'draft-1', status: 'draft' } as never)
+      .mockResolvedValueOnce({ id: 'draft-2', status: 'draft' } as never)
+      // The engine cancels the draft whose link it could not write, then throws.
+      .mockRejectedValueOnce(refused)
+
+    await expect(createJournalEntries(supabase, 'co-1', 'user-1', SET, { businessEvent: link })).rejects.toBe(refused)
+    expect(commitEntry).not.toHaveBeenCalled()
+    expect(vi.mocked(cancelDraftEntry).mock.calls.map((call) => call[3])).toEqual(['draft-1', 'draft-2'])
   })
 
   it('a committed voucher whose reload came back empty is still returned by id', async () => {

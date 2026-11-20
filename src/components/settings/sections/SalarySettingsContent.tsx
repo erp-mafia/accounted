@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
@@ -10,14 +11,21 @@ import {
   SettingsInput,
   SettingsReveal,
   SettingsRow,
+  SettingsRowNote,
   SettingsSectionHeader,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
 import { VacationYearSettings } from '@/components/settings/sections/VacationYearSettings'
+import { ShiftPremiumRulesPanel } from '@/components/salary/premium-rules/ShiftPremiumRulesPanel'
+import { VacationLiabilitySettings } from '@/components/settings/sections/VacationLiabilitySettings'
 import { Switch } from '@/components/ui/switch'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useSettings } from '@/components/settings/useSettings'
+import { usePaymentFileAccount } from '@/lib/hooks/use-payment-file-account'
+import { payingAccountDisplay } from '@/lib/payments/paying-account-label'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { resolveEmployerSwitches } from '@/lib/salary/employer-switches'
 import {
   DEFAULT_SALARY_CALCULATION_POLICY,
   SALARY_CALCULATION_POLICY_KEYS,
@@ -28,7 +36,6 @@ import {
 import type { CompanySettings } from '@/types'
 
 const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
-const BANK_OPTIONS = ['swedbank', 'seb', 'handelsbanken', 'nordea'] as const
 
 /**
  * One <select> per calculation convention. The form field name is the policy
@@ -46,13 +53,6 @@ function readPolicyFromForm(formData: FormData): SalaryCalculationPolicy {
   return policy as SalaryCalculationPolicy
 }
 
-const BANK_LABEL: Record<(typeof BANK_OPTIONS)[number], string> = {
-  swedbank: 'Swedbank',
-  seb: 'SEB',
-  handelsbanken: 'Handelsbanken',
-  nordea: 'Nordea',
-}
-
 export function SalarySettingsContent() {
   const t = useTranslations('settings_salary')
   const tNav = useTranslations('settings_nav')
@@ -60,6 +60,10 @@ export function SalarySettingsContent() {
   const tSalary = useTranslations('salary')
   const tTax = useTranslations('settings_tax_form')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
+  // The account the salary payment files pay from: the primary bank account,
+  // the one the net pay is booked on (crm#1483). Read-only here; it changes
+  // with the primary under Bokföring.
+  const { account: payingAccount } = usePaymentFileAccount(null)
   // Controlled so the LB sunset note reacts to the selection before save.
   const [format, setFormat] = useState<'bg_lb' | 'pain001' | null>(null)
   // Controlled: the Radix Switch is not a form element, so its value rides
@@ -69,6 +73,8 @@ export function SalarySettingsContent() {
   // same null = not touched rule.
   const [showEmployerCost, setShowEmployerCost] = useState<boolean | null>(null)
   const [showBreakdown, setShowBreakdown] = useState<boolean | null>(null)
+  // Regionalt stöd (PH 208): controlled Switch, same null = not touched rule.
+  const [regionalSupport, setRegionalSupport] = useState<boolean | null>(null)
   // Employer flags moved here from Skatt (2026-09-24). Controlled for the
   // same reason; null = not touched, read the saved value.
   const [paysSalaries, setPaysSalaries] = useState<boolean | null>(null)
@@ -82,12 +88,13 @@ export function SalarySettingsContent() {
   const effectiveNetRounding = netRounding ?? settings.salary_net_rounding ?? false
   const effectiveShowEmployerCost = showEmployerCost ?? settings.salary_payslip_show_employer_cost ?? true
   const effectiveShowBreakdown = showBreakdown ?? settings.salary_payslip_show_breakdown ?? true
-  const effectivePays = paysSalaries ?? settings.pays_salaries ?? false
-  // Fall back to pays_salaries for rows saved before the registration flag
-  // existed; saving attests the shown value.
-  const effectiveRegistered =
-    employerRegistered ?? settings.employer_registered ?? settings.pays_salaries ?? false
-  const effectiveSeasonal = employerSeasonal ?? settings.employer_seasonal ?? false
+  const effectiveRegionalSupport = regionalSupport ?? settings.salary_regional_support ?? false
+  // An unanswered employer_registered shows pays_salaries and is saved only
+  // once the person sets it: an untouched NULL stays NULL (crm#1790).
+  const employer = resolveEmployerSwitches(settings, { paysSalaries, employerRegistered, employerSeasonal })
+  const effectivePays = employer.paysSalaries
+  const effectiveRegistered = employer.employerRegistered
+  const effectiveSeasonal = employer.employerSeasonal
   const currentSeries = resolveDefaultSeriesForSource(settings, 'salary_payment')
   // {} on a company that never touched the conventions = every default.
   const currentPolicy: SalaryCalculationPolicy = {
@@ -99,7 +106,6 @@ export function SalarySettingsContent() {
     const payDayRaw = parseInt((formData.get('salary_pay_day') as string) || '25', 10)
     const payDay = Number.isFinite(payDayRaw) ? Math.min(28, Math.max(1, payDayRaw)) : 25
     const paymentFormat = (formData.get('preferred_payment_format') as string) || 'pain001'
-    const bank = (formData.get('salary_default_bank') as string) || 'none'
     const series = (formData.get('salary_voucher_series') as string) || 'A'
     const deviationRaw = formData.get('salary_deviation_period') as string | null
     const deviationPeriod = deviationRaw === 'previous_month' ? 'previous_month' : 'same_month'
@@ -107,14 +113,12 @@ export function SalarySettingsContent() {
     const updates: Record<string, unknown> = {
       salary_pay_day: payDay,
       preferred_payment_format: paymentFormat,
-      salary_default_bank: bank === 'none' ? null : bank,
       salary_net_rounding: effectiveNetRounding,
       salary_payslip_show_employer_cost: effectiveShowEmployerCost,
       salary_payslip_show_breakdown: effectiveShowBreakdown,
+      salary_regional_support: effectiveRegionalSupport,
       salary_deviation_period: deviationPeriod,
-      pays_salaries: effectivePays,
-      employer_registered: effectiveRegistered,
-      employer_seasonal: effectiveRegistered && effectiveSeasonal,
+      ...employer.updates,
       // All six conventions travel together: the internal settings route
       // stores the object as a whole.
       salary_calculation_policy: readPolicyFromForm(formData),
@@ -229,22 +233,39 @@ export function SalarySettingsContent() {
             </SettingsSelect>
           </SettingsRow>
           {effectiveFormat === 'bg_lb' && (
-            <p className="border-b border-border px-1 pb-3 text-[12.5px] leading-relaxed text-attn">
+            <p className="border-b-hairline px-1 pb-3 text-xs leading-relaxed text-attn">
               {t('sunset_warning')}
             </p>
           )}
-          <SettingsRow label={t('bank_label')} htmlFor="salary_default_bank" help={t('bank_help')}>
-            <SettingsSelect
-              id="salary_default_bank"
-              name="salary_default_bank"
-              defaultValue={settings.salary_default_bank ?? 'none'}
-            >
-              <option value="none">{t('bank_none')}</option>
-              {BANK_OPTIONS.map((key) => (
-                <option key={key} value={key}>{BANK_LABEL[key]}</option>
-              ))}
-              <option value="other">{t('bank_other')}</option>
-            </SettingsSelect>
+          {/* Which account pays the salaries is not a payroll setting: the
+              file pays from the account the net pay is booked on, the
+              primary bank account (crm#1483). Shown read-only (convention
+              15) with the way to change it; salary_default_bank, the bank
+              whose upload instructions open first, now follows this
+              account and is kept only as its fallback. */}
+          <SettingsRow label={t('paying_account_label')} htmlFor="salary_paying_account" help={t('paying_account_help')}>
+            <SettingsInput
+              id="salary_paying_account"
+              disabled
+              value={payingAccount ? payingAccountDisplay(payingAccount.account) : ''}
+              placeholder={payingAccount ? undefined : t('paying_account_loading')}
+              // The whole line: the note and the link go under it, so a
+              // narrow row never cuts the account's name.
+              className="basis-full tabular-nums"
+              data-ph-mask=""
+              readOnly
+            />
+            {payingAccount?.missing && (
+              <SettingsRowNote>
+                {t(payingAccount.missing === 'iban' ? 'paying_account_no_iban' : 'paying_account_no_bic')}{' '}
+                <Link href="/settings/invoicing" className={QUIET_LINK_CLASS}>
+                  {t('paying_account_fill_in')}
+                </Link>
+              </SettingsRowNote>
+            )}
+            <Link href="/settings/bookkeeping" className={QUIET_LINK_CLASS}>
+              {t('paying_account_change')}
+            </Link>
           </SettingsRow>
           <SettingsRow
             label={t('deviation_period_label')}
@@ -291,6 +312,20 @@ export function SalarySettingsContent() {
               </SettingsSelect>
             </SettingsRow>
           ))}
+        </SettingsGroup>
+
+        {/* Regionalt stöd (lib/salary/regional-support.ts): the company
+            attests work at a fast driftställe in a stödområde; runs
+            calculated afterwards declare FK471/FK476 and book the avdrag. */}
+        <SettingsGroup label={t('avgifter_heading')}>
+          <SettingsRow label={t('regional_support_label')} help={t('regional_support_help')}>
+            <Switch
+              id="salary_regional_support"
+              aria-label={t('regional_support_toggle')}
+              checked={effectiveRegionalSupport}
+              onCheckedChange={(next) => setRegionalSupport(next)}
+            />
+          </SettingsRow>
         </SettingsGroup>
 
         {/* What the employee's copy of the payslip prints (crm#202). The
@@ -363,6 +398,13 @@ export function SalarySettingsContent() {
           exist. Vacation itself is configured per employee; the rule row
           only points there. */}
       <VacationYearSettings settings={settings} onSaved={updateSettings} />
+      {/* Semesterlöneskuld: how 2920/2940 are booked. Its own confirm, not
+          the save bar: switching can post the catch-up verifikat. */}
+      <VacationLiabilitySettings settings={settings} onSaved={updateSettings} />
+
+      {/* OB and overtime rules: their own list and editor dialog, outside
+          the form so the dirty-form save bar never reacts to them. */}
+      <ShiftPremiumRulesPanel />
       </>
       ) : null}
     </div>

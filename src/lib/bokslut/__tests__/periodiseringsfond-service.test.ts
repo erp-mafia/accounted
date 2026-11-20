@@ -367,6 +367,37 @@ describe('proposeAteforing', () => {
   })
 })
 
+describe('proposeAteforing: a fond without a cohort year', () => {
+  const fond2110: ExistingFond = {
+    account_number: '2110',
+    cohort_year: null,
+    balance: 50_000,
+    opening_balance: 50_000,
+    must_return_this_year: false,
+  }
+
+  it('is never forced back, and counts in the schablonintäkt', () => {
+    const result = proposeAteforing([fond2110], { schablonintaktRate: 0.02 })
+    expect(result.proposals).toEqual([])
+    expect(result.schablonintaktAmount).toBe(1_000)
+  })
+
+  it('is returned from the account that holds it when the user asks, named by account', () => {
+    const result = proposeAteforing([fond2110], {
+      schablonintaktRate: 0.02,
+      returns: { '2110': 20_000 },
+    })
+    expect(result.proposals).toHaveLength(1)
+    expect(result.proposals[0]).toMatchObject({
+      label: 'Återföring periodiseringsfond konto 2110',
+      amount: 20_000,
+      required: false,
+    })
+    expect(result.proposals[0].lines[0]).toMatchObject({ account_number: '2110', debit_amount: 20_000 })
+    expect(result.proposals[0].lines[1]).toMatchObject({ account_number: '8819', credit_amount: 20_000 })
+  })
+})
+
 describe('listExistingPeriodiseringsfonder', () => {
   const supabase = {} as SupabaseClient
   const mockFetchEntryLines = vi.mocked(fetchEntryLines)
@@ -455,9 +486,10 @@ describe('listExistingPeriodiseringsfonder', () => {
         account_number: '2129', debit_amount: 0, credit_amount: 10_000,
         journal_entries: { entry_date: '2019-12-31' },
       },
-      // 2110 is a grouping account with no cohort: skipped
+      // 2150 (ackumulerade överavskrivningar) is in the fetched 21xx range
+      // but is not a periodiseringsfond: skipped
       {
-        account_number: '2110', debit_amount: 0, credit_amount: 5_000,
+        account_number: '2150', debit_amount: 0, credit_amount: 5_000,
         journal_entries: { entry_date: '2020-12-31' },
       },
     ])
@@ -490,6 +522,119 @@ describe('listExistingPeriodiseringsfonder', () => {
         must_return_this_year: false, // 2025 + 6 = 2031 > 2026
       },
     ])
+  })
+
+  it('keeps a fond booked on 211x or 213x, the whole INK2R 2.29 range, in the list', async () => {
+    mockFetchEntryLines.mockResolvedValue([
+      // 2110 names no year: in the base, six-year limit unknown
+      {
+        account_number: '2110', debit_amount: 0, credit_amount: 200_000,
+        journal_entries: { entry_date: '2022-12-31' },
+      },
+      // 2130 is "Periodiseringsfond 2020: nr 2": cohort 2020
+      {
+        account_number: '2130', debit_amount: 0, credit_amount: 30_000,
+        journal_entries: { entry_date: '2020-12-31' },
+      },
+      // 2135 avsatt on the closing date: opening 0
+      {
+        account_number: '2135', debit_amount: 0, credit_amount: 40_000,
+        journal_entries: { entry_date: '2025-12-31' },
+      },
+      {
+        account_number: '2124', debit_amount: 0, credit_amount: 60_000,
+        journal_entries: { entry_date: '2024-12-31' },
+      },
+      // Outside 211x-213x: never a periodiseringsfond
+      {
+        account_number: '2150', debit_amount: 0, credit_amount: 70_000,
+        journal_entries: { entry_date: '2024-12-31' },
+      },
+      {
+        account_number: '2140', debit_amount: 0, credit_amount: 9_000,
+        journal_entries: { entry_date: '2024-12-31' },
+      },
+    ])
+
+    const result = await listExistingPeriodiseringsfonder(
+      supabase, 'company-1', '2026-12-31', '2026-01-01',
+    )
+
+    // Oldest cohort first, the fond without a cohort year last
+    expect(result).toEqual([
+      {
+        account_number: '2130',
+        cohort_year: 2020,
+        balance: 30_000,
+        opening_balance: 30_000,
+        must_return_this_year: true, // 2020 + 6 = 2026 <= 2026
+      },
+      {
+        account_number: '2124',
+        cohort_year: 2024,
+        balance: 60_000,
+        opening_balance: 60_000,
+        must_return_this_year: false,
+      },
+      {
+        account_number: '2135',
+        cohort_year: 2025,
+        balance: 40_000,
+        opening_balance: 40_000,
+        must_return_this_year: false,
+      },
+      {
+        account_number: '2110',
+        cohort_year: null,
+        balance: 200_000,
+        opening_balance: 200_000,
+        must_return_this_year: false,
+      },
+    ])
+  })
+
+  it('puts the opening balance of 211x and 213x fonder in the schablonintäkt base', async () => {
+    mockFetchEntryLines.mockResolvedValue([
+      {
+        account_number: '2110', debit_amount: 0, credit_amount: 200_000,
+        journal_entries: { entry_date: '2022-12-31' },
+      },
+      {
+        account_number: '2133', debit_amount: 0, credit_amount: 100_000,
+        journal_entries: { entry_date: '2023-12-31' },
+      },
+      {
+        account_number: '2124', debit_amount: 0, credit_amount: 100_000,
+        journal_entries: { entry_date: '2024-12-31' },
+      },
+    ])
+
+    const fonder = await listExistingPeriodiseringsfonder(
+      supabase, 'company-1', '2025-12-31', '2025-01-01',
+    )
+    const rate = resolveSchablonintaktRate(2025, fonder)
+    const result = proposeAteforing(fonder, { schablonintaktRate: rate })
+
+    // 400 000 kr at 1,96 % (SLR 2024-11-30) = 7 840 kr, Skatteverket's own
+    // example amount; with only the 212x account in the base it was 1 960 kr.
+    expect(result.schablonintaktAmount).toBe(7_840)
+    // Nothing is past its sixth year and nothing was asked back: no återföring.
+    expect(result.proposals).toEqual([])
+  })
+
+  it('consults the SLR table when the only opening fond is on 2110', async () => {
+    mockFetchEntryLines.mockResolvedValue([
+      {
+        account_number: '2110', debit_amount: 0, credit_amount: 200_000,
+        journal_entries: { entry_date: '2022-12-31' },
+      },
+    ])
+
+    const fonder = await listExistingPeriodiseringsfonder(
+      supabase, 'company-1', '2025-12-31', '2025-01-01',
+    )
+
+    expect(resolveSchablonintaktRate(2025, fonder)).toBe(0.0196)
   })
 
   it('does not double-count a fond carried via an opening-balance entry', async () => {

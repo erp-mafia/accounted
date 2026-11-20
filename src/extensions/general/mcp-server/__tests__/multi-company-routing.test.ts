@@ -201,15 +201,16 @@ describe('resolveMcpCompanyScope', () => {
     teamId: null,
   })
 
-  it('applies the seat gate per non-owner company and keeps owners untouched', async () => {
-    resolveCompanyScopeMock.mockResolvedValue({
-      companies: [scoped(DEFAULT_COMPANY_ID, 'owner'), scoped(OTHER_COMPANY_ID, 'admin')],
+  it('returns the lib scope as is: the seat gate lives in the shared resolver, not in this wrapper', async () => {
+    const resolved = {
+      companies: [scoped(DEFAULT_COMPANY_ID, 'owner')],
       truncated: false,
       remainingCompanyIds: [],
       unresolved: [],
+      dormant: [OTHER_COMPANY_ID],
       team: null,
-    })
-    getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+    }
+    resolveCompanyScopeMock.mockResolvedValue(resolved)
 
     const scope = await resolveMcpCompanyScope({
       supabase: {} as never,
@@ -218,10 +219,8 @@ describe('resolveMcpCompanyScope', () => {
     })
 
     expect(resolveCompanyScopeMock).toHaveBeenCalledWith({}, 'user-1', { companies: 'all' })
-    expect(getMultiUserStateMock).toHaveBeenCalledTimes(1)
-    expect(getMultiUserStateMock).toHaveBeenCalledWith({}, OTHER_COMPANY_ID)
-    expect(scope.companies.map((c) => c.companyId)).toEqual([DEFAULT_COMPANY_ID])
-    expect(scope.dormant).toEqual([OTHER_COMPANY_ID])
+    expect(getMultiUserStateMock).not.toHaveBeenCalled()
+    expect(scope).toEqual(resolved)
   })
 
   it('passes an undefined scope through as an empty input', async () => {
@@ -230,6 +229,7 @@ describe('resolveMcpCompanyScope', () => {
       truncated: false,
       remainingCompanyIds: [],
       unresolved: [],
+      dormant: [],
       team: null,
     })
     const scope = await resolveMcpCompanyScope({ supabase: {} as never, userId: 'user-1', scope: undefined })
@@ -259,6 +259,30 @@ describe('listAccessibleCompanies', () => {
 
     getUserCompaniesMock.mockRejectedValue(new Error('down'))
     await expect(listAccessibleCompanies(supabase as never, 'user-1')).resolves.toEqual([])
+  })
+
+  it('leaves out a company paused for this user by the seat gate, as every scoped read does', async () => {
+    vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
+    try {
+      getUserCompaniesMock.mockResolvedValue([
+        { company_id: DEFAULT_COMPANY_ID, role: 'owner', companies: { id: DEFAULT_COMPANY_ID, name: 'Owned AB', archived_at: null } },
+        { company_id: OTHER_COMPANY_ID, role: 'member', companies: { id: OTHER_COMPANY_ID, name: 'Frozen AB', archived_at: null } },
+      ])
+      getMultiUserStateMock.mockResolvedValue({ state: 'frozen', graceEndsAt: null })
+      const rangeMock = vi.fn().mockResolvedValue({ data: [], error: null })
+      const supabase = {
+        from: vi.fn(() => ({
+          select: vi.fn(() => ({ in: vi.fn(() => ({ order: vi.fn(() => ({ range: rangeMock })) })) })),
+        })),
+      }
+
+      await expect(listAccessibleCompanies(supabase as never, 'user-1')).resolves.toEqual([
+        { company_id: DEFAULT_COMPANY_ID, name: 'Owned AB' },
+      ])
+      expect(getMultiUserStateMock).toHaveBeenCalledWith(supabase, OTHER_COMPANY_ID)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

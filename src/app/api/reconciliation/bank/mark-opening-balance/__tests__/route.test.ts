@@ -98,6 +98,71 @@ describe('POST /api/reconciliation/bank/mark-opening-balance', () => {
     expect(body.error).toBe('Perioden är låst. Lås upp perioden innan du ändrar verifikationen.')
   })
 
+  it('refuses a mid-year verifikat with 400 and a Swedish message (agent feedback seq 878478)', async () => {
+    enqueue({
+      error: {
+        message:
+          'Only an entry dated on the first day of its fiscal period can be re-tagged as opening balance (entry date 2026-09-21, period start 2026-01-01)',
+      },
+    })
+
+    const request = createMockRequest('/api/reconciliation/bank/mark-opening-balance', {
+      method: 'POST',
+      body: { journal_entry_id: JE_ID },
+    })
+
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/^Bara en verifikation daterad på räkenskapsårets första dag kan markeras som ingående balans\./)
+  })
+
+  it('names a bank link as the reason a verifikat cannot be an IB', async () => {
+    enqueue({ error: { message: 'Entry has linked bank transactions; unlink them before re-tagging as opening balance' } })
+
+    const request = createMockRequest('/api/reconciliation/bank/mark-opening-balance', {
+      method: 'POST',
+      body: { journal_entry_id: JE_ID },
+    })
+
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/kopplad till en banktransaktion/)
+  })
+
+  it('falls back to a generic Swedish 400 for an unrecognised RPC error', async () => {
+    enqueue({ error: { message: 'something unexpected' } })
+
+    const request = createMockRequest('/api/reconciliation/bank/mark-opening-balance', {
+      method: 'POST',
+      body: { journal_entry_id: JE_ID },
+    })
+
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe('Kunde inte markera verifikationen som ingående balans.')
+  })
+
+  it('translates a missing verifikat to Swedish', async () => {
+    enqueue({ error: { message: 'Journal entry not found' } })
+
+    const request = createMockRequest('/api/reconciliation/bank/mark-opening-balance', {
+      method: 'POST',
+      body: { journal_entry_id: JE_ID },
+    })
+
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe('Verifikationen kunde inte hittas.')
+  })
+
   it('marks the entry as opening balance via the RPC', async () => {
     enqueue({ data: { updated: true } })
 

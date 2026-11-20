@@ -13,7 +13,8 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex h-10 items-center justify-center rounded-full bg-muted p-1 text-muted-foreground max-w-full overflow-x-auto scrollbar-hide",
+      // Stil v3: the same wash track and raised thumb as SegmentedControl.
+      "inline-flex h-8 items-center justify-center gap-0.5 rounded-lg bg-secondary/80 p-0.5 text-muted-foreground max-w-full overflow-x-auto scrollbar-hide",
       className
     )}
     {...props}
@@ -30,7 +31,7 @@ const TabsTrigger = React.forwardRef<
     ref={ref}
     data-ph-unmask=""
     className={cn(
-      "inline-flex items-center justify-center whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-[var(--shadow-sm)]",
+      "inline-flex h-full items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-[13px] font-medium ring-offset-background transition-[background-color,box-shadow,color] duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-40 data-[state=active]:bg-control data-[state=active]:text-strong data-[state=active]:shadow-raised",
       className
     )}
     {...props}
@@ -45,7 +46,7 @@ const TabsContent = React.forwardRef<
   <TabsPrimitive.Content
     ref={ref}
     className={cn(
-      "mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+      "mt-4 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2",
       // When a consumer passes `forceMount`, Radix keeps inactive panels in the
       // DOM (present is always true) but does NOT hide them itself: hide them
       // here. No-op for non-forceMount tabs, which unmount inactive content.

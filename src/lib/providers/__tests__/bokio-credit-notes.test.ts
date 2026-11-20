@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // Pagination and routing test: no throttling against a stubbed fetch.
-vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} } }));
+vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} }, connectionRateKey: (credential: string) => credential }));
 import { fetchMigrationPage, fetchSalesInvoicesDirect, hydrateSalesInvoices } from '../provider-data-fetcher';
 import { mapBokioToSalesInvoice } from '../bokio/mapper';
 import { BokioApiError } from '../bokio/client';

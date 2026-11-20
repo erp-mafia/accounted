@@ -9,11 +9,17 @@
  * app's own origin (`/api/storage/...`) and resolve it back to the upstream
  * Storage URL inside the proxy route.
  *
- * The signed token travels unchanged and is the only credential on both
- * sides: the proxy grants nothing the public Storage host did not already
- * grant, and it refuses every path that is not a signed object path on the
- * documents bucket. Without NEXT_PUBLIC_APP_URL (a self-host that never set
- * it) the rewrite is a no-op rather than a broken localhost link.
+ * The signed token is the only credential on both sides: the proxy grants
+ * nothing the public Storage host did not already grant, and it refuses
+ * every path that is not a signed object path on the documents bucket. On
+ * this app's origin the token never rides in the URL (CASA 2.1.1): the
+ * rewrite moves it out of the query string into an `Authorization: Bearer`
+ * header the caller sends, and the proxy refuses a request that still carries
+ * `token` in its query. Only the proxy's own server-to-server request to
+ * Storage puts it back in the query, because that is Storage's contract.
+ * Without NEXT_PUBLIC_APP_URL (a self-host that never set it) the rewrite is
+ * a no-op rather than a broken localhost link, and the raw signed Storage
+ * URL is handed out unchanged, with no header to send.
  */
 
 export const STORAGE_PROXY_ROUTE = '/api/storage'
@@ -92,7 +98,40 @@ const ALLOWED_OBJECT_PATH_RE = /^(sign|upload\/sign)\/documents\/[^/]+/
 
 export type StorageProxyResolution =
   | { ok: true; url: string }
-  | { ok: false; reason: 'unsupported_path' | 'missing_token' | 'storage_unconfigured' }
+  | {
+      ok: false
+      reason: 'unsupported_path' | 'missing_token' | 'token_in_url' | 'api_key_as_token' | 'storage_unconfigured'
+    }
+
+/**
+ * A file URL as a client must request it: `url`, plus the headers every
+ * request to it carries. `headers` is always an object, empty when the URL
+ * needs none, so a client can pass it along without looking.
+ */
+export interface StorageRequest {
+  url: string
+  headers: Record<string, string>
+}
+
+/** Name of the query parameter Storage's own signed URLs carry the token in. */
+const TOKEN_PARAM = 'token'
+
+/**
+ * Prefix of every credential this app issues (API keys `gnubok_sk_`, MCP
+ * refresh tokens `gnubok_rt_`). MCP clients send those to this same host in
+ * the same `Authorization: Bearer` header, so one that lands here by mistake
+ * is refused instead of being relayed to Storage inside a URL.
+ */
+const APP_CREDENTIAL_PREFIX = 'gnubok_'
+
+/**
+ * The signed Storage token from an `Authorization: Bearer <token>` header,
+ * or null when the header is absent or is not a Bearer credential.
+ */
+export function storageTokenFromAuthorization(header: string | null | undefined): string | null {
+  const match = /^Bearer +(\S+)$/i.exec(header?.trim() ?? '')
+  return match ? match[1] : null
+}
 
 /**
  * True when every segment of the (still percent-encoded) object path is a
@@ -132,54 +171,90 @@ function upstreamStorageOrigin(): string | null {
 }
 
 /**
- * Rewrite a Supabase signed Storage URL onto this app's origin. Returns the
- * input unchanged when it is not a signed documents-bucket URL on our Storage
- * host, or when the app has no public URL configured.
+ * Rewrite a Supabase signed Storage URL onto this app's origin, as the
+ * request a client makes: the proxy URL without the token, and the token in
+ * an `Authorization: Bearer` header. Every other query parameter (Storage's
+ * `download[=name]`) stays in the URL as Storage encoded it. Returns the
+ * input unchanged, with no headers, when it is not a signed documents-bucket
+ * URL on our Storage host or when the app has no public URL configured.
  */
-export function toSameOriginStorageUrl(
+export function toSameOriginStorageRequest(
   signedUrl: string,
   appBaseUrl: string | undefined = process.env.NEXT_PUBLIC_APP_URL,
-): string {
+): StorageRequest {
+  const unchanged: StorageRequest = { url: signedUrl, headers: {} }
   const base = appBaseUrl?.trim()
   const upstream = upstreamStorageOrigin()
-  if (!base || !upstream) return signedUrl
+  if (!base || !upstream) return unchanged
 
   let url: URL
   try {
     url = new URL(signedUrl)
   } catch {
-    return signedUrl
+    return unchanged
   }
-  if (url.origin !== upstream) return signedUrl
-  if (!url.pathname.startsWith(UPSTREAM_OBJECT_PREFIX)) return signedUrl
+  if (url.origin !== upstream) return unchanged
+  if (!url.pathname.startsWith(UPSTREAM_OBJECT_PREFIX)) return unchanged
 
   // Keep the pathname exactly as Storage encoded it: object keys may hold
   // spaces and non-ASCII, and the token was signed over the real key.
   const objectPath = url.pathname.slice(UPSTREAM_OBJECT_PREFIX.length)
-  if (!ALLOWED_OBJECT_PATH_RE.test(objectPath)) return signedUrl
-  if (!url.searchParams.has('token')) return signedUrl
+  if (!ALLOWED_OBJECT_PATH_RE.test(objectPath)) return unchanged
+  const token = url.searchParams.get(TOKEN_PARAM)
+  if (!token) return unchanged
 
-  return `${trimTrailingSlash(base)}${STORAGE_PROXY_ROUTE}/${objectPath}${url.search}`
+  // The remaining parameters, byte for byte: re-serialising them would turn
+  // `download=` and percent-escapes into another spelling of the same value.
+  const rest = url.search
+    .slice(1)
+    .split('&')
+    .filter((pair) => pair !== '' && queryKey(pair) !== TOKEN_PARAM)
+    .join('&')
+
+  return {
+    url: `${trimTrailingSlash(base)}${STORAGE_PROXY_ROUTE}/${objectPath}${rest ? `?${rest}` : ''}`,
+    headers: { Authorization: `Bearer ${token}` },
+  }
+}
+
+/** The decoded name of one raw `name=value` query pair. */
+function queryKey(pair: string): string {
+  const raw = pair.split('=')[0].replace(/\+/g, ' ')
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    // A malformed escape cannot spell `token`: the name is compared as written.
+    return raw
+  }
 }
 
 /**
  * Resolve the proxied path (everything after `/api/storage/`, still
- * percent-encoded as received) plus its query back to the upstream Storage
- * URL. Fails closed on anything outside the signed documents-bucket paths.
+ * percent-encoded as received), its query and the token from the request's
+ * Authorization header back to the upstream Storage URL. Fails closed on
+ * anything outside the signed documents-bucket paths, on a token sent in the
+ * query string, and on one of this app's own credentials sent as the token.
  */
 export function resolveUpstreamStorageUrl(
   objectPath: string,
   search: URLSearchParams,
+  token: string | null,
 ): StorageProxyResolution {
   const upstream = upstreamStorageOrigin()
   if (!upstream) return { ok: false, reason: 'storage_unconfigured' }
   if (!ALLOWED_OBJECT_PATH_RE.test(objectPath) || !hasOnlyPlainSegments(objectPath)) {
     return { ok: false, reason: 'unsupported_path' }
   }
-  if (!search.get('token')) return { ok: false, reason: 'missing_token' }
+  if (search.has(TOKEN_PARAM)) return { ok: false, reason: 'token_in_url' }
+  if (!token) return { ok: false, reason: 'missing_token' }
+  if (token.startsWith(APP_CREDENTIAL_PREFIX)) return { ok: false, reason: 'api_key_as_token' }
 
-  const query = search.toString()
-  const url = `${upstream}${UPSTREAM_OBJECT_PREFIX}${objectPath}${query ? `?${query}` : ''}`
+  // Storage reads the token from the query string and nowhere else. This URL
+  // is requested by the proxy itself, server to server, and is never logged
+  // or sent back to the client.
+  const query = new URLSearchParams({ [TOKEN_PARAM]: token })
+  for (const [key, value] of search) query.append(key, value)
+  const url = `${upstream}${UPSTREAM_OBJECT_PREFIX}${objectPath}?${query.toString()}`
   // Belt and braces: whatever fetch() will actually request, after URL
   // normalisation, must still sit inside the allowlist.
   let normalisedPath: string

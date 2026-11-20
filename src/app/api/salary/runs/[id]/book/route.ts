@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { bookPaidSalaryRun } from '@/lib/salary/book-run'
 import { SalaryRunPartiallyBookedError } from '@/lib/salary/salary-entries'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -7,15 +6,17 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-ensureInitialized()
-
 /** paid → booked (creates immutable journal entries). The booking core lives
- * in lib/salary/book-run.ts, shared with the book_salary_run pending-operation
- * executor (MCP gnubok_book_salary_run). */
+ * in lib/salary/book-run.ts, shared with the v1 :book verb and the
+ * book_salary_run pending-operation executor (MCP gnubok_book_salary_run).
+ * The optional body { confirm_payment_date_ahead: true } is the Bokför
+ * dialog's confirmation when the payment date has not come yet; without it
+ * such a run is refused (crm#1216). */
 export const POST = withRouteContext(
   'salary_run.book',
-  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
+    const body = (await request.json().catch(() => null)) as { confirm_payment_date_ahead?: unknown } | null
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ salaryRunId: id })
 
@@ -25,6 +26,7 @@ export const POST = withRouteContext(
         userId: user.id,
         salaryRunId: id,
         log: opLog,
+        confirmPaymentDateAhead: body?.confirm_payment_date_ahead === true,
       })
 
       if (!result.ok) {

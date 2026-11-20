@@ -1,16 +1,14 @@
 import type { WorklistCategory, WorklistCounts } from './types'
 
 /**
- * The things on Att göra that a connected AI client can do over MCP.
- *
- * Every row here carries a "Gör i Claude" (or ChatGPT, Grok) pill on Hem
- * and in the books act's Klart step, in the section's band order (Bokför,
- * Betala, Granska, Bevaka), skipping rows no agent can clear: staged
+ * The things on Att göra that a connected AI client can do over MCP, listed
+ * on Hem and in the books act's Klart step in the section's band order
+ * (Bokför, Betala, Granska, Bevaka), skipping rows no agent can clear: staged
  * operations wait for a human approval, and the two Betala rows are bank
- * transfers a person makes. Each category keys a prompt in messages
- * (dashboard.ai_task_<category>) that names the count and the MCP tools
- * behind it, a row label (dashboard.row_*) and the page the row opens.
- * Pure: the components only render the copy.
+ * transfers a person makes. Each category has a row label (dashboard.row_*)
+ * and the page the row opens. Only "Verifikat utan underlag" carries an AI
+ * action (Kvittojakten, see components/dashboard/AiTaskAction). Pure: the
+ * components only render the copy.
  */
 export type AiTaskCategory = Extract<
   WorklistCategory,
@@ -36,21 +34,34 @@ export const AI_TASK_ORDER: readonly AiTaskCategory[] = [
   'inbox_document',
   'supplier_invoice_approval',
   'verifikat_missing_document',
-  'overdue_invoice',
   'deadline_action',
+  'overdue_invoice',
   'reconciliation_due',
 ]
 
 /** The page each row opens: the same hrefs as the Att göra rows on Hem. */
 export const AI_TASK_HREF: Record<AiTaskCategory, string> = {
-  book_transaction: '/transactions',
-  book_skattekonto: '/transactions?source=skatteverket',
+  // ?view=inbox: these rows count what waits to be booked, so they open the
+  // to-book view even for someone whose remembered view is Alla.
+  book_transaction: '/transactions?view=inbox',
+  book_skattekonto: '/transactions?source=skatteverket&view=inbox',
   inbox_document: '/e/general/invoice-inbox',
-  supplier_invoice_approval: '/supplier-invoices',
+  // The Registrerade tab: what attest still accepts, the very invoices the
+  // count holds (crm#1631).
+  supplier_invoice_approval: '/supplier-invoices?tab=registered',
   verifikat_missing_document: '/bookkeeping?missingUnderlag=true',
-  overdue_invoice: '/invoices?status=unpaid',
+  overdue_invoice: '/invoices?status=overdue',
   deadline_action: '/deadlines',
   reconciliation_due: '/reconciliation',
+}
+
+/**
+ * The page a row opens for this company: the inbox row follows the
+ * company's inbox (WorklistCounts.inboxHref: the new Inkorg in the rollout),
+ * the rest are fixed.
+ */
+export function aiTaskHref(category: AiTaskCategory, inboxHref?: string | null): string {
+  return category === 'inbox_document' && inboxHref ? inboxHref : AI_TASK_HREF[category]
 }
 
 /** The row label key in the `dashboard` namespace, shared with Hem's rows. */
@@ -79,4 +90,16 @@ export function listAiTasks(
     if (count > 0) out.push({ category, count })
   }
   return out
+}
+
+/**
+ * Whether the books act's Klart step shows what the app found without being
+ * asked. Bank rows waiting to be booked are what a first session is for,
+ * and the step kept them behind a folded toggle: of the 83 people who signed
+ * up in the 30 days to 2026-11-12, had rows waiting and never booked one, 57
+ * had finished the act. Anything else on the list stays folded until asked.
+ * A click on the toggle always wins over this.
+ */
+export function foundTasksStartOpen(tasks: readonly AiTask[]): boolean {
+  return tasks.some((task) => task.category === 'book_transaction')
 }

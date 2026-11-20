@@ -82,6 +82,18 @@ describe('raw-reference-fetch: browser-side table reads', () => {
     expect(isClientSource(`import a from 'b'\n'use client'`)).toBe(false)
   })
 
+  it('covers the registers and the roster the hooks serve, not only the four settings tables', () => {
+    // The 2026-08-26 decision moved customers, suppliers and articles behind
+    // the hooks, but the guard only watched four tables, so the supplier and
+    // article registers kept a raw select and never refreshed the pickers.
+    for (const table of ['customers', 'suppliers', 'articles', 'booking_template_library', 'employees']) {
+      expect(kinds(`'use client'\nawait supabase.from('${table}').select('*')`)).toEqual(['table'])
+    }
+    expect(kinds(`fetch('/api/salary/employees')`)).toEqual(['api'])
+    expect(kinds(`fetch('/api/salary/employees', { method: 'POST', body })`)).toEqual([])
+    expect(kinds("fetch(`/api/salary/employees/${id}/benefits`)")).toEqual([])
+  })
+
   it('leaves inserts and updates alone', () => {
     expect(kinds(`'use client'\nawait supabase.from('fiscal_periods').insert(row)`)).toEqual([])
     expect(kinds(`'use client'\nawait supabase.from('company_settings').update(patch).eq('company_id', id)`)).toEqual([])

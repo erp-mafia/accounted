@@ -3,10 +3,6 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { syncCommunityFromRepo } from '@/lib/agent-skills/community-sync'
 import { notifyPublishedAuthors } from '@/lib/agent-skills/community-notify'
-import { ensureInitialized } from '@/lib/init'
-
-// The email service is registered by the email extension.
-ensureInitialized()
 
 export const maxDuration = 60
 

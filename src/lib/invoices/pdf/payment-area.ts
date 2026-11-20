@@ -12,6 +12,9 @@
  *   cancelled           "Makulerad, ska inte betalas" instead of rows; no code
  *   credited            "Krediterad, ska inte betalas" instead of rows; no code
  *   kreditfaktura       Att kreditera and the invoice it credits; no rows, no code
+ *   Autogiro            as unpaid, partly paid or paid, but the rows are the
+ *                       payer number under an "Autogiro" heading that says the
+ *                       amount is debited on the due date; never a QR code
  *   offert              Summa, Giltig till and who to ask; no rows, no code
  *   proforma, följesedel  no payment area at all
  *
@@ -21,6 +24,8 @@ import type { Invoice, InvoiceDocumentType } from '@/types'
 import { partlyPaidRemainder } from '@/lib/invoices/amount-due'
 import {
   buildInvoicePaymentRows,
+  INVOICE_AUTOGIRO_TEXT,
+  invoiceAutogiroPayerNumber,
   type InvoicePaymentRowsCompany,
   type InvoicePaymentRowsInvoice,
 } from '@/lib/invoices/payment-rows'
@@ -137,7 +142,10 @@ export interface PdfPaymentArea {
   detail: { label: string; value: string } | null
   /** The middle column. Empty on a credit note. */
   rows: PdfPaymentAreaRow[]
-  /** Replaces the rows on a cancelled or credited invoice. */
+  /**
+   * The block above the rows: in place of them on a cancelled or credited
+   * invoice (rows empty), and the Autogiro heading over the payer number row.
+   */
   status: { headline: string; text: string | null } | null
   /** The right column: the one QR code, the paid marker, or nothing. */
   slot: PdfPaymentAreaSlot | null
@@ -252,6 +260,9 @@ export function buildPdfPaymentArea(input: PdfPaymentAreaInput): PdfPaymentArea 
     ...(row.key === 'payment_link' ? { href: row.value } : {}),
   }))
   const dueDate = { label: A.dueDate, value: formatPdfDate(invoice.due_date) }
+  // Autogiro: the rows are the payer number (buildInvoicePaymentRows), headed
+  // by the sentence Bankgirot requires; a paid one keeps only the heading.
+  const autogiro = invoiceAutogiroPayerNumber(invoice) ? INVOICE_AUTOGIRO_TEXT[lang] : null
 
   if (paidState?.kind === 'paid') {
     return {
@@ -261,11 +272,14 @@ export function buildPdfPaymentArea(input: PdfPaymentAreaInput): PdfPaymentArea 
       amount: 0,
       detail: dueDate,
       rows,
+      status: autogiro ? { headline: autogiro.heading, text: null } : null,
       slot: { kind: 'paid', title: A.paid, date: paidState.paidDate, amount: money(paidState.paidAmount) },
     }
   }
 
-  const qrSlot: PdfPaymentAreaSlot | null = input.paymentQr ? { kind: 'qr', qr: input.paymentQr } : null
+  const autogiroStatus = autogiro ? { headline: autogiro.heading, text: autogiro.notice } : null
+  // Never a code on an Autogiro invoice, whatever the caller passed.
+  const qrSlot: PdfPaymentAreaSlot | null = input.paymentQr && !autogiro ? { kind: 'qr', qr: input.paymentQr } : null
 
   if (paidState?.kind === 'partially_paid') {
     return {
@@ -276,6 +290,7 @@ export function buildPdfPaymentArea(input: PdfPaymentAreaInput): PdfPaymentArea 
       amountNote: A.paidSoFar(money(paidState.paidAmount)),
       detail: dueDate,
       rows,
+      status: autogiroStatus,
       slot: qrSlot,
     }
   }
@@ -287,6 +302,7 @@ export function buildPdfPaymentArea(input: PdfPaymentAreaInput): PdfPaymentArea 
     amount: amountToPay,
     detail: dueDate,
     rows,
+    status: autogiroStatus,
     slot: qrSlot,
   }
 }

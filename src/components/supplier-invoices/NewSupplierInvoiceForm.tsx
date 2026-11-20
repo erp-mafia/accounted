@@ -12,55 +12,109 @@ import { Switch } from '@/components/ui/switch'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
+import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
+import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
+import { supplierInvoiceBookingMoment, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
-import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { accountNameForRow } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
-import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-template-format'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
-import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { postDocumentForm, uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { INBOX_UPLOAD_ACCEPT, isAllowedInboxFile } from '@/lib/documents/upload-types'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
-import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
+import {
+  invoiceTotalsCrosscheck,
+  invoiceVatIsBooked,
+  rowNetFromInvoiceTotals,
+  rowsAgainstInvoiceTotals,
+  totalFirstFill,
+} from '@/lib/supplier-invoices/total-first'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useFiledVatPeriod } from '@/lib/hooks/use-filed-vat-period'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import {
+  DEFAULT_PREPAID_EXPENSE_ACCOUNT,
+  suggestBalanceAccount,
+} from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
+  isForeignSupplierType,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
-import { roundOre } from '@/lib/money'
+import { netVat } from '@/lib/bookkeeping/gross-split'
+import { roundOre, parseAmountInput } from '@/lib/money'
 import {
   buildSupplierInvoicePayload,
+  statedVatFromInvoiceField,
+  reverseChargeKindMissing,
   type SupplierInvoiceFormData,
   type SupplierInvoiceLineItem,
 } from '@/lib/supplier-invoices/form-payload'
 import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/planted-rows'
+import { reverseChargeRateDefault, reverseChargeRateOf } from '@/lib/supplier-invoices/reverse-charge-rate'
+import {
+  bookLimitedDeduction,
+  deductibleRowVat,
+  invoicedRowVat,
+  limitedDeductionApplies,
+} from '@/lib/supplier-invoices/limited-deduction'
+import { rememberedReverseChargeKind } from '@/lib/supplier-invoices/remembered-kind'
 import { VatRateCell, RcRateSelect, AmountCell } from '@/components/supplier-invoices/supplier-invoice-cells'
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
+import { accrualFrameworkOf, accrualThresholdSek } from '@/components/bookkeeping/accrual-k2-hint'
+import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import {
+  PLAIN_DOCUMENT_UPLOAD_URL,
+  documentIdFromPlainUpload,
+  plainDocumentUploadForm,
+  underlagUploadRoute,
+} from '@/lib/documents/underlag-upload-route'
+import { regionOfCountry, sellerCountry, supplierTypeForRegion } from '@/lib/vat/seller-country'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
+import { useSupplierInvoiceDuplicates } from '@/components/supplier-invoices/use-supplier-invoice-duplicates'
+import {
+  DuplicateNumberLine,
+  ReusedReferenceLine,
+  ReusedReferenceSentence,
+  duplicateNumberSentence,
+} from '@/components/supplier-invoices/DuplicateWarnings'
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { isPersonPayer } from '@/lib/expenses/payer'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, CalendarClock, Tags, FileText } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  CalendarDaysIcon,
+  PercentBadgeIcon,
+  ChatBubbleOvalLeftIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  HashtagIcon,
+  LockClosedIcon,
+  PlusIcon,
+  SpinnerIcon,
+  TrashIcon,
+} from '@/components/icons'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { isIsoDateShaped } from '@/lib/invariants/iso-date'
 
 // The form's line/field shapes live in lib/supplier-invoices/form-payload.ts
 // next to the payload builder they feed, pinned there by parity tests.
@@ -77,19 +131,8 @@ interface NewSupplierForm {
   iban: string
   bic: string
   default_expense_account: string
-}
-
-function RequiredMark() {
-  return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
-}
-
-// Accepts sv-SE formatted numbers ("12 345,67" with regular, no-break or
-// narrow no-break group separators) as well as plain "12345.67".
-function parseFlexibleNumber(s: string): number | null {
-  const cleaned = s.replace(/[\s  ]/g, '').replace(',', '.')
-  if (!cleaned) return null
-  const n = parseFloat(cleaned)
-  return Number.isFinite(n) ? n : null
+  /** The country the reading names (lib/vat/seller-country.ts); sent while the type agrees with it. */
+  country: string
 }
 
 const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
@@ -103,6 +146,7 @@ const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   iban: '',
   bic: '',
   default_expense_account: '',
+  country: '',
 }
 
 // Dense in-table inputs: leaf tier inside the Kontering table surface.
@@ -113,8 +157,6 @@ const CELL_INPUT_CLASS =
 const ROW_ICON_BTN_CLASS =
   'inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground'
 
-const UNDERLAG_ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
-const UNDERLAG_ACCEPT_ATTR = '.pdf,.jpg,.jpeg,.png,.webp'
 const UNDERLAG_MAX_SIZE = 10 * 1024 * 1024
 
 // A deferred web upload returns an empty extraction skeleton (confidence 0)
@@ -132,15 +174,31 @@ function hasExtractionContent(e: InvoiceExtractionResult | null | undefined): bo
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="mb-3 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
+    <div className="mb-3 text-xs text-muted-foreground">
       {children}
     </div>
   )
 }
 
+/** The bank row an inbox invoice was paid by, when the Inkorg found it on arrival. */
+export interface SettleWithBankRow {
+  transactionId: string
+  date: string
+  /** As the bank row carries it: signed, in `currency`. */
+  amount: number
+  currency: string
+  counterparty: string | null
+}
+
 export interface NewSupplierInvoiceFormProps {
   /** Invoice-inbox item to convert; prefills the form from its AI extraction. */
   inboxItemId?: string | null
+  /**
+   * With an inbox item: the bank row that paid it. "Vem betalade?" starts on
+   * Företaget, and Registrera registers the invoice and settles it against
+   * this row in one step instead of asking for the row.
+   */
+  settleWith?: SettleWithBankRow | null
   /**
    * Render without page chrome (back button + h1) for use inside
    * NewSupplierInvoiceDialog: the same convention as JournalEntryForm's
@@ -156,13 +214,28 @@ export interface NewSupplierInvoiceFormProps {
   onCreated?: (invoiceId?: string) => void
   /** Called by the Avbryt button instead of navigating (dialog mode). */
   onCancel?: () => void
+  /**
+   * With an inbox item: the cost account of what was bought (the Inkorg's
+   * booking plan), put on every line the reading gives instead of leaving
+   * the account empty.
+   */
+  prefillAccount?: string | null
+  /**
+   * Dialog mode, without an inbox item: told the document id of the file
+   * dropped into Underlag once it is stored (null when it is removed), so
+   * the dialog can show it beside the form. Pass a stable function.
+   */
+  onUnderlagDocument?: (documentId: string | null) => void
 }
 
 export default function NewSupplierInvoiceForm({
   inboxItemId = null,
+  settleWith = null,
   bare = false,
   onCreated,
   onCancel,
+  prefillAccount = null,
+  onUnderlagDocument,
 }: NewSupplierInvoiceFormProps = {}) {
   const router = useRouter()
   const { canWrite } = useCanWrite()
@@ -201,15 +274,31 @@ export default function NewSupplierInvoiceForm({
     entityType,
     accountingMethod,
     bookingMoment,
-    oreRounding,
+    oreRoundingChoice,
     setOreRounding,
     dimensionsEnabled,
     vatRegistered,
     periods,
     periodsLoaded,
   } = useSupplierInvoiceData()
+  const { settings: companySettingsRow } = useCompanySettings()
+
+  /** The fiscal year a date is booked in, when the periods are known. */
+  const fiscalYearOf = (date: string | null | undefined) =>
+    (date ? periods.find((p) => date >= p.period_start && date <= p.period_end) : undefined) ?? null
+  /** The start of the fiscal year a date is booked in, when the periods are known. */
+  const fiscalYearStartOf = (date: string | null | undefined): string | null =>
+    fiscalYearOf(date)?.period_start ?? null
+  // The accrual limit follows the framework too (K3: none).
+  const accrualFramework = accrualFrameworkOf(useCompanyOptional()?.company)
+  const underlagRoute = underlagUploadRoute({ hasAiCapability: useCapability(CAPABILITY.ai) })
 
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
+  // The invoice-level tags start as the supplier's default (accounted#144)
+  // until the user picks one: a supplier switch then swaps in the new
+  // supplier's default, a pick of their own is kept.
+  const defaultDimsPickedRef = useRef(false)
+  const [defaultDimsFromSupplier, setDefaultDimsFromSupplier] = useState(false)
   const [showNewSupplier, setShowNewSupplier] = useState(false)
   const [isCreatingSupplier, setIsCreatingSupplier] = useState(false)
   const [pendingSupplierSelect, setPendingSupplierSelect] = useState<string | null>(null)
@@ -217,6 +306,9 @@ export default function NewSupplierInvoiceForm({
   const [documentFiles, setDocumentFiles] = useState<UploadedFile[]>([])
   const documentFilesRef = useRef<UploadedFile[]>([])
   const createFinishedRef = useRef(false)
+  // The uploads Avbryt has already removed itself, so the unmount cleanup
+  // below does not delete them a second time (each second delete was a 404).
+  const discardedUploadIdsRef = useRef(new Set<string>())
   const invoiceNumberInputRef = useRef<HTMLInputElement | null>(null)
 
   // Dokument-först state: a standalone upload routed through the invoice-inbox
@@ -224,7 +316,7 @@ export default function NewSupplierInvoiceForm({
   // upload through /api/documents stays a plain attached document.
   const [uploadedInboxItemId, setUploadedInboxItemId] = useState<string | null>(null)
   const uploadedInboxItemIdRef = useRef<string | null>(null)
-  const [extractionPhase, setExtractionPhase] = useState<'idle' | 'processing' | 'done'>('idle')
+  const [extractionPhase, setExtractionPhase] = useState<'idle' | 'processing' | 'slow' | 'done' | 'failed'>('idle')
   const extractionPollTokenRef = useRef(0)
   const underlagInputRef = useRef<HTMLInputElement | null>(null)
   const [isDraggingUnderlag, setIsDraggingUnderlag] = useState(false)
@@ -245,22 +337,24 @@ export default function NewSupplierInvoiceForm({
     { type: 'terms'; days: number } | { type: 'on_invoice' } | null
   >(null)
 
-  // Pre-submit duplicate advisory (change 3): debounced lookup against
-  // GET /api/supplier-invoices/exists; the create route's 409 stays the backstop.
-  const [duplicateWarning, setDuplicateWarning] = useState<{
-    number: string
-    existingId: string | null
-  } | null>(null)
-  const duplicateSeqRef = useRef(0)
-
-  // Total cross-check (change 2): client-only compare, never in the payload.
+  // Fakturabelopp and Moms as the invoice states them (total-first): they
+  // fill a single empty row, switch öresavrundning on when the gap is
+  // whole-krona rounding, and otherwise cross-check. Never in the payload.
   const [fakturaTotalStr, setFakturaTotalStr] = useState('')
+  const [fakturaVatStr, setFakturaVatStr] = useState('')
+  // The net the total-first fill last put on the single row: a row amount
+  // still equal to it is the fill's to update, any other amount is the
+  // person's and is never overwritten.
+  const totalFillRef = useRef<number | null>(null)
+  // Whether a reading made the rows: under reverse charge the fill leaves
+  // such a row as read (totalFirstFill).
+  const readingRowsRef = useRef(false)
 
   // Shell state
   const [forvalOpen, setForvalOpen] = useState(false)
-  const [supplierMenuOpen, setSupplierMenuOpen] = useState(false)
-  const supplierTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const supplierInputRef = useRef<HTMLInputElement | null>(null)
   const entryInputRef = useRef<HTMLInputElement | null>(null)
+  const reverseChargeKindRef = useRef<HTMLButtonElement | null>(null)
   const [entryResetKey, setEntryResetKey] = useState(0)
   const amountInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
   const [pendingAmountFocus, setPendingAmountFocus] = useState<number | null>(null)
@@ -270,17 +364,19 @@ export default function NewSupplierInvoiceForm({
     defaultValues: {
       supplier_id: '',
       supplier_invoice_number: '',
-      invoice_date: new Date().toISOString().split('T')[0],
+      invoice_date: todayIsoStockholm(),
       due_date: '',
       delivery_date: '',
       currency: 'SEK',
       exchange_rate: '',
       reverse_charge: false,
+      reverse_charge_kind: '',
       payment_reference: '',
       notes: '',
-      payer: 'unpaid',
+      payer: settleWith && inboxItemId ? 'company' : 'unpaid',
       claimant_name: '',
       employee_id: '',
+      is_self_billed: false,
       // The table starts empty: the ghost entry row (never part of form
       // state) is the only way rows are born, so no silent prefilled expense
       // account can ever reach a verifikat unnoticed.
@@ -312,18 +408,19 @@ export default function NewSupplierInvoiceForm({
 
   useEffect(() => () => {
     if (inboxItemId || createFinishedRef.current) return
+    const discarded = discardedUploadIdsRef.current
     // A standalone upload that went through the inbox pipeline created an
     // inbox item alongside the document: clean up both (same orphan-cleanup
     // contract as the plain path; the item DELETE 409s if it was converted).
     const itemId = uploadedInboxItemIdRef.current
-    if (itemId) {
+    if (itemId && !discarded.has(itemId)) {
       void fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, {
         method: 'DELETE',
         keepalive: true,
       })
     }
     for (const file of documentFilesRef.current) {
-      if (file.status === 'uploaded' && file.id) {
+      if (file.status === 'uploaded' && file.id && !discarded.has(file.id)) {
         void fetch(`/api/documents/${file.id}`, { method: 'DELETE', keepalive: true })
       }
     }
@@ -341,6 +438,31 @@ export default function NewSupplierInvoiceForm({
   // person's liability, an open claim on Hem) instead of a 2440 payable.
   const watchedPaidPrivately = isPersonPayer(watchedPayer)
   const watchedReverseCharge = watch('reverse_charge')
+  const watchedSelfBilled = watch('is_self_billed') === true
+  // The Moms field only exists where an invoice moms can be booked.
+  const fakturaVatVisible = invoiceVatIsBooked(vatRegistered, watchedReverseCharge)
+  const enteredFakturaTotal = parseAmountInput(fakturaTotalStr)
+  const enteredFakturaVat = fakturaVatVisible ? parseAmountInput(fakturaVatStr) : null
+  // The net a single row takes from the totals at a moms sats, or null
+  // without a Fakturabelopp.
+  function totalFirstNetAt(rate: number): number | null {
+    if (enteredFakturaTotal == null) return null
+    return rowNetFromInvoiceTotals({
+      total: enteredFakturaTotal,
+      vat: enteredFakturaVat,
+      rate,
+      reverseCharge: watchedReverseCharge,
+    })
+  }
+  const watchedReverseChargeKind = watch('reverse_charge_kind')
+  // An EU supplier's reverse charge books goods (ruta 20) or services
+  // (ruta 21): the form asks which, and sends it only then (crm#1323).
+  const euSupplier = suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type === 'eu_business'
+  const asksReverseChargeKind = watchedReverseCharge && euSupplier
+  const reverseChargeKindUnanswered = reverseChargeKindMissing(
+    { reverse_charge: watchedReverseCharge, reverse_charge_kind: watchedReverseChargeKind },
+    euSupplier,
+  )
   // Watched values used to decide whether the AI-filled indicator should
   // still be visible. Once the user edits a field, its value no longer
   // matches what the extractor wrote, and the dot fades out.
@@ -353,6 +475,9 @@ export default function NewSupplierInvoiceForm({
   const documentUploadInProgress = documentFiles.some((file) => file.status === 'uploading')
   const documentUploadFailed = documentFiles.some((file) => file.status === 'error')
   const uploadedDocumentId = documentFiles.find((file) => file.status === 'uploaded')?.id
+  useEffect(() => {
+    onUnderlagDocument?.(uploadedDocumentId ?? null)
+  }, [uploadedDocumentId, onUnderlagDocument])
 
   // Settle-tint bookkeeping: applyInboxItem reports every field it fills.
   const markSettled = useCallback((field: string) => {
@@ -376,6 +501,33 @@ export default function NewSupplierInvoiceForm({
     [markSettled],
   )
 
+  const handleInvoiceTotalPrefilled = useCallback(
+    (total: number) => {
+      setFakturaTotalStr(formatAmount(total))
+      markSettled('faktura_total')
+    },
+    [markSettled],
+  )
+
+  const handleInvoiceVatPrefilled = useCallback(
+    (vat: number | null) => {
+      setFakturaVatStr(vat == null ? '' : formatAmount(vat))
+      if (vat != null) markSettled('faktura_vat')
+    },
+    [markSettled],
+  )
+
+  // The rows a reading proposes: a single row holding the total-first net is
+  // the fill's to keep in step with the totals, any other rows stand as read.
+  const replaceRowsFromReading = useCallback(
+    (items: SupplierInvoiceLineItem[], filledNet: number | null) => {
+      totalFillRef.current = filledNet
+      readingRowsRef.current = true
+      replace(items)
+    },
+    [replace],
+  )
+
   useEffect(() => {
     if (settledFields.size === 0) return
     const timer = setTimeout(() => setSettledFields(new Set()), 1200)
@@ -390,17 +542,33 @@ export default function NewSupplierInvoiceForm({
     isLoadingInbox,
     applyCount: prefillApplyCount,
     applyInboxItem,
+    readingRowsChoice,
+    toggleReadingRows,
   } = useInboxPrefill({
     inboxItemId,
     suppliersLoaded,
     suppliers,
     setValue,
-    replace,
+    replace: replaceRowsFromReading,
     reset,
     getValues,
     toast,
     t,
     onFieldPrefilled: handleFieldPrefilled,
+    onInvoiceTotal: handleInvoiceTotalPrefilled,
+    onInvoiceVat: handleInvoiceVatPrefilled,
+    prefillAccount,
+    vatRegistered,
+    reverseCharge: watchedReverseCharge,
+    items: watchedItems,
+    accounts,
+    accrualThresholdFor: (invoiceDate) =>
+      accrualThresholdSek({
+        entityType,
+        framework: accrualFramework,
+        fiscalYearStart: fiscalYearStartOf(invoiceDate),
+        fiscalYearEnd: fiscalYearOf(invoiceDate)?.period_end ?? null,
+      }),
   })
 
   // Returns true when the field currently matches whatever the AI wrote
@@ -427,12 +595,45 @@ export default function NewSupplierInvoiceForm({
   // books at payment and deferred booking at the Bokför step, so an
   // out-of-period date is fine there and we stay quiet. periodsLoaded gates the
   // warning so it never flashes before the fiscal periods have been fetched.
-  const willBookAtRegistration = bookingMoment === 'issue' || watchedPaidPrivately
+  // Registered and settled against the bank row in one request (the Inkorg's
+  // register-and-settle): a company that books supplier invoices in a
+  // separate Bokför step gets the registration verifikat booked now, first,
+  // by the settlement (lib/supplier-invoices/registration-first.ts), so the
+  // form says what happens, not "when you choose Bokför".
+  // Under kontantmetoden an EU goods acquisition is booked at registration
+  // too (ML 7 kap. 26 §), by the rule create.ts posts by.
+  const settlesNow = !!(settleWith && inboxItemId && watchedPayer === 'company')
+  const watchedSupplierType = suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type
+  const invoiceBookingMomentHere = supplierInvoiceBookingMoment(
+    bookingMoment,
+    { reverse_charge: watchedReverseCharge, reverse_charge_kind: watchedReverseChargeKind || null },
+    watchedSupplierType,
+  )
+  const effectiveBookingMoment = settlesNow && invoiceBookingMomentHere === 'manual' ? 'issue' : invoiceBookingMomentHere
+  const willBookAtRegistration = effectiveBookingMoment === 'issue' || watchedPaidPrivately
+  // The registration verifikat's date, by the rule the builder dates it by:
+  // an EU goods acquisition at the latest on the 15th of the month after its
+  // delivery (ML 7 kap. 26 §). The utlägg verifikat keeps the invoice date.
+  const registrationDateHere = supplierInvoiceRegistrationDate(
+    {
+      invoice_date: watchedInvoiceDate || '',
+      delivery_date: watchedDeliveryDate || null,
+      reverse_charge: watchedReverseCharge,
+      reverse_charge_kind: watchedReverseChargeKind || null,
+    },
+    watchedSupplierType,
+  )
+  const registrationDateCapped = !watchedPaidPrivately && !!watchedInvoiceDate && registrationDateHere !== watchedInvoiceDate
+  const bookedDateHere = watchedPaidPrivately ? watchedInvoiceDate : registrationDateHere
   const invoiceDateOutsidePeriod =
     periodsLoaded &&
-    !!watchedInvoiceDate &&
-    !periods.some((p) => watchedInvoiceDate >= p.period_start && watchedInvoiceDate <= p.period_end)
+    !!bookedDateHere &&
+    !periods.some((p) => bookedDateHere >= p.period_start && bookedDateHere <= p.period_end)
   const showNoPeriodWarning = willBookAtRegistration && invoiceDateOutsidePeriod
+  // The date the registration books on, against the filed momsdeklarationer:
+  // a late invoice dated in a filed period books there, and its moms then
+  // changes a declaration already filed.
+  const bookedDateFiledVat = useFiledVatPeriod(bookedDateHere, willBookAtRegistration && !invoiceDateOutsidePeriod)
 
   // Advisory nudge (#863 item 2): reverse charge purchases are normally booked
   // on cost accounts (4xxx/5xxx), so flag lines sitting on a class 1 or 6
@@ -555,6 +756,12 @@ export default function NewSupplierInvoiceForm({
 
     applySupplierTerms(supplier)
 
+    if (!defaultDimsPickedRef.current) {
+      const supplierDims = supplier.default_dimensions ?? {}
+      setDefaultDims(supplierDims)
+      setDefaultDimsFromSupplier(Object.keys(supplierDims).length > 0)
+    }
+
     if (supplier.default_expense_account) {
       // Fill every row the user hasn't assigned yet (or plant the first row
       // when the table is empty): an empty account is the only signal needed.
@@ -565,8 +772,30 @@ export default function NewSupplierInvoiceForm({
     if (supplier.default_currency && watch('currency') === 'SEK') {
       setValue('currency', supplier.default_currency)
     }
-    if (supplier.supplier_type === 'eu_business') {
+    // A foreign supplier's service is omvänd betalningsskyldighet, from the EU or outside it.
+    if (isForeignSupplierType(supplier.supplier_type)) {
       setValue('reverse_charge', true)
+    }
+    // Goods or services is never carried over from the previous supplier: it
+    // starts unanswered, and an EU supplier's own latest answer fills it (a
+    // supplier usually sells one or the other). Without one it stays empty
+    // and registration asks: a silent "services" booked EU goods in ruta 21
+    // (crm#1323). Best-effort: on any miss the question stays open.
+    setValue('reverse_charge_kind', '')
+    let cancelled = false
+    if (supplier.supplier_type === 'eu_business') {
+      ;(async () => {
+        try {
+          const res = await fetch(`/api/supplier-invoices?supplier_id=${encodeURIComponent(supplier.id)}`)
+          if (!res.ok) return
+          const json = await res.json()
+          if (cancelled || getValues('reverse_charge_kind')) return
+          const kind = rememberedReverseChargeKind(Array.isArray(json?.data) ? json.data : [])
+          if (kind) setValue('reverse_charge_kind', kind)
+        } catch {
+          // Prefill is best-effort; the question stays open.
+        }
+      })()
     }
 
     // No supplier default: fall back to the company's own booking history for
@@ -576,7 +805,6 @@ export default function NewSupplierInvoiceForm({
     // private/balance-sheet templates like 2013 or 1630 out). Best-effort: on
     // any miss the rows simply stay blank, exactly as before.
     if (!supplier.default_expense_account && supplier.name?.trim()) {
-      let cancelled = false
       ;(async () => {
         try {
           const res = await fetch(
@@ -589,23 +817,17 @@ export default function NewSupplierInvoiceForm({
           const debit: string | undefined = match?.template?.debit_account
           const credit: string | undefined = match?.template?.credit_account
           if (!match || (match.confidence ?? 0) < 0.5) return
-          if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
+          // Settled on a bank or on a company card's liability account.
+          if (!debit || !/^[4-8]/.test(debit) || !credit || !(credit.startsWith('19') || isCardLedgerAccount(credit))) return
           requestAccountFill(debit, match.template.counterparty_name)
         } catch {
           // Prefill is best-effort; the rows stay blank.
         }
       })()
-      return () => { cancelled = true }
     }
-    return undefined
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSupplierId, suppliers])
-
-  function computeDueDate(invoiceDate: string, days: number): string {
-    const due = new Date(invoiceDate)
-    due.setDate(due.getDate() + days)
-    return due.toISOString().split('T')[0]
-  }
 
   // Terms-based förfallodatum (change 4). Auto-set from the supplier's
   // default_payment_terms with an honest caption; stops updating the moment
@@ -620,8 +842,11 @@ export default function NewSupplierInvoiceForm({
     if (currentDue && currentDue !== lastAutoDueRef.current) return
     const days = supplier.default_payment_terms
     if (days && days > 0) {
-      if (invoiceDate) {
-        const due = computeDueDate(invoiceDate, days)
+      // Pure calendar-date arithmetic: parsing as UTC, shifting with local
+      // setDate and reading back as UTC lost a day across the March DST
+      // change (accounted#58).
+      if (isIsoDateShaped(invoiceDate)) {
+        const due = invoiceDueDate(invoiceDate, days)
         setValue('due_date', due)
         lastAutoDueRef.current = due
       }
@@ -645,8 +870,8 @@ export default function NewSupplierInvoiceForm({
     const currentDue = getValues('due_date')
     if (currentDue && currentDue !== lastAutoDueRef.current) return
     const days = supplier.default_payment_terms
-    if (days && days > 0 && watchedInvoiceDate) {
-      const due = computeDueDate(watchedInvoiceDate, days)
+    if (days && days > 0 && isIsoDateShaped(watchedInvoiceDate)) {
+      const due = invoiceDueDate(watchedInvoiceDate, days)
       setValue('due_date', due)
       lastAutoDueRef.current = due
       setDueDateCaption({ type: 'terms', days })
@@ -654,40 +879,17 @@ export default function NewSupplierInvoiceForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedInvoiceDate])
 
-  // Pre-submit duplicate advisory (change 3): debounced, sequence-guarded and
-  // purely advisory: the create route's structured 409 stays the enforcement
-  // point, and the exists endpoint mirrors the unique index's
-  // credited/reversed exclusion so re-issues never warn.
-  useEffect(() => {
-    const supplierId = watchedSupplierId
-    const number = (watchedInvoiceNumber || '').trim()
-    if (!supplierId || !number) {
-      // Advance the seq so an in-flight exists response cannot resurrect the
-      // warning under a field the user just cleared.
-      duplicateSeqRef.current += 1
-      setDuplicateWarning(null)
-      return
-    }
-    const seq = ++duplicateSeqRef.current
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/supplier-invoices/exists?supplier_id=${encodeURIComponent(supplierId)}&number=${encodeURIComponent(number)}`,
-        )
-        if (!res.ok) return
-        const json = await res.json()
-        if (duplicateSeqRef.current !== seq) return
-        setDuplicateWarning(
-          json?.data?.exists
-            ? { number, existingId: json.data.existing?.id ?? null }
-            : null,
-        )
-      } catch {
-        // Advisory only; the 409 backstop still catches real duplicates.
-      }
-    }, 400)
-    return () => clearTimeout(timer)
-  }, [watchedSupplierId, watchedInvoiceNumber])
+  // Pre-submit duplicate advisory: the number (the create route's structured
+  // 409 stays the enforcement point) and the payment reference, which no
+  // door refuses.
+  const { found: duplicates, check: checkDuplicates } = useSupplierInvoiceDuplicates({
+    supplier_id: watchedSupplierId,
+    supplier_invoice_number: watchedInvoiceNumber,
+    payment_reference: watchedPaymentReference,
+    payer: watchedPayer,
+  })
+  // On one other invoice of the supplier only: acknowledged in the review dialog.
+  const reuseToAcknowledge = duplicates?.reference?.needs_acknowledgement ? duplicates.reference : null
 
   // Auto-fetch Riksbanken exchange rate when currency switches to non-SEK and
   // the user hasn't typed a custom rate yet. Re-fetches when the invoice
@@ -744,10 +946,8 @@ export default function NewSupplierInvoiceForm({
   function handleAccountChange(index: number, accountNumber: string) {
     setValue(`items.${index}.account_number`, accountNumber)
     const currentDesc = watch(`items.${index}.description`)
-    if (!currentDesc && accountNumber.length === 4) {
-      const desc = getAccountDescription(accountNumber)
-      if (desc) setValue(`items.${index}.description`, desc.name)
-    }
+    const accountName = accountNameForRow(accountNumber, accounts)
+    if (!currentDesc && accountName) setValue(`items.${index}.description`, accountName)
     // Auto-fill the rad's moms from the konto's configured default (e.g.
     // öresavrundning 3740 = ingen moms), so a rounding line stops inheriting
     // the 25 % rad-default. Only when the konto carries an explicit default;
@@ -779,15 +979,22 @@ export default function NewSupplierInvoiceForm({
       : !watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)
         ? defaultRate
         : 0.25
-    const description =
-      accountNumber.length === 4 ? getAccountDescription(accountNumber)?.name ?? '' : ''
+    const description = accountNameForRow(accountNumber, accounts)
     const index = getValues('items').length
+    // Total-first: the first row is born with the net the invoice totals
+    // give, so the amount cell that takes focus already shows it.
+    const net = index === 0 ? totalFirstNetAt(vatRate) : null
+    if (net != null) totalFillRef.current = net
+    // A first row typed by hand is no reading's row.
+    if (index === 0) readingRowsRef.current = false
     append({
       description,
-      amount: 0,
+      amount: net ?? 0,
       account_number: accountNumber,
       vat_rate: vatRate,
-      reverse_charge_rate: 0.25,
+      // Under reverse charge the row self-assesses at its default sats; a
+      // row added without it gets one when reverse charge is switched on.
+      ...(watchedReverseCharge ? { reverse_charge_rate: reverseChargeRateDefault(vatRate) } : {}),
     })
     return index
   }
@@ -841,6 +1048,21 @@ export default function NewSupplierInvoiceForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedReverseCharge])
 
+  // When reverse charge is switched on, every row on screen without a
+  // reverse-charge sats of its own gets its default (reverseChargeRateOf): a
+  // sats chosen under reverse charge earlier stands. Rows added or read in
+  // under reverse charge already carry it, so a row self-assesses at the same
+  // sats whichever came first.
+  useEffect(() => {
+    if (!watchedReverseCharge) return
+    const items = getValues('items') ?? []
+    items.forEach((item, index) => {
+      const rate = reverseChargeRateOf(item)
+      if (item.reverse_charge_rate !== rate) setValue(`items.${index}.reverse_charge_rate`, rate)
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedReverseCharge])
+
   // Force every line to 0 % moms for icke momsregistrerade companies: the
   // default line, AI prefills and konto defaults all assume 25 % otherwise.
   // Re-runs after EVERY applied extraction (prefillApplyCount bumps per
@@ -860,7 +1082,7 @@ export default function NewSupplierInvoiceForm({
     items.forEach((item, index) => {
       if (item.vat_rate !== 0) {
         if (item.amount) {
-          setValue(`items.${index}.amount`, roundOre(item.amount * (1 + item.vat_rate)))
+          setValue(`items.${index}.amount`, roundOre(item.amount + netVat(item.amount, item.vat_rate)))
         }
         setValue(`items.${index}.vat_rate`, 0)
       }
@@ -923,7 +1145,7 @@ export default function NewSupplierInvoiceForm({
           <p className="text-xs text-muted-foreground tabular-nums">
             {t('slp_applied_line', { amount: formatAmount(slpAmount) })}
           </p>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setSlp(index, false)}>
+          <Button type="button" variant="ghost" onClick={() => setSlp(index, false)}>
             {t('slp_remove_action')}
           </Button>
         </div>
@@ -932,16 +1154,15 @@ export default function NewSupplierInvoiceForm({
     return (
       <div
         role="status"
-        className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+        className="flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised"
       >
-        <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+        <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
         <p className="flex-1 text-sm">
           {t('slp_hint', { amount: formatAmount(slpAmount) })}
         </p>
         <Button
           type="button"
           variant="outline"
-          size="sm"
           className="shrink-0"
           onClick={() => setSlp(index, true)}
         >
@@ -951,11 +1172,80 @@ export default function NewSupplierInvoiceForm({
     )
   }
 
+  // --- Begränsat momsavdrag (personbil, representation; crm#1617) ---
+  // The row keeps the invoice's net and moms sats; the panel says how much of
+  // that moms is deducted. The rest is booked on the row's cost account
+  // (bookLimitedDeduction), so the payable stays the invoice total.
+  function limitedDeductionAvailable(index: number): boolean {
+    const item = watchedItems?.[index]
+    if (!item || !vatRegistered) return false
+    if (!limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled })) return false
+    return invoicedRowVat(item) > 0
+  }
+
+  function isLimitedDeductionOpen(index: number): boolean {
+    return limitedDeductionAvailable(index) && watchedItems?.[index]?.vat_deduction_share != null
+  }
+
+  function toggleLimitedDeduction(index: number) {
+    const item = watchedItems?.[index]
+    if (!item) return
+    // Opens at half the row's moms, the personbil rule; the person adjusts it.
+    const next = item.vat_deduction_share != null ? undefined : 0.5
+    setValue(`items.${index}.vat_deduction_share`, next, { shouldDirty: true })
+  }
+
+  function renderLimitedDeductionPanel(index: number) {
+    const item = watchedItems?.[index]
+    if (!item) return null
+    const invoiced = invoicedRowVat(item)
+    return (
+      <div className="rounded-lg p-3 space-y-2 bg-control shadow-raised">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Label htmlFor={`deductible-vat-${index}`} className="text-sm font-normal">
+            {t('deductible_vat_label')}
+          </Label>
+          {/* Shown and typed in kronor, kept as a share of the row's moms
+              so a corrected amount or moms sats keeps it in proportion. */}
+          <Controller
+            name={`items.${index}.vat_deduction_share`}
+            control={control}
+            render={({ field }) => (
+              <AmountCell
+                value={deductibleRowVat(item, field.value ?? 1)}
+                onChange={(kronor) => field.onChange(invoiced > 0 ? kronor / invoiced : 0)}
+                id={`deductible-vat-${index}`}
+                className="h-8 w-28 text-right tabular-nums"
+              />
+            )}
+          />
+          <span className="text-muted-foreground tabular-nums">
+            {t('deductible_vat_of', {
+              vat: formatAmount(invoiced),
+              cost: formatAmount(nonDeductibleVat[index] ?? 0),
+            })}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            className="ml-auto"
+            onClick={() => toggleLimitedDeduction(index)}
+          >
+            {t('deductible_vat_remove')}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">{t('deductible_vat_hint')}</p>
+      </div>
+    )
+  }
+
   // --- Dimension tagging (kostnadsställe/projekt, dimensions PR7) ---
   // Mirrors the accrual pattern: a defined (possibly empty) bag on the item
   // means the row's panel is open; closing clears the bag entirely so the
   // payload never carries a stale override.
   function setDefaultDimension(dimNo: string, code: string | null) {
+    defaultDimsPickedRef.current = true
+    setDefaultDimsFromSupplier(false)
     setDefaultDims((prev) => {
       const next = { ...prev }
       const trimmed = code?.trim()
@@ -996,7 +1286,7 @@ export default function NewSupplierInvoiceForm({
     const item = watchedItems?.[index]
     if (!item || item.dimensions == null) return null
     return (
-      <div className="rounded-lg border bg-muted/30 p-3 space-y-1">
+      <div className="rounded-lg p-3 space-y-1 bg-control shadow-raised">
         <div className="max-w-md">
           <LineDimensionFields
             dimensions={item.dimensions}
@@ -1016,6 +1306,11 @@ export default function NewSupplierInvoiceForm({
   function renderAccrualPanel(index: number, idPrefix: string) {
     const item = watchedItems?.[index]
     if (!item || item.accrual_balance_account == null) return null
+    const accrualValue = {
+      start: item.accrual_period_start ?? '',
+      end: item.accrual_period_end ?? '',
+      balanceAccount: item.accrual_balance_account || DEFAULT_PREPAID_EXPENSE_ACCOUNT,
+    }
     return (
       <AccrualPeriodControl
         direction="expense"
@@ -1029,12 +1324,13 @@ export default function NewSupplierInvoiceForm({
         // and then hides the hint instead of comparing the wrong unit.
         currency={watchedCurrency}
         exchangeRate={parseFloat(watchedExchangeRate)}
+        invoiceDate={watchedInvoiceDate}
+        // K2's limit follows the fiscal year: 7 000 kr from a year starting 2026.
+        fiscalYearStart={fiscalYearStartOf(watchedInvoiceDate)}
+        fiscalYearEnd={fiscalYearOf(watchedInvoiceDate)?.period_end ?? null}
         idPrefix={idPrefix}
-        value={{
-          start: item.accrual_period_start ?? '',
-          end: item.accrual_period_end ?? '',
-          balanceAccount: item.accrual_balance_account || '1790',
-        }}
+        value={accrualValue}
+        targetAccount={item.account_number}
         onChange={(next) => {
           setValue(`items.${index}.accrual_period_start`, next.start, { shouldDirty: true })
           setValue(`items.${index}.accrual_period_end`, next.end, { shouldDirty: true })
@@ -1050,16 +1346,70 @@ export default function NewSupplierInvoiceForm({
   // else moms-related disappears when the company isn't VAT-registered.
   const vatColsVisible = vatRegistered || watchedReverseCharge
 
-  const { itemTotals, subtotal, totalVat, figures } = supplierInvoiceEditorAmounts(
-    watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, oreRounding,
+  // Öresavrundning follows the invoice until the person flips the switch:
+  // a Fakturabelopp that is the rows' exact total rounded to whole kronor
+  // turns it on, so the 3740 line books the difference with its sign.
+  // The Moms field is the invoice's own VAT: on a single-rate invoice it is
+  // what the registration books when the lines take it (crm#1367).
+  // Begränsat momsavdrag: the amounts are those the registration books (the
+  // non-deductible moms on the cost row); the figures shown add it back so
+  // they read as the invoice does.
+  const { items: bookedItems, nonDeductibleVat } = bookLimitedDeduction(
+    watchedItems || [],
+    limitedDeductionApplies({ reverse_charge: watchedReverseCharge, is_self_billed: watchedSelfBilled }),
   )
+  const {
+    statedVat,
+    oreRounding,
+    amounts: { itemTotals, subtotal: bookedSubtotal, totalVat: deductibleVat, figures },
+  } = rowsAgainstInvoiceTotals({
+    items: bookedItems,
+    currency: watchedCurrency || 'SEK',
+    reverseCharge: watchedReverseCharge,
+    invoiceTotal: enteredFakturaTotal,
+    invoiceVat: enteredFakturaVat,
+    oreRoundingChoice,
+  })
+  const totalNonDeductibleVat = roundOre(nonDeductibleVat.reduce((sum, vat) => sum + vat, 0))
+  const subtotal = roundOre(bookedSubtotal - totalNonDeductibleVat)
+  const totalVat = roundOre(deductibleVat + totalNonDeductibleVat)
 
-  // Total cross-check (change 2): client-only compare against the displayed
-  // payable; a mismatch renders field-adjacent, never blocks, never travels.
-  const enteredFakturaTotal = parseFlexibleNumber(fakturaTotalStr)
-  const crosscheckDiff =
-    enteredFakturaTotal == null ? null : roundOre(enteredFakturaTotal - figures.toPay)
-  const crosscheckMatches = crosscheckDiff != null && Math.abs(crosscheckDiff) <= 0.005
+  // Total-first fill: a single row whose amount is still empty, or still the
+  // one this fill put there, takes its net from Fakturabelopp and Moms (and
+  // follows a later change of either, or of the row's moms sats). With
+  // several rows the fields only cross-check.
+  const singleRow = watchedItems?.length === 1 ? watchedItems[0] : null
+  const singleRowAmount = singleRow ? singleRow.amount || 0 : null
+  const singleRowNet = singleRow ? totalFirstNetAt(singleRow.vat_rate || 0) : null
+  useEffect(() => {
+    if (singleRowAmount == null) return
+    const net = totalFirstFill({
+      amount: singleRowAmount,
+      net: singleRowNet,
+      filled: totalFillRef.current,
+      fromReading: readingRowsRef.current,
+      reverseCharge: watchedReverseCharge,
+    })
+    if (net == null) return
+    totalFillRef.current = net
+    setValue('items.0.amount', net, { shouldDirty: true })
+  }, [singleRowAmount, singleRowNet, watchedReverseCharge, setValue])
+
+  // Cross-check: client-only compare against the displayed payable and the
+  // rows' moms; a mismatch renders field-adjacent, never blocks, never travels.
+  const {
+    totalDiff: crosscheckDiff,
+    totalMatches: crosscheckMatches,
+    vatDiff: vatCrosscheckDiff,
+    vatMatches: vatCrosscheckMatches,
+  } = invoiceTotalsCrosscheck({
+    invoiceTotal: enteredFakturaTotal,
+    invoiceVat: enteredFakturaVat,
+    toPay: figures.toPay,
+    totalVat,
+  })
+  const signedAmount = (amount: number) =>
+    (amount > 0 ? '+' : '') + formatCurrency(amount, watchedCurrency)
 
   // Show the AI-suggested supplier card when we have an extraction, the AI
   // surfaced a supplier name, and we couldn't match it to an existing record.
@@ -1069,9 +1419,12 @@ export default function NewSupplierInvoiceForm({
     !watchedSupplierId
 
   function openSupplierDialogPrefilled() {
+    // Where the seller is, read as the Inkorg's one click reads it: Sweden unless the document names elsewhere.
+    const seller = sellerCountry(extractedData?.supplier)
     setNewSupplier({
       name: extractedData?.supplier?.name || '',
-      supplier_type: 'swedish_business',
+      supplier_type: seller.region ? supplierTypeForRegion(seller.region) : 'swedish_business',
+      country: seller.country ?? '',
       org_number: extractedData?.supplier?.orgNumber || '',
       vat_number: extractedData?.supplier?.vatNumber || '',
       address_line1: extractedData?.supplier?.address || '',
@@ -1084,8 +1437,9 @@ export default function NewSupplierInvoiceForm({
     setShowNewSupplier(true)
   }
 
-  function openSupplierDialogBlank() {
-    setNewSupplier(EMPTY_NEW_SUPPLIER)
+  /** "Skapa leverantör" from the supplier picker, with what was typed as the name. */
+  function openSupplierDialogNamed(name: string) {
+    setNewSupplier({ ...EMPTY_NEW_SUPPLIER, name })
     setShowNewSupplier(true)
   }
 
@@ -1108,6 +1462,10 @@ export default function NewSupplierInvoiceForm({
     if (newSupplier.iban) payload.iban = newSupplier.iban
     if (newSupplier.bic) payload.bic = newSupplier.bic
     if (newSupplier.default_expense_account) payload.default_expense_account = newSupplier.default_expense_account
+    // The country the reading named, while the type still agrees with it.
+    if (newSupplier.country && supplierTypeForRegion(regionOfCountry(newSupplier.country)) === newSupplier.supplier_type) {
+      payload.country = newSupplier.country
+    }
 
     const res = await fetch('/api/suppliers', {
       method: 'POST',
@@ -1139,14 +1497,6 @@ export default function NewSupplierInvoiceForm({
   // a disabled extension just 404s and the upload degrades to the plain
   // /api/documents path with no extraction. Manual entry is never blocked.
 
-  function afterUploadExtraction(extracted: InvoiceExtractionResult | null) {
-    setExtractionPhase('done')
-    if (extracted?.totals?.total != null) {
-      setFakturaTotalStr(formatAmount(extracted.totals.total))
-      markSettled('faktura_total')
-    }
-  }
-
   // Standalone-path guard: an extraction can land up to 90 s after upload,
   // and applyInboxItem overwrites scalars and replaces ALL rows. Auto-apply
   // only while the form is still pristine; once the user has typed, buffer
@@ -1160,7 +1510,7 @@ export default function NewSupplierInvoiceForm({
       return
     }
     applyInboxItem(item)
-    afterUploadExtraction(item.extracted_data)
+    setExtractionPhase('done')
   }
 
   function applyPendingExtraction() {
@@ -1168,59 +1518,106 @@ export default function NewSupplierInvoiceForm({
     if (!item) return
     setPendingExtraction(null)
     applyInboxItem(item)
-    afterUploadExtraction(item.extracted_data)
+    setExtractionPhase('done')
+  }
+
+  // A finished reading: fill the form, or say it could not be read and offer
+  // another try instead of going quiet (the provider may have been down). A
+  // document that was never sent for reading (extraction_skipped: no AI,
+  // unsupported file) stays quiet: another try would read nothing either.
+  function settleReading(
+    itemId: string,
+    documentId: string,
+    data: { extracted_data?: InvoiceExtractionResult | null; matched_supplier_id?: string | null; extraction_skipped?: boolean } | null,
+  ) {
+    if (hasExtractionContent(data?.extracted_data)) {
+      applyExtractionIfPristine({
+        id: itemId,
+        extracted_data: data?.extracted_data ?? null,
+        matched_supplier_id: data?.matched_supplier_id ?? null,
+        document_id: documentId,
+      })
+      return
+    }
+    setExtractionPhase(data?.extraction_skipped ? 'idle' : 'failed')
+  }
+
+  // "Läs igen" on the uploaded underlag: the inbox's own retry-extraction,
+  // then the item as it now stands.
+  async function retryUnderlagReading() {
+    const itemId = uploadedInboxItemId
+    const documentId = documentFiles[0]?.id
+    if (!itemId || !documentId) return
+    const token = ++extractionPollTokenRef.current
+    setExtractionPhase('processing')
+    try {
+      const retry = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}/retry-extraction`, { method: 'POST' })
+      if (retry.ok) {
+        const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`)
+        const json = res.ok ? await res.json().catch(() => null) : null
+        if (extractionPollTokenRef.current !== token) return
+        if (json?.data) {
+          settleReading(itemId, documentId, json.data)
+          return
+        }
+      }
+    } catch {
+      // Falls through to the failed state: the user can try again or type.
+    }
+    if (extractionPollTokenRef.current === token) setExtractionPhase('failed')
   }
 
   async function pollExtraction(itemId: string, documentId: string) {
     const token = ++extractionPollTokenRef.current
     const startedAt = Date.now()
+    // A reading may run to its 250 s deadline: one still running when the
+    // poll gives up is said as such, with a way to look again, not dropped.
+    let stillReading = true
     while (Date.now() - startedAt < 90_000) {
       await new Promise((resolve) => setTimeout(resolve, 1500))
       if (extractionPollTokenRef.current !== token) return
       try {
         const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`)
-        if (!res.ok) break
+        if (!res.ok) {
+          stillReading = false
+          break
+        }
         const { data } = await res.json()
         if (extractionPollTokenRef.current !== token) return
         if (data?.status !== 'processing') {
-          if (hasExtractionContent(data?.extracted_data)) {
-            applyExtractionIfPristine({
-              id: itemId,
-              extracted_data: data.extracted_data,
-              matched_supplier_id: data.matched_supplier_id ?? null,
-              document_id: documentId,
-            })
-          } else {
-            // Extraction failed or read nothing: keep the plain attachment.
-            setExtractionPhase('idle')
-          }
+          settleReading(itemId, documentId, data)
           return
         }
       } catch {
+        stillReading = false
         break
       }
     }
-    if (extractionPollTokenRef.current === token) setExtractionPhase('idle')
+    if (extractionPollTokenRef.current === token) setExtractionPhase(stillReading ? 'slow' : 'idle')
+  }
+
+  // "Kolla igen" after a slow reading: the same poll, for the same item.
+  function checkReadingAgain() {
+    const itemId = uploadedInboxItemId
+    const documentId = documentFiles[0]?.id
+    if (!itemId || !documentId) return
+    setExtractionPhase('processing')
+    void pollExtraction(itemId, documentId)
   }
 
   async function uploadPlainDocument(entry: UploadedFile) {
-    const formData = new FormData()
-    formData.append('file', entry.file)
-    formData.append('upload_source', 'file_upload')
     try {
-      const res = await fetch('/api/documents', { method: 'POST', body: formData })
-      let result: { data?: { id?: string }; error?: unknown } = {}
-      try {
-        result = await res.json()
-      } catch {
+      const res = await postDocumentForm(
+        PLAIN_DOCUMENT_UPLOAD_URL,
+        plainDocumentUploadForm(),
+        entry.file,
+      )
+      const id = res.ok ? documentIdFromPlainUpload(await res.json().catch(() => null)) : null
+      if (!id) {
         setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
         return
       }
-      if (!res.ok || result.error || !result.data?.id) {
-        setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
-        return
-      }
-      setDocumentFiles([{ ...entry, status: 'uploaded', id: result.data.id }])
+      setDocumentFiles([{ ...entry, status: 'uploaded', id }])
     } catch {
       setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
     }
@@ -1235,7 +1632,7 @@ export default function NewSupplierInvoiceForm({
       fileSize: file.size,
       uploadKey,
     }
-    if (!UNDERLAG_ACCEPTED_TYPES.includes(file.type)) {
+    if (!isAllowedInboxFile(file)) {
       setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_unsupported_type') }])
       return
     }
@@ -1246,6 +1643,14 @@ export default function NewSupplierInvoiceForm({
     setDocumentFiles([entry])
     setExtractionPhase('idle')
     setPendingExtraction(null)
+
+    // Without the AI capability the document inbox refuses the upload, so
+    // the file goes straight to the plain upload (which also carries a file
+    // over the hosted body limit) instead of there after a refused request.
+    if (underlagRoute === 'documents') {
+      await uploadPlainDocument(entry)
+      return
+    }
 
     // Above the hosted request-body limit the platform refuses a multipart
     // body before the route runs (a plain 413, nothing in the logs), so the
@@ -1337,6 +1742,8 @@ export default function NewSupplierInvoiceForm({
       oreRounding,
       defaultDims,
       canUseAccrual,
+      euSupplier,
+      statedVat,
     })
   }
 
@@ -1347,12 +1754,14 @@ export default function NewSupplierInvoiceForm({
   const effectiveInboxItemId = inboxItemId ?? uploadedInboxItemId
 
   function focusMissingField(
-    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account',
+    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account' | 'reverse_charge_kind',
     rowIndex?: number,
   ) {
-    if (field === 'supplier') {
-      setSupplierMenuOpen(true)
-      supplierTriggerRef.current?.focus()
+    if (field === 'reverse_charge_kind') {
+      reverseChargeKindRef.current?.focus()
+    } else if (field === 'supplier') {
+      // Focusing the supplier combobox opens its list.
+      supplierInputRef.current?.focus()
     } else if (field === 'invoice_number') {
       invoiceNumberInputRef.current?.focus()
     } else if (field === 'rows') {
@@ -1369,7 +1778,6 @@ export default function NewSupplierInvoiceForm({
     pendingData,
     showBankPicker,
     setShowBankPicker,
-    setPendingTransactionId,
     conflict,
     setConflict,
     isResolvingConflict,
@@ -1396,23 +1804,34 @@ export default function NewSupplierInvoiceForm({
     // The Utlägg nav row is gated on existing claims in the server layout.
     onExpenseRegistered: () => router.refresh(),
     onMissingField: focusMissingField,
+    settleTransactionId: inboxItemId ? (settleWith?.transactionId ?? null) : null,
+    euSupplier,
+    acknowledgesInReview: async (data) => (await checkDuplicates(data))?.reference?.needs_acknowledgement === true,
   })
+
+  // Gone, or never there: nothing is left for the unmount cleanup to remove.
+  // A delete that failed (offline, a server error) is left for it to retry.
+  const deleteSettled = (res: Response) => res.ok || res.status === 404
 
   async function discardUploadedDocument() {
     extractionPollTokenRef.current += 1
     const itemId = uploadedInboxItemId
     if (itemId) {
       try {
-        await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, { method: 'DELETE' })
+        const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, { method: 'DELETE' })
+        if (deleteSettled(res)) discardedUploadIdsRef.current.add(itemId)
       } catch {
-        // Best-effort cleanup.
+        // Best-effort cleanup: the unmount cleanup tries once more.
       }
     }
     const ids = documentFiles
       .filter((file) => file.status === 'uploaded' && file.id)
       .map((file) => file.id as string)
     await Promise.allSettled(
-      ids.map((documentId) => fetch(`/api/documents/${documentId}`, { method: 'DELETE' })),
+      ids.map(async (documentId) => {
+        const res = await fetch(`/api/documents/${documentId}`, { method: 'DELETE' })
+        if (deleteSettled(res)) discardedUploadIdsRef.current.add(documentId)
+      }),
     )
   }
 
@@ -1428,19 +1847,30 @@ export default function NewSupplierInvoiceForm({
   const selectedSupplier = suppliers.find((s) => s.id === watchedSupplierId)
   const supplierHasGiro = Boolean(selectedSupplier?.bankgiro || selectedSupplier?.plusgiro)
   const underlagFile = documentFiles[0]
-  const underlagAttached = Boolean(inboxItemId || uploadedDocumentId)
-
-  const detailsFilled = Boolean((watchedInvoiceNumber || '').trim() && watchedInvoiceDate)
+  // Självfaktura (crm#1367): offered for a supplier the company has a
+  // self-billing agreement with, on a fresh invoice (not one read from an
+  // underlag), while the company shows självfakturor at all.
+  const selfBillingOffered =
+    !inboxItemId &&
+    !settleWith &&
+    isInvoiceTypeEnabled(companySettingsRow, 'self_billing_enabled') &&
+    Boolean(selectedSupplier?.self_billing_agreement_ref)
+  const selfBilled = selfBillingOffered && watchedSelfBilled
+  // A supplier without an agreement (or an underlag-driven invoice) takes no
+  // självfaktura: drop a choice made for another supplier.
+  useEffect(() => {
+    if (!selfBillingOffered && watchedSelfBilled) setValue('is_self_billed', false)
+  }, [selfBillingOffered, watchedSelfBilled, setValue])
 
   // Next-step line (the page's ONLY ochre line): same predicates and order as
   // the submit-time checks in useSupplierInvoiceSubmit, so the always-enabled
   // primary's focus routing and this line always agree.
-  type MissingField = 'supplier' | 'invoice_number' | 'rows' | 'row_account'
+  type MissingField = 'supplier' | 'invoice_number' | 'rows' | 'row_account' | 'reverse_charge_kind'
   const nextStep = ((): { field: MissingField; rowIndex?: number; label: string } | null => {
     if (!watchedSupplierId) {
       return { field: 'supplier', label: t('next_step_supplier') }
     }
-    if (!(watchedInvoiceNumber || '').trim()) {
+    if (!selfBilled && !(watchedInvoiceNumber || '').trim()) {
       return { field: 'invoice_number', label: t('next_step_invoice_number') }
     }
     if (!watchedItems || watchedItems.length === 0) {
@@ -1454,29 +1884,50 @@ export default function NewSupplierInvoiceForm({
         label: t('next_step_row_account', { row: rowMissingAccount + 1 }),
       }
     }
+    if (reverseChargeKindUnanswered) {
+      return { field: 'reverse_charge_kind', label: t('next_step_reverse_charge_kind') }
+    }
     return null
   })()
-  const readyLineText =
-    watchedPaidPrivately || isEF
-      ? willBookAtRegistration
-        ? t('ready_line_register')
-        : bookingMoment === 'payment'
-          ? t('ready_line_register_cash')
-          : t('ready_line_register_deferred')
-      : bookingMoment === 'issue'
-        ? t('ready_line_review')
-        : bookingMoment === 'payment'
-          ? t('ready_line_review_cash')
-          : t('ready_line_review_deferred')
-
+  const reverseChargeKindRow = (
+    <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
+      <span>
+        {t('reverse_charge_kind_label')}
+        <span className="block text-xs text-muted-foreground">
+          {t('reverse_charge_kind_help')}
+        </span>
+      </span>
+      <Controller
+        name="reverse_charge_kind"
+        control={control}
+        render={({ field }) => (
+          <Select value={field.value} onValueChange={field.onChange}>
+            <SelectTrigger ref={reverseChargeKindRef} className="h-8 w-28" aria-label={t('reverse_charge_kind_label')}>
+              <SelectValue placeholder={t('reverse_charge_kind_placeholder')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="eu_services">{t('reverse_charge_kind_services')}</SelectItem>
+              <SelectItem value="eu_goods">{t('reverse_charge_kind_goods')}</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+      />
+    </div>
+  )
   const forvalChips: string[] = [
     willBookAtRegistration
       ? t('forval_books_at_registration')
-      : bookingMoment === 'payment'
+      : effectiveBookingMoment === 'payment'
         ? t('forval_books_at_payment')
         : t('forval_books_on_book_step'),
   ]
-  if (watchedReverseCharge) forvalChips.push(t('reverse_charge_label'))
+  if (watchedReverseCharge) {
+    forvalChips.push(
+      asksReverseChargeKind && watchedReverseChargeKind
+        ? t(watchedReverseChargeKind === 'eu_goods' ? 'reverse_charge_chip_goods' : 'reverse_charge_chip_services')
+        : t('reverse_charge_label'),
+    )
+  }
   if ((watchedCurrency || 'SEK') !== 'SEK') {
     forvalChips.push(
       watchedExchangeRate
@@ -1489,13 +1940,9 @@ export default function NewSupplierInvoiceForm({
   if ((watchedNotes || '').trim()) forvalChips.push(t('chip_notes'))
   if (dimensionsEnabled && defaultDimsSummary) forvalChips.push(defaultDimsSummary)
 
-  const underlagCaption = inboxItemId
-    ? null
-    : extractionPhase === 'done'
-      ? t('underlag_caption_done')
-      : underlagFile?.status === 'uploaded' && extractionPhase === 'idle'
-        ? t('underlag_caption_attached')
-        : t('underlag_caption_default')
+  // Only a finished tolkning earns a caption: before it the drop zone and the
+  // file row say what is going on.
+  const underlagCaption = !inboxItemId && extractionPhase === 'done' ? t('underlag_caption_done') : null
 
   // The primary action follows "Vem betalade?": a person -> book the utlägg,
   // the company -> register and match the bank line, no one yet -> register.
@@ -1521,18 +1968,18 @@ export default function NewSupplierInvoiceForm({
             onClick={() => router.push(inboxItemId ? '/e/general/invoice-inbox' : '/supplier-invoices')}
             aria-label={inboxItemId ? t('back_aria_inbox') : t('back_aria')}
           >
-            <ArrowLeft className="h-5 w-5" />
+            <ArrowLeftIcon className="h-5 w-5" />
           </Button>
           <div>
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
+            <h1 className="text-2xl leading-8">{t('page_title')}</h1>
           </div>
         </div>
       )}
 
       {isLoadingInbox && (
         <Card className="mb-6">
-          <CardContent className="py-4 flex items-center gap-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+          <CardContent className="flex items-center gap-3 text-sm text-muted-foreground">
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             {t('loading_inbox')}
           </CardContent>
         </Card>
@@ -1542,36 +1989,51 @@ export default function NewSupplierInvoiceForm({
         <div className="divide-y divide-border">
           {/* ── Underlag (first: dokument-först) ─────────────────── */}
           <section className="pb-6">
-            <SectionLabel>
-              {t('section_underlag')}
-              <span className="ml-2 normal-case tracking-normal">({t('underlag_recommended')})</span>
-              {underlagAttached && (
-                <span className="ml-2 normal-case tracking-normal text-success">
-                  {'✓'} {t('mark_attached')}
-                </span>
-              )}
-            </SectionLabel>
+            <SectionLabel>{t('section_underlag')}</SectionLabel>
             {inboxItemId ? (
-              <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
-                <FileText className="h-4 w-4 shrink-0" />
+              <div className="flex items-center gap-3 rounded-lg px-4 py-3 text-[13px] text-muted-foreground bg-control shadow-raised">
+                <DocumentTextIcon className="h-4 w-4 shrink-0" />
                 {t('underlag_caption_inbox')}
               </div>
+            ) : selfBilled ? (
+              // Our own document: the server refuses an uploaded underlag on a
+              // självfaktura, so none is offered (crm#1367).
+              <div className="flex items-center gap-3 rounded-lg px-4 py-3 text-[13px] text-muted-foreground bg-control shadow-raised">
+                <DocumentTextIcon className="h-4 w-4 shrink-0" />
+                {t('underlag_caption_self_billed')}
+              </div>
             ) : underlagFile ? (
-              <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-3">
+              <div className="flex items-center justify-between gap-3 rounded-lg px-4 py-3 bg-control shadow-raised">
                 <div className="flex min-w-0 items-center gap-3">
-                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
                     <p className="truncate text-[13px]">{underlagFile.fileName}</p>
                     {(underlagFile.status === 'uploading' || extractionPhase === 'processing') && (
-                      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <SpinnerIcon className="h-3 w-3 animate-spin" />
                         {underlagFile.status === 'uploading'
                           ? t('underlag_uploading')
                           : t('underlag_processing')}
-                      </p>
+                      </div>
                     )}
                     {underlagFile.status === 'error' && (
                       <p className="text-xs text-destructive">{underlagFile.error}</p>
+                    )}
+                    {underlagFile.status === 'uploaded' && extractionPhase === 'slow' && (
+                      <p className="text-xs text-muted-foreground">
+                        {t('underlag_read_slow')}{' '}
+                        <button type="button" className={QUIET_LINK_CLASS} onClick={checkReadingAgain}>
+                          {t('underlag_read_check_again')}
+                        </button>
+                      </p>
+                    )}
+                    {underlagFile.status === 'uploaded' && extractionPhase === 'failed' && (
+                      <p className="text-xs text-muted-foreground">
+                        {t('underlag_read_failed')}{' '}
+                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => void retryUnderlagReading()}>
+                          {t('underlag_read_retry')}
+                        </button>
+                      </p>
                     )}
                   </div>
                 </div>
@@ -1614,7 +2076,7 @@ export default function NewSupplierInvoiceForm({
                 <input
                   ref={underlagInputRef}
                   type="file"
-                  accept={UNDERLAG_ACCEPT_ATTR}
+                  accept={INBOX_UPLOAD_ACCEPT}
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0]
@@ -1642,19 +2104,13 @@ export default function NewSupplierInvoiceForm({
           <section className="py-6">
             <SectionLabel>
               {t('section_supplier')}
-              <RequiredMark />
-              {watchedSupplierId && (
-                <span className="ml-2 normal-case tracking-normal text-success">
-                  {'✓'} {t('mark_selected')}
-                </span>
-              )}
             </SectionLabel>
 
             {showAISupplierHint && (
-              <div className="mb-3 rounded-lg border border-border bg-muted/30 p-4">
+              <div className="mb-3 rounded-lg p-4 bg-control shadow-raised">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    <MessageCircle className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+                    <ChatBubbleOvalLeftIcon className="h-5 w-5 text-primary shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm font-medium">
                         {t('ai_suggested_supplier', { name: extractedData?.supplier?.name ?? '' })}
@@ -1667,145 +2123,103 @@ export default function NewSupplierInvoiceForm({
                       </p>
                     </div>
                   </div>
-                  <Button type="button" size="sm" onClick={openSupplierDialogPrefilled}>
-                    <Plus className="mr-2 h-4 w-4" />
+                  <Button type="button" onClick={openSupplierDialogPrefilled}>
+                    <PlusIcon className="h-4 w-4" />
                     {t('create_and_select')}
                   </Button>
                 </div>
               </div>
             )}
 
-            <DropdownMenu open={supplierMenuOpen} onOpenChange={setSupplierMenuOpen}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  ref={supplierTriggerRef}
-                  className={cn(
-                    'w-full rounded-lg border border-border px-4 py-4 text-left transition-colors hover:bg-secondary/60',
-                    settledFields.has('supplier_id') && 'prefill-settle',
-                  )}
-                  aria-haspopup="menu"
-                  aria-expanded={supplierMenuOpen}
-                >
-                  <span className="flex items-center justify-between gap-3">
-                    <span
-                      className={cn(
-                        'font-display text-lg leading-snug',
-                        selectedSupplier ? 'text-foreground' : 'text-muted-foreground',
-                      )}
-                    >
-                      {selectedSupplier?.name ?? t('supplier_placeholder')}
-                    </span>
-                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </span>
-                  {selectedSupplier?.org_number && (
-                    <span className="mt-1 block text-[13px] text-muted-foreground">
-                      {t('org_number_prefix', { number: selectedSupplier.org_number })}
-                    </span>
-                  )}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="max-h-80 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto"
-                onCloseAutoFocus={(e) => {
-                  // Picking a supplier routes focus to the invoice-number
-                  // field; the menu's default close behavior would yank it
-                  // back to the trigger.
-                  e.preventDefault()
-                }}
-              >
-                {suppliers.length === 0 && (
-                  <div className="px-2 py-2 text-[13px] text-muted-foreground">
-                    {t('no_suppliers_yet')}
-                  </div>
-                )}
-                {suppliers.map((s) => (
-                  <DropdownMenuItem
-                    key={s.id}
-                    onSelect={() => {
-                      setValue('supplier_id', s.id, { shouldDirty: true })
-                      requestAnimationFrame(() => invoiceNumberInputRef.current?.focus())
-                    }}
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm">{s.name}</div>
-                      {s.org_number && (
-                        <div className="text-xs text-muted-foreground">
-                          {t('org_number_prefix', { number: s.org_number })}
-                        </div>
-                      )}
-                    </div>
-                  </DropdownMenuItem>
-                ))}
-                {/* No separator over an empty list: it reads as a stray line. */}
-                {suppliers.length > 0 && <DropdownMenuSeparator />}
-                <DropdownMenuItem onSelect={openSupplierDialogBlank} className="text-muted-foreground">
-                  {t('add_new_supplier')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <CustomerCombobox
+              kind="supplier"
+              value={watchedSupplierId ?? ''}
+              customers={suppliers}
+              onChange={(supplierId) => {
+                setValue('supplier_id', supplierId, { shouldDirty: true })
+                requestAnimationFrame(() => invoiceNumberInputRef.current?.focus())
+              }}
+              inputRef={supplierInputRef}
+              className={cn('h-11 text-[15px]', settledFields.has('supplier_id') && 'prefill-settle')}
+              aria-required
+              loading={!suppliersLoaded}
+              emptyLabel={t('no_suppliers_yet')}
+              onCreateCustomer={openSupplierDialogNamed}
+            />
+            {selectedSupplier?.org_number && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t('org_number_prefix', { number: selectedSupplier.org_number })}
+              </p>
+            )}
+            {selfBillingOffered && (
+              <div className="mt-3 flex items-start justify-between gap-4 rounded-lg px-4 py-3 bg-control shadow-raised">
+                <div className="min-w-0">
+                  <Label htmlFor="si-self-billed" className="text-sm font-medium">
+                    {t('self_billing_toggle_label')}
+                  </Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {t('self_billing_toggle_help', { agreement: selectedSupplier?.self_billing_agreement_ref ?? '' })}
+                  </p>
+                </div>
+                <Switch
+                  id="si-self-billed"
+                  checked={watchedSelfBilled}
+                  onCheckedChange={(next) => {
+                    setValue('is_self_billed', next, { shouldDirty: true })
+                    if (next) {
+                      // What a självfaktura can carry today: SEK, Swedish VAT,
+                      // paid by the company (the server refuses anything else).
+                      setValue('currency', 'SEK', { shouldDirty: true })
+                      setValue('reverse_charge', false, { shouldDirty: true })
+                      setValue('payer', 'unpaid', { shouldDirty: true })
+                    }
+                  }}
+                />
+              </div>
+            )}
           </section>
 
           {/* ── Fakturauppgifter ─────────────────────────────────── */}
           <section className="py-6">
             <SectionLabel>
               {t('section_details')}
-              <RequiredMark />
-              {detailsFilled && (
-                <span className="ml-2 normal-case tracking-normal text-success">
-                  {'✓'} {t('mark_filled')}
-                </span>
-              )}
             </SectionLabel>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="si-invoice-number" className="text-xs font-normal text-muted-foreground">
                     {t('supplier_invoice_number_label')}
-                    <RequiredMark />
                   </Label>
                   <AiFilledIndicator active={aiFlags.invoiceNumber} label="AI-fyllt" />
                 </div>
-                {(() => {
-                  const { ref: rhfRef, ...rest } = register('supplier_invoice_number')
-                  return (
-                    <Input
-                      id="si-invoice-number"
-                      placeholder={t('supplier_invoice_number_placeholder')}
-                      autoComplete="off"
-                      className={cn('h-9', settledFields.has('supplier_invoice_number') && 'prefill-settle')}
-                      {...rest}
-                      ref={(el) => {
-                        rhfRef(el)
-                        invoiceNumberInputRef.current = el
-                      }}
-                    />
-                  )
-                })()}
-                {duplicateWarning && (
-                  <p className="text-xs text-destructive" data-ph-mask="">
-                    {t('duplicate_warning_line', { number: duplicateWarning.number })}
-                    {duplicateWarning.existingId && (
-                      <>
-                        {' '}
-                        <button
-                          type="button"
-                          className="underline underline-offset-2"
-                          onClick={() => router.push(`/supplier-invoices/${duplicateWarning.existingId}`)}
-                        >
-                          {t('duplicate_warning_link')}
-                        </button>
-                      </>
-                    )}
-                  </p>
+                {selfBilled ? (
+                  <p className="flex h-9 items-center text-sm text-muted-foreground">{t('self_billing_number_note')}</p>
+                ) : (
+                  (() => {
+                    const { ref: rhfRef, ...rest } = register('supplier_invoice_number')
+                    return (
+                      <Input
+                        id="si-invoice-number"
+                        placeholder={t('supplier_invoice_number_placeholder')}
+                        autoComplete="off"
+                        className={cn('h-9', settledFields.has('supplier_invoice_number') && 'prefill-settle')}
+                        {...rest}
+                        ref={(el) => {
+                          rhfRef(el)
+                          invoiceNumberInputRef.current = el
+                        }}
+                      />
+                    )
+                  })()
+                )}
+                {duplicates?.number && (
+                  <DuplicateNumberLine number={(watchedInvoiceNumber || '').trim()} invoice={duplicates.number} />
                 )}
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="si-invoice-date" className="text-xs font-normal text-muted-foreground">
                     {t('invoice_date_label')}
-                    <RequiredMark />
                   </Label>
                   <AiFilledIndicator active={aiFlags.invoiceDate} label="AI-fyllt" />
                 </div>
@@ -1828,10 +2242,20 @@ export default function NewSupplierInvoiceForm({
                     value={field.value}
                     onChange={field.onChange}
                     accountingMethod={accountingMethod}
+                    disabled={selfBilled}
                     labelClassName="text-xs font-normal text-muted-foreground"
                   />
                 )}
               />
+              {settleWith && inboxItemId && watchedPayer === 'company' && (
+                <p data-ph-mask="" className="text-xs text-muted-foreground">
+                  {t('settle_with_bank_row', {
+                    date: formatDate(settleWith.date),
+                    amount: formatCurrency(Math.abs(settleWith.amount), settleWith.currency),
+                    counterparty: settleWith.counterparty ?? t('settle_with_bank_row_unknown'),
+                  })}
+                </p>
+              )}
               {isPersonPayer(watchedPayer) && (
                 <ExpenseClaimantFields
                   payer={watchedPayer}
@@ -1887,25 +2311,102 @@ export default function NewSupplierInvoiceForm({
                       className={cn('h-9', settledFields.has('payment_reference') && 'prefill-settle')}
                       {...register('payment_reference')}
                     />
+                    {duplicates?.reference && <ReusedReferenceLine reuse={duplicates.reference} />}
                     {supplierHasGiro && (
                       <p className="text-xs text-muted-foreground">{t('ocr_payment_file_caption')}</p>
                     )}
                   </div>
                 </>
               )}
+              <div className="space-y-2">
+                <Label htmlFor="si-faktura-total" className="text-xs font-normal text-muted-foreground">
+                  {t('invoice_total_label')}
+                </Label>
+                <Input
+                  id="si-faktura-total"
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  placeholder="0,00"
+                  className={cn('h-9 text-right tabular-nums', settledFields.has('faktura_total') && 'prefill-settle')}
+                  value={fakturaTotalStr}
+                  onChange={(e) => setFakturaTotalStr(e.target.value)}
+                  onBlur={() => {
+                    const parsed = parseAmountInput(fakturaTotalStr)
+                    if (parsed != null) setFakturaTotalStr(formatAmount(parsed))
+                  }}
+                />
+              </div>
+              {fakturaVatVisible && (
+                <div className="space-y-2">
+                  <Label htmlFor="si-faktura-vat" className="text-xs font-normal text-muted-foreground">
+                    {t('invoice_vat_label')}
+                  </Label>
+                  <Input
+                    id="si-faktura-vat"
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="0,00"
+                    className={cn('h-9 text-right tabular-nums', settledFields.has('faktura_vat') && 'prefill-settle')}
+                    value={fakturaVatStr}
+                    onChange={(e) => setFakturaVatStr(e.target.value)}
+                    onBlur={() => {
+                      const parsed = parseAmountInput(fakturaVatStr)
+                      if (parsed != null) setFakturaVatStr(formatAmount(parsed))
+                    }}
+                  />
+                </div>
+              )}
             </div>
+
+            {/* Total-first cross-check (client-only, never sent): quiet until
+                the kontering has a row to compare with. */}
+            {fields.length > 0 && (crosscheckDiff != null || vatCrosscheckDiff != null) && (
+              <div className="mt-3 space-y-1 text-right text-xs">
+                {crosscheckDiff != null && (
+                  <p className={crosscheckMatches ? 'text-success' : 'text-destructive'}>
+                    {!crosscheckMatches
+                      ? t('crosscheck_diff', { diff: signedAmount(crosscheckDiff) })
+                      : figures.rounding.applies
+                        ? t('crosscheck_match_rounded', { amount: signedAmount(figures.rounding.roundingDelta) })
+                        : t('crosscheck_match')}
+                  </p>
+                )}
+                {vatCrosscheckDiff != null && !vatCrosscheckMatches && (
+                  <p className="text-destructive">
+                    {t('crosscheck_vat_diff', { diff: signedAmount(vatCrosscheckDiff) })}
+                  </p>
+                )}
+                {/* Less moms than the rows carry is often a limited deduction
+                    typed into the invoice's Moms field (crm#1617): point at
+                    the row control that books it. */}
+                {vatCrosscheckDiff != null && !vatCrosscheckMatches && vatCrosscheckDiff < 0 && totalNonDeductibleVat === 0 && (
+                  <p className="text-muted-foreground">{t('crosscheck_vat_limited_hint')}</p>
+                )}
+              </div>
+            )}
 
             {showNoPeriodWarning && (
               <div
                 role="alert"
-                className="mt-4 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
+                className="bg-destructive/8 mt-4 flex items-start gap-3 rounded-lg p-3"
               >
-                <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                <ExclamationCircleIcon className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
                 <div className="flex-1 text-sm text-destructive">
-                  <p className="font-medium">{t('no_period_warning', { date: watchedInvoiceDate })}</p>
+                  <p className="font-medium">{t('no_period_warning', { date: bookedDateHere })}</p>
                   <p className="mt-0.5">{t('no_period_help')}</p>
                 </div>
               </div>
+            )}
+            {bookedDateFiledVat && (
+              <p className="mt-4 text-xs text-muted-foreground">
+                {t('booked_date_filed_vat', {
+                  booked: formatDate(bookedDateHere),
+                  period: bookedDateFiledVat.tax_period,
+                  date: formatDate(bookedDateFiledVat.filed_on),
+                })}
+              </p>
             )}
           </section>
 
@@ -1913,7 +2414,6 @@ export default function NewSupplierInvoiceForm({
           <section className="py-6">
             <SectionLabel>
               {t('section_accounting')}
-              <RequiredMark />
               {fields.length > 0 && (
                 <span className="ml-2 normal-case tracking-normal">
                   {t('rows_count', { count: fields.length })}
@@ -1921,9 +2421,22 @@ export default function NewSupplierInvoiceForm({
               )}
             </SectionLabel>
 
+            {/* The invoice's own lines beside the rows the reading opened
+                with: one quiet choice, gone once the person has changed a row. */}
+            {readingRowsChoice && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                {t(readingRowsChoice.split ? 'reading_rows_split_line' : 'reading_rows_combined_line', {
+                  count: readingRowsChoice.lineCount,
+                })}{' '}
+                <button type="button" className={QUIET_LINK_CLASS} onClick={toggleReadingRows}>
+                  {t(readingRowsChoice.split ? 'reading_rows_combine' : 'reading_rows_split')}
+                </button>
+              </p>
+            )}
+
             {templateAccountNote &&
               (watchedItems ?? []).some((r) => r.account_number === templateAccountNote.account) && (
-                <p className="mb-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+                <p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
                   {t('account_from_history', {
                     account: templateAccountNote.account,
@@ -1936,9 +2449,9 @@ export default function NewSupplierInvoiceForm({
             {rcAccountWarningRows.length > 0 && (
               <div
                 role="status"
-                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+                className="mb-3 flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised"
               >
-                <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-sm text-muted-foreground">
                   {t('rc_account_warning', {
                     count: rcAccountWarningRows.length,
@@ -1954,9 +2467,9 @@ export default function NewSupplierInvoiceForm({
             {foreignZeroVatRows.length > 0 && (
               <div
                 role="status"
-                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+                className="mb-3 flex items-start gap-2 rounded-lg p-3 bg-control shadow-raised"
               >
-                <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-sm text-muted-foreground">
                   {t('foreign_zero_vat_warning', {
                     count: foreignZeroVatRows.length,
@@ -1968,8 +2481,8 @@ export default function NewSupplierInvoiceForm({
 
             <div className="overflow-x-auto">
               <table className="w-full min-w-[560px] border-collapse text-[13px]">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                  <tr className="border-b border-border text-left">
+                <thead className="[&_th]:font-medium [&_th]:text-xs [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b-hairline text-left">
                     <th className="w-28 pb-2 pr-2">{t('col_account')}</th>
                     <th className="pb-2 pr-2">{t('col_description')}</th>
                     <th className="w-28 pb-2 pr-2 text-right">
@@ -1996,9 +2509,10 @@ export default function NewSupplierInvoiceForm({
                           'group align-middle',
                           (canUseAccrual && isAccrualOpen(index)) ||
                             (dimensionsEnabled && isDimOpen(index)) ||
-                            slpRowVisible(index)
+                            slpRowVisible(index) ||
+                            isLimitedDeductionOpen(index)
                             ? 'border-0'
-                            : 'border-b border-border',
+                            : 'border-b-hairline',
                           settledFields.has('items') && 'prefill-settle',
                         )}
                       >
@@ -2054,16 +2568,27 @@ export default function NewSupplierInvoiceForm({
                         {vatColsVisible && (
                           <>
                             <td className="py-1 pr-2">
+                              {/* One Controller per field, each with its own key:
+                                  a Controller whose name changes hands the new
+                                  field the value the cell was first shown with. */}
                               {watchedReverseCharge ? (
                                 <Controller
+                                  key="reverse_charge_rate"
                                   name={`items.${index}.reverse_charge_rate`}
                                   control={control}
                                   render={({ field: f }) => (
-                                    <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                                    <RcRateSelect
+                                      value={reverseChargeRateOf({
+                                        vat_rate: watchedItems?.[index]?.vat_rate,
+                                        reverse_charge_rate: f.value,
+                                      })}
+                                      onChange={f.onChange}
+                                    />
                                   )}
                                 />
                               ) : (
                                 <Controller
+                                  key="vat_rate"
                                   name={`items.${index}.vat_rate`}
                                   control={control}
                                   render={({ field: f }) => (
@@ -2073,7 +2598,7 @@ export default function NewSupplierInvoiceForm({
                               )}
                             </td>
                             <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
-                              {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                              {formatAmount(roundOre((itemTotals[index]?.vatAmount ?? 0) + (nonDeductibleVat[index] ?? 0)))}
                             </td>
                           </>
                         )}
@@ -2088,10 +2613,27 @@ export default function NewSupplierInvoiceForm({
                                 title={t('row_dimensions_title')}
                                 className={ROW_ICON_BTN_CLASS}
                               >
-                                <Tags
+                                <HashtagIcon
                                   className={cn(
                                     'h-3.5 w-3.5',
                                     isDimOpen(index) ? 'text-foreground' : undefined,
+                                  )}
+                                />
+                              </button>
+                            )}
+                            {limitedDeductionAvailable(index) && (
+                              <button
+                                type="button"
+                                onClick={() => toggleLimitedDeduction(index)}
+                                aria-label={t('row_deductible_vat_aria', { index: index + 1 })}
+                                aria-pressed={isLimitedDeductionOpen(index)}
+                                title={t('row_deductible_vat_title')}
+                                className={ROW_ICON_BTN_CLASS}
+                              >
+                                <PercentBadgeIcon
+                                  className={cn(
+                                    'h-4 w-4',
+                                    isLimitedDeductionOpen(index) ? 'text-foreground' : undefined,
                                   )}
                                 />
                               </button>
@@ -2105,7 +2647,7 @@ export default function NewSupplierInvoiceForm({
                                 title={ta('row_toggle')}
                                 className={ROW_ICON_BTN_CLASS}
                               >
-                                <CalendarClock
+                                <CalendarDaysIcon
                                   className={cn(
                                     'h-3.5 w-3.5',
                                     isAccrualOpen(index) ? 'text-foreground' : undefined,
@@ -2123,29 +2665,36 @@ export default function NewSupplierInvoiceForm({
                               })}
                               className={cn(ROW_ICON_BTN_CLASS, 'hover:text-destructive')}
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              <TrashIcon className="h-3.5 w-3.5" />
                             </button>
                           </span>
                         </td>
                       </tr>
                       {canUseAccrual && isAccrualOpen(index) && (
-                        <tr className={cn(dimensionsEnabled && isDimOpen(index) ? 'border-0' : 'border-b border-border')}>
+                        <tr className={cn((dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderAccrualPanel(index, `accrual-${index}`)}
                           </td>
                         </tr>
                       )}
                       {dimensionsEnabled && isDimOpen(index) && (
-                        <tr className={cn(slpRowVisible(index) ? 'border-0' : 'border-b border-border')}>
+                        <tr className={cn(slpRowVisible(index) || isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderDimensionsPanel(index)}
                           </td>
                         </tr>
                       )}
                       {slpRowVisible(index) && (
-                        <tr className="border-b border-border">
+                        <tr className={cn(isLimitedDeductionOpen(index) ? 'border-0' : 'border-b-hairline')}>
                           <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                             {renderSlpPanel(index)}
+                          </td>
+                        </tr>
+                      )}
+                      {isLimitedDeductionOpen(index) && (
+                        <tr className="border-b-hairline">
+                          <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
+                            {renderLimitedDeductionPanel(index)}
                           </td>
                         </tr>
                       )}
@@ -2170,18 +2719,18 @@ export default function NewSupplierInvoiceForm({
                         }}
                       />
                     </td>
-                    <td className="py-2 pr-2 italic text-muted-foreground/50">
+                    <td className="py-2 pr-2 italic text-muted-foreground">
                       {t('ghost_description')}
                     </td>
-                    <td className="py-2 pr-2 text-right italic tabular-nums text-muted-foreground/50">
+                    <td className="py-2 pr-2 text-right italic tabular-nums text-muted-foreground">
                       0
                     </td>
                     {vatColsVisible && (
                       <>
-                        <td className="py-2 pr-2 italic tabular-nums text-muted-foreground/50">
+                        <td className="py-2 pr-2 italic tabular-nums text-muted-foreground">
                           25 %
                         </td>
-                        <td className="py-2 pr-2 text-right italic text-muted-foreground/50">-</td>
+                        <td className="py-2 pr-2 text-right italic text-muted-foreground">-</td>
                       </>
                     )}
                     <td></td>
@@ -2206,9 +2755,14 @@ export default function NewSupplierInvoiceForm({
                 {forvalOpen ? `${t('forval_toggle_close')} ▴` : `${t('forval_toggle_open')} ▾`}
               </button>
             </div>
+            {/* Goods or services stays in plain view for an EU supplier:
+                behind Ändra förval it was missed (crm#1323). */}
+            {asksReverseChargeKind && !forvalOpen && (
+              <div className="mt-4 border-t-hairline">{reverseChargeKindRow}</div>
+            )}
             {forvalOpen && (
-              <div className="mt-4 border-t border-border">
-                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+              <div className="mt-4 border-t-hairline">
+                <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                   <label htmlFor="reverse_charge" className="cursor-pointer">
                     {t('reverse_charge_label')}
                     <span className="block text-xs text-muted-foreground">
@@ -2219,17 +2773,23 @@ export default function NewSupplierInvoiceForm({
                     name="reverse_charge"
                     control={control}
                     render={({ field }) => (
-                      <Switch id="reverse_charge" checked={field.value} onCheckedChange={field.onChange} />
+                      <Switch
+                        id="reverse_charge"
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={selfBilled}
+                      />
                     )}
                   />
                 </div>
-                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                {asksReverseChargeKind && reverseChargeKindRow}
+                <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                   <span>{t('currency_label')}</span>
                   <Controller
                     name="currency"
                     control={control}
                     render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select value={field.value} onValueChange={field.onChange} disabled={selfBilled}>
                         <SelectTrigger className="h-8 w-28">
                           <SelectValue />
                         </SelectTrigger>
@@ -2246,7 +2806,7 @@ export default function NewSupplierInvoiceForm({
                   />
                 </div>
                 {watchedCurrency !== 'SEK' && (
-                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                     <span>
                       {t('exchange_rate_label')}{' '}
                       <span className="text-muted-foreground">{t('exchange_rate_to_sek')}</span>
@@ -2264,7 +2824,7 @@ export default function NewSupplierInvoiceForm({
                   </div>
                 )}
                 {(watchedCurrency || 'SEK') === 'SEK' && (
-                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                     <label htmlFor="ore-rounding" className="cursor-pointer">
                       {t('ore_rounding_label')}
                       <span className="block text-xs text-muted-foreground">{t('ore_rounding_help')}</span>
@@ -2277,7 +2837,7 @@ export default function NewSupplierInvoiceForm({
                     />
                   </div>
                 )}
-                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                <div className="flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]">
                   <Label htmlFor="si-delivery-date" className="text-[13px] font-normal">
                     {t('delivery_date_label')}
                   </Label>
@@ -2288,8 +2848,13 @@ export default function NewSupplierInvoiceForm({
                     {...register('delivery_date')}
                   />
                 </div>
+                {registrationDateCapped && (
+                  <p className="border-b-hairline py-2 text-xs text-muted-foreground">
+                    {t('eu_goods_registration_date_hint', { date: formatDate(registrationDateHere) })}
+                  </p>
+                )}
                 {dimensionsEnabled && (
-                  <div className="border-b border-border py-3 text-[13px]">
+                  <div className="border-b-hairline py-3 text-[13px]">
                     <span>{t('row_dimensions_title')}</span>
                     <div className="mt-2 max-w-md">
                       <LineDimensionFields
@@ -2298,6 +2863,9 @@ export default function NewSupplierInvoiceForm({
                         inputClassName="h-8"
                       />
                     </div>
+                    {defaultDimsFromSupplier && (
+                      <p className="mt-1.5 text-xs text-muted-foreground">{t('default_dims_from_supplier')}</p>
+                    )}
                   </div>
                 )}
                 <div className="py-3 text-[13px]">
@@ -2320,103 +2888,44 @@ export default function NewSupplierInvoiceForm({
             <SectionLabel>{t('section_summary')}</SectionLabel>
             {vatColsVisible && (
               <>
-                <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
                   <span className="text-muted-foreground">{t('net_excl_vat')}</span>
                   <span className="tabular-nums">{formatCurrency(subtotal, watchedCurrency)}</span>
                 </div>
-                <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
                   <span className="text-muted-foreground">
                     {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
                   </span>
                   <span className="tabular-nums">{formatCurrency(totalVat, watchedCurrency)}</span>
                 </div>
+                {totalNonDeductibleVat !== 0 && (
+                  <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
+                    <span className="text-muted-foreground">{t('non_deductible_vat_label')}</span>
+                    <span className="tabular-nums">{formatCurrency(totalNonDeductibleVat, watchedCurrency)}</span>
+                  </div>
+                )}
               </>
             )}
             {figures.rounding.applies && (
-              <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+              <div className="flex items-baseline justify-between border-b-hairline py-2 text-[13px]">
                 <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
-                <span className="tabular-nums">
-                  {formatCurrency(figures.rounding.roundingDelta, watchedCurrency)}
-                </span>
+                <span className="tabular-nums">{signedAmount(figures.rounding.roundingDelta)}</span>
               </div>
             )}
             <div className="flex items-baseline justify-between pt-4">
-              <span className="font-display text-lg">{t('total_payable_label')}</span>
+              <span className="text-[15px] font-medium text-strong">{t('total_payable_label')}</span>
               <span className="font-display text-xl tabular-nums">
                 {formatCurrency(figures.toPay, watchedCurrency)}
               </span>
             </div>
 
-            {/* Total cross-check (client-only, never sent) */}
-            <div className="mt-4 flex items-center justify-between gap-4">
-              <Label htmlFor="si-faktura-total" className="text-[13px] font-normal text-muted-foreground">
-                {t('crosscheck_label')}{' '}
-                <span className="text-muted-foreground">({t('crosscheck_optional')})</span>
-              </Label>
-              <Input
-                id="si-faktura-total"
-                type="text"
-                inputMode="decimal"
-                autoComplete="off"
-                placeholder="0,00"
-                className={cn(
-                  'h-8 w-32 text-right tabular-nums',
-                  settledFields.has('faktura_total') && 'prefill-settle',
-                )}
-                value={fakturaTotalStr}
-                onChange={(e) => setFakturaTotalStr(e.target.value)}
-                onBlur={() => {
-                  const parsed = parseFlexibleNumber(fakturaTotalStr)
-                  if (parsed != null) setFakturaTotalStr(formatAmount(parsed))
-                }}
-              />
-            </div>
-            {crosscheckDiff != null && (
-              <p
-                className={cn(
-                  'mt-2 text-right text-xs',
-                  crosscheckMatches ? 'text-success' : 'text-destructive',
-                )}
-              >
-                {crosscheckMatches
-                  ? t('crosscheck_match')
-                  : t('crosscheck_diff', {
-                      diff:
-                        (crosscheckDiff > 0 ? '+' : '') +
-                        formatCurrency(crosscheckDiff, watchedCurrency),
-                    })}
-              </p>
-            )}
-
-            {/* AI totals comparison: only when extracted */}
-            {extractedData?.totals && (extractedData.totals.subtotal != null || extractedData.totals.total != null) && (
-              <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                <span className="text-muted-foreground">{t('ai_totals_label')}</span>
-                {extractedData.totals.subtotal != null && (
-                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
-                    {t('ai_net', { amount: formatAmount(extractedData.totals.subtotal) })}
-                  </span>
-                )}
-                {extractedData.totals.vatAmount != null && (
-                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
-                    {t('ai_vat', { amount: formatAmount(extractedData.totals.vatAmount) })}
-                  </span>
-                )}
-                {extractedData.totals.total != null && (
-                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
-                    {t('ai_total', { amount: formatAmount(extractedData.totals.total) })}
-                  </span>
-                )}
-              </div>
-            )}
-
             {/* The page's single ochre line: what stands between the user and
-                a registered invoice, sage once nothing does. */}
-            <p
-              aria-live="polite"
-              className={cn('pt-6 text-[12.5px]', nextStep ? 'text-attn' : 'text-success')}
-            >
-              {nextStep ? (
+                a registered invoice. Gone once nothing does: the Förval line
+                names the booking moment and the confirm dialog the outcome
+                (convention 10). The live region stays mounted so the change
+                is announced. */}
+            <p aria-live="polite" className={cn('text-xs text-attn', nextStep && 'pt-6')}>
+              {nextStep && (
                 <>
                   {t('next_step_prefix')}
                   <button
@@ -2428,8 +2937,6 @@ export default function NewSupplierInvoiceForm({
                   </button>
                   .
                 </>
-              ) : (
-                readyLineText
               )}
             </p>
           </section>
@@ -2439,55 +2946,49 @@ export default function NewSupplierInvoiceForm({
             mode, to the page panel scroll on the standalone page) ── */}
         <div
           className={cn(
-            'sticky bottom-0 z-10 mt-6 border-t border-border bg-background',
+            'sticky bottom-0 z-10 mt-6 border-t-hairline bg-background',
             bare && '-mx-6 -mb-6 rounded-b-xl px-6',
           )}
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
-            <div className="whitespace-nowrap text-[13px] text-muted-foreground">
-              {t('total_label')}
-              <strong className="ml-2 text-[15px] font-semibold tabular-nums text-foreground">
-                {formatCurrency(figures.toPay, watchedCurrency)}
-              </strong>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-3">
-              <button
-                type="button"
-                className={cn(QUIET_LINK_CLASS, 'disabled:opacity-50')}
-                onClick={handleCancel}
-                disabled={isSubmitting || documentUploadInProgress}
-              >
-                {t('cancel')}
-              </button>
-              {/* Always enabled pre-click for writable users: clicking with
-                  something missing routes focus to the first missing field
-                  (submit-time hard blocks stay in onSubmit). Viewers keep the
-                  disabled + lock treatment: authorization, not validation. */}
-              <Button
-                type="submit"
-                disabled={!canWrite}
-                loading={isSubmitting}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {isSubmitting ? (
-                  t('registering')
-                ) : !canWrite ? (
-                  <>
-                    <Lock className="mr-2 h-4 w-4" />
-                    {primaryLabel}
-                  </>
-                ) : (
-                  primaryLabel
-                )}
-              </Button>
-            </div>
+          {/* The total lives once, as the Summering headline above. */}
+          <div className="flex flex-wrap items-center justify-end gap-3 py-3">
+            <button
+              type="button"
+              className={cn(QUIET_LINK_CLASS, 'disabled:opacity-50')}
+              onClick={handleCancel}
+              disabled={isSubmitting || documentUploadInProgress}
+            >
+              {t('cancel')}
+            </button>
+            {/* Always enabled pre-click for writable users: clicking with
+                something missing routes focus to the first missing field
+                (submit-time hard blocks stay in onSubmit). Viewers keep the
+                disabled + lock treatment: authorization, not validation. */}
+            <Button
+              type="submit"
+              disabled={!canWrite}
+              loading={isSubmitting}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isSubmitting ? (
+                t('registering')
+              ) : !canWrite ? (
+                <>
+                  <LockClosedIcon className="h-4 w-4" />
+                  {primaryLabel}
+                </>
+              ) : (
+                primaryLabel
+              )}
+            </Button>
           </div>
         </div>
       </form>
 
-      {/* Review dialog (AB only: also shown after a bank transaction is picked
-          in the register-and-match flow). */}
-      {pendingData && !isEF && showReview && (() => {
+      {/* Review dialog (AB: also shown after a bank transaction is picked in
+          the register-and-match flow. EF only when a reused payment reference
+          is acknowledged here). */}
+      {pendingData && showReview && (() => {
         const reviewSupplier = suppliers.find((s) => s.id === pendingData.supplier_id)
         if (!reviewSupplier) return null
         return (
@@ -2497,14 +2998,20 @@ export default function NewSupplierInvoiceForm({
             onConfirm={handleConfirm}
             isSubmitting={isSubmitting}
             title={t('review_dialog_title')}
+            // One attention sentence: a reference to acknowledge takes its
+            // place, right above the button that acknowledges it.
             warningText={
-              bookingMoment === 'issue'
+              reuseToAcknowledge ? (
+                <span data-ph-mask="">
+                  <ReusedReferenceSentence reuse={reuseToAcknowledge} />
+                </span>
+              ) : effectiveBookingMoment === 'issue'
                 ? t('review_dialog_warning')
-                : bookingMoment === 'payment'
+                : effectiveBookingMoment === 'payment'
                   ? t('review_dialog_warning_cash')
                   : t('review_dialog_warning_deferred')
             }
-            confirmLabel={t('review_dialog_confirm')}
+            confirmLabel={reuseToAcknowledge ? t('review_dialog_confirm_anyway') : t('review_dialog_confirm')}
           >
             <SupplierInvoiceReviewContent
               supplier={reviewSupplier}
@@ -2515,10 +3022,18 @@ export default function NewSupplierInvoiceForm({
               currency={pendingData.currency}
               exchangeRate={pendingData.exchange_rate || undefined}
               reverseCharge={pendingData.reverse_charge}
+              reverseChargeKind={pendingData.reverse_charge && euSupplier ? pendingData.reverse_charge_kind || undefined : undefined}
               paymentReference={pendingData.payment_reference || undefined}
-              items={pendingData.items}
+              items={bookLimitedDeduction(pendingData.items, limitedDeductionApplies(pendingData)).items}
               oreRounding={oreRounding}
-              bookingMoment={bookingMoment}
+              bookingMoment={effectiveBookingMoment}
+              chartVatTreatments={chartVatTreatmentsOf(accounts)}
+              defaultDimensions={defaultDims}
+              statedVat={statedVatFromInvoiceField(
+                bookLimitedDeduction(pendingData.items, limitedDeductionApplies(pendingData)).items,
+                enteredFakturaVat,
+                pendingData.reverse_charge,
+              )}
             />
           </ConfirmationDialog>
         )
@@ -2528,10 +3043,7 @@ export default function NewSupplierInvoiceForm({
           target is the payable including the invoice rounding item. */}
       <BankTransactionPicker
         open={showBankPicker}
-        onOpenChange={(open) => {
-          setShowBankPicker(open)
-          if (!open) setPendingTransactionId(null)
-        }}
+        onOpenChange={setShowBankPicker}
         targetAmount={figures.toPay}
         targetCurrency={watchedCurrency}
         onPick={handlePickTransaction}
@@ -2539,13 +3051,13 @@ export default function NewSupplierInvoiceForm({
 
       {/* New supplier dialog */}
       <Dialog open={showNewSupplier} onOpenChange={setShowNewSupplier}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent size="confirm">
           <DialogHeader>
             <DialogTitle>{t('new_supplier_dialog_title')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>{t('new_supplier_name_label')}<RequiredMark /></Label>
+              <Label>{t('new_supplier_name_label')}</Label>
               <Input
                 placeholder={t('new_supplier_name_placeholder')}
                 value={newSupplier.name}
@@ -2641,11 +3153,15 @@ export default function NewSupplierInvoiceForm({
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-destructive" />
+              <ExclamationCircleIcon className="h-5 w-5 text-destructive" />
               {t('duplicate_dialog_title')}
             </DialogTitle>
             {/* data-ph-mask: the conflict message carries the invoice number */}
-            <DialogDescription data-ph-mask="">{conflict?.message}</DialogDescription>
+            <DialogDescription data-ph-mask="">
+              {duplicates?.number?.voucher
+                ? duplicateNumberSentence(t, (watchedInvoiceNumber || '').trim(), duplicates.number)
+                : conflict?.message}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
             {conflict?.existing && (

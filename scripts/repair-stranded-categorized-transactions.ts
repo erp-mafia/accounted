@@ -38,7 +38,7 @@
  *                        normally left to cleanup_sandbox_user
  *   --verbose            print every row in the dry run
  *
- * Never run by a loop: the founder decides per company (issue #2057).
+ * Never run by a loop: an operator decides per company (issue #2057).
  */
 
 import { config } from 'dotenv'

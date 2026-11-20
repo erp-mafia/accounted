@@ -3,7 +3,7 @@
  *
  * While Google's restricted-scope review is open, every consent on the hosted
  * app shows "Google hasn't verified this app", and prospects bounce off it
- * (Lumaro AB, 2026-09-05). The connect button is therefore withheld on hosted
+ * (observed 2026-09-05). The connect button is therefore withheld on hosted
  * unless the company is on `GOOGLE_MAIL_CONNECT_COMPANY_IDS`:
  *
  *   unset or empty   nobody can start a consent (the default while in review)

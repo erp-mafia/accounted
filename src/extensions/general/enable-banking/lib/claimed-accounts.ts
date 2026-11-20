@@ -37,6 +37,35 @@ export function partitionByClaim<T extends Pick<StoredAccount, 'claimed_by_compa
 }
 
 /**
+ * A connection's accounts split the one way every surface that lists them
+ * uses: the account picker, the connection's details in settings, and the
+ * check below for a connection worth resuming (crm#1097). The details used to
+ * split by claim alone, so a card account that only mirrors the main account
+ * showed up there as an account that "Synkas ej", with a balance of its own
+ * and a place in the count, while the picker never offers it: a person
+ * reading the details went looking for a way to switch it on or remove it,
+ * and there was none to find.
+ *
+ * - `own`: this company's accounts. The picker's main list, the details'
+ *   rows and their "x av y konton synkas".
+ * - `claimedElsewhere`: booked by another of the user's companies
+ *   (partitionByClaim). One line in the details, a disclosure in the picker.
+ * - `mirrorCards`: card accounts that mirror the main account, on or off
+ *   (lib/bank-sync/mirror-card-account.ts). Never a choice and never a row:
+ *   one line on both surfaces (describeMirrorCards). Taken out before the
+ *   claim split, so no claim flag can put one behind the disclosure.
+ */
+export function partitionAccounts<
+  T extends Pick<StoredAccount, 'claimed_by_company_id' | 'enabled' | 'name' | 'iban' | 'bban'>,
+>(accounts: readonly T[]): { own: T[]; claimedElsewhere: T[]; mirrorCards: T[] } {
+  const mirrorCards = accounts.filter((account) => isMirrorCardAccount(account))
+  const { own, claimedElsewhere } = partitionByClaim(
+    accounts.filter((account) => !isMirrorCardAccount(account)),
+  )
+  return { own, claimedElsewhere, mirrorCards }
+}
+
+/**
  * Whether a consent leaves this company anything to pick: one account in the
  * picker's main list, checked or not. False when every account is booked by
  * another company (a login made for the wrong company), when the consent
@@ -53,7 +82,22 @@ export function hasSelectableAccounts(
     | undefined,
 ): boolean {
   if (!Array.isArray(accounts)) return false
-  return partitionByClaim(accounts).own.some((account) => !isMirrorCardAccount(account))
+  return partitionAccounts(accounts).own.length > 0
+}
+
+/**
+ * One Swedish line for the card accounts partitionAccounts sets aside, shared
+ * by the picker and the connection's details so the two say the same thing.
+ * "hämtas inte" holds in every state, for a card an old row still has
+ * switched on too: no sync fetches one (isSyncedAccount), and the selection
+ * save turns its flag off. Empty string for an empty list, like
+ * describeClaimedElsewhere.
+ */
+export function describeMirrorCards(cards: readonly Pick<StoredAccount, 'name'>[]): string {
+  if (cards.length === 0) return ''
+  const subject = cards.length === 1 ? 'Kortkontot' : 'Kortkontona'
+  const names = cards.map((card) => card.name).join(', ')
+  return `${subject} ${names} hämtas inte: kortköpen finns redan på huvudkontot.`
 }
 
 /**

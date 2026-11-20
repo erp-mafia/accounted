@@ -10,8 +10,6 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { AlertTriangle } from 'lucide-react'
-import { cn } from '@/lib/utils'
 
 interface DestructiveConfirmDialogProps {
   open: boolean
@@ -54,19 +52,12 @@ export function DestructiveConfirmDialog({
         onOpenChange(v)
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      {/* Stil v3 confirm: 440px, the title is the question, one sentence
+          below it, Avbryt and the one action. No icon tile: the red action
+          and the question carry it. */}
+      <DialogContent size="confirm">
         <DialogHeader>
           <div className="flex items-start gap-4">
-            <div
-              className={cn(
-                'flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full',
-                variant === 'destructive'
-                  ? 'bg-destructive/10 text-destructive'
-                  : 'bg-muted text-attn'
-              )}
-            >
-              <AlertTriangle className="h-5 w-5" />
-            </div>
             <div className="space-y-1">
               {/* data-ph-mask: confirm dialogs describe the object being
                   acted on (convention 10), so title and description are user
@@ -75,15 +66,15 @@ export function DestructiveConfirmDialog({
               {/* pre-line so callers can pass newline-separated paragraphs
                   (e.g. the salary unapprove confirm assembles its copy
                   dynamically); single-line descriptions render unchanged. */}
-              <DialogDescription data-ph-mask="" className="whitespace-pre-line">
+              <DialogDescription data-ph-mask="" className="whitespace-pre-line text-[13px] leading-5">
                 {description}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
-        <DialogFooter className="gap-2 sm:gap-0">
+        <DialogFooter>
           <Button
-            variant="outline"
+            variant="ghost"
             onClick={() => onOpenChange(false)}
             disabled={isLoading}
           >

@@ -20,7 +20,7 @@ import { UUID_RE } from '@/lib/invariants/uuid'
 
 /**
  * Whether the owner-only dormancy rule is enforced at all in this
- * environment. OFF everywhere by default (founder decision 2026-09-10, issue
+ * environment. OFF everywhere by default (product decision 2026-09-10, issue
  * #2494): a trial that ends must change nothing for the people in the
  * company, and the grace countdown read as "your account will be paused or
  * deleted". Nobody is frozen out, no seat banner or reminder mail exists,

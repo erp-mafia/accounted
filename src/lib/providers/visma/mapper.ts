@@ -15,8 +15,9 @@ import {
   multiplyIfBothPresent,
 } from '../amounts';
 import { parseSourceVoucherRef } from '../source-voucher';
-import { creditNoteTypeCode } from '../dto';
+import { documentPayment, documentState } from '../document-state';
 import { roundOre } from '@/lib/money';
+import { vismaDeductionKind, vismaHouseholdDeduction, vismaHouseholdWork } from './housework';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
@@ -52,11 +53,13 @@ const CUSTOMER_PS_OVERDUE = 2;
 // NOT verifiably left the account, so they must stay open payables.
 const SUPPLIER_PS_SETTLED = new Set([6, 9]);
 const SUPPLIER_PS_OVERDUE = new Set([4, 7]);
+/** The values that say money moved on the invoice, in full or in part. */
+const SUPPLIER_PS_PAYMENT = new Set([4, 5, ...SUPPLIER_PS_SETTLED]);
 
 /**
  * RemainingAmount is nullable in the eAccounting schema, and in practice the
  * /supplierinvoices LIST payload omits it entirely: reading a missing value as
- * 0 made every migrated supplier invoice look fully settled (ElvaSmultron,
+ * 0 made every migrated supplier invoice look fully settled (one migration:
  * 290/290 imported as paid). Distinguish "0" from "absent" and let the caller
  * fall back to the PaymentStatus enum / TotalAmount instead.
  */
@@ -72,8 +75,8 @@ function readRemaining(raw: Record<string, unknown>): number | null {
  * The open balance the DTO reports. Two independent signals arrive: the
  * PaymentStatus enum and the remaining amount. With the enum present and
  * saying NOT settled, a present-but-zero RemainingAmount (or its
- * *InvoiceCurrency twin) is a payload artefact, not a settlement: company
- * 5208b894 (2026-09-10) imported all 53 of its unpaid supplier invoices as
+ * *InvoiceCurrency twin) is a payload artefact, not a settlement: one company
+ * (2026-09-10) imported all 53 of its unpaid supplier invoices as
  * paid because that zero was read as the balance. The open balance is then
  * the positive remaining amount when one is stated, otherwise the total;
  * never 0. Without the enum, or when it says settled, the amount keeps its
@@ -93,17 +96,14 @@ function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
   const remaining = readRemaining(raw);
   const total = raw['TotalAmount'] as number ?? 0;
   const ps = raw['PaymentStatus'] as number | undefined;
-  if (raw['IsCancelled'] === true) return 'cancelled';
-  // A credit invoice has a negative TotalAmount, so the `total > 0` paid check
-  // below can never match it: without this it fell all the way through to
-  // 'draft' and surfaced on the dashboard as an overdue unsent invoice.
-  if (raw['IsCreditInvoice'] === true) return 'credited';
   if (ps === CUSTOMER_PS_PAID) return 'paid';
   if (ps === CUSTOMER_PS_OVERDUE) return 'overdue';
   if (ps == null && remaining === 0 && total !== 0) return 'paid';
   if (raw['IsBooked'] === true) return 'booked';
-  if (raw['IsSent'] === true || raw['SendType'] != null) return 'sent';
-  return 'draft';
+  // Never 'draft': /customerinvoices lists issued invoices only, drafts live
+  // under /customerinvoicedrafts. A draft fallback imported issued, booked
+  // invoices as drafts, and Skicka then booked the sale a second time.
+  return 'sent';
 }
 
 /**
@@ -111,31 +111,52 @@ function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
  * (IsCancelled/IsBooked/IsSent): its lifecycle lives in `Status`
  * (0 = Draft, 1 = Normal, 2 = Deleted) plus the PaymentStatus enum.
  */
-function deriveSupplierInvoiceStatus(
-  raw: Record<string, unknown>,
-  paid: boolean,
-  isCreditNote: boolean,
-): InvoiceStatusCode {
-  const status = raw['Status'] as number | undefined;
-  if (status === 2) return 'cancelled';
-  if (isCreditNote) return 'credited';
+function deriveSupplierInvoiceStatus(raw: Record<string, unknown>, paid: boolean): InvoiceStatusCode {
   if (paid) return 'paid';
-  if (status === 0) return 'draft';
   const ps = raw['PaymentStatus'] as number | undefined;
   if (ps != null && SUPPLIER_PS_OVERDUE.has(ps)) return 'overdue';
   return 'booked';
 }
 
-function buildParty(name: string, orgNumber?: string, raw?: Record<string, unknown>): PartyDto {
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Where a record keeps its postal address. A customer (CustomerApi) names it
+ * Invoice*, country included; a supplier (SupplierApi) names it plainly. Each
+ * record is read under its own names: the customer's country was read as the
+ * supplier's CountryCode, and no Visma customer had one (crm#1436).
+ */
+interface AddressFields {
+  street: string;
+  additionalStreet: string;
+  city: string;
+  postalZone: string;
+  country: string;
+}
+
+const CUSTOMER_ADDRESS: AddressFields = {
+  street: 'InvoiceAddress1', additionalStreet: 'InvoiceAddress2', city: 'InvoiceCity',
+  postalZone: 'InvoicePostalCode', country: 'InvoiceCountryCode',
+};
+
+const SUPPLIER_ADDRESS: AddressFields = {
+  street: 'Address1', additionalStreet: 'Address2', city: 'City', postalZone: 'PostalCode', country: 'CountryCode',
+};
+
+/** A customer or supplier record as a party; an invoice names only the party's name. */
+function buildParty(name: string, orgNumber?: string, record?: { raw: Record<string, unknown>; address: AddressFields }): PartyDto {
+  const raw = record?.raw;
   return {
     name,
     identifications: orgNumber ? [{ id: orgNumber, schemeId: 'SE:ORGNR' }] : [],
-    postalAddress: raw ? {
-      streetName: (raw['InvoiceAddress1'] ?? raw['Address1']) as string | undefined,
-      additionalStreetName: (raw['InvoiceAddress2'] ?? raw['Address2']) as string | undefined,
-      cityName: (raw['InvoiceCity'] ?? raw['City']) as string | undefined,
-      postalZone: (raw['InvoicePostalCode'] ?? raw['PostalCode']) as string | undefined,
-      countryCode: raw['CountryCode'] as string | undefined,
+    postalAddress: record ? {
+      streetName: record.raw[record.address.street] as string | undefined,
+      additionalStreetName: record.raw[record.address.additionalStreet] as string | undefined,
+      cityName: record.raw[record.address.city] as string | undefined,
+      postalZone: record.raw[record.address.postalZone] as string | undefined,
+      countryCode: nonEmptyString(record.raw[record.address.country]),
     } : undefined,
     legalEntity: orgNumber ? {
       registrationName: name,
@@ -143,10 +164,30 @@ function buildParty(name: string, orgNumber?: string, raw?: Record<string, unkno
       companyIdSchemeId: 'SE:ORGNR',
     } : undefined,
     contact: {
-      email: (raw?.['EmailAddress'] ?? raw?.['Email']) as string | undefined,
-      telephone: (raw?.['Telephone'] ?? raw?.['Phone']) as string | undefined,
+      name: nonEmptyString(raw?.['ContactPersonName']),
+      email: raw?.['EmailAddress'] as string | undefined,
+      // The landline first, then the mobile: many records carry only one.
+      telephone: nonEmptyString(raw?.['Telephone']) ?? nonEmptyString(raw?.['MobilePhone']),
     },
   };
+}
+
+/**
+ * A customer's terms in days. Only Normal terms (type 0) are a number of days
+ * net; CurrentMonth counts from the month's end, and the others are paid on
+ * the spot, so they keep the default.
+ */
+function termsOfPaymentDays(terms: unknown): number | undefined {
+  if (!terms || typeof terms !== 'object') return undefined;
+  const { TermsOfPaymentTypeId: type, NumberOfDays: days } = terms as Record<string, unknown>;
+  return type === 0 && typeof days === 'number' && Number.isInteger(days) && days >= 0 && days <= 365 ? days : undefined;
+}
+
+/** The CC addresses a customer's invoice e-mails go to. */
+function emailAddresses(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const addresses = value.flatMap((item) => nonEmptyString(item) ?? []);
+  return addresses.length > 0 ? addresses : undefined;
 }
 
 export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
@@ -157,6 +198,18 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const paid = ps != null
     ? ps === CUSTOMER_PS_PAID
     : remaining === 0 && total !== 0;
+  // /customerinvoices lists issued invoices only: drafts live under
+  // /customerinvoicedrafts (see deriveInvoiceStatus).
+  const doc = documentState({
+    issued: true,
+    cancelled: raw['IsCancelled'] === true,
+    creditFlag: raw['IsCreditInvoice'] === true,
+    total,
+  });
+  // A kreditfaktura carries no deduction here: crediting a ROT, RUT or grön
+  // teknik invoice is outside what the migrated deduction step handles.
+  const isCredit = doc.invoiceTypeCode !== undefined;
+  const greenTechnology = !isCredit && vismaDeductionKind(raw) === 'gron_teknik';
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
@@ -178,6 +231,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
       taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
       accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
       articleNumber: row['ArticleNumber'] as string | undefined,
+      householdWork: isCredit ? undefined : vismaHouseholdWork(row, greenTechnology),
     };
   });
 
@@ -207,8 +261,8 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
-    invoiceTypeCode: raw['IsCreditInvoice'] === true ? '381' : undefined,
+    status: doc.status ?? deriveInvoiceStatus(raw),
+    invoiceTypeCode: doc.invoiceTypeCode,
     supplier: buildParty(''),
     customer: buildParty(
       (raw['InvoiceCustomerName'] ?? '') as string,
@@ -218,6 +272,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
+    householdDeduction: isCredit ? undefined : vismaHouseholdDeduction(raw),
     // eAccounting names the booking voucher on the invoice itself
     // (`VoucherNumber`, "A329"). Kept only when it parses cleanly.
     sourceVoucher: parseSourceVoucherRef(raw['VoucherNumber']) ?? undefined,
@@ -236,14 +291,28 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
   // LIST payload omits RemainingAmount, and reading that absence as 0 imported
   // every supplier invoice as fully paid. Fall back to RemainingAmount only
   // when the enum itself is missing.
-  const paid = ps != null
+  const statedPaid = ps != null
     ? SUPPLIER_PS_SETTLED.has(ps)
     : remaining === 0 && total !== 0;
+  // 381 for a supplier kreditfaktura: `IsCreditInvoice` is eAccounting's own
+  // flag; the negative total is the same backstop every supplier mapper has,
+  // for a payload that omits the flag. SupplierInvoiceApi names no credited
+  // invoice, so the credit note lands unpaired.
+  const doc = documentState({
+    issued: raw['Status'] !== 0,
+    paymentStated: ps != null && SUPPLIER_PS_PAYMENT.has(ps),
+    cancelled: raw['Status'] === 2,
+    creditFlag: raw['IsCreditInvoice'] === true,
+    total,
+  });
   // A partially paid invoice without a RemainingAmount cannot be represented
   // faithfully: report the full total as open (visible and correctable)
   // rather than inventing a split. A PRESENT zero beside an unpaid enum is
   // handled in openBalance.
-  const balance = openBalance(ps, paid, remaining, total);
+  const { paid, balance } = documentPayment(doc, total, {
+    paid: statedPaid,
+    balance: openBalance(ps, statedPaid, remaining, total),
+  });
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
@@ -285,21 +354,14 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     source: ps != null ? 'enum' : 'balance',
   };
 
-  // 381 for a supplier kreditfaktura: the one signal the importer reads
-  // (dto.ts). `IsCreditInvoice` is eAccounting's own flag; the negative total
-  // is the same backstop every supplier mapper has, for a payload that omits
-  // the flag. SupplierInvoiceApi names no credited invoice, so the credit
-  // note lands unpaired.
-  const invoiceTypeCode = creditNoteTypeCode(raw['IsCreditInvoice'] === true, total);
-
   return {
     id: String(raw['Id'] ?? ''),
     invoiceNumber: String(raw['InvoiceNumber'] ?? ''),
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveSupplierInvoiceStatus(raw, paid, invoiceTypeCode !== undefined),
-    invoiceTypeCode,
+    status: doc.status ?? deriveSupplierInvoiceStatus(raw, paid),
+    invoiceTypeCode: doc.invoiceTypeCode,
     supplier: buildParty((raw['SupplierName'] ?? '') as string),
     buyer: buildParty(''),
     lines,
@@ -320,9 +382,12 @@ export function mapVismaToCustomer(raw: Record<string, unknown>): CustomerDto {
     party: buildParty(
       (raw['Name'] as string) ?? '',
       raw['CorporateIdentityNumber'] as string | undefined,
-      raw,
+      { raw, address: CUSTOMER_ADDRESS },
     ),
+    invoiceEmailCcAddresses: emailAddresses(raw['EmailAddresses']),
     active: raw['IsActive'] !== false,
+    vatNumber: nonEmptyString(raw['VatNumber']),
+    defaultPaymentTermsDays: termsOfPaymentDays(raw['TermsOfPayment']),
     note: raw['Note'] as string | undefined,
     updatedAt: raw['ChangedUtc'] as string | undefined,
     _raw: raw,
@@ -336,12 +401,20 @@ export function mapVismaToSupplier(raw: Record<string, unknown>): SupplierDto {
     party: buildParty(
       (raw['Name'] as string) ?? '',
       raw['CorporateIdentityNumber'] as string | undefined,
-      raw,
+      { raw, address: SUPPLIER_ADDRESS },
     ),
     active: raw['IsActive'] !== false,
+    vatNumber: nonEmptyString(raw['VatNumber']),
     bankAccount: raw['BankAccountNumber'] as string | undefined,
-    bankGiro: raw['BankGiro'] as string | undefined,
-    plusGiro: raw['PlusGiro'] as string | undefined,
+    clearingNumber: nonEmptyString(raw['Clearing']),
+    // SupplierApi spells them BankgiroNumber and PlusgiroNumber; BankGiro and
+    // PlusGiro were read instead and found nothing (crm#1436).
+    bankGiro: nonEmptyString(raw['BankgiroNumber']),
+    plusGiro: nonEmptyString(raw['PlusgiroNumber']),
+    iban: nonEmptyString(raw['BankIban']),
+    bic: nonEmptyString(raw['BankBic']),
+    currencyCode: nonEmptyString(raw['CurrencyCode']),
+    note: raw['Note'] as string | undefined,
     updatedAt: raw['ModifiedUtc'] as string | undefined,
     _raw: raw,
   };

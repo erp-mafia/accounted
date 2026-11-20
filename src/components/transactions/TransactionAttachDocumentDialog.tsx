@@ -14,7 +14,13 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowUpRight, ArrowDownRight, FileText, Inbox, X } from 'lucide-react'
+import {
+  ArrowDownRightIcon,
+  ArrowUpRightIcon,
+  DocumentTextIcon,
+  InboxIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
@@ -120,19 +126,19 @@ export default function TransactionAttachDocumentDialog({
         onOpenChange(o)
       }}
     >
-      <DialogContent
-        ref={dropSurfaceRef}
-        className="sm:max-w-lg"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => e.preventDefault()}
-      >
+      <DialogContent size="form"
+ ref={dropSurfaceRef}
+ 
+ onDragOver={(e) => e.preventDefault()}
+ onDrop={(e) => e.preventDefault()}
+>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{t('description')}</DialogDescription>
         </DialogHeader>
 
         {/* Transaction summary: same block as TransactionBookingDialog */}
-        <div className="flex items-center gap-3 rounded-lg border p-3">
+        <div className="flex items-center gap-3 rounded-lg p-3 bg-control shadow-raised">
           <div
             className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${
               isIncome
@@ -141,9 +147,9 @@ export default function TransactionAttachDocumentDialog({
             }`}
           >
             {isIncome ? (
-              <ArrowUpRight className="h-4 w-4" />
+              <ArrowUpRightIcon className="h-4 w-4" />
             ) : (
-              <ArrowDownRight className="h-4 w-4" />
+              <ArrowDownRightIcon className="h-4 w-4" />
             )}
           </div>
           <div className="flex-1 min-w-0">
@@ -165,7 +171,6 @@ export default function TransactionAttachDocumentDialog({
                 <Button
                   type="button"
                   variant="link"
-                  size="sm"
                   className="h-auto p-0 text-xs"
                   disabled={isAttaching}
                   onClick={() => onDetach(transaction)}
@@ -180,9 +185,12 @@ export default function TransactionAttachDocumentDialog({
         <div className="space-y-2">
           <DocumentUploadZone
             files={uploadedFiles}
-            onFilesChange={(files) => {
-              setUploadedFiles(files)
-              if (files.length > 0) setPickedDoc(null)
+            onFilesChange={(update) => {
+              // One document: a file in the list replaces a pick. The list
+              // itself takes the update as it is when it lands
+              // (DocumentUploadZone).
+              if (update(uploadedFiles).length > 0) setPickedDoc(null)
+              setUploadedFiles(update)
             }}
             maxFiles={1}
             compact
@@ -191,7 +199,7 @@ export default function TransactionAttachDocumentDialog({
           />
           {pickedDoc && (
             <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
-              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+              <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
               <span className="truncate flex-1">
                 {pickedDoc.supplier_name ?? pickedDoc.file_name}
               </span>
@@ -202,24 +210,23 @@ export default function TransactionAttachDocumentDialog({
               )}
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0"
                 aria-label={t('selected_remove')}
                 onClick={() => setPickedDoc(null)}
               >
-                <X className="h-3 w-3" />
+                <XMarkIcon className="h-3 w-3" />
               </Button>
             </div>
           )}
           <Button
             type="button"
             variant="outline"
-            size="sm"
             className="w-full"
             disabled={isAttaching}
             onClick={() => setInboxPickerOpen(true)}
           >
-            <Inbox className="h-4 w-4 mr-2" />
+            <InboxIcon className="h-4 w-4" />
             {t('pick_existing')}
           </Button>
         </div>

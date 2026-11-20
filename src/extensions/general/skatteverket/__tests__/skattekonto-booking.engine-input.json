@@ -1,0 +1,286 @@
+[
+  {
+    "name": "three settled rows booked in one batch",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "entry_date": "2026-07-12",
+          "description": "Skattekonto: Debiterad preliminärskatt",
+          "source_type": "tax_account",
+          "source_id": "00000000-0000-4000-8000-000001000001",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9001",
+          "lines": [
+            {
+              "account_number": "2510",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Preliminär skatt"
+            },
+            {
+              "account_number": "1630",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Debiterad preliminärskatt"
+            }
+          ],
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "entry_date": "2026-07-14",
+          "description": "Skattekonto: Inbetalning bokförd",
+          "source_type": "tax_account",
+          "source_id": "00000000-0000-4000-8000-000001000002",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9002",
+          "lines": [
+            {
+              "account_number": "1630",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Inbetalning bokförd"
+            },
+            {
+              "account_number": "1930",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Inbetalning till skattekonto"
+            }
+          ],
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+        }
+      ],
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "entry_date": "2026-07-31",
+          "description": "Skattekonto: Kostnadsränta",
+          "source_type": "tax_account",
+          "source_id": "00000000-0000-4000-8000-000001000003",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9003",
+          "lines": [
+            {
+              "account_number": "8423",
+              "debit_amount": 12,
+              "credit_amount": 0,
+              "line_description": "Kostnadsränta skattekonto"
+            },
+            {
+              "account_number": "1630",
+              "debit_amount": 0,
+              "credit_amount": 12,
+              "line_description": "Kostnadsränta"
+            }
+          ],
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-0-0",
+        "bulk_accept"
+      ],
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-0-1",
+        "bulk_accept"
+      ],
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-0-2",
+        "bulk_accept"
+      ]
+    ]
+  },
+  {
+    "name": "one row drafted for review",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "entry_date": "2026-08-12",
+          "description": "Skattekonto: Debiterad preliminärskatt",
+          "source_type": "tax_account",
+          "source_id": "00000000-0000-4000-8000-000002000001",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: -",
+          "lines": [
+            {
+              "account_number": "2510",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Preliminär skatt"
+            },
+            {
+              "account_number": "1630",
+              "debit_amount": 0,
+              "credit_amount": 1500,
+              "line_description": "Debiterad preliminärskatt"
+            }
+          ],
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+        }
+      ]
+    ],
+    "commitEntry": []
+  },
+  {
+    "name": "a one-row batch (a person accepting the suggestion)",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "entry_date": "2026-08-20",
+          "description": "Skattekonto: Intäktsränta",
+          "source_type": "tax_account",
+          "source_id": "00000000-0000-4000-8000-000003000001",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9005",
+          "lines": [
+            {
+              "account_number": "1630",
+              "debit_amount": 3,
+              "credit_amount": 0,
+              "line_description": "Intäktsränta"
+            },
+            {
+              "account_number": "8314",
+              "debit_amount": 0,
+              "credit_amount": 3,
+              "line_description": "Intäktsränta skattekonto"
+            }
+          ],
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2-0",
+        "user_accept"
+      ]
+    ]
+  },
+  {
+    "name": "a VAT refund that clears 1650 with öresutjämning",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "entry_date": "2026-08-26",
+          "description": "Skattekonto: Moms juli 2026",
+          "source_type": "tax_account",
+          "source_id": "00000000-0000-4000-8000-000004000001",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9006",
+          "lines": [
+            {
+              "account_number": "1630",
+              "debit_amount": 4750,
+              "credit_amount": 0,
+              "line_description": "Moms juli 2026"
+            },
+            {
+              "account_number": "1650",
+              "debit_amount": 0,
+              "credit_amount": 4749.9,
+              "line_description": "Momsfordran"
+            },
+            {
+              "account_number": "3740",
+              "debit_amount": 0,
+              "credit_amount": 0.1,
+              "line_description": "Öres- och kronutjämning"
+            }
+          ],
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3-0",
+        "user_accept"
+      ]
+    ]
+  },
+  {
+    "name": "a row booked over a ledger twin, with the reason in the notes",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "entry_date": "2026-09-12",
+          "description": "Skattekonto: Debiterad preliminärskatt",
+          "source_type": "tax_account",
+          "source_id": "00000000-0000-4000-8000-000005000001",
+          "notes": "Genererad från skattekonto-synk. Skatteverket-id: 9007 Bokförd trots att bokföringen redan innehåller händelsen (A17). Skäl: Skatteverket debiterade två gånger",
+          "lines": [
+            {
+              "account_number": "2510",
+              "debit_amount": 1000,
+              "credit_amount": 0,
+              "line_description": "Preliminär skatt"
+            },
+            {
+              "account_number": "1630",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Debiterad preliminärskatt"
+            }
+          ],
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001"
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-4-0",
+        "user_accept"
+      ]
+    ]
+  }
+]

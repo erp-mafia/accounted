@@ -2,8 +2,17 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Check, X, AlertTriangle, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
+import { useTranslations } from 'next-intl'
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  ExclamationTriangleIcon,
+  LockClosedIcon,
+  ShieldCheckIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -14,6 +23,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
 import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
 import { REJECTION_CATEGORY_LABELS } from '@/components/pending-operations/vocabulary'
+import { proposalNumberLabel } from '@/components/pending-operations/ProposalNumber'
 import { operationTypeFromToolName } from '@/lib/pending-operations/tool-name'
 
 // Inline approval card for an agent-staged pending_operation.
@@ -46,6 +56,9 @@ interface PeriodStatus {
 
 interface Props {
   operationId: string
+  // pending_operations.operation_number: which proposal this is, as Rutin
+  // names it ("Förslag 128"). None before the column exists.
+  operationNumber?: number | null
   riskLevel: 'low' | 'medium' | 'high'
   message: string
   toolName?: string
@@ -84,6 +97,7 @@ interface CommitResultData {
 
 export default function ApprovalCard({
   operationId,
+  operationNumber,
   riskLevel,
   message,
   toolName,
@@ -98,14 +112,17 @@ export default function ApprovalCard({
   // What's paid is feeding a rejection back so the agent generates a *new*
   // proposal (an LLM call): that's suppressed when the company lacks `ai`.
   const hasAi = useCapability(CAPABILITY.ai)
+  // Approving and rejecting are ledger writes: locked for a read-only member.
+  const { canWrite, lockedTitle } = useViewerLock()
+  const t = useTranslations('pending')
   // Chart names for the preview lines (same source as /pending).
   const accountNames = useAccountNamesSource()
   const [state, setState] = useState<State>('pending')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [confirmText, setConfirmText] = useState('')
   // Reject-with-reason form (mirrors the granskning dialog). Clicking "Avslå"
-  // opens it; both fields are optional. When a reason is given, the rejection
-  // is fed back so the agent re-proposes.
+  // opens it; the category is required, the note optional. The rejection is
+  // fed back so the agent re-proposes.
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
   const [rejectReason, setRejectReason] = useState('')
@@ -197,25 +214,22 @@ export default function ApprovalCard({
   }
 
   async function handleReject() {
+    // A person's rejection always says what was wrong (parity with the
+    // granskning dialog): the button stays disabled until a category is picked.
+    if (!rejectCategory) return
     setState('rejecting')
     setErrorMessage(null)
-    const categoryLabel = rejectCategory ? REJECTION_CATEGORY_LABELS[rejectCategory] : null
+    const categoryLabel = REJECTION_CATEGORY_LABELS[rejectCategory]
     const reason = rejectReason.trim()
-    // Both fields optional: a bare "Avvisa" still rejects (parity with the
-    // granskning dialog and older bodyless clients).
-    const body =
-      rejectCategory || reason
-        ? {
-            ...(rejectCategory ? { rejection_category: rejectCategory } : {}),
-            ...(reason ? { rejection_reason: reason } : {}),
-          }
-        : undefined
+    const body = {
+      rejection_category: rejectCategory,
+      ...(reason ? { rejection_reason: reason } : {}),
+    }
     try {
       const res = await fetch(`/api/pending-operations/${operationId}/reject`, {
         method: 'POST',
-        ...(body
-          ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-          : {}),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => null)
@@ -225,10 +239,9 @@ export default function ApprovalCard({
       }
       setShowRejectForm(false)
       setState('rejected')
-      // Feed the correction back so the agent re-proposes: only when the user
-      // actually said what was wrong. A bare reject just stops here.
+      // Feed the correction back so the agent re-proposes.
       const parts = [categoryLabel, reason].filter(Boolean) as string[]
-      if (hasAi && parts.length > 0) {
+      if (hasAi) {
         onRequestCorrection?.(
           `Jag avvisade förslaget. Det som var fel: ${parts.join(', ')}. Föreslå en korrigerad bokning.`,
         )
@@ -289,12 +302,12 @@ export default function ApprovalCard({
     // screen readers but don't render it.
     return (
       <div
-        className="rounded-lg border border-success/40 bg-success/10 px-4 py-3 text-sm"
+        className="bg-success/9 rounded-lg px-4 py-3 text-sm"
         aria-description={message}
       >
-        <p className="flex items-center gap-2 font-medium">
-          <Check className="h-4 w-4" /> Godkänt
-        </p>
+        <div className="flex items-center gap-2 font-medium">
+          <CheckIcon className="h-4 w-4" /> Godkänt
+        </div>
         {bulkSummary && (
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
             {bulkSummary.booked} {bulkSummary.booked === 1 ? 'underlag bokfört' : 'underlag bokförda'}
@@ -307,7 +320,7 @@ export default function ApprovalCard({
             className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-foreground hover:underline"
           >
             {deepLink.label}
-            <ArrowRight className="h-3 w-3" />
+            <ArrowRightIcon className="h-3 w-3" />
           </Link>
         )}
       </div>
@@ -317,15 +330,15 @@ export default function ApprovalCard({
   if (state === 'rejected') {
     return (
       <div
-        className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
+        className="rounded-lg px-4 py-3 text-sm text-muted-foreground bg-control shadow-raised"
         aria-description={message}
       >
-        <p className="flex items-center gap-2">
-          <X className="h-4 w-4" /> Avslaget
+        <div className="flex items-center gap-2">
+          <XMarkIcon className="h-4 w-4" /> Avslaget
           {rejectCategory && (
-            <span className="text-xs text-muted-foreground/80">· {REJECTION_CATEGORY_LABELS[rejectCategory]}</span>
+            <span className="text-xs text-muted-foreground">· {REJECTION_CATEGORY_LABELS[rejectCategory]}</span>
           )}
-        </p>
+        </div>
       </div>
     )
   }
@@ -348,14 +361,14 @@ export default function ApprovalCard({
       )}
     >
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">
-          Förslag · risk {translateRisk(riskLevel)}
+        <p className="text-xs text-muted-foreground">
+          {proposalNumberLabel({ operation_number: operationNumber }, t) ?? 'Förslag'} · risk {translateRisk(riskLevel)}
         </p>
         {periodStatus && <PeriodBadge status={periodStatus} />}
       </div>
 
       {preview != null && typeof preview === 'object' && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg px-3 py-2 bg-control shadow-raised">
           <AccountNamesContext.Provider value={accountNames}>
             <OperationPreview
               op={{
@@ -370,16 +383,16 @@ export default function ApprovalCard({
 
       {requiresTextConfirm && (
         <div className="space-y-1">
-          <p className="flex items-center gap-2 text-xs text-destructive">
-            <AlertTriangle className="h-3.5 w-3.5" />
+          <div className="flex items-center gap-2 text-xs text-destructive">
+            <ExclamationTriangleIcon className="h-3.5 w-3.5" />
             Hög risk: skriv <strong className="font-semibold">godkänn</strong> för att bekräfta.
-          </p>
+          </div>
           <input
             type="text"
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
             disabled={isBusy}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-full rounded-lg px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
             autoComplete="off"
             aria-label="Bekräfta med ordet godkänn"
           />
@@ -389,14 +402,14 @@ export default function ApprovalCard({
       {errorMessage && <p className="text-xs text-destructive">{errorMessage}</p>}
 
       {showRejectForm ? (
-        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs font-medium">Vad är fel?</p>
           <Select
             value={rejectCategory}
             onValueChange={(v) => setRejectCategory(v as PendingOperationRejectionCategory)}
           >
             <SelectTrigger className="h-8 text-xs" aria-label="Anledning">
-              <SelectValue placeholder="Anledning (valfritt)" />
+              <SelectValue placeholder={t('reject_category_label')} />
             </SelectTrigger>
             {/* The agent sheet panel is z-[60]; SelectContent defaults to z-50
                 and portals to <body>, so without this it opens BEHIND the
@@ -418,11 +431,11 @@ export default function ApprovalCard({
             aria-label="Notering"
           />
           {hasAi ? (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Med en anledning eller notering föreslår assistenten en korrigerad bokning direkt.
             </p>
           ) : (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Din anledning sparas på förslaget. Vill du att assistenten automatiskt
               föreslår en korrigerad bokning?{' '}
               <Link href="/settings/billing" className="font-medium text-foreground hover:underline">
@@ -434,9 +447,9 @@ export default function ApprovalCard({
           <div className="flex gap-2">
             <Button
               variant="destructive"
-              size="sm"
               onClick={handleReject}
-              disabled={isBusy}
+              disabled={!canWrite || isBusy || !rejectCategory}
+              title={lockedTitle}
               loading={state === 'rejecting'}
               className="flex-1"
             >
@@ -444,7 +457,6 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => setShowRejectForm(false)}
               disabled={isBusy}
               className="flex-1"
@@ -454,16 +466,16 @@ export default function ApprovalCard({
           </div>
         </div>
       ) : accountsToActivate ? (
-        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg px-3 py-2 bg-control shadow-raised">
           <p className="text-xs leading-5">
             Bokningen använder konton som inte är aktiva i din kontoplan:{' '}
             <strong className="tabular-nums">{accountsToActivate.join(', ')}</strong>. Aktivera dem för att godkänna bokningen.
           </p>
           <div className="flex gap-2">
             <Button
-              size="sm"
               onClick={handleActivateAndCommit}
-              disabled={isBusy}
+              disabled={!canWrite || isBusy}
+              title={lockedTitle}
               loading={state === 'committing'}
               className="flex-1"
             >
@@ -471,7 +483,6 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => setAccountsToActivate(null)}
               disabled={isBusy}
               className="flex-1"
@@ -484,9 +495,9 @@ export default function ApprovalCard({
         <>
           <div className="flex gap-2">
             <Button
-              size="sm"
               onClick={handleCommit}
-              disabled={isBusy || !canCommit}
+              disabled={!canWrite || isBusy || !canCommit}
+              title={lockedTitle}
               loading={state === 'committing'}
               className="flex-1"
             >
@@ -494,9 +505,9 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="outline"
-              size="sm"
               onClick={() => setShowRejectForm(true)}
-              disabled={isBusy}
+              disabled={!canWrite || isBusy}
+              title={lockedTitle}
               className="flex-1"
             >
               Avslå
@@ -504,7 +515,7 @@ export default function ApprovalCard({
           </div>
           {/* Keep in sync with EXPIRY_DAYS in
               app/api/pending-operations/expire/cron/route.ts. */}
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Om du inte gör något utgår förslaget automatiskt efter 30 dagar, inget bokförs.
           </p>
         </>
@@ -516,22 +527,22 @@ export default function ApprovalCard({
 function PeriodBadge({ status }: { status: PeriodStatus }) {
   if (status.status === 'open') {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-success">
-        <ShieldCheck className="h-3 w-3" /> Period öppen
+      <span className="inline-flex items-center gap-1 text-xs text-success">
+        <ShieldCheckIcon className="h-3 w-3" /> Period öppen
       </span>
     )
   }
   if (status.status === 'locked') {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-warning">
-        <Lock className="h-3 w-3" /> Period låst
+      <span className="inline-flex items-center gap-1 text-xs text-warning">
+        <LockClosedIcon className="h-3 w-3" /> Period låst
         {status.lock_date ? <span className="tabular-nums">· {status.lock_date}</span> : null}
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-destructive">
-      <Lock className="h-3 w-3" /> Period stängd
+    <span className="inline-flex items-center gap-1 text-xs text-destructive">
+      <LockClosedIcon className="h-3 w-3" /> Period stängd
     </span>
   )
 }

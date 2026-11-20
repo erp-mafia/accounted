@@ -73,23 +73,3 @@ export function resolveInitialVatPeriodSelection(opts: {
   }
   return { periodType: cadence, year: selected.year, period: selected.period }
 }
-
-/**
- * The räkenskapsår a yearly VAT period names: the fiscal period that ends in
- * `year` (the key's year), the later one when an omläggning ends two in the
- * same year. Only periods that have started (`period_start <= today`) are
- * candidates, matching the räkenskapsår picker's list. Null when the company
- * has no such fiscal period yet.
- */
-export function fiscalPeriodForVatYear<P extends { period_start: string; period_end: string }>(
-  periods: readonly P[],
-  year: number,
-  today: string,
-): P | null {
-  let match: P | null = null
-  for (const candidate of periods) {
-    if (!candidate.period_end.startsWith(`${year}-`) || candidate.period_start > today) continue
-    if (!match || candidate.period_end > match.period_end) match = candidate
-  }
-  return match
-}

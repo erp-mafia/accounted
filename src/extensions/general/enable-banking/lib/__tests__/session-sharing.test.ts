@@ -106,6 +106,45 @@ describe('fetchCrossCompanyAccountContext', () => {
     expect(context!.deselectedIbans).toEqual(new Set(['SE22', 'SE44']))
   })
 
+  it('releases the accounts of an archived company: they are no claim, so a company made anew can take them', async () => {
+    const { supabase } = makeSupabase({
+      company_members: {
+        data: [{ company_id: 'company-new' }, { company_id: 'company-archived' }, { company_id: 'company-2' }],
+      },
+      bank_connections: { data: [] },
+      cash_accounts: {
+        data: [
+          { company_id: 'company-archived', iban: 'SE55' },
+          { company_id: 'company-2', iban: 'SE66' },
+        ],
+      },
+      companies: {
+        data: [
+          { id: 'company-archived', name: 'Gamla AB', archived_at: '2026-10-15T05:09:09Z' },
+          { id: 'company-2', name: 'Sibling AB', archived_at: null },
+        ],
+      },
+    })
+
+    const context = await fetchCrossCompanyAccountContext(supabase, 'user-1', 'company-new', 'conn-active')
+
+    expect(context!.claims.has('SE55')).toBe(false)
+    expect(context!.claims.get('SE66')).toEqual({ companyId: 'company-2', companyName: 'Sibling AB' })
+  })
+
+  it('keeps the claim when the claimant lookup fails (fails closed)', async () => {
+    const { supabase } = makeSupabase({
+      company_members: { data: [{ company_id: 'company-new' }, { company_id: 'company-archived' }] },
+      bank_connections: { data: [] },
+      cash_accounts: { data: [{ company_id: 'company-archived', iban: 'SE55' }] },
+      companies: { data: null, error: { message: 'boom' } },
+    })
+
+    const context = await fetchCrossCompanyAccountContext(supabase, 'user-1', 'company-new', 'conn-active')
+
+    expect(context!.claims.get('SE55')).toEqual({ companyId: 'company-archived', companyName: null })
+  })
+
   it("lets the active company's own standing state outrank a sibling claim", async () => {
     // The bank-list renewal case: the active company's old row (about to be
     // superseded) and its cash_accounts row still book the IBAN. A sibling
@@ -261,6 +300,48 @@ describe('fetchCrossCompanyAccountContext', () => {
 
     const cashChain = chainsByTable.get('cash_accounts')![0]
     expect(cashChain.in).toHaveBeenCalledWith('company_id', ['company-1', 'company-2'])
+  })
+
+  it('ignores archived companies, like user_company_ids() does', async () => {
+    // A migration restart archives the old company and opens a new one for
+    // the same org number. The old company's bank was disconnected, but its
+    // cash accounts stay enabled; if they still claimed, the new company's
+    // picker would offer nothing (crm#1241). The membership read is filtered
+    // on archived_at in PostgREST, so the archived company never arrives,
+    // and its connection rows must not claim or deselect on their own.
+    const { supabase, chainsByTable } = makeSupabase({
+      company_members: { data: [{ company_id: 'company-1' }] },
+      bank_connections: {
+        data: [
+          {
+            id: 'conn-archived',
+            company_id: 'company-archived',
+            status: 'expired',
+            accounts_data: [
+              { uid: 'a1', iban: 'SE11', currency: 'SEK', enabled: true },
+              { uid: 'a2', iban: 'SE22', currency: 'SEK', enabled: false },
+            ],
+          },
+        ],
+      },
+      cash_accounts: { data: [] },
+      companies: { data: [] },
+    })
+
+    const context = await fetchCrossCompanyAccountContext(
+      supabase,
+      'user-1',
+      'company-1',
+      'conn-active',
+    )
+
+    expect(context!.claims.size).toBe(0)
+    expect(context!.deselectedIbans.size).toBe(0)
+
+    const membershipChain = chainsByTable.get('company_members')![0]
+    expect(membershipChain.select).toHaveBeenCalledWith('company_id, companies!inner(archived_at)')
+    expect(membershipChain.is).toHaveBeenCalledWith('companies.archived_at', null)
+    expect(chainsByTable.get('cash_accounts')![0].in).toHaveBeenCalledWith('company_id', ['company-1'])
   })
 
   it('returns null when a lookup fails, so the caller can fail closed', async () => {

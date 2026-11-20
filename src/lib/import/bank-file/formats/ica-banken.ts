@@ -14,12 +14,10 @@
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
+import { preambleAccountIdentity } from '../account-identity'
 import { normalizeDate } from '../date-utils'
+import { parseSwedishAmount } from '@/lib/money'
 
-function parseCommaDecimal(value: string): number {
-  const cleaned = value.replace(/\s/g, '').replace(',', '.')
-  return parseFloat(cleaned)
-}
 
 /**
  * Check if a line looks like the ICA Banken data header.
@@ -144,7 +142,7 @@ export const icaBankenFormat: BankFileFormat = {
         continue
       }
 
-      const amount = parseCommaDecimal(amountStr)
+      const amount = parseSwedishAmount(amountStr) ?? NaN
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
         skippedRows++
@@ -158,7 +156,7 @@ export const icaBankenFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? parseCommaDecimal(balanceStr) : null
+      const balance = balanceStr ? (parseSwedishAmount(balanceStr) ?? NaN) : null
 
       transactions.push({
         date: normalizedDate,
@@ -178,6 +176,8 @@ export const icaBankenFormat: BankFileFormat = {
       format: 'ica_banken',
       format_name: 'ICA Banken',
       transactions,
+      // The "Kontonummer" line above the header (crm#1204).
+      account: preambleAccountIdentity(lines, headerLineIdx),
       date_from: dates[0] || null,
       date_to: dates[dates.length - 1] || null,
       issues,

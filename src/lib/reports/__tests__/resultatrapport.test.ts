@@ -103,7 +103,7 @@ describe('generateResultatrapport', () => {
       error: null,
     })
     q.enqueue({
-      data: { period_start: '2025-01-01', period_end: '2025-12-31' },
+      data: { id: 'period-0', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
 
@@ -144,7 +144,7 @@ describe('generateResultatrapport', () => {
       error: null,
     })
     q.enqueue({
-      data: { period_start: '2025-01-01', period_end: '2025-12-31' },
+      data: { id: 'period-0', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
 
@@ -248,10 +248,8 @@ describe('generateResultatrapport', () => {
       data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
       error: null,
     })
-    // Date-range fallback finds the immediately-preceding period.
-    q.enqueue({ data: [{ id: 'period-0' }], error: null })
-    // Prior-period dates.
-    q.enqueue({ data: { period_start: '2025-01-01', period_end: '2025-12-31' }, error: null })
+    // The date fallback: the period ending the day before (2025-12-31).
+    q.enqueue({ data: { id: 'period-0', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null })
 
     mockTrialBalance
       .mockResolvedValueOnce(
@@ -279,7 +277,7 @@ describe('generateResultatrapport', () => {
       data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
       error: null,
     })
-    q.enqueue({ data: [], error: null }) // no date-adjacent predecessor
+    q.enqueue({ data: null, error: null }) // no period ends 2025-12-31
 
     mockTrialBalance.mockResolvedValueOnce(
       tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 })])
@@ -290,6 +288,28 @@ describe('generateResultatrapport', () => {
 
     expect(report.prior_period).toBeNull()
     expect(report.net_result_prior).toBe(0)
+    expect(mockTrialBalance).toHaveBeenCalledTimes(1)
+  })
+
+  // A year across a gap is not the previous year: its UB is not this year's
+  // IB. The comparison column stays empty instead of showing 2024 against 2026.
+  it('ignores a link to a year that does not end the day before', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'period-2024' },
+      error: null,
+    })
+    q.enqueue({ data: { id: 'period-2024', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null })
+    q.enqueue({ data: null, error: null }) // and no period ends 2025-12-31
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 })])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.prior_period).toBeNull()
     expect(mockTrialBalance).toHaveBeenCalledTimes(1)
   })
 

@@ -40,7 +40,7 @@ Options:
   -h, --help           Show this help
   -v, --version        Show the version
 
-ACCOUNTED_API_KEY=<key> uses an API key from Settings instead of a login.
+ACCOUNTED_API_KEY=<key> uses an API key (Agents › Connect an agent, Developers) instead of a login.
 Writes are staged: nothing is booked until the user approves.
 Exit codes: 0 ok, 1 tool error, 2 usage, 3 not signed in, 4 server or network.
 `

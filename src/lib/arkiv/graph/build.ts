@@ -5,11 +5,15 @@ import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templa
 import { isPaymentText, merchantKey, merchantLabel } from './merchant-key'
 import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type GraphNode } from './types'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Builds the company graph from the tables that exist. Every query is listed
  * in one fixed order (the unit test enqueues answers in that order), every
- * read is capped, and a cap that was hit marks the graph as truncated.
+ * read is capped, and a cap that was hit marks the graph as truncated. A cap
+ * above PostgREST's 1000-row max-rows is reached by paging (`capped`): a bare
+ * limit of 20000 answers with 1000 rows and no error, so the graph used to
+ * draw from a silent 1000 and never flag the cut.
  *
  * Aggregation is the default: documents fold into one node per group unless
  * an agreement, a fact or a link points at them; counterparties beyond the
@@ -95,6 +99,16 @@ const GROUP_LABELS: Record<string, string> = {
 const INVOICE_SOURCE_TYPES = new Set(['invoice_created', 'invoice_paid', 'invoice_cash_payment', 'credit_note'])
 
 const round2 = roundOre
+
+type Page<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null }>
+/** Up to maxRows rows, paged past the 1000-row max-rows, in the `{ data, error }` shape every read below shares. */
+async function capped<T>(query: (range: { from: number; to: number }) => Page<T>, maxRows: number): Promise<{ data: T[] | null; error: { message: string } | null }> {
+  try {
+    return { data: await fetchAllRows<T>(query, { maxRows }), error: null }
+  } catch (error) {
+    return { data: null, error: { message: error instanceof Error ? error.message : String(error) } }
+  }
+}
 /** Thousands separated by a plain space, so text renderings and tests never meet a non-breaking space. */
 const kr = (n: number) => Math.round(n).toLocaleString('sv-SE').replace(/\u00a0/g, ' ')
 const group = (type: string | null): string =>
@@ -131,53 +145,78 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
 
   // One fixed order. The test enqueues answers in exactly this sequence.
   const company = await supabase.from('companies').select('name').eq('id', companyId).maybeSingle()
-  const accounts = await supabase.from('chart_of_accounts').select('account_number, account_name').eq('company_id', companyId).limit(3000)
-  const lines = await supabase
-    .from('journal_entry_lines')
-    .select('account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(entry_date, status, source_type, source_id, company_id)')
-    .eq('journal_entries.company_id', companyId)
-    // A reversed original stays in the ledger and its storno cancels it; the reports sum both, so must the graph.
-    .in('journal_entries.status', ['posted', 'reversed'])
-    .gte('journal_entries.entry_date', from)
-    .limit(LINE_CAP)
-  const parties = await supabase.from('parties').select('id, display_name, kind').eq('company_id', companyId).limit(2000)
-  const customers = await supabase.from('customers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).limit(2000)
-  const suppliers = await supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).limit(2000)
-  const invoices = await supabase.from('invoices').select('id, customer_id').eq('company_id', companyId).not('customer_id', 'is', null).limit(DOC_CAP)
-  const supplierInvoices = await supabase
-    .from('supplier_invoices')
-    .select('id, supplier_id, registration_journal_entry_id, payment_journal_entry_id')
-    .eq('company_id', companyId)
-    .limit(DOC_CAP)
+  const accounts = await capped((r) => supabase.from('chart_of_accounts').select('account_number, account_name').eq('company_id', companyId).order('id').range(r.from, r.to), 3000)
+  const lines = await capped(
+    (r) =>
+      supabase
+        .from('journal_entry_lines')
+        .select('account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(entry_date, status, source_type, source_id, company_id)')
+        .eq('journal_entries.company_id', companyId)
+        // A reversed original stays in the ledger and its storno cancels it; the reports sum both, so must the graph.
+        .in('journal_entries.status', ['posted', 'reversed'])
+        .gte('journal_entries.entry_date', from)
+        .order('id')
+        .range(r.from, r.to),
+    LINE_CAP,
+  )
+  const parties = await capped((r) => supabase.from('parties').select('id, display_name, kind').eq('company_id', companyId).order('id').range(r.from, r.to), 2000)
+  const customers = await capped((r) => supabase.from('customers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(r.from, r.to), 2000)
+  const suppliers = await capped((r) => supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(r.from, r.to), 2000)
+  const invoices = await capped((r) => supabase.from('invoices').select('id, customer_id').eq('company_id', companyId).not('customer_id', 'is', null).order('id').range(r.from, r.to), DOC_CAP)
+  const supplierInvoices = await capped(
+    (r) =>
+      supabase
+        .from('supplier_invoices')
+        .select('id, supplier_id, registration_journal_entry_id, payment_journal_entry_id')
+        .eq('company_id', companyId)
+        .order('id')
+        .range(r.from, r.to),
+    DOC_CAP,
+  )
   const agreements = await supabase
     .from('agreements')
     .select('id, title, kind, status, ends_on, amount, period, principal, counterparty_party_id, counterparty_name, source_document_id')
     .eq('company_id', companyId)
     .limit(1000)
-  const obligations = await supabase
-    .from('agreement_obligations')
-    .select('id, agreement_id, kind, due_on, amount, status, transaction_id, direction')
-    .eq('company_id', companyId)
-    .gte('due_on', from)
-    .lte('due_on', horizon)
-    .limit(3000)
+  const obligations = await capped(
+    (r) =>
+      supabase
+        .from('agreement_obligations')
+        .select('id, agreement_id, kind, due_on, amount, status, transaction_id, direction')
+        .eq('company_id', companyId)
+        .gte('due_on', from)
+        .lte('due_on', horizon)
+        .order('id')
+        .range(r.from, r.to),
+    3000,
+  )
   const matchedTxIds = ((obligations.data ?? []) as Array<{ transaction_id: string | null }>).map((o) => o.transaction_id).filter((id): id is string => !!id)
-  const transactions = await supabase
-    .from('transactions')
-    .select('id, journal_entry_id')
-    .eq('company_id', companyId)
-    .in('id', matchedTxIds.length ? matchedTxIds : [NONE])
-    .limit(3000)
+  const transactions = await capped(
+    (r) =>
+      supabase
+        .from('transactions')
+        .select('id, journal_entry_id')
+        .eq('company_id', companyId)
+        .in('id', matchedTxIds.length ? matchedTxIds : [NONE])
+        .order('id')
+        .range(r.from, r.to),
+    3000,
+  )
   // Counterparties known from the bank side: the alias a person or the resolver tied to a party,
   // and every booked transaction of the period, so a loan paid straight from the account has a party too.
-  const aliases = await supabase.from('counterparty_aliases').select('alias_key, party_id').eq('company_id', companyId).not('party_id', 'is', null).limit(5000)
-  const bookedTx = await supabase
-    .from('transactions')
-    .select('id, journal_entry_id, original_description, description, merchant_name, date')
-    .eq('company_id', companyId)
-    .not('journal_entry_id', 'is', null)
-    .gte('date', from)
-    .limit(TX_CAP)
+  const aliases = await capped((r) => supabase.from('counterparty_aliases').select('alias_key, party_id').eq('company_id', companyId).not('party_id', 'is', null).order('id').range(r.from, r.to), 5000)
+  const bookedTx = await capped(
+    (r) =>
+      supabase
+        .from('transactions')
+        .select('id, journal_entry_id, original_description, description, merchant_name, date')
+        .eq('company_id', companyId)
+        .not('journal_entry_id', 'is', null)
+        .gte('date', from)
+        .order('id')
+        .range(r.from, r.to),
+    TX_CAP,
+  )
   const facts = await supabase
     .from('company_facts')
     .select('id, predicate, value_text, valid_from, source_document_id, sources')
@@ -188,30 +227,45 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     .is('sys_to', null)
     .neq('rank', 'deprecated')
     .limit(200)
-  const documents = await supabase
-    .from('document_attachments')
-    .select('id, file_name, doc_type, created_at, journal_entry_id')
-    .eq('company_id', companyId)
-    .eq('admission_state', 'admitted')
-    .or(NOT_STRUCTURED_MIME_FILTER)
-    .order('created_at', { ascending: false })
-    .limit(DOC_CAP)
-  const documentLinks = await supabase
-    .from('document_links')
-    .select('document_id, target_kind, party_id, agreement_id, asset_id')
-    .eq('company_id', companyId)
-    .is('retired_at', null)
-    .limit(2000)
+  const documents = await capped(
+    (r) =>
+      supabase
+        .from('document_attachments')
+        .select('id, file_name, doc_type, created_at, journal_entry_id')
+        .eq('company_id', companyId)
+        .eq('admission_state', 'admitted')
+        .or(NOT_STRUCTURED_MIME_FILTER)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(r.from, r.to),
+    DOC_CAP,
+  )
+  const documentLinks = await capped(
+    (r) =>
+      supabase
+        .from('document_links')
+        .select('document_id, target_kind, party_id, agreement_id, asset_id')
+        .eq('company_id', companyId)
+        .is('retired_at', null)
+        .order('id')
+        .range(r.from, r.to),
+    2000,
+  )
   const employees = await supabase
     .from('employees')
     .select('id, first_name, last_name, employment_type, employment_end')
     .eq('company_id', companyId)
     .limit(500)
-  const runEmployees = await supabase.from('salary_run_employees').select('salary_run_id, employee_id, gross_salary').eq('company_id', companyId).limit(5000)
+  const runEmployees = await capped((r) => supabase.from('salary_run_employees').select('salary_run_id, employee_id, gross_salary').eq('company_id', companyId).order('id').range(r.from, r.to), 5000)
+  // Open deadlines only, the rule of lib/deadlines/open.ts written out here
+  // (this block does not depend on the deadlines block): the stored status
+  // survives a tick-off and a dismissal, so it cannot say what is open.
   const deadlines = await supabase
     .from('deadlines')
     .select('id, title, due_date, deadline_type, tax_deadline_type, status')
     .eq('company_id', companyId)
+    .eq('is_completed', false)
+    .is('dismissed_at', null)
     .gte('due_date', today)
     .lte('due_date', horizon)
     .in('status', ['upcoming', 'action_needed', 'in_progress', 'overdue'])

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -11,7 +11,7 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { Loader2, Lock } from 'lucide-react'
+import { LockClosedIcon, SpinnerIcon } from '@/components/icons'
 import { parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
 import { validateFirstPeriod } from '@/components/bookkeeping/FiscalPeriodDateFields'
 import {
@@ -20,8 +20,9 @@ import {
   SettingsRow,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
+import { SettingsSaveBar } from '@/components/settings/SettingsFormWrapper'
 import type { FiscalPeriod } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 function formatSwedishDate(dateStr: string): string {
   const months = [
@@ -40,6 +41,7 @@ function isCalendarYear(period: { period_start: string; period_end: string }): b
 
 export function FiscalPeriodEditor() {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const { company, role } = useCompany()
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -59,7 +61,9 @@ export function FiscalPeriodEditor() {
   // Periods come from the session cache (lib/reference-data). The editor
   // snapshots the FIRST period once per company (a background revalidation
   // must not reset the dates the user is editing), then loads that period's
-  // posted-entry count, which is what gates editing.
+  // posted-entry count. The count informs, it does not gate: the dates may
+  // move over days that hold nothing, and the server refuses (naming what
+  // blocks) anything that would affect a posted voucher (crm#1010).
   const { periods, isLoading: periodsLoading, error: periodsError } = useFiscalPeriods()
   const periodsRef = useRef(periods)
   useEffect(() => {
@@ -119,8 +123,7 @@ export function FiscalPeriodEditor() {
     company?.entity_type,
   )
 
-  const isBlocked =
-    !!period && (period.locked_at || period.is_closed || (postedCount ?? 0) > 0)
+  const isBlocked = !!period && (!!period.locked_at || !!period.is_closed)
 
   const isDirty =
     period !== null && (startDate !== period.period_start || endDate !== period.period_end)
@@ -164,10 +167,7 @@ export function FiscalPeriodEditor() {
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        // Canonical { error: { code, message } } envelope; a bare string is
-        // still read in case a proxy answers one.
-        const message = typeof body.error === 'string' ? body.error : body.error?.message
-        throw new Error(message || t('fp_update_failed_title'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fp_update_failed_title') }))
       }
       setPeriod(body.data as FiscalPeriod)
       // Every picker reads the shared list: refresh it with the new dates.
@@ -193,12 +193,28 @@ export function FiscalPeriodEditor() {
     setEndDate(period.period_end)
   }
 
-  return (
+  // What used to sit in the flow (the care warning, the posted-voucher
+  // count) lives behind the group's "?". The enskild-firma calendar-year rule
+  // shows as a validation message when the dates break it.
+  const help = (
     <>
-      <SettingsGroup label={t('fp_heading')} help={t('fp_intro')}>
+      <p>{t('fp_intro')}</p>
+      <p className="mt-2">
+        {t('fp_warning_title')} {t('fp_warning_body')}
+        {isEF ? t('fp_warning_ef_suffix') : null}
+      </p>
+      {(postedCount ?? 0) > 0 && (
+        <p className="mt-2">{t('fp_posted_note', { count: postedCount ?? 0 })}</p>
+      )}
+    </>
+  )
+
+  return (
+    <div>
+      <SettingsGroup label={t('fp_heading')} help={help}>
         {isLoading ? (
           <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             {t('fp_loading')}
           </div>
         ) : loadError ? (
@@ -206,15 +222,9 @@ export function FiscalPeriodEditor() {
         ) : !period ? (
           <p className="px-1 py-3 text-sm text-muted-foreground">{t('fp_none')}</p>
         ) : isBlocked ? (
-          <BlockedRow period={period} postedCount={postedCount ?? 0} />
+          <BlockedRow period={period} />
         ) : (
           <>
-            {/* Consequential warning: stays visible as one quiet ochre sentence. */}
-            <p className="px-1 py-3 text-[12.5px] text-attn">
-              {t('fp_warning_title')} {t('fp_warning_body')}
-              {isEF ? t('fp_warning_ef_suffix') : null}
-            </p>
-
             <SettingsRow
               label={t('fp_start_date_label')}
               htmlFor="fiscal-period-start"
@@ -245,7 +255,9 @@ export function FiscalPeriodEditor() {
               />
             </SettingsRow>
 
-            {validation.canSummarise && (
+            {/* The proposed year restates the two fields, so it only shows
+                once they differ from the saved dates. */}
+            {isDirty && validation.canSummarise && (
               <p className="px-1 pt-3 text-xs text-muted-foreground">
                 {t('fp_summary_title')}:{' '}
                 <span className="tabular-nums">
@@ -257,54 +269,39 @@ export function FiscalPeriodEditor() {
             {validation.error && (
               <p className="px-1 pt-1 text-xs text-destructive">{validation.error}</p>
             )}
-
-            <div className="flex justify-end gap-2 px-1 pt-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleReset}
-                disabled={!isDirty || isSaving}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                {t('fp_reset')}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleSave}
-                disabled={
-                  !isDirty ||
-                  !startDate ||
-                  !endDate ||
-                  validation.error !== null
-                }
-                loading={isSaving}
-              >
-                {isSaving ? t('fp_saving') : t('fp_save')}
-              </Button>
-            </div>
           </>
         )}
       </SettingsGroup>
+      {/* The shared dirty-only save bar; saving still opens the confirm
+          dialog first (handleSave). */}
+      {period && !isBlocked && (
+        <SettingsSaveBar
+          visible={isDirty || isSaving}
+          saving={isSaving}
+          saved={false}
+          disabled={!startDate || !endDate || validation.error !== null}
+          onSave={() => void handleSave()}
+          secondary={
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleReset}
+              disabled={isSaving}
+              tabIndex={isDirty ? 0 : -1}
+            >
+              {t('fp_reset')}
+            </Button>
+          }
+        />
+      )}
       <DestructiveConfirmDialog {...dialogProps} />
-    </>
+    </div>
   )
 }
 
-function BlockedRow({
-  period,
-  postedCount,
-}: {
-  period: FiscalPeriod
-  postedCount: number
-}) {
+function BlockedRow({ period }: { period: FiscalPeriod }) {
   const t = useTranslations('settings_company')
-  const reason = period.locked_at
-    ? t('fp_blocked_reason_locked')
-    : period.is_closed
-      ? t('fp_blocked_reason_closed')
-      : t('fp_blocked_reason_posted', { count: postedCount })
+  const reason = period.locked_at ? t('fp_blocked_reason_locked') : t('fp_blocked_reason_closed')
 
   return (
     <SettingsRow
@@ -321,7 +318,7 @@ function BlockedRow({
       }
       borderless
     >
-      <Lock aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <LockClosedIcon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       <span className="tabular-nums">
         {t('fp_range', { start: formatSwedishDate(period.period_start), end: formatSwedishDate(period.period_end) })}
       </span>

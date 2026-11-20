@@ -1,16 +1,21 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { hasPreRegisterArInPeriod } from '@/lib/invoices/invoice-register-coverage'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { hasPreRegisterArInPeriod } from '@/lib/reports/invoice-register-coverage'
+import { generateARLedger } from './ar-ledger'
+import { reskontraBalanceDate } from './reskontra-balance-date'
+import { closingBalanceOf } from './trial-balance'
 
 export interface ARReconciliationResult {
+  /** The kundreskontra's total on the balance date: the same figure as generateARLedger. */
   ar_ledger_total: number
+  /** The day the reskontra is read as of: a past year's last day, null while the year runs (today). */
+  as_of_date: string | null
   /**
-   * Sum of posted balances on accounts 1510 (Kundfordringar) and 1513
-   * (Kundfordringar: delad faktura). 1513 covers the Skatteverket portion
-   * of ROT/RUT fakturamodellen invoices and is zero today (no fakturamodellen
-   * postings yet): included for forward compatibility.
+   * Closing balance (UB, ingående balans included) of accounts 1510
+   * (Kundfordringar) and 1513 (Kundfordringar: delad faktura), as the balance
+   * sheet shows them. 1513 carries the Skatteverket portion
+   * of ROT/RUT fakturamodellen invoices until the begäran's payout clears it;
+   * ar_ledger_total counts the same share per invoice (skatteverket-share.ts).
    */
   account_1510_balance: number
   difference: number
@@ -36,8 +41,11 @@ export interface ARReconciliationResult {
 }
 
 /**
- * Compare sum of open customer invoices against account 1510 balance.
- * Account 1510 is debit-normal (asset): balance = debits - credits.
+ * Compare the kundreskontra with accounts 1510 and 1513 at the end of a fiscal
+ * year: generateARLedger as of the year's last day against the UB. While the
+ * year runs that is the live register (the ledger's rule for today or a date
+ * ahead); a past year reads the invoices open on its balansdag, not the ones
+ * open today. Account 1510 is debit-normal (asset): balance = debits - credits.
  *
  * Conversion uses each invoice's stored exchange_rate (the invoice-date rate),
  * which matches what was originally posted to 1510. This means the report will
@@ -51,104 +59,48 @@ export async function generateARReconciliation(
   companyId: string,
   periodId: string
 ): Promise<ARReconciliationResult> {
+  const asOfDate = await reskontraBalanceDate(supabase, companyId, periodId)
 
-  // total/paid_amount are stored in invoice currency; account 1510 is in SEK
-  // (booked at invoice-date rate), so convert each row before summing.
-  // Paginated: a company with >1000 open invoices would otherwise be silently
-  // truncated, manufacturing a phantom reconciliation gap.
-  const invoices = await fetchAllRows<{
-    id: string
-    total: number | null
-    paid_amount: number | null
-    currency: string | null
-    exchange_rate: number | null
-  }>(({ from, to }) =>
-    supabase
-      .from('invoices')
-      .select('id, total, paid_amount, currency, exchange_rate')
-      .eq('company_id', companyId)
-      // Proformas, delivery notes and quotes are never receivables.
-      .eq('document_type', 'invoice')
-      // A partially paid invoice still carries total - paid_amount on 1510;
-      // leaving it out turned that remainder into a reconciliation difference.
-      .in('status', ['sent', 'overdue', 'partially_paid'])
-      .order('id', { ascending: true })
-      .range(from, to)
-  )
+  const [ledger, account1510Balance, preRegisterArInPeriod] = await Promise.all([
+    generateARLedger(supabase, companyId, asOfDate ?? undefined, { strict: true }),
+    // The booked AR balance: 1510 (Kundfordringar) AND 1513 (Kundfordringar:
+    // delad faktura), so the comparison stays correct under ROT/RUT
+    // fakturamodellen, where the customer portion sits on 1510 and the
+    // Skatteverket claim on 1513: both are open AR receivable from the
+    // company's perspective, and the subledger side counts each invoice's
+    // Skatteverket share until the begäran's payout clears it.
+    //
+    // Read as the balance sheet reads it (closingBalanceOf: the trial
+    // balance's UB, ingående balans included). The open invoices are every
+    // open invoice of the register, whatever year it was booked in, so the
+    // ledger side must carry the opening balance too: summing only this
+    // fiscal year's verifikat left out an IB carried from earlier years'
+    // verifikat and showed that IB as a false difference (crm#1296). Both are
+    // debit-normal assets.
+    closingBalanceOf(supabase, companyId, periodId, [
+      resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable'),
+      resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable'),
+    ]),
+    // Coverage context for the difference. Non-fatal: a failed lookup
+    // degrades to "no explanation offered" (the helper returns false on
+    // failure), which leaves the red badge standing unqualified rather than
+    // excused.
+    hasPreRegisterArInPeriod(supabase, companyId, periodId).catch(() => false),
+  ])
 
-  let unconvertedFxCount = 0
-  const arLedgerTotal = (invoices || [])
-    .reduce((sum, inv) => {
-      const isFx = inv.currency && inv.currency !== 'SEK'
-      const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-      // Skip unconvertible FX rows from the sum: adding raw foreign amounts
-      // to a SEK total is arithmetically unsound. Counted instead.
-      if (isFx && !hasRate) {
-        unconvertedFxCount += 1
-        return sum
-      }
-      const outstanding = (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)
-      const sek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
-      return Math.round((sum + sek) * 100) / 100
-    }, 0)
-
-  // Get AR receivable balance from the ledger in this period. We sum 1510
-  // (Kundfordringar) AND 1513 (Kundfordringar: delad faktura) so the comparison
-  // stays correct under ROT/RUT fakturamodellen, where the customer portion sits
-  // on 1510 and the Skatteverket claim on 1513: both are open AR receivable
-  // from the company's perspective. 1513 is zero today (no fakturamodellen
-  // postings yet) so this is a forward-looking defense.
-  //
-  // We count posted AND reversed entries together: the SAME inclusion rule the
-  // trial balance / balance sheet use. A corrected invoice flips its original to
-  // status='reversed'; that reversed leg is cancelled by the posted storno, so
-  // both must be summed or a corrected invoice manufactures a phantom gap.
-  // Fetched via the two-step entry-lines helper (entries first, then lines
-  // chunked by entry id, both paginated): see lib/bookkeeping/entry-lines.ts.
-  const journalLines = await fetchEntryLines<{
-    id: string
-    debit_amount: number | null
-    credit_amount: number | null
-  }>({
-    supabase,
-    lineColumns: 'id, debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', periodId)
-        .in('status', ['posted', 'reversed']),
-    filterLines: (q: EntryLinesQuery) => q.in('account_number', ['1510', '1513']),
-    attachEntriesAs: null,
-  })
-
-  // Both 1510 and 1513 are debit-normal assets: balance = debits - credits
-  let account1510Balance = 0
-  for (const line of journalLines) {
-    account1510Balance = Math.round((account1510Balance + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)) * 100) / 100
-  }
-
-  const difference = Math.round((arLedgerTotal - account1510Balance) * 100) / 100
-
-  // Coverage context for the difference. Non-fatal: a failed lookup degrades
-  // to "no explanation offered" (the helper returns false on failure), which
-  // leaves the red badge standing unqualified rather than excused.
-  let preRegisterArInPeriod = false
-  try {
-    preRegisterArInPeriod = await hasPreRegisterArInPeriod(supabase, companyId, periodId)
-  } catch {
-    // keep false
-  }
+  const difference = Math.round((ledger.total_outstanding - account1510Balance) * 100) / 100
 
   return {
-    ar_ledger_total: Math.round(arLedgerTotal * 100) / 100,
+    ar_ledger_total: ledger.total_outstanding,
+    as_of_date: asOfDate,
     account_1510_balance: Math.round(account1510Balance * 100) / 100,
     difference,
     // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
     // any row was excluded for a missing exchange rate, the calculation is
     // incomplete by construction and we cannot honestly stamp the period
     // Avstämd: the user must fix the underlying data first.
-    is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
-    unconverted_fx_count: unconvertedFxCount,
+    is_reconciled: Math.abs(difference) < 0.01 && ledger.unconverted_fx_count === 0,
+    unconverted_fx_count: ledger.unconverted_fx_count,
     pre_register_ar_in_period: preRegisterArInPeriod,
   }
 }

@@ -24,13 +24,14 @@ describe('parseCompanyMembersPayload', () => {
       invitations: [{ id: 'i1', email: 'bo@example.se' }],
       canInvite: true,
       inviteRequiresUpgrade: false,
+      profileChoice: null,
     })
   })
 
   it('accepts a confirmed-empty roster (that is data, not a failure)', () => {
     expect(
       parseCompanyMembersPayload({ data: { members: [], invitations: [], canInvite: false } }),
-    ).toEqual({ members: [], invitations: [], canInvite: false, inviteRequiresUpgrade: false })
+    ).toEqual({ members: [], invitations: [], canInvite: false, inviteRequiresUpgrade: false, profileChoice: null })
   })
 
   it('rejects a 200 with no data envelope instead of fabricating an empty roster', () => {
@@ -51,7 +52,7 @@ describe('parseCompanyMembersPayload', () => {
     // A truthy non-boolean must not unlock the invite form.
     expect(
       parseCompanyMembersPayload({ data: { members: [], invitations: [], canInvite: 'yes' } }),
-    ).toEqual({ members: [], invitations: [], canInvite: false, inviteRequiresUpgrade: false })
+    ).toEqual({ members: [], invitations: [], canInvite: false, inviteRequiresUpgrade: false, profileChoice: null })
   })
 
   it('only swaps the invite form for the upsell on an explicit boolean true', () => {
@@ -61,12 +62,30 @@ describe('parseCompanyMembersPayload', () => {
       parseCompanyMembersPayload({
         data: { members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: 'yes' },
       }),
-    ).toEqual({ members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: false })
+    ).toEqual({ members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: false, profileChoice: null })
     expect(
       parseCompanyMembersPayload({
         data: { members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: true },
       }),
-    ).toEqual({ members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: true })
+    ).toEqual({ members: [], invitations: [], canInvite: true, inviteRequiresUpgrade: true, profileChoice: null })
+  })
+
+  it('passes the byrå profile choice through only when it names known profiles', () => {
+    const base = { members: [], invitations: [], canInvite: true }
+    expect(
+      parseCompanyMembersPayload({ data: { ...base, profileChoice: { current: null, preselected: 'sole-trader' } } })
+        ?.profileChoice,
+    ).toEqual({ current: null, preselected: 'sole-trader' })
+    expect(
+      parseCompanyMembersPayload({ data: { ...base, profileChoice: { current: 'retail', preselected: 'retail' } } })
+        ?.profileChoice,
+    ).toEqual({ current: 'retail', preselected: 'retail' })
+    // An unknown id keeps the form as it was; the server still requires the pick.
+    expect(
+      parseCompanyMembersPayload({ data: { ...base, profileChoice: { current: null, preselected: 'freelancer' } } })
+        ?.profileChoice,
+    ).toBeNull()
+    expect(parseCompanyMembersPayload({ data: { ...base, profileChoice: 'yes' } })?.profileChoice).toBeNull()
   })
 })
 
@@ -82,6 +101,7 @@ describe('parseTeamMembersPayload', () => {
           teamKind: 'byra',
           isOwner: true,
           canInvite: true,
+          companies: [{ id: 'co-1', name: 'Klient AB' }],
         },
       }),
     ).toEqual({
@@ -92,6 +112,7 @@ describe('parseTeamMembersPayload', () => {
       teamKind: 'byra',
       isOwner: true,
       canInvite: true,
+      companies: [{ id: 'co-1', name: 'Klient AB' }],
     })
   })
 
@@ -104,6 +125,18 @@ describe('parseTeamMembersPayload', () => {
       teamKind: null,
       isOwner: false,
       canInvite: false,
+      companies: [],
+    })
+  })
+
+  it('keeps only well-formed companies for the access choice', () => {
+    expect(
+      parseTeamMembersPayload({
+        data: { members: [], companies: [{ id: 'co-1', name: 'Klient AB' }, { id: 7 }, null] },
+      }),
+    ).toMatchObject({ companies: [{ id: 'co-1', name: 'Klient AB' }] })
+    expect(parseTeamMembersPayload({ data: { members: [], companies: 'oops' } })).toMatchObject({
+      companies: [],
     })
   })
 

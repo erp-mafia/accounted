@@ -25,6 +25,8 @@
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { ruleValueProblem, type DimensionRuleType } from './rule-value'
+import type { z } from 'zod'
+import type { CreateAccountDimensionRuleSchema, UpdateAccountDimensionRuleSchema } from '@/lib/api/schemas'
 
 export const RULE_SELECT =
   'id, account_number, rule_type, value_id, is_active, dimension:dimensions!account_dimension_rules_dimension_id_company_id_fkey(id, sie_dim_no, name), value:dimension_values!account_dimension_rules_value_id_fkey(code, name)'
@@ -109,13 +111,8 @@ async function checkRuleValue(
   return null
 }
 
-export interface CreateAccountDimensionRuleInput {
-  account_number: string
-  dimension_id: string
-  rule_type: DimensionRuleType
-  value_id?: string | null
-  is_active?: boolean
-}
+/** The request every door validates (CreateAccountDimensionRuleSchema). */
+export type CreateAccountDimensionRuleInput = z.output<typeof CreateAccountDimensionRuleSchema>
 
 export async function createAccountDimensionRule(
   ctx: OperationContext,
@@ -221,11 +218,8 @@ function ruleExists(accountNumber: string, ruleId?: string): Extract<OperationOu
   }
 }
 
-export interface UpdateAccountDimensionRuleInput {
-  rule_type?: DimensionRuleType
-  value_id?: string | null
-  is_active?: boolean
-}
+/** The request every door validates (UpdateAccountDimensionRuleSchema). */
+export type UpdateAccountDimensionRuleInput = z.output<typeof UpdateAccountDimensionRuleSchema>
 
 export async function updateAccountDimensionRule(
   ctx: OperationContext,

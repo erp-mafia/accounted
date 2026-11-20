@@ -16,16 +16,18 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 vi.mock('@/lib/events', () => ({ eventBus: { emit: vi.fn().mockResolvedValue(undefined) } }))
-// The seeding + calculation libs have their own tests — stub them here and
+// The seeding + calculation libs have their own tests - stub them here and
 // assert on the wiring (defaults, conflict handling, non-fatal calc).
 vi.mock('@/lib/salary/create-run', () => ({ createSalaryRunWithEmployees: vi.fn() }))
 vi.mock('@/lib/salary/run-calculation', () => ({ runSalaryCalculation: vi.fn() }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -85,13 +87,8 @@ describe('POST /api/salary/runs — one-click creation', () => {
     authed(supabase)
 
     enqueueMany([
-      // settings: pay day 27, salary series L
-      {
-        data: {
-          salary_pay_day: 27,
-          default_voucher_series_per_source_type: { salary_payment: 'L' },
-        },
-      },
+      // settings: pay day 27
+      { data: { salary_pay_day: 27 } },
       // latest non-corrected run: 2026-06 → defaults resolve to 2026-07
       { data: { period_year: 2026, period_month: 6 } },
       // conflict pre-check: none
@@ -111,13 +108,16 @@ describe('POST /api/salary/runs — one-click creation', () => {
     // Calculation succeeded → recalculated row is returned
     expect(body.data.total_gross).toBe(105000)
 
+    // No series in the body: the lib resolves the company's salary series,
+    // the same rule v1 and MCP use, and emits salary_run.created itself.
     expect(createSalaryRunWithEmployees).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
       periodYear: 2026,
       periodMonth: 7,
       paymentDate: '2026-07-27',
-      voucherSeries: 'L',
+      voucherSeries: undefined,
       notes: undefined,
     })
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   it('rolls December forward into January of the next year', async () => {
@@ -125,7 +125,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
     authed(supabase)
 
     enqueueMany([
-      { data: null }, // no settings row → pay day 25, series 'A'
+      { data: null }, // no settings row → pay day 25
       { data: { period_year: 2026, period_month: 12 } },
       { data: null },
     ])
@@ -136,7 +136,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ periodYear: 2027, periodMonth: 1, paymentDate: '2027-01-25', voucherSeries: 'A' }),
+      expect.objectContaining({ periodYear: 2027, periodMonth: 1, paymentDate: '2027-01-25', voucherSeries: undefined }),
     )
   })
 
@@ -171,8 +171,8 @@ describe('POST /api/salary/runs — one-click creation', () => {
     authed(supabase)
 
     enqueueMany([
-      { data: { salary_pay_day: 27, default_voucher_series_per_source_type: { salary_payment: 'L' } } },
-      // no latest-run lookup — period was explicit
+      { data: { salary_pay_day: 27 } },
+      // no latest-run lookup - period was explicit
       { data: null }, // conflict pre-check
     ])
 
@@ -191,6 +191,30 @@ describe('POST /api/salary/runs — one-click creation', () => {
         paymentDate: '2026-03-24',
         voucherSeries: 'B',
       }),
+    )
+  })
+
+  it('creates a chosen earlier month with the pay day in that month (crm#1001)', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { salary_pay_day: 27 } },
+      // no latest-run lookup: the period was chosen
+      { data: null }, // conflict pre-check: the month is free
+    ])
+
+    const response = await POST(post({ period_year: 2026, period_month: 8 }), {
+      params: Promise.resolve({}),
+    } as never)
+    expect(response.status).toBe(201)
+    // The payment date follows the chosen month, so the AGI period and the
+    // verifikat date (both read from payment_date) land in that month too.
+    expect(createSalaryRunWithEmployees).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ periodYear: 2026, periodMonth: 8, paymentDate: '2026-08-27' }),
     )
   })
 
@@ -258,13 +282,23 @@ describe('POST /api/salary/runs — one-click creation', () => {
       { params: Promise.resolve({}) } as never,
     )
     const { status, body } = await parseJsonResponse<{
-      error: { code: string; details: { existingId: string } }
+      error: { code: string; message: string; details: { existingId: string; reason: string } }
     }>(response)
 
     expect(status).toBe(409)
-    expect(body.error.code).toBe('CONFLICT')
+    expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
+    expect(body.error.message).toBe('Det finns redan en lönekörning för 2026-06.')
     expect(body.error.details.existingId).toBe('run-existing')
+    expect(body.error.details.reason).toBe('salary_run_exists_for_period')
     expect(createSalaryRunWithEmployees).not.toHaveBeenCalled()
+
+    // The page shows the refusal through the shared error mapping.
+    expect(getErrorMessage(body, { context: 'salary', statusCode: 409, locale: 'sv' })).toBe(
+      'Det finns redan en lönekörning för 2026-06.',
+    )
+    expect(getErrorMessage(body, { context: 'salary', statusCode: 409, locale: 'en' })).toBe(
+      'A salary run for that period already exists.',
+    )
   })
 
   it('maps a create race (lib 23505 message) to 409', async () => {
@@ -283,7 +317,13 @@ describe('POST /api/salary/runs — one-click creation', () => {
       post({ period_year: 2026, period_month: 6, payment_date: '2026-06-25' }),
       { params: Promise.resolve({}) } as never,
     )
-    expect(response.status).toBe(409)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: { existingId?: string } }
+    }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
+    expect(body.error.message).toBe('Det finns redan en lönekörning för 2026-06.')
+    expect(body.error.details.existingId).toBeUndefined()
   })
 
   it('puts the existing run id in the 409 when the lib names the race winner', async () => {
@@ -308,7 +348,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
       error: { code: string; details: { existingId?: string; existingStatus?: string } }
     }>(response)
     expect(status).toBe(409)
-    expect(body.error.code).toBe('CONFLICT')
+    expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
     expect(body.error.details.existingId).toBe('run-winner')
     expect(body.error.details.existingStatus).toBe('draft')
   })

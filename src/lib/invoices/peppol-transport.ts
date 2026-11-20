@@ -3,6 +3,9 @@
  * contracted Access Point. Core code must not infer network delivery from an
  * HTTP response: submissions, asynchronous events, and evidence are distinct.
  */
+import { whenInitialized } from '@/lib/initialized'
+import { globalSingleton } from '@/lib/global-singleton'
+import { brandError, isBrandedInstance } from '@/lib/errors/brand'
 
 export type PeppolDeliveryStatus =
   | 'staged'
@@ -164,6 +167,14 @@ export interface PeppolInboundListOptions {
    * it; one that does not ignores it, so the caller still dedupes by id.
    */
   receivedAfter?: string
+  /**
+   * How long the call may take, in ms, from the caller's own limit. A listing
+   * that consumes (inboundListingConsumes) hands its page over when the
+   * provider answers, whether or not the answer reaches us, so it is given up
+   * only at this limit: only the caller knows how long it can still wait and
+   * archive what comes back. Not sent to the provider.
+   */
+  timeoutMs?: number
 }
 
 /**
@@ -171,7 +182,18 @@ export interface PeppolInboundListOptions {
  * operational problem (network, rate limit, credentials) from a verdict on the
  * document itself (rejected, duplicate); the send route records them as
  * different lifecycle events.
+ *
+ * `instanceof` answers by a process-wide mark, not by the prototype
+ * (lib/errors/brand.ts): lib/init registers the transports in the
+ * instrumentation hook's copy of this module, so an adapter throws that
+ * copy's class, while the send, the registration and the delivery sync catch
+ * with the route's copy. A prototype check would read every access point
+ * refusal as an unknown failure: a rejected document recorded as retryable
+ * with no reason, a failed recipient lookup answered as a 500 (the crm#1282
+ * mechanism).
  */
+const PEPPOL_TRANSPORT_ERROR = 'accounted.peppol.transportError'
+
 export class PeppolTransportError extends Error {
   readonly retryable: boolean
   readonly detail: string | null
@@ -192,6 +214,11 @@ export class PeppolTransportError extends Error {
     this.retryable = options.retryable
     this.detail = options.detail ?? null
     this.code = options.code ?? null
+    brandError(this, PEPPOL_TRANSPORT_ERROR)
+  }
+
+  static [Symbol.hasInstance](value: unknown): value is PeppolTransportError {
+    return isBrandedInstance(this, PeppolTransportError, PEPPOL_TRANSPORT_ERROR, value)
   }
 }
 
@@ -236,6 +263,13 @@ export interface PeppolTransport {
   registerRecipient?(input: PeppolRecipientRegistrationInput): Promise<PeppolRecipientRegistration>
   unregisterRecipient?(participant: PeppolParticipant): Promise<void>
   listInboundDocuments?(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]>
+  /**
+   * True when listing hands the documents over for good (Qvalia's read
+   * endpoint marks a listed page read): a document the caller fails to
+   * archive is not listed again, so the caller must not stop the page at it.
+   * Absent for a cursor-based listing, which lists it again next run.
+   */
+  readonly inboundListingConsumes?: boolean
   /** The exact received document, for the archive (räkenskapsinformation). */
   fetchInboundDocumentXml?(
     providerDocumentId: string,
@@ -257,7 +291,9 @@ export interface PeppolTransport {
  */
 export const CONNECTOR_PEPPOL_PROVIDER = 'connector'
 
-const transports = new Map<string, PeppolTransport>()
+// Process-wide (lib/global-singleton.ts): lib/init registers the transports
+// through its own copy of this module, a route reads them through another.
+const transports = globalSingleton('peppolTransports', () => new Map<string, PeppolTransport>())
 
 export function registerPeppolTransport(transport: PeppolTransport): () => void {
   const provider = transport.provider.trim().toLowerCase()
@@ -272,7 +308,27 @@ export function registerPeppolTransport(transport: PeppolTransport): () => void 
   }
 }
 
-export function getPeppolTransport(provider: string): PeppolTransport | null {
+/**
+ * Registration-time idempotency for lib/init: register what `create` builds
+ * unless `provider` already has a transport (a test's fake, an earlier init).
+ * Returns the transport it registered, or null. Reads the map directly
+ * because it runs inside init, where the async getters below would wait on
+ * the init that is calling them.
+ */
+export function registerPeppolTransportIfAbsent(
+  provider: string,
+  create: () => PeppolTransport | null,
+): PeppolTransport | null {
+  if (transports.has(provider.trim().toLowerCase())) return null
+  const transport = create()
+  if (!transport) return null
+  registerPeppolTransport(transport)
+  return transport
+}
+
+/** The registered transport, after lib/init has registered them (lib/initialized.ts). */
+export async function getPeppolTransport(provider: string): Promise<PeppolTransport | null> {
+  await whenInitialized()
   return transports.get(provider.trim().toLowerCase()) ?? null
 }
 
@@ -284,7 +340,8 @@ export type PeppolTransportAvailability =
       reason: 'provider_selection_required' | 'provider_adapter_unavailable'
     }
 
-export function getPeppolTransportAvailability(): PeppolTransportAvailability {
+export async function getPeppolTransportAvailability(): Promise<PeppolTransportAvailability> {
+  await whenInitialized()
   const configuredProvider = process.env.PEPPOL_TRANSPORT_PROVIDER?.trim().toLowerCase()
   if (!configuredProvider) {
     // A self-hosted instance in connector mode has exactly one possible

@@ -3,59 +3,62 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { FileText } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
-import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { InvoiceEditorShell, type EditorPane } from './InvoiceEditorShell'
 import { InvoiceEditorShellSkeleton } from './InvoiceEditorShellSkeleton'
+import { LoadError, NotFoundState } from '@/components/ui/empty-state'
 import { EditorTopBar, type TopBarMenuEntry } from './EditorTopBar'
 import { EditorPreviewPane } from './EditorPreviewPane'
 import { EditorEmailPreview, type EmailTextOverride } from './EditorEmailPreview'
 import { EditorStatusLine } from './EditorStatusLine'
 import { EditorSection } from './EditorSection'
 import { SendConfirmDialog, type ConfirmVoucher } from './SendConfirmDialog'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
+import type { InvoiceAttachmentFile } from '@/components/invoices/InvoiceAttachmentsSection'
+import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { useInvoicePdfPreview } from './use-editor-previews'
 import { buildSummaryVatLines } from '@/lib/invoices/editor/summary-vat'
 import {
+  CHANNEL_BLOCK_KEYS,
   emailPreviewBlock,
+  NO_MAILBOX_READY,
   resolveChannelOptions,
   resolveEffectiveChannel,
   type ChannelContext,
   type EditorChannel,
-  type EmailBlockReason,
 } from '@/lib/invoices/editor/channel'
 import { resolveSendLabel } from '@/lib/invoices/editor/primary-action'
+import { DIGITAL_MAILBOX_PROVIDER_NAMES } from '@/lib/digital-mailboxes/sending-status'
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { proposeCreditNoteSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
-import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
-import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import { creditedAmount, creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
+import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
+import { creditBooksOriginalFirst, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { isEntityType } from '@/lib/company/entity-type'
 import { EMAIL_PATTERN, parseInvoiceRecipientText } from '@/lib/invoices/email-recipients'
-import { hasLineDiscount } from '@/lib/invoices/line-amounts'
+import { hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
-
-// Why email is not possible, as keys of the invoice_editor_shell namespace.
-const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
-  not_emailable: 'email_block_not_emailable',
-  sandbox: 'email_block_sandbox',
-  no_email_plan: 'email_block_no_email_plan',
-  no_customer_email: 'email_block_no_customer_email',
-}
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { invoiceRowStatus } from '@/lib/invoices/status-display'
+import { postalPlaceLine } from '@/lib/invoices/postal-address'
 
 type CreditIntent = { kind: 'send'; channel: EditorChannel } | { kind: 'create' }
 
 const NOTE_INPUT_CLASS =
-  'w-full rounded-lg border border-input bg-card px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20'
+  'w-full rounded-lg px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 bg-control shadow-raised'
 
 /**
  * /invoices/[id]/credit: the kreditfaktura of an issued invoice in the
@@ -72,15 +75,22 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const { company, role, isSandbox } = useCompany()
   const canEmail = useCapability(CAPABILITY.email_send)
   const { settings: companySettings } = useCompanySettings()
-  const { accounts } = useAccounts()
   const locale = useLocale() as ErrorLocale
   const t = useTranslations('invoice_credit')
+  const tDetail = useTranslations('invoice_detail')
+  const tCommon = useTranslations('common')
+  const tInvoices = useTranslations('invoices')
   const tShell = useTranslations('invoice_editor_shell')
   const tSend = useTranslations('invoice_send_dialog')
   const supabase = useMemo(() => createClient(), [])
   const isCompanyAdmin = role === 'owner' || role === 'admin'
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
+  // The read failed: the page says so with "Försök igen" (bumps reloadKey).
+  const [loadFailed, setLoadFailed] = useState(false)
+  // No invoice under this id: not a failure to retry.
+  const [notFound, setNotFound] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [reason, setReason] = useState('')
   const [channelChoice, setChannelChoice] = useState<EditorChannel | null>(null)
   const [emailOverride, setEmailOverride] = useState<EmailTextOverride | null>(null)
@@ -88,6 +98,8 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const [pane, setPane] = useState<EditorPane>('form')
   const [confirmIntent, setConfirmIntent] = useState<CreditIntent | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Bilagor picked in the confirm (#79): linked once the send has created the credit note.
+  const [stagedAttachments, setStagedAttachments] = useState<InvoiceAttachmentFile[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -104,8 +116,9 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       if (cancelled) return
 
       if (error || !data) {
-        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
-        router.push('/invoices')
+        // .single() answers PGRST116 when no row matched.
+        if ((!error && !data) || error?.code === 'PGRST116') setNotFound(true)
+        else setLoadFailed(true)
         return
       }
       // Only an issued invoice has a number a credit note can refer to (ML
@@ -125,7 +138,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     }
     // supabase is memoised; t and toast are stable for the page's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoiceId])
+  }, [invoiceId, reloadKey])
 
   const originalNumber = invoice ? creditNoteOriginalReference(invoice) : null
   const creditNumber = originalNumber ? creditNoteNumber(originalNumber) : null
@@ -149,13 +162,19 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   // A credit note reverses what was booked: under kontantmetoden an unpaid,
   // unbooked original has nothing to reverse.
   const books = invoice ? creditNoteNeedsJournalEntry(accountingMethod, invoice) : false
+  // accounted#45: a deferred original that was never booked is booked first,
+  // on its own date, then credited.
+  const booksOriginalFirst = invoice ? creditBooksOriginalFirst(companySettings, invoice) : false
   const channelContext: ChannelContext = {
     documentType: 'invoice',
     canEmail,
     isSandbox,
     customerSelected: Boolean(customer),
     customerEmail: customer?.email ?? null,
-    peppolReady: false,
+    // A kreditfaktura never goes as an e-faktura or to a digital mailbox
+    // (both sends refuse it).
+    peppol: null,
+    mailboxReady: NO_MAILBOX_READY,
   }
   const channelOptions = resolveChannelOptions(channelContext)
   const channel = resolveEffectiveChannel(channelChoice, channelContext)
@@ -168,7 +187,9 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         ? tShell('email_unavailable_manual')
         : emailTabBlock === 'peppol'
           ? tShell('email_unavailable_peppol')
-          : tShell(EMAIL_BLOCK_KEYS[emailTabBlock])
+          : emailTabBlock === 'kivra' || emailTabBlock === 'billo'
+            ? tShell('email_unavailable_mailbox', { provider: DIGITAL_MAILBOX_PROVIDER_NAMES[emailTabBlock] })
+            : tShell(CHANNEL_BLOCK_KEYS[emailTabBlock])
   const primaryLabel = tShell(resolveSendLabel({ documentType: 'invoice', channel, booksOnIssue: books }))
 
   const extraCc = parseInvoiceRecipientText(extraCcText)
@@ -244,6 +265,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         documentType: 'invoice',
         payload: { credited_invoice_id: invoice.id, reason },
         channel,
+        attachmentDocumentIds: channel === 'email' ? stagedAttachments.map((file) => file.document_id) : undefined,
         email:
           channel === 'email'
             ? {
@@ -305,37 +327,66 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     }
   }
 
+  if (notFound) {
+    return (
+      <div className="px-4 pt-4 md:px-6">
+        <NotFoundState title={tDetail('not_found')} backHref="/invoices" backLabel={tCommon('back_to_list')} />
+      </div>
+    )
+  }
+
+  if (loadFailed) {
+    // Full-bleed route: the editor owns its padding, so the state brings the gutter.
+    return (
+      <div className="px-4 pt-4 md:px-6">
+        <LoadError
+          title={t('load_failed_title')}
+          onRetry={() => {
+            setLoadFailed(false)
+            setReloadKey((key) => key + 1)
+          }}
+        />
+      </div>
+    )
+  }
+
   if (!invoice) return <InvoiceEditorShellSkeleton />
 
   const items = invoice.items ?? []
+  // The credit note's own rows, as the create route writes them: a rabatt
+  // row of the original comes back positive (accounted#58).
+  const creditRows = items.map((item) => ({ id: item.id, ...buildCreditNoteItem(invoice.id, item) }))
   const productCount = items.filter((item) => item.line_type !== 'text').length
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const vatByRate = new Map<number, { base: number; vat: number }>()
-  for (const item of items) {
-    if (item.line_type === 'text') continue
-    const rate = item.vat_rate ?? 0
+  for (const row of creditRows) {
+    if (row.line_type === 'text') continue
+    const rate = row.vat_rate ?? 0
     const group = vatByRate.get(rate) ?? { base: 0, vat: 0 }
     vatByRate.set(rate, {
-      base: Math.round((group.base + Math.abs(item.line_total ?? 0)) * 100) / 100,
-      vat: Math.round((group.vat + Math.abs(item.vat_amount ?? 0)) * 100) / 100,
+      base: roundOre(group.base + row.line_total),
+      vat: roundOre(group.vat + row.vat_amount),
     })
   }
-  // The same VAT lines as the invoice editor's Summering: a 0 % rate says
-  // why (the original's treatment), shown negated as the amount credited.
+  // The same VAT lines as the invoice editor's Summering, from the credit
+  // rows: a 0 % rate says why (the original's treatment).
   const summaryVatLines = buildSummaryVatLines({
     vatRegistered: companySettings?.vat_registered !== false,
     groups: Array.from(vatByRate.entries()).map(([rate, group]) => ({ rate, ...group })),
     treatment: invoice.vat_treatment,
   })
-  const credited = (amount: number) => (amount === 0 ? 0 : -Math.abs(amount))
-  const statusLabel =
-    invoice.status === 'paid' ? t('status_paid') : invoice.status === 'overdue' ? t('status_overdue') : t('status_unpaid')
+  // The original's status as the invoice list and its own page show it
+  // (lib/invoices/status-display.ts invoiceRowStatus).
+  const originalStatus = invoiceRowStatus(invoice, today)
+  const originalStatusValues =
+    originalStatus.values && 'date' in originalStatus.values
+      ? { date: formatDate(originalStatus.values.date) }
+      : originalStatus.values
+  const statusLabel = originalStatus.labelKey ? tInvoices(originalStatus.labelKey, originalStatusValues) : invoice.status
   const customerLine = customer
     ? [
         customer.customer_type === 'individual' ? '' : customer.org_number ?? '',
-        [customer.address_line1, [customer.postal_code, customer.city].filter(Boolean).join(' ')]
-          .filter(Boolean)
-          .join(', '),
+        [customer.address_line1, postalPlaceLine(customer)].filter(Boolean).join(', '),
         customer.email ?? '',
       ]
         .filter(Boolean)
@@ -383,7 +434,13 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
     confirmRows.push({ label: tShell('confirm_row_channel'), value: tShell('confirm_channel_manual') })
   }
   confirmRows.push({ label: tShell('confirm_row_number'), value: creditNumber ?? '' })
-  confirmRows.push({ label: t('to_credit'), value: formatCurrency(-Math.abs(invoice.total), currency) })
+  confirmRows.push({ label: t('to_credit'), value: formatCurrency(creditedAmount(invoice.total), currency) })
+  if (confirmChannel && booksOriginalFirst) {
+    confirmRows.push({
+      label: t('confirm_row_original'),
+      value: t('original_booked_first', { date: formatDate(invoice.invoice_date) }),
+    })
+  }
   let confirmVoucher: ConfirmVoucher | null = null
   if (confirmIntent?.kind === 'create') {
     confirmVoucher = { kind: 'note', text: tShell('confirm_create_note') }
@@ -397,18 +454,12 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       const lines = isEntityType(entityType)
         ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today })
         : []
-      const names = new Map(accounts.map((account) => [account.account_number, account.account_name]))
       confirmVoucher =
         lines.length > 0
           ? {
               kind: 'lines',
               date: today,
-              lines: lines.map((line) => ({
-                account: line.account_number,
-                name: names.get(line.account_number) ?? line.line_description,
-                debit: parseFloat(line.debit_amount) || 0,
-                credit: parseFloat(line.credit_amount) || 0,
-              })),
+              lines: voucherLineViews(lines),
             }
           : { kind: 'note', text: tShell('confirm_voucher_foreign') }
     }
@@ -424,7 +475,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       label: tShell(`channel_${option.channel}`),
       selected: option.channel === channel,
       disabled: !option.available || !canWrite,
-      reason: option.reason ? tShell(EMAIL_BLOCK_KEYS[option.reason]) : null,
+      reason: option.reason ? tShell(CHANNEL_BLOCK_KEYS[option.reason]) : null,
       onSelect: () => requestIntent({ kind: 'send', channel: option.channel }),
     })),
     actions: [
@@ -484,25 +535,23 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         }
         form={
           <div className="space-y-8">
-            {/* What is credited: one line of context, read only. */}
-            <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px]" data-ph-mask="">
-              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <span className="min-w-0">
-                {t('credits_line', {
-                  number: originalNumber ?? '',
-                  date: formatDate(invoice.invoice_date),
-                  amount: formatCurrency(Math.abs(invoice.total), currency),
-                  status: statusLabel,
-                })}
-              </span>
-            </div>
+            {/* What is credited: one muted line, the only place besides the
+                breadcrumb that names the original invoice. */}
+            <p className="text-xs text-muted-foreground" data-ph-mask="">
+              {t('credits_line', {
+                number: originalNumber ?? '',
+                date: formatDate(invoice.invoice_date),
+                amount: formatCurrency(Math.abs(invoice.total), currency),
+                status: statusLabel,
+              })}
+            </p>
 
             <EditorSection label={t('customer_label')}>
-              <div className="rounded-lg border border-border bg-secondary/35 px-4 py-3" data-ph-mask="">
+              <div className="rounded-lg bg-secondary/35 px-4 py-3 bg-control shadow-raised" data-ph-mask="">
                 <p className="text-[15px]">{customer?.name ?? ''}</p>
-                {customerLine && <p className="text-[12.5px] text-muted-foreground">{customerLine}</p>}
+                {customerLine && <p className="text-xs text-muted-foreground">{customerLine}</p>}
               </div>
-              <p className="mt-3 text-[12.5px] text-muted-foreground">
+              <p className="mt-3 text-xs text-muted-foreground">
                 {t('details_line', {
                   date: formatDate(today),
                   currency,
@@ -511,13 +560,10 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
               </p>
             </EditorSection>
 
-            <EditorSection
-              label={t('rows_title')}
-              aside={t('rows_from', { count: productCount, number: originalNumber ?? '' })}
-            >
+            <EditorSection label={t('rows_title')}>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
-                  <tr className="border-b border-border text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+                  <tr className="border-b-hairline text-xs text-muted-foreground">
                     <th className="px-2 pb-2 text-left font-normal">{t('th_description')}</th>
                     <th className="px-2 pb-2 text-right font-normal">{t('th_quantity')}</th>
                     <th className="px-2 pb-2 text-right font-normal">{t('th_unit_price')}</th>
@@ -525,15 +571,15 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) =>
+                  {creditRows.map((item) =>
                     item.line_type === 'text' ? (
-                      <tr key={item.id} className="border-b border-border">
+                      <tr key={item.id} className="border-b-hairline">
                         <td colSpan={4} className="px-2 py-2 italic text-muted-foreground">
                           {item.description}
                         </td>
                       </tr>
                     ) : (
-                      <tr key={item.id} className="border-b border-border align-top">
+                      <tr key={item.id} className="border-b-hairline align-top">
                         <td className="px-2 py-2">
                           <span className="block">{item.description}</span>
                           {hasLineDiscount(item.discount_percent) && (
@@ -543,26 +589,23 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                           )}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                          -{Math.abs(item.quantity)} {item.unit}
+                          {item.quantity} {item.unit}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                          {formatCurrency(item.unit_price, currency)}
+                          {formatRowAmount(item.unit_price, currency)}
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 text-right tabular-nums">
-                          {formatCurrency(-Math.abs(item.line_total), currency)}
+                          {formatRowAmount(item.line_total, currency)}
                         </td>
                       </tr>
                     ),
                   )}
                 </tbody>
               </table>
-              <p className="mt-3 text-[12.5px] text-muted-foreground">
-                {t('rows_note', { number: originalNumber ?? '' })}
-              </p>
 
               <dl className="ml-auto mt-6 grid w-full max-w-xs grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-1 text-[13px] tabular-nums">
                 <dt className="text-muted-foreground">{t('subtotal')}</dt>
-                <dd className="text-right">{formatCurrency(-Math.abs(invoice.subtotal), currency)}</dd>
+                <dd className="text-right">{formatCurrency(creditedAmount(invoice.subtotal), currency)}</dd>
                 {/* A rate with no VAT to reverse says nothing; a 0 % rate says why. */}
                 {summaryVatLines
                   .filter((line) => line.kind === 'vat' && line.rate !== null)
@@ -572,19 +615,19 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
                         {t('vat_at_rate', { rate: line.rate ?? 0 })}
                         {line.kind === 'vat' && line.reason && ` · ${tShell(`vat_zero_reason_${line.reason}`)}`}
                       </dt>
-                      <dd className="text-right">{formatCurrency(credited(line.amount), currency)}</dd>
+                      <dd className="text-right">{formatCurrency(line.amount, currency)}</dd>
                     </div>
                   ))}
                 {currency !== 'SEK' && invoice.total_sek ? (
                   <>
                     <dt className="text-muted-foreground">{t('in_sek', { rate: invoice.exchange_rate ?? 1 })}</dt>
-                    <dd className="text-right">{formatCurrency(-Math.abs(invoice.total_sek))}</dd>
+                    <dd className="text-right">{formatCurrency(creditedAmount(invoice.total_sek))}</dd>
                   </>
                 ) : null}
                 {/* One row spanning both columns: an unbroken rule above the total. */}
-                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t border-border pt-2 font-display text-xl">
+                <div className="col-span-2 mt-2 flex items-baseline justify-between gap-6 border-t-hairline pt-2 font-display text-xl">
                   <dt>{t('to_credit')}</dt>
-                  <dd className="text-right">{formatCurrency(-Math.abs(invoice.total), currency)}</dd>
+                  <dd className="text-right">{formatCurrency(creditedAmount(invoice.total), currency)}</dd>
                 </div>
               </dl>
             </EditorSection>
@@ -613,6 +656,11 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
         title={confirmTitle}
         rows={confirmRows}
         voucher={confirmVoucher}
+        attachments={
+          canWrite && offersInvoiceAttachments({ channel: confirmChannel, status: null, isSandbox, canEmail, invoicer: isInvoicerRole(role) })
+            ? { kind: 'staged', files: stagedAttachments, onChange: setStagedAttachments }
+            : null
+        }
         confirmLabel={confirmLabel}
         confirmDisabled={!canWrite || (confirmChannel === 'email' && isCompanyAdmin && extraCcError !== null)}
         busy={isSubmitting}

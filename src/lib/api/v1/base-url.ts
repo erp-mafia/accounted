@@ -1,3 +1,8 @@
+import { resolveTrustedAppOrigin } from '@/lib/domains/trusted-app-origin'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('discovery-base-url')
+
 /**
  * Canonical base URL for v1 surfaces.
  *
@@ -29,8 +34,9 @@ export function getCanonicalBaseUrl(): string {
  * that the metadata they fetch is self-consistent with the host they
  * fetched it from, so discovery must reflect the host the client actually
  * used. The Host header stays attacker-controlled at the edge, so only
- * allowlisted hosts are reflected; anything else falls back to the
- * canonical base URL.
+ * hosts this deployment serves are reflected (this set, local development
+ * and the registered brand domains, see resolveDiscoveryBaseUrl); anything
+ * else falls back to the canonical base URL.
  */
 const LEGACY_DISCOVERY_HOSTS = new Set(['app.gnubok.se'])
 
@@ -99,7 +105,25 @@ export function validateLegacyDiscoveryHosts(): string[] {
   return violations
 }
 
-export function resolveDiscoveryBaseUrl(request: Request): string {
+/**
+ * The base URL that the discovery documents, the MCP 401 challenge and the
+ * RFC 9207 `iss` parameter name for this request: the host the client used,
+ * when this deployment serves it.
+ *
+ * White-label byrå domains are served by the same deployment, and Settings
+ * > API och MCP hands their users a connector URL on that domain. Their
+ * registry is the brands table, read through resolveTrustedAppOrigin: the
+ * same check that decides which host an auth link may point at. Without it
+ * every brand domain advertised the canonical host, and MCP clients refuse
+ * a resource or issuer that does not match the URL they were given (RFC
+ * 9728 §3.3, RFC 8414 §3.3), so sign-in could not complete there.
+ *
+ * A brands lookup that fails, or throws, answers canonical: the answer an
+ * unknown host gets anyway. Discovery only names a host and nothing travels
+ * in it, and a 5xx in the middle of a connector setup fails the sign-in the
+ * same way. A failed lookup is not cached, so the next attempt retries.
+ */
+export async function resolveDiscoveryBaseUrl(request: Request): Promise<string> {
   const canonical = getCanonicalBaseUrl()
   const host = request.headers.get('host')?.trim().toLowerCase()
   if (!host) return canonical
@@ -119,5 +143,13 @@ export function resolveDiscoveryBaseUrl(request: Request): string {
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
     return `http://${host}`
   }
-  return canonical
+  try {
+    return await resolveTrustedAppOrigin(host, { onLookupFailure: 'canonical' })
+  } catch (err) {
+    log.warn('brand lookup threw; discovery falls back to the canonical host', {
+      host,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return canonical
+  }
 }

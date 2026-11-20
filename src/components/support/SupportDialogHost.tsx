@@ -27,5 +27,6 @@ export function SupportDialogHost() {
     }
   }
 
-  return <SupportLink variant="hidden" open={open} onOpenChange={handleOpenChange} />
+  // The mail's link leads to the staff's answer, so the tickets, never the AI assistant.
+  return <SupportLink variant="hidden" open={open} onOpenChange={handleOpenChange} assistant={false} />
 }

@@ -21,6 +21,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { cn } from '@/lib/utils'
 import { formatQty } from '@/components/sales-orders/labels'
 import type { SalesOrder, SalesOrderItem } from '@/types'
+import { parseDecimalInput } from '@/lib/money'
 
 interface CreateInvoiceDialogProps {
   open: boolean
@@ -44,8 +45,8 @@ function deliveredNotInvoicedOf(item: SalesOrderItem): number {
 }
 
 function parseQty(value: string | undefined): number {
-  const n = parseFloat((value ?? '').replace(',', '.'))
-  return Number.isFinite(n) && n > 0 ? n : 0
+  const n = parseDecimalInput(value)
+  return n !== null && n > 0 ? n : 0
 }
 
 /**
@@ -147,7 +148,7 @@ export default function CreateInvoiceDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !isSubmitting && onOpenChange(v)}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('invoice_dialog_title')}</DialogTitle>
           <DialogDescription>{t('invoice_dialog_description')}</DialogDescription>
@@ -155,10 +156,10 @@ export default function CreateInvoiceDialog({
 
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => seed('remaining')}>
+            <Button type="button" variant="outline" onClick={() => seed('remaining')}>
               {t('mode_remaining')}
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => seed('delivered')}>
+            <Button type="button" variant="outline" onClick={() => seed('delivered')}>
               {t('mode_delivered')}
             </Button>
           </div>

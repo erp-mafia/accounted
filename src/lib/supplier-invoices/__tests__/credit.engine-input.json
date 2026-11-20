@@ -1,0 +1,173 @@
+[
+  {
+    "name": "a credit on the credit note's date: the reversing verifikat is posted",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kreditfaktura leverantör KF-3000, Kontorsbolaget AB (ankomstnr 60)",
+          "source_type": "supplier_credit_note",
+          "source_id": "00000000-0000-4000-8000-0000000c0001",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura leverantör KF-3000, Kontorsbolaget AB (ankomstnr 60)"
+            },
+            {
+              "account_number": "5410",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Kreditfaktura leverantör KF-3000, Kontorsbolaget AB (ankomstnr 60)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 0,
+              "credit_amount": 200,
+              "line_description": "Kreditfaktura leverantör KF-3000, Kontorsbolaget AB (ankomstnr 60)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-3000, Kontorsbolaget AB (ankomstnr 60)"
+            }
+          ]
+        }
+      ]
+    ],
+    "reverseEntry": [],
+    "outcome": {
+      "ok": true,
+      "journal_entry_id": "je-credit-0"
+    }
+  },
+  {
+    "name": "the credit note cannot point at its verifikat: the verifikat is reversed on the credit date",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kreditfaktura leverantör KF-3001, Kontorsbolaget AB (ankomstnr 61)",
+          "source_type": "supplier_credit_note",
+          "source_id": "00000000-0000-4000-8000-0000000c0002",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura leverantör KF-3001, Kontorsbolaget AB (ankomstnr 61)"
+            },
+            {
+              "account_number": "5410",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Kreditfaktura leverantör KF-3001, Kontorsbolaget AB (ankomstnr 61)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 0,
+              "credit_amount": 200,
+              "line_description": "Kreditfaktura leverantör KF-3001, Kontorsbolaget AB (ankomstnr 61)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-3001, Kontorsbolaget AB (ankomstnr 61)"
+            }
+          ]
+        }
+      ]
+    ],
+    "reverseEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-credit-1",
+        "2026-09-20"
+      ]
+    ],
+    "outcome": {
+      "ok": false,
+      "code": "SI_CREDIT_FAILED",
+      "details": {
+        "step": "credit_journal_entry_link"
+      }
+    }
+  },
+  {
+    "name": "a concurrent credit won the race: the losing verifikat is reversed on the credit date",
+    "createJournalEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-09-20",
+          "description": "Kreditfaktura leverantör KF-3002, Kontorsbolaget AB (ankomstnr 62)",
+          "source_type": "supplier_credit_note",
+          "source_id": "00000000-0000-4000-8000-0000000c0003",
+          "lines": [
+            {
+              "account_number": "2440",
+              "debit_amount": 1500,
+              "credit_amount": 0,
+              "line_description": "Kreditfaktura leverantör KF-3002, Kontorsbolaget AB (ankomstnr 62)"
+            },
+            {
+              "account_number": "5410",
+              "debit_amount": 0,
+              "credit_amount": 1000,
+              "line_description": "Kreditfaktura leverantör KF-3002, Kontorsbolaget AB (ankomstnr 62)"
+            },
+            {
+              "account_number": "6110",
+              "debit_amount": 0,
+              "credit_amount": 200,
+              "line_description": "Kreditfaktura leverantör KF-3002, Kontorsbolaget AB (ankomstnr 62)"
+            },
+            {
+              "account_number": "2641",
+              "debit_amount": 0,
+              "credit_amount": 300,
+              "line_description": "Ingående moms 25% Kreditfaktura leverantör KF-3002, Kontorsbolaget AB (ankomstnr 62)"
+            }
+          ]
+        }
+      ]
+    ],
+    "reverseEntry": [
+      [
+        5,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-credit-2",
+        "2026-09-20"
+      ]
+    ],
+    "outcome": {
+      "ok": false,
+      "code": "SI_CREDIT_ALREADY_CREDITED",
+      "details": {
+        "reason": "race"
+      }
+    }
+  }
+]

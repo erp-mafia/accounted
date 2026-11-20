@@ -123,7 +123,7 @@ registerEndpoint({
   },
   scope: 'reconciliation:signoff',
   risk: 'medium',
-  idempotent: false,
+  idempotent: true,
   reversible: true,
   dryRunSupported: true,
   request: { body: SignoffRequest },

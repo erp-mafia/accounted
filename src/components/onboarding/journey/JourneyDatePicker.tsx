@@ -1,12 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { InkText } from './ink'
 
 /**
  * Tap-only date picker: year → month BY NAME → day. No dd/mm ambiguity.
  * Fires onPick("YYYY-MM-DD") shortly after the day is tapped (immediately
- * under reduced motion).
+ * under reduced motion). The pick is dropped if the picker goes away or the
+ * choice changes before it fires: Tillbaka pressed in that moment used to be
+ * overtaken by the late pick, which moved the journey a step forward.
  */
 const MONTHS_SV = [
   'januari', 'februari', 'mars', 'april', 'maj', 'juni',
@@ -27,12 +29,25 @@ export default function JourneyDatePicker({ years, onPick }: JourneyDatePickerPr
   const [y, setY] = useState<number>(years[years.length - 1])
   const [m, setM] = useState<number>(0)
   const [d, setD] = useState<number>(0)
+  const pending = useRef<number[]>([])
+
+  function dropPendingPick() {
+    pending.current.forEach((id) => window.clearTimeout(id))
+    pending.current.length = 0
+  }
+
+  useEffect(() => {
+    const list = pending.current
+    return () => list.forEach((id) => window.clearTimeout(id))
+  }, [])
 
   function pickDay(day: number) {
     setD(day)
     const iso = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    window.setTimeout(() => onPick(iso), reduced ? 0 : 650)
+    // Only the last day tapped is sent.
+    dropPendingPick()
+    pending.current.push(window.setTimeout(() => onPick(iso), reduced ? 0 : 650))
   }
 
   const label = m && d ? `${d} ${MONTHS_SV[m - 1]} ${y}` : m ? `${MONTHS_SV[m - 1]} ${y}` : ''
@@ -46,6 +61,7 @@ export default function JourneyDatePicker({ years, onPick }: JourneyDatePickerPr
             type="button"
             className={`jny-mchip${yy === y ? ' is-sel' : ''}`}
             onClick={() => {
+              dropPendingPick()
               setY(yy)
               setD(0)
             }}
@@ -61,6 +77,7 @@ export default function JourneyDatePicker({ years, onPick }: JourneyDatePickerPr
             type="button"
             className={`jny-mchip${i + 1 === m ? ' is-sel' : ''}`}
             onClick={() => {
+              dropPendingPick()
               setM(i + 1)
               setD(0)
             }}

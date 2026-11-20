@@ -1,15 +1,16 @@
 import type { NextResponse } from 'next/server'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import type { ServiceFailure } from './result'
 
-type MinimalLog = Parameters<typeof errorResponseFromCode>[1]
-
-/** Map a service failure onto the canonical error envelope. */
+/** Map a service failure onto the canonical error envelope (sessionFailureResponse). */
 export function serviceFailureResponse(
   failure: ServiceFailure,
-  log: MinimalLog,
+  log: Parameters<typeof sessionFailureResponse>[1],
   requestId?: string,
 ): NextResponse {
-  if ('dbError' in failure) return errorResponse(failure.dbError, log, { requestId })
-  return errorResponseFromCode(failure.code, log, { requestId, details: failure.details })
+  return sessionFailureResponse(
+    'dbError' in failure ? { ok: false, code: 'INTERNAL_ERROR', error: failure.dbError ?? new Error('unknown database error') } : failure,
+    log,
+    requestId,
+  )
 }

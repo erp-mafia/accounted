@@ -10,8 +10,8 @@ import {
 } from '../invoice-candidate-ranking'
 
 /**
- * Ranking rule of the two manual invoice pickers (InvoicePicker,
- * SupplierInvoicePicker).
+ * Ranking rule of the manual invoice picker (InvoicePicker, one component for
+ * customer and supplier invoices since the supplier copy was merged into it).
  *
  * The bug: both sorted by `Math.abs(remaining - |tx.amount|)` with no regard
  * for currency. A 1 000 EUR invoice therefore ranked as a perfect match for a
@@ -362,7 +362,7 @@ describe('normalizeCurrency', () => {
 describe('the pickers the helper serves', () => {
   const read = (file: string) => fs.readFileSync(path.resolve(__dirname, '..', file), 'utf8')
 
-  for (const file of ['InvoicePicker.tsx', 'SupplierInvoicePicker.tsx']) {
+  for (const file of ['InvoicePicker.tsx']) {
     describe(file, () => {
       const SRC = read(file)
 

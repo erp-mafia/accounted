@@ -27,6 +27,12 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn(async () => null),
 }))
 
+const { mockMembershipActive } = vi.hoisted(() => ({ mockMembershipActive: vi.fn() }))
+vi.mock('@/lib/entitlements/multi-user', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/multi-user')>()
+  return { ...actual, isMembershipActive: mockMembershipActive }
+})
+
 const { mockCreateFlow, mockPurge, mockResolveOrigin, mockNewId } = vi.hoisted(() => ({
   mockCreateFlow: vi.fn(),
   mockPurge: vi.fn(),
@@ -52,6 +58,7 @@ vi.mock('@/lib/supabase/server', () => ({
 import { skatteverketExtension } from '../index'
 import { buildAuthorizeUrl } from '../lib/oauth'
 import { storeTokens } from '../lib/token-store'
+import { requireCapability } from '@/lib/entitlements/has-capability'
 
 vi.mock('../lib/token-store', () => ({
   storeTokens: vi.fn(), getTokens: vi.fn(), deleteTokens: vi.fn(), getTokenHealth: vi.fn(),
@@ -223,5 +230,140 @@ describe('skatteverket /authorize: direct mode', () => {
     )
     expect(res.status).toBe(307)
     expect(mockCreateFlow).toHaveBeenCalledTimes(1)
+  })
+})
+
+// crm#1622: an agent's connect link names the company it was asked about.
+// The browser's active company (ctx.companyId) may be another one; the flow
+// must be bound to the named company, and only for a member the same gates
+// as the active company let through.
+describe('skatteverket /authorize: a link that names the company', () => {
+  const OTHER = '6f1c2a5e-0b7d-4c1e-9a3f-2d8e5b4c7a10'
+
+  function memberSupabase(membership: { role: string } | null, error: unknown = null) {
+    const maybeSingle = vi.fn(async () => ({ data: membership, error }))
+    const chain: any = { select: vi.fn(() => chain), eq: vi.fn(() => chain), maybeSingle }
+    return { from: vi.fn(() => chain), chain }
+  }
+
+  beforeEach(() => {
+    mockConnectorMode.mockReturnValue(null)
+    mockMembershipActive.mockResolvedValue(true)
+  })
+
+  it('binds the flow to the named company, not the active one, and tags the landing page', async () => {
+    const sb = memberSupabase({ role: 'owner' })
+    const res = await authorizeRoute().handler(
+      new Request(
+        `https://instans.example.se/api/extensions/ext/skatteverket/authorize?return_to=%2Fsettings%2Fskatteverket&company_id=${OTHER}`,
+      ),
+      { ...ctx, supabase: sb },
+    )
+
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toBe('https://skv.test/authorize?direct=1')
+    expect(sb.from).toHaveBeenCalledWith('company_members')
+    expect(sb.chain.eq).toHaveBeenCalledWith('company_id', OTHER)
+    expect(sb.chain.eq).toHaveBeenCalledWith('user_id', 'user-1')
+    expect(requireCapability).toHaveBeenCalledWith(sb, OTHER, 'skatteverket')
+    expect(mockCreateFlow).toHaveBeenCalledWith(
+      { tag: 'service' },
+      expect.objectContaining({
+        companyId: OTHER,
+        userId: 'user-1',
+        returnTo: `/settings/skatteverket?skv_company=${OTHER}`,
+      }),
+    )
+  })
+
+  it('lands on the Skatteverket settings page when the link names no return path', async () => {
+    const sb = memberSupabase({ role: 'member' })
+    await authorizeRoute().handler(
+      new Request(`https://instans.example.se/api/extensions/ext/skatteverket/authorize?company_id=${OTHER}`),
+      { ...ctx, supabase: sb },
+    )
+    expect(mockCreateFlow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ companyId: OTHER, returnTo: `/settings/skatteverket?skv_company=${OTHER}` }),
+    )
+  })
+
+  it('needs no membership read when the named company is the active one', async () => {
+    const sb = memberSupabase(null)
+    await authorizeRoute().handler(
+      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize?company_id=company-1'),
+      { ...ctx, supabase: sb },
+    )
+    expect(sb.from).not.toHaveBeenCalled()
+    expect(mockCreateFlow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ companyId: 'company-1', returnTo: '/settings/skatteverket?skv_company=company-1' }),
+    )
+  })
+
+  it('keeps the active company when the link names none', async () => {
+    const sb = memberSupabase(null)
+    await authorizeRoute().handler(
+      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize?return_to=%2F'),
+      { ...ctx, supabase: sb },
+    )
+    expect(sb.from).not.toHaveBeenCalled()
+    expect(mockCreateFlow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ companyId: 'company-1', returnTo: '/' }),
+    )
+  })
+
+  it.each([
+    ['not a member', null],
+    ['the invoicing-only role', { role: 'invoicer' }],
+  ])('refuses %s, records no flow and sends the user back with the reason', async (_label, membership) => {
+    const sb = memberSupabase(membership as { role: string } | null)
+    const res = await authorizeRoute().handler(
+      new Request(
+        `https://instans.example.se/api/extensions/ext/skatteverket/authorize?return_to=%2Fsettings%2Fskatteverket&company_id=${OTHER}`,
+      ),
+      { ...ctx, supabase: sb },
+    )
+    expect(res.status).toBe(307)
+    const location = new URL(res.headers.get('location') as string)
+    expect(location.origin).toBe('https://instans.example.se')
+    expect(location.pathname).toBe('/settings/skatteverket')
+    expect(location.searchParams.get('skv_error')).toMatch(/inloggad med/)
+    expect(mockCreateFlow).not.toHaveBeenCalled()
+    expect(buildAuthorizeUrl).not.toHaveBeenCalled()
+  })
+
+  it('refuses a membership the seat gate has frozen', async () => {
+    mockMembershipActive.mockResolvedValueOnce(false)
+    const sb = memberSupabase({ role: 'member' })
+    const res = await authorizeRoute().handler(
+      new Request(`https://instans.example.se/api/extensions/ext/skatteverket/authorize?company_id=${OTHER}`),
+      { ...ctx, supabase: sb },
+    )
+    expect(res.status).toBe(403)
+    expect(mockMembershipActive).toHaveBeenCalledWith(sb, OTHER, 'member')
+    expect(mockCreateFlow).not.toHaveBeenCalled()
+  })
+
+  it('answers 400 for a company id that is not a uuid, without reading memberships', async () => {
+    const sb = memberSupabase({ role: 'owner' })
+    const res = await authorizeRoute().handler(
+      new Request("https://instans.example.se/api/extensions/ext/skatteverket/authorize?company_id=x'or'1"),
+      { ...ctx, supabase: sb },
+    )
+    expect(res.status).toBe(400)
+    expect(sb.from).not.toHaveBeenCalled()
+    expect(mockCreateFlow).not.toHaveBeenCalled()
+  })
+
+  it('answers 500 when the membership cannot be read', async () => {
+    const sb = memberSupabase(null, { message: 'boom' })
+    const res = await authorizeRoute().handler(
+      new Request(`https://instans.example.se/api/extensions/ext/skatteverket/authorize?company_id=${OTHER}`),
+      { ...ctx, supabase: sb },
+    )
+    expect(res.status).toBe(500)
+    expect(mockCreateFlow).not.toHaveBeenCalled()
   })
 })

@@ -1,16 +1,22 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { expiredCookieOptions } from '@/lib/supabase/cookie-options'
 import { getMailSearchService } from '@/lib/mail-search/service'
+import { getActiveCompanyId } from '@/lib/company/active-company'
+import { getStripe } from '@/lib/stripe/client'
+import { endCompanySubscriptions, readCompanyStripeRef } from '@/lib/stripe/company-subscription'
+
+// company.deleted ends the company's bank connections at the bank inline
+// (lib/events/handlers/company-deleted-bank-feed-handler.ts), up to 30 s a
+// bank call: room for that, so the request is not cut off after the archive.
+export const maxDuration = 300
 
 const log = createLogger('api/company/delete')
-
-ensureInitialized()
 
 const DeleteCompanySchema = z.object({
   confirm_name: z.string().min(1),
@@ -29,9 +35,18 @@ const DeleteCompanySchema = z.object({
  *  - The body must include confirm_name matching the company's display name
  *    exactly as the UI shows it: company_settings.company_name, falling back
  *    to companies.name only when no settings row exists. ONLY that single
- *    name is accepted (see step 3) — accepting alternates would weaken the
+ *    name is accepted (see step 3) - accepting alternates would weaken the
  *    confirmation gate on an irreversible action.
  *  - Already-archived companies return 404 (treated as not found).
+ *  - The company's Stripe subscription ends first (crm#1373); if Stripe
+ *    cannot be reached the company is not archived (502).
+ *
+ * Response: { data: { companyId, archivedAt, nextCompanyId } }. nextCompanyId
+ * is the company the user lands in now (the same resolution the middleware
+ * runs on the next request), or null when they have none left: the client
+ * then takes them to the delete-account action instead of a settings page
+ * the middleware would bounce to onboarding (crm#1042). It is absent when
+ * that resolution failed, which never reads as "no companies left".
  */
 export async function POST(
   request: Request,
@@ -114,6 +129,29 @@ export async function POST(
     return NextResponse.json(
       { error: 'Företagsnamnet stämmer inte överens.' },
       { status: 400 }
+    )
+  }
+
+  // 3b. End the company's Stripe subscription (crm#1373). Once the company
+  // is hidden nobody can open its billing page or the portal, yet the
+  // subscription went on charging every period: an owner who deleted the
+  // wrong company and subscribed on the right one paid for both. Ended
+  // before the archive and fail closed: a company that would keep being
+  // charged is not hidden. A failure after this point leaves the company
+  // visible and unsubscribed, which a retry of the delete completes.
+  try {
+    const stripeRef = await readCompanyStripeRef(service, companyId)
+    if (stripeRef) {
+      const ended = await endCompanySubscriptions(getStripe(), companyId, stripeRef)
+      if (ended.length > 0) {
+        log.info('Ended the company subscription before archive', { companyId, subscriptionIds: ended })
+      }
+    }
+  } catch (err) {
+    log.error('Failed to end the company subscription before archive', err, { companyId })
+    return NextResponse.json(
+      { error: 'Kunde inte avsluta företagets abonnemang. Försök igen om en stund.' },
+      { status: 502 }
     )
   }
 
@@ -247,14 +285,14 @@ export async function POST(
   // seam, since core never imports the extension; best effort toward
   // Google, and the archive above stands whatever happens here.
   try {
-    await getMailSearchService().endCompanyGrants?.(companyId, user.id)
+    await (await getMailSearchService()).endCompanyGrants?.(companyId, user.id)
   } catch (err) {
     log.error('Failed to end mailbox grants on company archive', { companyId, err })
   }
 
   // 7. Write audit log row. companies has no auto-audit trigger, so do it
   // explicitly. Service client bypasses audit_log RLS (no INSERT policy).
-  // The archive already happened — don't fail the request, but an audit
+  // The archive already happened - don't fail the request, but an audit
   // write failing on an irreversible action must never be silent.
   const { error: auditError } = await service.from('audit_log').insert({
     user_id: user.id,
@@ -280,20 +318,24 @@ export async function POST(
     payload: { companyId, userId: user.id, archivedAt },
   })
 
-  // 9. Build response and clear company cookie if it matched
-  const response = NextResponse.json({ data: { companyId, archivedAt } })
+  // 9. Where the user lands now. Same resolver as the middleware (user
+  // preferences, then the first non-archived membership), read through the
+  // caller's own session so RLS hides the company just archived. A failed
+  // read leaves the field out: unknown is not "no companies left".
+  let nextCompanyId: string | null | undefined
+  try {
+    nextCompanyId = await getActiveCompanyId(supabase, user.id)
+  } catch (err) {
+    log.error('Failed to resolve the next active company after archive', { companyId, err })
+  }
+
+  // 10. Build response and clear company cookie if it matched
+  const response = NextResponse.json({ data: { companyId, archivedAt, nextCompanyId } })
 
   const cookieCompanyId = request.headers.get('cookie')?.match(/gnubok-company-id=([^;]+)/)?.[1]
   if (cookieCompanyId === companyId) {
-    response.cookies.set('gnubok-company-id', '', {
-      path: '/',
-      maxAge: 0,
-    })
+    response.cookies.set('gnubok-company-id', '', expiredCookieOptions())
   }
-
-  // Ignore supabase server-client cookie warnings; the response is what
-  // the browser sees. RLS session isn't relevant here.
-  void supabase
 
   return response
 }

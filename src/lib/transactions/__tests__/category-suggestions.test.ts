@@ -3,8 +3,10 @@ import {
   buildMerchantHistory,
   getSuggestedCategories,
   getSuggestedTemplates,
+  mappingRuleMatches,
   merchantHistoryFor,
   rowProposal,
+  type MerchantHistoryMap,
   type SuggestedTemplate,
 } from '../category-suggestions'
 import { makeTransaction } from '@/tests/helpers'
@@ -210,6 +212,68 @@ describe('getSuggestedCategories: counterparty history', () => {
   })
 })
 
+describe('counterparty history follows the learned counterpart guards (crm#1920)', () => {
+  // A bank's wording for how the money moved, on every such payment whoever
+  // was paid: no counterparty, so no key to gather tags under.
+  const generic = (text: string, category: string) => ({
+    merchant_name: null,
+    description: text,
+    original_description: text,
+    category,
+  })
+
+  it('gathers nothing under a bank text that names no one', () => {
+    const map = buildMerchantHistory([
+      generic('INTERNET BET 1', 'expense_other'),
+      generic('INTERNET BET 1', 'expense_other'),
+      generic('INSÄTTNING', 'income_other'),
+    ])
+    expect(map.size).toBe(0)
+    expect(merchantHistoryFor(map, null, 'INTERNET BET 1')).toEqual({})
+  })
+
+  it('reads nothing for a row whose text names no one, whatever the map holds', () => {
+    // Before the guard both rows keyed on the bank's own words.
+    const map: MerchantHistoryMap = new Map([
+      ['internet bet 1', { expense_other: 2 }],
+      ['internet bet', { expense_other: 2 }],
+    ])
+    expect(merchantHistoryFor(map, null, 'INTERNET BET 1')).toEqual({})
+    expect(merchantHistoryFor(map, 'INTERNET BET 4')).toEqual({})
+  })
+
+  it('counts no tag on a row no live verifikat books any more', () => {
+    const map = buildMerchantHistory([
+      { merchant_name: 'Zqxw Vrpt', category: 'expense_office', is_booked: true },
+      { merchant_name: 'Zqxw Vrpt', category: 'expense_other', is_booked: false },
+    ])
+    expect(merchantHistoryFor(map, 'Zqxw Vrpt')).toEqual({ expense_office: 1 })
+  })
+
+  it('still gathers history when the line names someone beside the wording', () => {
+    const map = buildMerchantHistory([generic('INTERNET BET 1 ZQXW FÖRSÄKRING', 'expense_other')])
+    expect(merchantHistoryFor(map, null, 'INTERNET BET 1 ZQXW FÖRSÄKRING')).toEqual({ expense_other: 1 })
+  })
+
+  it('gives a key shorter than two characters no history', () => {
+    const map = buildMerchantHistory([{ merchant_name: 'X', category: 'expense_office' }])
+    expect(merchantHistoryFor(map, 'X')).toEqual({})
+  })
+
+  it('offers no history for a payment to Skatteverket: the skattekonto rule books it', () => {
+    // The catalog template that books these rows tags them expense_other.
+    const payment = tx({ merchant_name: 'Skatteverket', description: 'SKATTEVERKET', amount: -5000 })
+    const result = getSuggestedCategories(payment, [], { expense_other: 5 })
+    expect(result.some((s) => s.source === 'history')).toBe(false)
+  })
+
+  it('keeps history for money in from Skatteverket, which the rule leaves alone', () => {
+    const payout = tx({ merchant_name: 'Skatteverket', description: 'SKATTEVERKET', amount: 5000 })
+    const result = getSuggestedCategories(payout, [], { income_other: 2 })
+    expect(result).toEqual([expect.objectContaining({ category: 'income_other', source: 'history' })])
+  })
+})
+
 describe('getSuggestedTemplates: rules that matched vs templates used lately', () => {
   const tx = makeTransaction({ description: 'Autogiro Telia 4471028', merchant_name: 'Telia', amount: -2487.5, mcc_code: null })
   const base = {
@@ -247,5 +311,38 @@ describe('getSuggestedTemplates: rules that matched vs templates used lately', (
     // The row never wears it: without a match the chip says Välj kategori.
     expect(rowProposal(out)?.source).not.toBe('recent')
     expect(rowProposal([recent!])).toBeUndefined()
+  })
+})
+
+describe('mapping rules learned from a generic bank text (crm#1707)', () => {
+  const rule = (merchant_pattern: string, over: Record<string, unknown> = {}) =>
+    ({
+      id: 'rule-g', user_id: null, company_id: 'co-1', rule_name: `Learned: ${merchant_pattern}`, rule_type: 'merchant_name', priority: 10,
+      mcc_codes: null, merchant_pattern, description_pattern: null, amount_min: null, amount_max: null,
+      debit_account: '1930', credit_account: '2081', vat_treatment: null, vat_debit_account: null, vat_credit_account: null,
+      risk_level: 'NONE', default_private: false, requires_review: false, confidence_score: 0.95,
+      capitalization_threshold: null, capitalized_debit_account: null, source: 'auto',
+      user_description: null, template_id: null, is_active: true, created_at: '', updated_at: '',
+      ...over,
+    }) as never
+
+  it.each(['INSÄTTNING', 'KORTKÖP', 'ÖVERFÖRING', 'BG-BETALNING'])('a rule on %j matches no row', (text) => {
+    expect(mappingRuleMatches(rule(text), tx({ merchant_name: text, description: `${text} 4455`, amount: 14000 }))).toBe(false)
+  })
+
+  it('a rule on a real merchant or a mixed text still matches', () => {
+    expect(mappingRuleMatches(rule('Telia'), tx({ merchant_name: 'Telia' }))).toBe(true)
+    expect(mappingRuleMatches(rule('KORTKÖP ICA MAXI'), tx({ merchant_name: 'KORTKÖP ICA MAXI' }))).toBe(true)
+    expect(mappingRuleMatches(rule('Test \\(Pty\\) Ltd\\.'), tx({ merchant_name: 'Test (Pty) Ltd.' }))).toBe(true)
+  })
+
+  it('the generic rule is offered neither as the row proposal nor as a suggested category', async () => {
+    const deposit = tx({ merchant_name: 'INSÄTTNING', description: 'STRIPE Shopi', amount: 14000 })
+    const generic = rule('INSÄTTNING', { template_id: 'share_capital_deposit' })
+
+    const templates = await getSuggestedTemplates(deposit, 'aktiebolag', [generic])
+    expect(templates.some((s: SuggestedTemplate) => s.source === 'rule')).toBe(false)
+    expect(rowProposal(templates)?.template_id).not.toBe('share_capital_deposit')
+    expect(getSuggestedCategories(deposit, [generic], {}).some((s) => s.source === 'mapping_rule')).toBe(false)
   })
 })

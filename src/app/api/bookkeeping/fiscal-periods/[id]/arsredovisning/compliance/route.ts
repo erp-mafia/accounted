@@ -9,9 +9,6 @@ import {
   updateArsredovisningCompliance,
 } from '@/lib/bokslut/arsredovisning/workflow-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'period.arsredovisning_compliance_get',

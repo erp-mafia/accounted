@@ -54,8 +54,8 @@ export function repairCharset(raw: string): string {
 
 // ── Bankgiro / LB payment-file lines ────────────────────────────────────
 
-// "2617264 DBT.VIEWLEDGER AB 144 240 2617264 350 Brorsan AB c/o ..." and
-// "240 DBT.5050-1055 SKATTEVERK 144 240 1655958320228 350 Polytop AB ...".
+// "2617264 DBT.LEVERANTOREN AB 144 240 2617264 350 Exempel AB c/o ..." and
+// "240 DBT.5050-1055 SKATTEVERK 144 240 1655882244684 350 Exempelbolaget AB ...".
 // DBT. opens the payee (optionally its giro number first); the numbered
 // fields 144, 240 and 350 open reference, amount and payer blocks. The payee
 // is often cut at twelve characters, so it is a fragment, not a name.

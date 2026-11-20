@@ -140,7 +140,7 @@ export function formatMandatoryDimensionViolation(v: MandatoryDimensionViolation
 /**
  * Raised at COMMIT time (commitEntry / the bulk-book pre-check) when an
  * active 'required' rule in account_dimension_rules is unsatisfied by a
- * line's dimensions bag. Drafts may be incomplete by design — the rule bites
+ * line's dimensions bag. Drafts may be incomplete by design - the rule bites
  * when the verifikat is about to become immutable. Companies without rules
  * (every company by default) never reach this error.
  */

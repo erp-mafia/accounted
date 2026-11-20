@@ -3,10 +3,14 @@ import type { z } from 'zod'
 import type { Currency, Customer, Invoice, SalesOrder, SalesOrderItem } from '@/types'
 import type { CreateInvoiceFromSalesOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
+import { customerInvoiceMarking } from '@/lib/customers/invoice-marking'
+import { todayIsoStockholm, invoiceDueDate } from '@/lib/dates/iso'
+import { consumerInvoiceTerms } from '@/lib/invoices/consumer-credit'
 import { loadSalesOrder } from './load'
 import { qtyGreater, roundQty } from './progress'
 import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
+import { loadInvoiceTerms } from '@/lib/invoices/due-date'
 
 export type CreateInvoiceFromOrderInput = z.infer<typeof CreateInvoiceFromSalesOrderSchema>
 
@@ -152,12 +156,10 @@ export async function createInvoiceFromSalesOrder(
   }
 
   const invoiceDate = input.invoice_date ?? todayIsoStockholm()
-  let dueDate = input.due_date
-  if (!dueDate) {
-    const due = new Date(invoiceDate)
-    due.setDate(due.getDate() + (customer.default_payment_terms ?? 30))
-    dueDate = due.toISOString().slice(0, 10)
-  }
+  const dueDate = input.due_date || invoiceDueDate(
+    invoiceDate,
+    consumerInvoiceTerms(await loadInvoiceTerms(supabase, companyId, customer.default_payment_terms), customer.customer_type, invoiceDate),
+  )
   const deliveryDate = deliveryDateFor(picked)
 
   const pickedById = new Map(picked.map((p) => [p.item.id, p]))
@@ -195,8 +197,11 @@ export async function createInvoiceFromSalesOrder(
       due_date: dueDate,
       delivery_date: deliveryDate,
       currency: order.currency as Currency,
-      your_reference: order.your_reference ?? undefined,
+      // The order's Er referens, else the card's Fakturareferens (crm#1200).
+      your_reference: yourReferenceForNewInvoice(order.your_reference, customer) ?? undefined,
       our_reference: order.our_reference ?? undefined,
+      // An order has no Märkning of its own: the card's (crm#1477).
+      invoice_marking: customerInvoiceMarking(customer) ?? undefined,
       notes: order.order_number ? `Kundorder ${order.order_number}` : undefined,
       default_dimensions: order.default_dimensions ?? {},
       items,

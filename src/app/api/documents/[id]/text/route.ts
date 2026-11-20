@@ -1,12 +1,8 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * GET /api/documents/[id]/text
@@ -25,7 +21,6 @@ export interface DocumentTextView {
 const MAX_CHARS = 200_000
 
 export const GET = withRouteContext('document.text', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const { data: doc, error: docError } = await ctx.supabase.from('document_attachments').select('id, page_count').eq('id', id).eq('company_id', ctx.companyId).maybeSingle()
   if (docError) return NextResponse.json({ error: getErrorMessage(docError) }, { status: 500 })

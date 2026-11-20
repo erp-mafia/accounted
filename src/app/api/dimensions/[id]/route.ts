@@ -17,14 +17,11 @@
  *     nothing booked can ever be pulled out from under a verifikat.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateDimensionSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { deleteDimension, updateDimension } from '@/lib/dimensions/registry-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const PATCH = withRouteContext(
   'dimension.update',

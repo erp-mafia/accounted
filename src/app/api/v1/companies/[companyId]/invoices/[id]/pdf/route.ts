@@ -18,30 +18,11 @@
  */
 
 import { z } from 'zod'
-import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
-import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
-import { contentDisposition } from '@/lib/api/content-disposition'
+import { renderStoredInvoicePdf } from '@/lib/invoices/stored-invoice-pdf'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import {
-  hasRequiredInvoicePaymentAccount,
-  invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
-import { INVOICE_PDF_COLUMNS } from '@/lib/api/v1/invoice-columns'
-import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
-import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
-
-// The ciphertext is fetched here, for the render only: the template derives
-// the masked personnummer (YYYYMMDD-XXXX) in the deduction box from it. It is
-// deliberately not part of INVOICE_PDF_COLUMNS, which pins what the API
-// projects; nothing on this route echoes the row.
-const PDF_FETCH_SELECT = `
-  ${INVOICE_PDF_COLUMNS},
-  deduction_personnummer_encrypted,
-  customer:customers(*),
-  items:invoice_items(*)
-`
+import { fileResponse } from '@/lib/api/file-response'
 
 registerEndpoint({
   operation: 'invoices.pdf',
@@ -92,123 +73,29 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
     const invoiceId = idParse.data
 
-    const { data: invoice, error: fetchErr } = await ctx.supabase
-      .from('invoices')
-      .select(PDF_FETCH_SELECT)
-      .eq('id', invoiceId)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!invoice) {
-      ctx.log.warn('invoices.pdf: not found', { invoiceId, companyId: ctx.companyId })
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'invoice' },
-      })
-    }
-
-    const typed = invoice as unknown as Invoice & {
-      customer?: Customer
-      items?: InvoiceItem[]
-    }
-
-    // No buyer to print (customer deleted, crm#263): refuse instead of a
-    // render that throws on the missing customer.
-    if (invoiceLacksCustomer(typed)) {
-      return v1ErrorResponseFromCode('INVOICE_CUSTOMER_MISSING', ctx.log, { requestId: ctx.requestId })
-    }
-
-    // company_settings is required by the PDF template (header, bank info,
-    // entity-type-driven layout). Select * is intentional: see the rationale
-    // in the :send route. Same flat owner-facing config object, no sensitive
-    // columns.
-    const { data: company, error: companyErr } = await ctx.supabase
-      .from('company_settings')
-      .select('*')
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-
-    if (companyErr || !company) {
-      ctx.log.warn('invoices.pdf: company settings missing', {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, typed)) {
-      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
-        requestId: ctx.requestId,
-        details: { currency: typed.currency },
-      })
-    }
-
-    const items = (typed.items ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
-
-    // Credit-note back-reference per ML 17 kap 22-23§. Best-effort: if the
-    // original invoice was somehow deleted, the PDF template tolerates an
-    // undefined value (the back-reference field is omitted from the layout).
-    let originalInvoiceNumber: string | undefined
-    if (typed.credited_invoice_id) {
-      const { data: orig } = await ctx.supabase
-        .from('invoices')
-        .select('invoice_number')
-        .eq('id', typed.credited_invoice_id)
-        .eq('company_id', ctx.companyId!)
-        .maybeSingle()
-      if (orig) {
-        originalInvoiceNumber = (orig as { invoice_number?: string }).invoice_number ?? undefined
+    // The loader and render are shared with gnubok_get_invoice_pdf
+    // (lib/invoices/stored-invoice-pdf.ts), so the agent's file and this
+    // download are the same document.
+    const rendered = await renderStoredInvoicePdf(ctx.supabase, ctx.companyId!, invoiceId, ctx.log)
+    if (!rendered.ok) {
+      if (rendered.code === 'DB_ERROR') {
+        return v1ErrorResponse(rendered.error, ctx.log, { requestId: ctx.requestId })
       }
-    }
-
-    let pdfBuffer: Buffer
-    try {
-      // Same render path, so the same QR code, as the dashboard download and
-      // the sent file.
-      pdfBuffer = (
-        await renderInvoicePdfBuffer({
-          invoice: typed as Invoice,
-          customer: typed.customer as Customer,
-          items,
-          company: company as CompanySettings,
-          originalInvoiceNumber,
-          paymentAccountRequired: invoiceRequiresPaymentAccount(typed),
-        })
-      ).buffer
-    } catch (err) {
-      ctx.log.error('invoices.pdf: render failed', err as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('INVOICE_PDF_RENDER_FAILED', ctx.log, {
+      return v1ErrorResponseFromCode(rendered.code, ctx.log, {
         requestId: ctx.requestId,
+        ...(rendered.details ? { details: rendered.details } : {}),
       })
     }
-
-    const isCreditNote = !!typed.credited_invoice_id
-    const filename = invoicePdfFilename({
-      companyName: (company as CompanySettings).company_name,
-      customerName: typed.customer?.name,
-      invoiceNumber: typed.invoice_number,
-      invoiceId,
-      invoiceDate: typed.invoice_date,
-      documentType: typed.document_type,
-      isCreditNote,
-    })
+    const pdfBuffer = rendered.buffer
+    const filename = rendered.filename
 
     const uint8Array = new Uint8Array(pdfBuffer)
-    return new Response(uint8Array, {
-      status: 200,
+    return fileResponse(uint8Array, {
+      filename: filename,
+      contentType: 'application/pdf',
+      cacheControl: 'private, no-store',
       headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': String(pdfBuffer.length),
-        'Cache-Control': 'private, no-store',
         'X-Request-Id': ctx.requestId,
       },
     })

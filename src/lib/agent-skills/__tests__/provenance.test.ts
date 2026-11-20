@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { loadSkillProvenance, oauthActorLabel, skillBodyHash } from '../provenance'
+import { loadSkillProvenance, skillBodyHash } from '../provenance'
 import { createMockSupabase } from '@/tests/helpers'
 
 describe('skill retrieval provenance', () => {
@@ -19,9 +19,5 @@ describe('skill retrieval provenance', () => {
     expect(chain.eq.mock.calls).toEqual(expect.arrayContaining([['company_id', 'company'], ['user_id', 'user'], ['data->>actorId', 'key'], ['data->>sessionId', 'session']]))
     expect(result.skills_loaded).toEqual(['bookkeep'])
     expect(result.skill_retrievals?.[0]).toMatchObject({ body_hash: skillBodyHash('new'), version: 2 })
-  })
-  it('derives display identity from stored provider while preserving unknown names', () => {
-    expect(oauthActorLabel('chatgpt', 'MCP-klient (OAuth)')).toBe('ChatGPT (OpenAI)')
-    expect(oauthActorLabel(null, 'My integration')).toBe('My integration')
   })
 })

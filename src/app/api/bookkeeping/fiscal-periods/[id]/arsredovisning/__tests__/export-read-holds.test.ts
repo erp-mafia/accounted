@@ -13,7 +13,7 @@ vi.mock('@/lib/bokslut/arsredovisning/arsredovisning-pdf', () => ({ Arsredovisni
 vi.mock('@/lib/bokslut/arsredovisning/arsredovisning-k3-pdf', () => ({ ArsredovisningK3PDF: vi.fn() }))
 vi.mock('@/lib/bokslut/arsredovisning/model', () => ({ buildCanonicalAnnualReport: vi.fn() }))
 vi.mock('@/lib/bokslut/ixbrl/build-input', () => ({ buildIxbrlInput: vi.fn() }))
-vi.mock('@/lib/bokslut/ixbrl/document/k2-document', () => ({ generateK2IxbrlDocument: vi.fn() }))
+vi.mock('@/lib/bokslut/ixbrl/document/generate', () => ({ generateIxbrlDocument: vi.fn() }))
 vi.mock('@/lib/bokslut/arsredovisning/version-ixbrl', () => ({ getVersionIxbrlInput: vi.fn() }))
 vi.mock('@/lib/bokslut/arsredovisning/version-service', () => ({
   getAnnualReportVersion: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock('@/lib/bokslut/arsredovisning/version-service', () => ({
 import { renderToBuffer } from '@react-pdf/renderer'
 import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
 import { buildIxbrlInput } from '@/lib/bokslut/ixbrl/build-input'
-import { generateK2IxbrlDocument } from '@/lib/bokslut/ixbrl/document/k2-document'
+import { generateIxbrlDocument } from '@/lib/bokslut/ixbrl/document/generate'
 import { getVersionIxbrlInput } from '@/lib/bokslut/arsredovisning/version-ixbrl'
 import { createAnnualReportVersion, getAnnualReportVersion } from '@/lib/bokslut/arsredovisning/version-service'
 import { GET as pdf } from '../pdf/route'
@@ -34,7 +34,11 @@ import { POST as createVersion } from '../versions/route'
 
 const params = { params: Promise.resolve({ id: 'period-1' }) }
 const report = { accounting_framework: 'k2', fiscal_period: { period_end: '2025-12-31' } }
-const model = { report, validation: { ok: true } }
+const model = {
+  report,
+  validation: { ok: true },
+  profile: { auditor_report_required: false, auditor_firm_name: null, auditor_opinion: null },
+}
 const input = { period: { end: '2025-12-31' } }
 const version = { id: 'version-1', summary: { status: 'signed' }, report_data: report }
 
@@ -69,7 +73,7 @@ beforeEach(() => {
   vi.mocked(buildCanonicalAnnualReport).mockResolvedValue(model as never)
   vi.mocked(buildIxbrlInput).mockResolvedValue(input as never)
   vi.mocked(renderToBuffer).mockResolvedValue(Buffer.from('annual PDF'))
-  vi.mocked(generateK2IxbrlDocument).mockReturnValue({ xhtml: '<html>annual report</html>', warnings: [] })
+  vi.mocked(generateIxbrlDocument).mockReturnValue({ xhtml: '<html>annual report</html>', warnings: [] })
   vi.mocked(getAnnualReportVersion).mockResolvedValue(version as never)
   vi.mocked(getVersionIxbrlInput).mockResolvedValue(input as never)
   vi.mocked(createAnnualReportVersion).mockResolvedValue({ id: 'version-1' } as never)
@@ -86,7 +90,7 @@ describe('annual report import holds', () => {
     expect(buildCanonicalAnnualReport).not.toHaveBeenCalled()
     expect(buildIxbrlInput).not.toHaveBeenCalled()
     expect(renderToBuffer).not.toHaveBeenCalled()
-    expect(generateK2IxbrlDocument).not.toHaveBeenCalled()
+    expect(generateIxbrlDocument).not.toHaveBeenCalled()
   })
 
   it.each([['pdf', pdf], ['ixbrl?download=1', ixbrl]] as const)(
@@ -107,7 +111,7 @@ describe('annual report import holds', () => {
         mock.events.push('render')
         return Buffer.from('annual PDF')
       })
-      vi.mocked(generateK2IxbrlDocument).mockImplementation(() => {
+      vi.mocked(generateIxbrlDocument).mockImplementation(() => {
         expect(mock.isActive()).toBe(true)
         mock.events.push('render')
         return { xhtml: '<html>annual report</html>', warnings: [] }

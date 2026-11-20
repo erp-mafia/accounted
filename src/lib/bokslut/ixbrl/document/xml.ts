@@ -9,9 +9,18 @@
  * byte-for-byte against the official examples.
  */
 
+/**
+ * Characters XML 1.0 does not allow anywhere in a document (C0 controls other
+ * than tab, newline and carriage return, plus U+FFFE/U+FFFF). One pasted
+ * vertical tab in a narrative would make the whole file not well-formed
+ * (Bolagsverket 4001), so they are dropped from every text that is written.
+ */
+const XML_ILLEGAL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g
+
 /** Escape text content using only the five XML entities (TA §3.2.4). */
 export function escapeText(value: string): string {
   return value
+    .replace(XML_ILLEGAL_CHARS, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -20,6 +29,7 @@ export function escapeText(value: string): string {
 /** Escape an attribute value (double-quoted attributes). */
 export function escapeAttr(value: string): string {
   return value
+    .replace(XML_ILLEGAL_CHARS, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

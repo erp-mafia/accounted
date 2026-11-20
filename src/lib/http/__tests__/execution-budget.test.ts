@@ -52,10 +52,10 @@ describe('execution deadlines reach the actual work', () => {
 
   it('does not let a cancelled local waiter consume a later token', async () => {
     const limiter = new TokenBucketRateLimiter({ maxRequests: 1, windowMs: 1000 })
-    await limiter.acquire()
-    await expect(withExecutionDeadline(Date.now() + 100, 'limiter', () => limiter.acquire()))
+    await limiter.acquire('connection')
+    await expect(withExecutionDeadline(Date.now() + 100, 'limiter', () => limiter.acquire('connection')))
       .rejects.toBeInstanceOf(ExecutionBudgetExceeded)
-    const next = limiter.acquire()
+    const next = limiter.acquire('connection')
     await vi.advanceTimersByTimeAsync(1000)
     await expect(next).resolves.toBeUndefined()
   })

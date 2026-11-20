@@ -5,7 +5,7 @@ import {
   type EntryLinesQuery,
 } from '@/lib/bookkeeping/entry-lines'
 import { addDaysIso } from '@/lib/dates/iso'
-import { SKATTEKONTO_ACCOUNT } from './manual-verifikat-prefill'
+import type { SkattekontoLedgerAccount } from './skattekonto-account'
 
 /**
  * Verifikat that are economically cancelled and must never be proposed as the
@@ -145,7 +145,8 @@ interface HeadRow {
 }
 
 /**
- * Cancelled entries among those touching 1630 in [from, to], looking
+ * Cancelled entries among those touching the skattekonto account (1630, or
+ * 2012 for an enskild firma that runs it there) in [from, to], looking
  * CANCELLATION_LOOKAROUND_DAYS further on both sides for the other half of a
  * pair. Throws on a read failure: callers treat that as "no safe candidates".
  */
@@ -154,21 +155,24 @@ export async function loadCancelledEntryIds(
   companyId: string,
   from: string,
   to: string,
+  account: SkattekontoLedgerAccount,
 ): Promise<Set<string>> {
-  return findCancelledEntryIds(await loadEntriesForCancellation(supabase, companyId, from, to))
+  return findCancelledEntryIds(await loadEntriesForCancellation(supabase, companyId, from, to, account))
 }
 
 /**
- * The imported storno pairs among entries touching 1630 in [from, to], with
- * the same lookaround as loadCancelledEntryIds. Throws on a read failure.
+ * The imported storno pairs among entries touching the skattekonto account in
+ * [from, to], with the same lookaround as loadCancelledEntryIds. Throws on a
+ * read failure.
  */
 export async function loadImportedStornoPairs(
   supabase: SupabaseClient,
   companyId: string,
   from: string,
   to: string,
+  account: SkattekontoLedgerAccount,
 ): Promise<Array<[string, string]>> {
-  return findImportedStornoPairs(await loadEntriesForCancellation(supabase, companyId, from, to))
+  return findImportedStornoPairs(await loadEntriesForCancellation(supabase, companyId, from, to, account))
 }
 
 async function loadEntriesForCancellation(
@@ -176,6 +180,7 @@ async function loadEntriesForCancellation(
   companyId: string,
   from: string,
   to: string,
+  account: SkattekontoLedgerAccount,
 ): Promise<EntryForCancellation[]> {
   const heads = await fetchEntryLines<HeadRow>({
     supabase,
@@ -187,7 +192,7 @@ async function loadEntriesForCancellation(
         .eq('company_id', companyId)
         .gte('entry_date', addDaysIso(from, -CANCELLATION_LOOKAROUND_DAYS))
         .lte('entry_date', addDaysIso(to, CANCELLATION_LOOKAROUND_DAYS)),
-    filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', account),
   })
   const byId = new Map<string, EntryForCancellation>()
   for (const h of heads) {

@@ -62,6 +62,21 @@ export function skvStatusNeedsReconnect(s: SkvStatusLike): boolean {
 }
 
 /**
+ * The one-word state of the Skatteverket connection for a /status shape (the
+ * Kopplingar overview row). "connected" only when the company reads on the
+ * ombud grant or the caller's own session is live (or can still refresh).
+ * A stored but dead session is "reconnect", never "connected": counting the
+ * row alone showed Ansluten for a session expired a week earlier while the
+ * agent's tool rightly said needs_reconsent (crm#1622).
+ */
+export function skvConnectionState(s: SkvStatusLike): 'connected' | 'reconnect' | 'off' {
+  if (s.ombud) return 'connected'
+  if (!s.connected) return 'off'
+  if (s.needsReconsent || (s.expired && !s.canRefresh)) return 'reconnect'
+  return 'connected'
+}
+
+/**
  * The canonical "this auth failure means reconnect" predicate over a failed
  * skatteverket API response. 401 covers several distinct auth states (see
  * handleSkvError in the skatteverket extension): only NOT_CONNECTED means "no

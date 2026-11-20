@@ -36,6 +36,21 @@ describe('readDocumentBytes', () => {
     expect((out as { pages: Array<{ pageNo: number }> }).pages.map((p) => p.pageNo)).toEqual([1, 2, 3, 4])
   })
 
+  it('sends no more pages to the model once one page has failed: the reading is lost either way', async () => {
+    mock(readPdfTextLayer).mockResolvedValue({ pages: [], pagesNeedingVision: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], pageCount: 12, pdfType: 'Scanned' })
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('p'))
+    mock(transcribeWithModel).mockImplementation(async (doc: { fileName?: string }) => {
+      await new Promise((r) => setTimeout(r, 5))
+      if (doc.fileName === 'page-1.pdf') throw new Error('503 Bedrock is unable to process your request.')
+      return { ok: true, text: 'sida' }
+    })
+    await expect(readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: true })).rejects.toThrow('503 Bedrock')
+    // Let the pages already in flight end, and any worker that would have gone on take its next page.
+    await new Promise((r) => setTimeout(r, 30))
+    // The three in flight when the first failed, never the nine behind them.
+    expect(mock(transcribeWithModel).mock.calls.length).toBeLessThanOrEqual(3)
+  })
+
   it('skips structured archives and unknown types without reading', async () => {
     expect(await readDocumentBytes(Buffer.from('<x/>'), 'application/xml')).toEqual({ ok: false, skipped: 'structured' })
     expect(await readDocumentBytes(Buffer.from('zzz'), 'application/zip')).toEqual({ ok: false, skipped: 'unsupported_mime' })
@@ -89,12 +104,12 @@ describe('readDocumentBytes', () => {
     }
     mock(readPdfTextLayer).mockResolvedValue(local)
     mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('%PDF-page2'))
-    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000' })
+    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Schedule 1.2 - Cap Table\nAnna Exempel 60 000' })
     const read = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf')
     expect(extractSinglePagePdf).toHaveBeenCalledWith(expect.any(Buffer), 2)
     expect(read.ok && read.pages.map((p) => [p.pageNo, p.reader, p.text])).toEqual([
       [1, 'pdf_text', 'Shareholders Agreement'],
-      [2, 'claude_vision', 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000'],
+      [2, 'claude_vision', 'Schedule 1.2 - Cap Table\nAnna Exempel 60 000'],
     ])
 
     vi.clearAllMocks()
@@ -159,6 +174,8 @@ describe('readDocumentBytes', () => {
     mock(readOfficeDocument).mockResolvedValue([{ pageNo: 1, text: '# Avtal', reader: 'office', hasTextLayer: true }])
     expect(await readDocumentBytes(Buffer.from('PK'), DOCX)).toMatchObject({ ok: true, reader: 'office' })
     expect(readImageWithModel).toHaveBeenCalledTimes(1)
+    // The office reader gets the type: a CSV has no signature to detect it by.
+    expect(readOfficeDocument).toHaveBeenCalledWith(Buffer.from('PK'), DOCX)
   })
 
   it('hands the model the fitted photo, and skips a HEIC the build cannot decode', async () => {

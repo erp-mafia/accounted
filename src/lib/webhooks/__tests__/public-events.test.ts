@@ -29,6 +29,31 @@ describe('public webhook event catalogue', () => {
     )
   })
 
+  it('delivers the lock date move in the Periods group, documented with every payload field (#128)', () => {
+    const periods = PUBLIC_WEBHOOK_EVENT_GROUPS.find((group) => group.title === 'Periods')
+    const entry = periods?.events.find((event) => event.type === 'period.lock_date_changed') as
+      | { type: string; description?: string }
+      | undefined
+    expect(entry?.description).toBeDefined()
+    for (const field of ['previousLockDate', 'lockDate', 'direction', 'via', 'reopenedFiledVatPeriods']) {
+      expect(entry?.description, field).toContain(`\`${field}\``)
+    }
+    // The door, never the person: the payload names no user.
+    expect(entry?.description).not.toMatch(/user/i)
+    expect(WEBHOOKS_MD).toContain('- `period.lock_date_changed`: ')
+  })
+
+  it('documents the payment reference invoice.sent carries (crm#1886)', () => {
+    const invoicing = PUBLIC_WEBHOOK_EVENT_GROUPS.find((group) => group.title === 'Invoicing')
+    const entry = invoicing?.events.find((event) => event.type === 'invoice.sent') as
+      | { type: string; description?: string }
+      | undefined
+    for (const field of ['payment_reference', 'payment_reference_type']) {
+      expect(entry?.description, field).toContain(`\`${field}\``)
+    }
+    expect(WEBHOOKS_MD).toContain('- `invoice.sent`: ')
+  })
+
   it('is exactly the event_type enum the v1 create endpoint advertises in the OpenAPI spec', () => {
     const spec = generateOpenApiSpec('https://unit.test')
     const op = (spec.paths['/api/v1/companies/{companyId}/webhooks'] as Record<string, unknown>).post as {
@@ -36,6 +61,17 @@ describe('public webhook event catalogue', () => {
     }
     const enumValues = op.requestBody.content['application/json'].schema.properties.event_type.enum
     expect(enumValues).toEqual([...PUBLIC_WEBHOOK_EVENTS])
+  })
+
+  it('is exactly the item enum of the v1 create endpoint event_types list', () => {
+    const spec = generateOpenApiSpec('https://unit.test')
+    const op = (spec.paths['/api/v1/companies/{companyId}/webhooks'] as Record<string, unknown>).post as {
+      requestBody: {
+        content: Record<string, { schema: { properties: Record<string, { items?: { enum?: unknown[] } }> } }>
+      }
+    }
+    const itemEnum = op.requestBody.content['application/json'].schema.properties.event_types.items?.enum
+    expect(itemEnum).toEqual([...PUBLIC_WEBHOOK_EVENTS])
   })
 
   it('is exactly the list the docs page renders', () => {

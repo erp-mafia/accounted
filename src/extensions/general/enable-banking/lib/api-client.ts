@@ -6,18 +6,24 @@
  * Flow:
  * 1. POST /auth → { url, authorization_id }
  * 2. User redirects to URL, authenticates with bank
- * 3. Callback receives ?code=XXX&state=YYY
+ * 3. Callback receives ?code=<code>&state=<state>
  * 4. POST /sessions { code } → { session_id, accounts }
  * 5. GET /accounts/{uid}/balances
  * 6. GET /accounts/{uid}/transactions
  */
 
-import { getAuthorizationHeader } from './jwt'
+import { getAuthorizationHeader, hasSigningCredentials } from './jwt'
+import { requireHttpsUrl } from '@/lib/http/require-https'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
+import { CONTRACT_VERSION_HEADER } from '@/lib/connect/instance/connector-fetch'
+import { CONTRACT_VERSION } from '@accounted/connect-contract'
 import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
+import { isPsuHeaderRefusal, type PsuHeaders } from './psu-headers'
+import { usableCurrency } from './account-currency'
+import { bankBookingDay, todayIsoStockholm } from '@/lib/dates/iso'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -186,8 +192,12 @@ export interface BalanceResponse {
 export interface Transaction {
   entry_reference?: string
   transaction_id?: string
+  /** BOOK, PDNG, HOLD, SCHD, CNCL, RJCT or OTHR. Some banks date pending entries too, so this, not the date, tells pending. */
+  status?: string
   booking_date?: string
   value_date?: string
+  /** When the transaction took place. PayPal sends only this date, on entries it marks BOOK (crm#1767). */
+  transaction_date?: string
   transaction_amount: {
     amount: string
     currency: string
@@ -208,6 +218,12 @@ export interface Transaction {
     name?: string
   }
   remittance_information?: string[]
+  /**
+   * Structured creditor reference: a Bankgiro OCR when reference_number_schema
+   * is 'SEBG', otherwise e.g. an RF reference ('INTL') or a Norwegian KID.
+   */
+  reference_number?: string
+  reference_number_schema?: string
   merchant_category_code?: string
   /**
    * Enable Banking sends this as an object ({ description, code, sub_code });
@@ -249,6 +265,9 @@ export interface BankTransaction {
   counterparty_name?: string
   counterparty_account?: string
   reference?: string
+  value_date?: string
+  /** The bank's own id for the row (entry_reference, else transaction_id). Never a dedupe key. */
+  provider_transaction_id?: string
   merchant_category_code?: string
   // ISO 20022 / proprietary transaction codes: carried through so the
   // description fallback can derive a meaningful Swedish label when remittance
@@ -266,22 +285,6 @@ const RETRY_DELAY_MS = 1000
 const INLINE_RETRY_AFTER_MAX_MS = 5000
 const MAX_PAGINATION_PAGES = 100
 const DEFAULT_PAGE_SIZE = 500
-
-/**
- * Thrown by getAccountTransactions on a non-OK response. Carries the HTTP
- * status and raw body so the pagination caller (getAllTransactions) can run the
- * same first-page strategy/window fallbacks as getAllTransactionsWithRaw. The
- * message is identical to the previous plain Error for back-compat.
- */
-class TransactionsFetchError extends Error {
-  constructor(
-    readonly status: number,
-    readonly body: string
-  ) {
-    super(`Failed to get transactions (${status}): ${body}`)
-    this.name = 'TransactionsFetchError'
-  }
-}
 
 /**
  * Normalized signatures (uppercase, non-alphanumerics stripped) of the
@@ -319,6 +322,18 @@ export function isSessionExpiredResponse(status: number, body: string): boolean 
 }
 
 /**
+ * Whether a failed response is a credential-level refusal: 401/403 WITHOUT a
+ * session-dead signal in the body. Enable Banking answers that way when the
+ * application itself is no longer let in (the contract ended, a revoked app
+ * key), never for one consent: it says nothing about any PSD2 session, so no
+ * row may be flipped or told to renew on it, and once two connections in a
+ * run have seen it the rest of the run would see it too (provider-circuit.ts).
+ */
+export function isCredentialRejection(status: number, body: string): boolean {
+  return (status === 401 || status === 403) && !isSessionExpiredResponse(status, body)
+}
+
+/**
  * User-facing (Swedish) messages persisted to bank_connections.error_message
  * and returned to the settings UI. error_message is a literal string in the
  * DB, not an i18n key, matching the extension's other user-facing strings.
@@ -340,7 +355,7 @@ export const BANK_UNAVAILABLE_MESSAGE =
 
 /**
  * Thrown when a transactions fetch fails because the PSD2 session is dead
- * (closed/expired/invalid). Distinct from TransactionsFetchError so the sync
+ * (closed/expired/invalid). Distinct from a plain fetch error so the sync
  * handler can flip the connection to 'expired' and prompt re-authorization
  * instead of surfacing a raw error the user can't act on. Carries the status
  * and raw body for logging. See isSessionExpiredResponse for the codes covered.
@@ -352,6 +367,33 @@ export class SessionExpiredError extends Error {
   ) {
     super(`Bank session expired (${status}): ${body}`)
     this.name = 'SessionExpiredError'
+  }
+}
+
+/**
+ * User-facing message when Enable Banking refused the application's
+ * credentials (ProviderCredentialError): about us, not the consent, so it
+ * says explicitly that the connection does NOT need renewing.
+ */
+export const PROVIDER_CREDENTIALS_REFUSED_MESSAGE =
+  'Bankleverantören släppte inte in oss just nu. Försök igen om en stund. Anslutningen behöver inte förnyas.'
+
+/**
+ * Thrown when Enable Banking (or the connector in front of it) refused OUR
+ * credentials: a 401/403 that names no session (isCredentialRejection). Not
+ * a dead consent and not a bank problem: the row is left exactly as it is
+ * (no status flip, no error_message, no renewal advice), the caller answers
+ * "try again later", and the cron's circuit breaker stops the run once two
+ * connections have seen it (provider-circuit.ts). Carries the raw body for
+ * the server log only.
+ */
+export class ProviderCredentialError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(`Enable Banking refused the application credentials (${status})`)
+    this.name = 'ProviderCredentialError'
   }
 }
 
@@ -423,6 +465,16 @@ export class ConnectorSyncError extends Error {
 export const CONNECTOR_UNAVAILABLE_MESSAGE =
   'Synkningen via Accounted Connect misslyckades tillfälligt. Försök igen om en stund. Anslutningen behöver inte förnyas.'
 
+/**
+ * Thrown when the instance has no route to Enable Banking: no connector key
+ * and no complete own signing credentials. Swedish and written for the user:
+ * the routes forward a thrown message to the client as `error`, and
+ * getErrorMessage shows such a string only when it reads as Swedish written
+ * for the user.
+ */
+export const BANK_NOT_CONFIGURED_MESSAGE =
+  'Bankkoppling är inte konfigurerad i den här miljön. Importera kontoutdraget som fil så länge.'
+
 // API Helper
 
 async function authenticatedFetch(
@@ -437,7 +489,23 @@ async function authenticatedFetch(
   // this instance has its own EB credentials, or on hosted, bankConnectorMode()
   // returns null and the direct path below is byte-identical to before.
   const connector = bankConnectorMode()
-  const url = connector ? `${connector.baseUrl}${endpoint}` : `${ENABLE_BANKING_API_URL}${endpoint}`
+  // No connector and no complete own client: this instance cannot reach
+  // Enable Banking at all. Refuse here, at the one door every bank call goes
+  // through, with a message a user can read. The signer would throw the name
+  // of the missing environment variable, which the routes pass on to the
+  // client; the names go to the log instead.
+  if (!connector && !hasSigningCredentials()) {
+    console.error('[enable-banking] Bank upstream not configured', {
+      endpoint,
+      hint: 'set ENABLE_BANKING_APP_ID and ENABLE_BANKING_PRIVATE_KEY (or their _PRODUCTION variants), or GNUBOK_CONNECTOR_KEY',
+    })
+    throw new Error(BANK_NOT_CONFIGURED_MESSAGE)
+  }
+  // The direct path sends Arcim's signed EB JWT: refuse a plaintext base URL
+  // (accounted#21). The connector base is checked in lib/connect/instance/config.ts.
+  const url = connector
+    ? `${connector.baseUrl}${endpoint}`
+    : `${requireHttpsUrl(ENABLE_BANKING_API_URL, 'ENABLE_BANKING_API_URL')}${endpoint}`
   const authorization = connector ? `Bearer ${connector.key}` : getAuthorizationHeader()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
@@ -449,6 +517,8 @@ async function authenticatedFetch(
       headers: {
         'Authorization': authorization,
         'Content-Type': 'application/json',
+        // Connect reads the caller's contract version on every family.
+        ...(connector ? { [CONTRACT_VERSION_HEADER]: CONTRACT_VERSION } : {}),
         ...options.headers,
       },
     })
@@ -603,7 +673,7 @@ export async function getPreferredAuthMethodDetails(
     const aspsp = aspsps.find((a) => a.name === aspspName)
     return selectPreferredAuthMethod(aspsp?.auth_methods, psuType)
   } catch (error) {
-    console.error('[enable-banking] getPreferredAuthMethod failed; using ASPSP default', {
+    console.error('[enable-banking] getPreferredAuthMethodDetails failed; using ASPSP default', {
       aspspName,
       country,
       psuType,
@@ -611,20 +681,6 @@ export async function getPreferredAuthMethodDetails(
     })
     return undefined
   }
-}
-
-/**
- * Name-only convenience wrapper around getPreferredAuthMethodDetails: the
- * value to send as auth_method on POST /auth, or undefined for the ASPSP
- * default.
- */
-export async function getPreferredAuthMethod(
-  aspspName: string,
-  country: string,
-  psuType: 'personal' | 'business'
-): Promise<string | undefined> {
-  const method = await getPreferredAuthMethodDetails(aspspName, country, psuType)
-  return method?.name
 }
 
 /**
@@ -637,7 +693,7 @@ export async function getPreferredAuthMethod(
  * @param psuType - Type of user: 'personal' or 'business'
  * @param authMethod - Optional Enable Banking auth_method name. When omitted,
  *   Enable Banking uses the ASPSP's visible default method. See
- *   getPreferredAuthMethod for why we pin Mobile BankID at some banks.
+ *   getPreferredAuthMethodDetails for why we pin Mobile BankID at some banks.
  */
 export async function startAuthorization(
   aspspName: string,
@@ -913,9 +969,22 @@ export async function deleteSession(sessionId: string): Promise<void> {
  * Get account balances
  *
  * @param accountUid - The account UID (from session.accounts[].uid)
+ * @param psu - The person who asked (./psu-headers.ts); omit for a background read.
  */
-export async function getAccountBalances(accountUid: string): Promise<Balance[]> {
-  const response = await authenticatedFetchWithRetry(`/accounts/${accountUid}/balances`)
+export async function getAccountBalances(accountUid: string, psu?: PsuHeaders): Promise<Balance[]> {
+  const endpoint = `/accounts/${accountUid}/balances`
+  let response = await authenticatedFetchWithRetry(endpoint, psu ? { headers: psu } : {})
+
+  if (!response.ok && psu) {
+    const body = await response.clone().text().catch(() => '')
+    if (isPsuHeaderRefusal(body)) {
+      console.warn('[enable-banking] getAccountBalances: bank refused the PSU headers, reading in the background', {
+        status: response.status,
+        accountUid,
+      })
+      response = await authenticatedFetchWithRetry(endpoint)
+    }
+  }
 
   if (!response.ok) {
     const body = await response.text()
@@ -969,11 +1038,32 @@ function pickBalanceByType(balances: Balance[], preference: string[]): Balance |
  * money is in the bank", covering decisions before payment runs) a fabricated
  * zero with a fresh timestamp is dangerous, so the caller keeps its previous
  * stored value instead.
+ *
+ * `referenceDate` and `type` are the bank's own day and type for the booked
+ * amount (null when the bank gave no day): a closingBooked balance is the
+ * close of that day, often yesterday, not of the day it was fetched.
+ *
+ * `accountCurrency`, when given, is the currency the account is stored
+ * under: a balance the bank reports in another currency is never this
+ * account's balance. An account without one fixed currency (PayPal reports
+ * 'XXX', crm#1767) can come back with one balance per currency it holds, and
+ * the first booked one, whatever its currency, was shown as the account's
+ * kronor. A balance without a usable currency code stays a candidate, as
+ * before. Only balances in other currencies: null, as for no balances.
  */
 export async function getAccountBalance(
-  accountUid: string
-): Promise<{ amount: number; date: string; available: number | null } | null> {
-  const balances = await getAccountBalances(accountUid)
+  accountUid: string,
+  psu?: PsuHeaders,
+  accountCurrency?: string,
+): Promise<{ amount: number; referenceDate: string | null; type: string; available: number | null } | null> {
+  const reported = await getAccountBalances(accountUid, psu)
+  const wanted = usableCurrency(accountCurrency)
+  const balances = wanted
+    ? reported.filter(b => {
+        const code = usableCurrency(b.balance_amount?.currency)
+        return code === null || code === wanted
+      })
+    : reported
 
   // Prefer closingBooked, then expected, then first available
   const balance = pickBalanceByType(balances, BOOKED_BALANCE_TYPES) || balances[0]
@@ -989,141 +1079,10 @@ export async function getAccountBalance(
 
   return {
     amount: parseFloat(balance.balance_amount.amount),
-    date: balance.reference_date || new Date().toISOString().split('T')[0],
+    referenceDate: balance.reference_date || null,
+    type: balance.balance_type,
     available: available != null && Number.isFinite(available) ? available : null,
   }
-}
-
-/**
- * Get account transactions
- *
- * @param accountUid - The account UID
- * @param dateFrom - Start date (YYYY-MM-DD)
- * @param dateTo - End date (YYYY-MM-DD)
- * @param continuationKey - Pagination key from previous response
- */
-export async function getAccountTransactions(
-  accountUid: string,
-  dateFrom?: string,
-  dateTo?: string,
-  continuationKey?: string,
-  strategy?: TransactionsFetchStrategy
-): Promise<TransactionsResponse> {
-  const params = new URLSearchParams()
-  if (dateFrom) params.set('date_from', dateFrom)
-  if (dateTo) params.set('date_to', dateTo)
-  if (continuationKey) params.set('continuation_key', continuationKey)
-  if (strategy) params.set('strategy', strategy)
-  params.set('limit', String(DEFAULT_PAGE_SIZE))
-
-  const queryString = params.toString()
-  const endpoint = `/accounts/${accountUid}/transactions${queryString ? `?${queryString}` : ''}`
-
-  const response = await authenticatedFetchWithRetry(endpoint)
-
-  if (!response.ok) {
-    const body = await response.text()
-    console.error('[enable-banking] getAccountTransactions failed', {
-      status: response.status,
-      statusText: response.statusText,
-      body,
-      accountUid,
-      dateFrom,
-      dateTo,
-      strategy,
-      hasContinuationKey: !!continuationKey,
-    })
-    if (isSessionExpiredResponse(response.status, body)) {
-      throw new SessionExpiredError(response.status, body)
-    }
-    if (response.status === 429) throw bankRateLimited(response, body, dateFrom)
-    throw new TransactionsFetchError(response.status, body)
-  }
-
-  return response.json()
-}
-
-/**
- * Get all transactions with pagination
- */
-export async function getAllTransactions(
-  accountUid: string,
-  dateFrom?: string,
-  dateTo?: string,
-  strategy?: TransactionsFetchStrategy,
-  options?: HistoryWindowOptions
-): Promise<Transaction[]> {
-  const allTransactions: Transaction[] = []
-  let continuationKey: string | undefined
-  let page = 0
-  let activeStrategy = strategy
-  // date_from is narrowed in place when the ASPSP rejects the window (below).
-  let activeDateFrom = dateFrom
-
-  while (true) {
-    let response: TransactionsResponse
-    try {
-      response = await getAccountTransactions(
-        accountUid,
-        activeDateFrom,
-        dateTo,
-        continuationKey,
-        activeStrategy
-      )
-    } catch (err) {
-      // Apply the same first-page recovery as getAllTransactionsWithRaw. Only
-      // TransactionsFetchError carries the status/body needed to decide;
-      // network errors and the like propagate untouched.
-      if (err instanceof TransactionsFetchError) {
-        const recovery = planFirstPageRecovery({
-          status: err.status,
-          body: err.body,
-          page,
-          hasContinuationKey: !!continuationKey,
-          activeStrategy,
-          activeDateFrom,
-          dateTo,
-          acceptedHistoryDays: options?.acceptedHistoryDays,
-        })
-        if (recovery.type === 'drop-strategy') {
-          console.warn('[enable-banking] strategy rejected by API, retrying without strategy', {
-            accountUid,
-            strategy: activeStrategy,
-            body: err.body,
-          })
-          activeStrategy = undefined
-          continue
-        }
-        if (recovery.type === 'narrow') {
-          console.warn('[enable-banking] ASPSP rejected history window, retrying with narrower date_from', {
-            accountUid,
-            previousDateFrom: activeDateFrom,
-            nextDateFrom: recovery.dateFrom,
-            dateTo,
-            body: err.body,
-          })
-          activeDateFrom = recovery.dateFrom
-          continue
-        }
-        if (recovery.type === 'aspsp-unavailable') {
-          throw bankUnavailable(accountUid, err.status, err.body, recovery.reason, activeDateFrom, dateTo)
-        }
-      }
-      throw err
-    }
-
-    allTransactions.push(...response.transactions)
-    continuationKey = response.continuation_key
-    page++
-
-    if (page >= MAX_PAGINATION_PAGES) {
-      console.warn(`[enable-banking] Pagination cap reached (${MAX_PAGINATION_PAGES} pages) for account ${accountUid}`)
-      break
-    }
-    if (!continuationKey) break
-  }
-
-  return allTransactions
 }
 
 /**
@@ -1135,7 +1094,7 @@ export async function getAllTransactions(
 const ASPSP_HISTORY_FALLBACK_DAYS = [90, 60, 30] as const
 
 /**
- * Per-account knowledge the caller can hand the pagination loops (#2202).
+ * Per-account knowledge the caller can hand the pagination loop (#2202).
  */
 export interface HistoryWindowOptions {
   /**
@@ -1165,6 +1124,20 @@ function isAspspError(body: string): boolean {
 }
 
 /**
+ * Enable Banking's 422 {"error":"WRONG_TRANSACTIONS_PERIOD","detail":{"message":
+ * "Invalid date range requested"}}: the bank refused the window. Every sample
+ * on record (Nordea, 2026-10-28 07:00-08:52 UTC, eight syncs) was a 7-day
+ * window ending on the UTC date, which the same accounts answered the day
+ * before and the day after, while Nordea also failed other calls (ASPSP_ERROR,
+ * a 502 through Open Payments). So it is read like ASPSP_ERROR: a window this
+ * account has answered before means the bank is refusing right now, a wider
+ * one is narrowed toward what it has answered.
+ */
+function isWrongTransactionsPeriod(body: string): boolean {
+  return body.includes('WRONG_TRANSACTIONS_PERIOD')
+}
+
+/**
  * Given the date_from we just tried, return the next strictly-narrower
  * date_from from ASPSP_HISTORY_FALLBACK_DAYS, anchored to date_to. Returns
  * undefined when no narrower window remains (or date_to is missing), which
@@ -1191,11 +1164,13 @@ function nextNarrowerDateFrom(
 }
 
 /**
- * First-page recovery policy shared by getAllTransactions and
- * getAllTransactionsWithRaw, so the two pagination loops can't drift. Fallbacks
+ * First-page recovery policy for getAllTransactionsWithRaw. Fallbacks
  * apply only to the very first request (page 0, no continuation_key): a
  * continuation_key is scoped to the window/strategy that produced it, so the
  * query is never rewritten mid-pagination.
+ *
+ * The window cases take a 400 ASPSP_ERROR and a 422 WRONG_TRANSACTIONS_PERIOD
+ * alike (isWrongTransactionsPeriod).
  *
  *  - 'drop-strategy'     : an unsupported strategy enum: retry the same window.
  *  - 'narrow'            : the ASPSP rejected the history window: retry with a
@@ -1235,10 +1210,12 @@ function planFirstPageRecovery(args: {
     dateTo,
     acceptedHistoryDays,
   } = args
-  if (status !== 400 || page !== 0 || hasContinuationKey) return { type: 'give-up' }
+  if (page !== 0 || hasContinuationKey) return { type: 'give-up' }
+  const periodRefused = status === 422 && isWrongTransactionsPeriod(body)
+  if (status !== 400 && !periodRefused) return { type: 'give-up' }
   // Drop an unsupported strategy first: preserves the full requested window.
   if (activeStrategy) return { type: 'drop-strategy' }
-  if (!isAspspError(body)) return { type: 'give-up' }
+  if (!periodRefused && !isAspspError(body)) return { type: 'give-up' }
 
   // A window this account has fetched before is the strongest signal on hand
   // that width is not the problem: stop after this one call. Wider than that:
@@ -1260,7 +1237,7 @@ function planFirstPageRecovery(args: {
   return { type: 'aspsp-unavailable', reason: 'ladder-exhausted' }
 }
 
-/** Log and build the error both pagination loops throw on 'aspsp-unavailable'. */
+/** Log and build the error the pagination loop throws on 'aspsp-unavailable'. */
 function bankUnavailable(
   accountUid: string,
   status: number,
@@ -1356,6 +1333,14 @@ export interface TransactionsWithRaw {
   effectiveDateFrom: string | undefined
   /** True when the bank refused the requested window and a narrower one was used. */
   narrowed: boolean
+  /**
+   * True when paging stopped at MAX_PAGINATION_PAGES while the bank still
+   * handed out a continuation key: the bank had not finished, so the window is
+   * incomplete (PH 195). Enable Banking may answer page after page of empty
+   * transactions with a key (its documented contract: keep calling until no
+   * key comes back), so an empty result here says nothing about the account.
+   */
+  truncated: boolean
 }
 
 export async function getAllTransactionsWithRaw(
@@ -1363,7 +1348,10 @@ export async function getAllTransactionsWithRaw(
   dateFrom?: string,
   dateTo?: string,
   strategy?: TransactionsFetchStrategy,
-  options?: HistoryWindowOptions
+  options?: HistoryWindowOptions & {
+    /** The person who asked (./psu-headers.ts); omit for a background read. */
+    psu?: PsuHeaders
+  }
 ): Promise<TransactionsWithRaw> {
   const allTransactions: Transaction[] = []
   const rawPages: string[] = []
@@ -1372,6 +1360,8 @@ export async function getAllTransactionsWithRaw(
   let activeStrategy = strategy
   // date_from is narrowed in place when the ASPSP rejects the window (below).
   let activeDateFrom = dateFrom
+  // Dropped once if the bank refuses them; the read then goes on in the background.
+  let activePsu = options?.psu
 
   while (true) {
     const params = new URLSearchParams()
@@ -1384,10 +1374,21 @@ export async function getAllTransactionsWithRaw(
     const queryString = params.toString()
     const endpoint = `/accounts/${accountUid}/transactions${queryString ? `?${queryString}` : ''}`
 
-    const response = await authenticatedFetchWithRetry(endpoint)
+    const response = await authenticatedFetchWithRetry(endpoint, activePsu ? { headers: activePsu } : {})
 
     if (!response.ok) {
       const body = await response.text()
+      // Before any other recovery: a refused PSU header says nothing about
+      // the strategy or the window, so the same request goes again without.
+      if (activePsu && isPsuHeaderRefusal(body)) {
+        console.warn('[enable-banking] getAllTransactionsWithRaw: bank refused the PSU headers, reading in the background', {
+          status: response.status,
+          accountUid,
+          page,
+        })
+        activePsu = undefined
+        continue
+      }
       const recovery = planFirstPageRecovery({
         status: response.status,
         body,
@@ -1441,6 +1442,13 @@ export async function getAllTransactionsWithRaw(
         console.warn('[enable-banking] getAllTransactionsWithRaw: bank session expired', logLine)
         throw new SessionExpiredError(response.status, body)
       }
+      // A 401/403 naming no session is the application being refused, not
+      // this consent: typed so no caller flips the row or asks for a renewal,
+      // and so the cron can stop a run that would only repeat it.
+      if (isCredentialRejection(response.status, body)) {
+        console.warn('[enable-banking] getAllTransactionsWithRaw: application credentials refused', logLine)
+        throw new ProviderCredentialError(response.status, body)
+      }
       if (response.status === 429) {
         console.warn('[enable-banking] getAllTransactionsWithRaw: bank rate limit', logLine)
         throw bankRateLimited(response, body, activeDateFrom)
@@ -1457,11 +1465,11 @@ export async function getAllTransactionsWithRaw(
     continuationKey = data.continuation_key
     page++
 
+    if (!continuationKey) break
     if (page >= MAX_PAGINATION_PAGES) {
       console.warn(`[enable-banking] Pagination cap reached (${MAX_PAGINATION_PAGES} pages) for account ${accountUid}`)
       break
     }
-    if (!continuationKey) break
   }
 
   return {
@@ -1470,6 +1478,8 @@ export async function getAllTransactionsWithRaw(
     requestedDateFrom: dateFrom,
     effectiveDateFrom: activeDateFrom,
     narrowed: activeDateFrom !== dateFrom,
+    // The loop only ends with a key in hand at the cap.
+    truncated: Boolean(continuationKey),
   }
 }
 
@@ -1497,10 +1507,15 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
   const proprietaryBankTransactionCode =
     normalizeBankTransactionCode(tx.proprietary_bank_transaction_code) ?? undefined
 
+  // The bank's dates as Swedish days (bankBookingDay): a date as written, a
+  // date-time with an offset on the day it fell on in Stockholm.
+  const bookingDate = bankBookingDay(tx.booking_date)
+  const valueDate = bankBookingDay(tx.value_date)
+
   return {
     id: tx.entry_reference || tx.transaction_id || `${tx.booking_date}_${rawAmount}`,
-    date: tx.value_date || tx.booking_date || new Date().toISOString().split('T')[0],
-    booking_date: tx.booking_date || tx.value_date || new Date().toISOString().split('T')[0],
+    date: valueDate || bookingDate || todayIsoStockholm(),
+    booking_date: bookingDate || valueDate || todayIsoStockholm(),
     amount,
     currency: tx.transaction_amount.currency || accountCurrency,
     // Fallback chain: bank's payment message → counterparty name → a Swedish
@@ -1518,6 +1533,9 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
                  }) ||
                  FALLBACK_DESCRIPTION,
     counterparty_name: isCredit ? debtorName : creditorName,
+    reference: tx.reference_number?.trim() || undefined,
+    value_date: valueDate || undefined,
+    provider_transaction_id: tx.entry_reference || tx.transaction_id || undefined,
     counterparty_account: isCredit
       ? pickAccountIdentifier(tx.debtor_account, tx.debtor_account_additional_identification)
       : pickAccountIdentifier(tx.creditor_account, tx.creditor_account_additional_identification),

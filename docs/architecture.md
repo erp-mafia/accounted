@@ -35,12 +35,15 @@ Two invariants hold for every entry:
   - Storno: `reverseEntry()` cancels a voucher with a reversal entry and
     `correctEntry()` replaces it (`src/lib/core/bookkeeping/storno-service.ts`).
     Always allowed.
-  - Inline rättelse (founder-approved 2026-07-23): the
+  - Inline rättelse: the
     `correct_entry_metadata` and `correct_entry_lines_inline` RPCs
     strike-and-replace inside the same voucher, keeping the original
     readable and writing an immutable who/when record to
     `journal_entry_rattelse_log`. Only while the period is open and
-    unlocked; past a lock, close, or declared state, storno is the only path.
+    unlocked; past a lock, close, or lock date, storno is the only path.
+    A filed VAT or AGI declaration does not freeze the period: both paths
+    stay open, and the VAT page shows every change made after filing
+    (`src/lib/vat/filed-period-changes.ts`) so the declaration is corrected.
 
 If a gap still occurs in a voucher series (for example around imported
 history), it must be documented, and the explanation is stored
@@ -64,8 +67,9 @@ the code path is wrong, not the trigger.
 
 Two smaller invariants that show up everywhere in the codebase:
 
-- Monetary amounts are rounded with `Math.round(x * 100) / 100`. String-based
-  rounding such as `toFixed()` causes drift at the öre level and breaks entry
+- Monetary amounts are rounded with `roundOre()` from `src/lib/money.ts`.
+  String-based rounding such as `toFixed()`, or a hand-written
+  `Math.round(x * 100) / 100`, causes drift at the öre level and breaks entry
   balance.
 - Account numbers are strings (`'1930'`, never `1930`). They are identifiers,
   not quantities.
@@ -89,7 +93,7 @@ so the Next.js app and RLS always agree on which company is active.
 ## Extension system
 
 Core is a complete accounting product on its own. Optional functionality
-(AI categorization, receipt OCR, email, calendar, the MCP server, and more)
+(AI document extraction, email, calendar, the MCP server, and more)
 ships as extensions under `src/extensions/`, toggled by `extensions.config.json`.
 
 The boundary is strict and CI-enforced:
@@ -99,14 +103,14 @@ The boundary is strict and CI-enforced:
 - Extensions integrate through the event bus and documented extension APIs,
   and are wired via a generated static registry (`npm run setup:extensions`).
 - Provider integrations (banks, Skatteverket, Peppol, migration sources) are
-  moving behind the connector: a self-hosted instance with a connector key
+  Connect adapters behind a port. A self-hosted instance with a connector key
   and no credentials of its own for an upstream reaches that upstream through
-  the Accounted Connect service (`connect.accounted.se`, a separate private
-  deployment; an instance running on its own registered credentials talks to
-  the provider directly, see `docs/SELF-HOSTING.md`), and the open ledger
-  keeps the contract plus the manual file paths. `npm run check:guards`
-  ratchets the set of files that name a provider API host directly; that set
-  may only shrink.
+  the Accounted Connect service (`connect.accounted.se`, operated by
+  Accounted); an instance running on its own registered credentials calls
+  the provider directly (see `docs/SELF-HOSTING.md`). The open ledger keeps
+  the contract plus the manual file paths. `npm run check:guards` lists the
+  files that name a provider API host directly and fails when a new file
+  names one.
 
 Licensing follows the same boundary: the project is AGPL-3.0, with an
 extension exception that allows third-party extensions using only the

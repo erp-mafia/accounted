@@ -5,11 +5,9 @@ import {
   ledgerLineAmountIn,
   tryReconcileTransaction,
 } from '@/lib/reconciliation/bank-reconciliation'
+import { DEFAULT_SETTLEMENT_ACCOUNT } from '@/lib/reconciliation/cash-account-scope'
 import { describeCashAccountSiblings, normalizeIban, shouldRepointToSibling } from '@/lib/cash-accounts/service'
 import type { Transaction } from '@/types'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'reconciliation.bank.unmatched_entries',
@@ -17,7 +15,7 @@ export const GET = withRouteContext(
     const { searchParams } = new URL(request.url)
     const dateFrom = searchParams.get('date_from') || undefined
     const dateTo = searchParams.get('date_to') || undefined
-    const accountNumber = searchParams.get('account_number') || '1930'
+    const accountNumber = searchParams.get('account_number') || DEFAULT_SETTLEMENT_ACCOUNT
     // Optional: when set, rank the returned candidates for this specific bank
     // transaction (used by the Transactions-page "Matcha mot befintlig
     // verifikation" dialog). Ranking happens server-side on purpose:

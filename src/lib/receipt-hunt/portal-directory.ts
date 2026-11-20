@@ -58,7 +58,7 @@ export interface PortalEntry {
  * vendor here has a billing page; what earns an entry is that the invoice does
  * not arrive by mail, so a person has no other way to get it.
  *
- * Anthropic, Vercel and Supabase were removed after a founder pointed out that
+ * Anthropic, Vercel and Supabase were removed after an operator pointed out that
  * all three do email their invoices, at least to European customers. The poll
  * they came from asked which portals people log into, and people answered with
  * where the invoice can ALSO be found. Listing them told somebody to go and log
@@ -69,10 +69,14 @@ export interface PortalEntry {
  * the invoice cannot be had any other way, and that claim is worth checking per
  * vendor rather than assuming.
  *
+ * Google Cloud went the same way (crm#1783): it mails "Payment received" for
+ * every card charge, with the amount and the card, and an agent found all six
+ * of a company's charges in the mailbox the entry told it not to search.
+ *
  * ## The URLs were wrong, and shipped anyway
  *
  * Every path here was hand-written and none was opened. The file said so and
- * shipped regardless, and a founder then hit a 404 on Google Workspace. A
+ * shipped regardless, and an operator then hit a 404 on Google Workspace. A
  * subsequent HTTP sweep found GitHub's billing path 404 as well. Both are
  * corrected; Trygg Hansa was removed because neither of its candidate URLs
  * could be reached at all, and an unverifiable link is the same promise this
@@ -95,11 +99,6 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
     // that lands on an error page.
     url: 'https://admin.google.com',
     note: 'Fakturor ligger under Fakturering i adminkonsolen.',
-  },
-  {
-    vendor: 'Google Cloud',
-    aliases: ['google cloud', 'google svcs', 'gcp'],
-    url: 'https://console.cloud.google.com/billing',
   },
   {
     vendor: 'OpenAI',
@@ -164,6 +163,74 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
     aliases: ['loopia'],
     url: 'https://customerzone.loopia.se',
   },
+  // Added 2026-10-20 from the vendors most often without underlag across
+  // production ledgers, each checked against the vendor's own help pages
+  // for whether the invoice is mailed, and each URL requested over HTTP.
+  {
+    vendor: 'Google Ads',
+    aliases: ['google ads'],
+    // Statements for card-paying advertisers are never mailed or emailed
+    // (support.google.com/google-ads/answer/1723045); only monthly invoicing
+    // is. Google's own help links this exact path.
+    url: 'https://ads.google.com/aw/billing/documents',
+    note: 'Månadsutdrag och fakturor ligger under Fakturering, Dokument.',
+  },
+  {
+    vendor: 'Amazon',
+    // 'amazon web' (AWS) is longer and wins over 'amazon'.
+    aliases: ['amazon', 'amzn', 'prime membership'],
+    // The VAT invoice is per order in Your Account, never mailed. amazon.se
+    // answers 503 to automated requests past the sign-in redirect, so no
+    // deeper path could be verified.
+    url: 'https://www.amazon.se/gp/css/order-history',
+    note: 'Fakturan hämtas per beställning under Dina beställningar. Kvitton för Prime finns under Mitt Amazon Prime.',
+  },
+  {
+    vendor: 'Cloudflare',
+    aliases: ['cloudflare'],
+    // Invoice emails are off until the customer turns them on
+    // (developers.cloudflare.com/billing/manage/invoices). The dashboard
+    // refuses automated requests (403); this is the link Cloudflare's docs use.
+    url: 'https://dash.cloudflare.com/?to=/:account/billing',
+    note: 'Fakturorna ligger under Billing, Invoices and documents.',
+  },
+  {
+    vendor: 'Hallon',
+    aliases: ['hallon'],
+    // A card customer is charged monthly and gets no invoice by mail; the
+    // documents are on Mina sidor (hallon.se/support/betalningar).
+    url: 'https://www.hallon.se/mina-sidor',
+    note: 'Fakturasammanfattning och specifikation under Betalningar. Mina sidor visar sex månader bakåt.',
+  },
+  // Telecoms: a PDF by email is something the customer orders; paper is the
+  // default, and autogiro with an SMS notice leaves the invoice only in the
+  // portal. The portal holds every invoice whichever way it is delivered.
+  {
+    vendor: 'Tre',
+    // Tre's company name on bank rows; 'tre' alone would match half the mailbox.
+    aliases: ['hi3g'],
+    url: 'https://www.tre.se/mitt3',
+    note: 'De 18 senaste fakturorna finns som PDF under Faktura i Mitt3.',
+  },
+  {
+    vendor: 'Telenor',
+    aliases: ['telenor'],
+    url: 'https://mittforetag.telenor.se/',
+    note: 'Fakturorna ligger under Faktura, Fakturaöversikt i Mitt Företag.',
+  },
+  {
+    vendor: 'Telia',
+    aliases: ['telia'],
+    url: 'https://mybusiness.telia.se/foretag/mybusiness',
+    note: 'Fakturorna ligger under Fakturor i MyBusiness.',
+  },
+  {
+    vendor: 'Tele2',
+    aliases: ['tele2'],
+    // PDF by email cannot be combined with autogiro (tele2.se/foretag/support/faktura/pdf-faktura).
+    url: 'https://www.tele2.se/logga-in/smaforetag',
+    note: 'Fakturorna ligger under Fakturor i Mitt Tele2 Företag. Bara administratörer ser dem.',
+  },
 ]
 
 /**
@@ -172,8 +239,8 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
  *
  * The descriptor is folded first, so "ANTHROPIC* CLAUDE SUB SAN FRANCISCO" and
  * "Kortköp 260228 HETZNER ONLINE GMBH" resolve like anything else the matcher
- * reads. Longer aliases are tried first: "google cloud" must win over a
- * hypothetical bare "google", or a cloud bill would point at Workspace.
+ * reads. Longer aliases are tried first: "amazon web" must win over "amazon",
+ * or an AWS bill would point at an Amazon order history.
  */
 export function lookupPortal(descriptor: string | null | undefined): PortalEntry | null {
   if (!descriptor) return null

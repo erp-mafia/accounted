@@ -51,6 +51,13 @@ describe('resolveDetailsExpansion', () => {
     expect(resolveDetailsExpansion(expansion({ dateLock: 'company_lock' }))).toEqual(['date_locked'])
   })
 
+  it('opens when the date lies in a filed momsperiod, and lets a lock on the same date say its own', () => {
+    expect(resolveDetailsExpansion(expansion({ dateFiledVat: true }))).toEqual(['date_filed_vat'])
+    expect(resolveDetailsExpansion(expansion({ dateFiledVat: false }))).toEqual([])
+    // A locked date cannot be booked at all: that is the one thing to say.
+    expect(resolveDetailsExpansion(expansion({ dateLock: 'company_lock', dateFiledVat: true }))).toEqual(['date_locked'])
+  })
+
   it('opens a quote only when it expires before its own date', () => {
     expect(
       resolveDetailsExpansion(expansion({ documentType: 'quote', validUntil: '2026-11-01' })),

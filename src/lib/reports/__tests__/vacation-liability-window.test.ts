@@ -205,10 +205,45 @@ describe('vacationLiabilityCheck', () => {
       booked2940: 1319.64,
       difference2920: 0,
       difference2940: 0,
+      // No roster reaches the valuation in this fixture: computed 0.
+      computedDifference2920: -4200,
+      computedDifference2940: -1319.64,
+      computedDifferenceTotal: -5519.64,
     })
     expect(vacationLiabilityCheck(report, { booked2920: 5000.1, booked2940: 1000 })).toMatchObject({
       difference2920: 800.1,
       difference2940: -319.64,
     })
+  })
+})
+
+describe('generateVacationLiability on a short week (Semesterlagen 12 a §)', () => {
+  it('counts days off in paid days and shows the remaining days off', async () => {
+    mock.enqueue({ data: null }) // basis: calendar
+    mock.enqueue({ data: [] }) // no closures
+    mock.enqueue({ data: [{ ...EMPLOYEE, workdays_per_week: 4 }] })
+    // Eight days off on a four-day week use ten paid days.
+    mock.enqueue({ data: [{ ...run('2026-06-25', 3000, 8), vacation_paid_days_per_day_off: 1.25 }] })
+    mock.enqueue({ data: [] }) // ledger
+    mock.enqueue({ data: [] }) // no cutover opening
+
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
+    const row = report.rows[0]
+    expect(row.vacationDaysTaken).toBe(10)
+    expect(row.vacationDaysRemaining).toBe(15)
+    expect(row.vacationDaysOffRemaining).toBe(12)
+  })
+
+  it('has no separate days-off figure on a five-day week', async () => {
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [{ ...EMPLOYEE, workdays_per_week: 5 }] })
+    mock.enqueue({ data: [run('2026-06-25', 3000, 8)] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
+    expect(report.rows[0].vacationDaysTaken).toBe(8)
+    expect(report.rows[0].vacationDaysOffRemaining).toBeNull()
   })
 })

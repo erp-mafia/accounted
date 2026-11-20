@@ -16,6 +16,10 @@
  * below is a different check: the Bolagsverket kontrollera rules on the
  * generated iXBRL document.
  *
+ * The board's BankID signing: arsredovisning.request-signatures sends a locked
+ * version to its signers (the MCP door stages it); each board member signs in
+ * person, and their signature fills their slot. No door here signs.
+ *
  * No MCP binding, on purpose:
  *   - arsredovisning.record-signature: it records that a named board member
  *     signed the legal document (evidence of a paper original or an
@@ -41,7 +45,9 @@ import {
   signatoryShape,
   versionShape,
 } from '@/lib/bokslut/arsredovisning/workflow-schemas'
+import { k3IxbrlEnabled } from '@/lib/bokslut/ixbrl/k3-release'
 import { defineOperation, type OperationOutcome } from './types'
+import { SigningRequestCreatedOut } from './signing-requests'
 
 /*
  * The services load on first use: this module sits in the operation
@@ -50,6 +56,7 @@ import { defineOperation, type OperationOutcome } from './types'
  * graph nobody else on those paths needs.
  */
 const workflow = () => import('@/lib/bokslut/arsredovisning/workflow-service')
+const boardSigning = () => import('@/lib/bokslut/arsredovisning/bankid-signing')
 const files = () => import('@/lib/bokslut/arsredovisning/file-service')
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -220,7 +227,7 @@ export const arsredovisningUpdateNarrative = defineOperation({
   docs: {
     summary: 'Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts.',
     description:
-      'Saves the narrative overrides for a räkenskapsår\'s årsredovisning, as the dashboard\'s text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object) and the K3 kassaflödesanalys omission. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.',
+      'Saves the narrative overrides for a räkenskapsår\'s årsredovisning, as the dashboard\'s text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object), the K3 kassaflödesanalys omission, the K3 disclosure answers (disclosure_answers by requirement id: {applies, text, choice, confirmed}; read the open ones from the validation issues and the k3_disclosures of the report), the kind of each equity verifikat the ledger cannot classify (equity_movement_overrides by journal_entry_id) and whether the K3 equity specification is its own statement (equity_statement_separate). disclosure_answers and equity_movement_overrides merge: only the keys sent change and null removes one. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.',
     useWhen: 'Writing or correcting the texts of the årsredovisning before a version is frozen for signing.',
     doNotUseFor:
       'The compliance profile answers (PATCH .../arsredovisning/compliance), the figures (they come from the books), or freezing the document (POST .../arsredovisning/versions).',
@@ -230,6 +237,7 @@ export const arsredovisningUpdateNarrative = defineOperation({
       'parent_company_org_number is an organisationsnummer or a foreign registration id; a personnummer is refused.',
       'Registered at Bolagsverket: 409 ARSREDOVISNING_REGISTERED.',
       'Saving clears narrative_confirmed: confirm again with PATCH .../compliance {"narrative_confirmed": true}.',
+      'A disclosure_answers key must be a requirement id of the K3 disclosure matrix (for example not.handelser_efter_balansdagen); an unknown id is 400 VALIDATION_ERROR.',
     ],
     example: {
       request: { description: 'Bolaget bedriver konsultverksamhet inom IT.', agm_date: '2027-05-20' },
@@ -261,7 +269,7 @@ export const arsredovisningUpdateNarrative = defineOperation({
     name: 'gnubok_update_arsredovisning_narrative',
     title: 'Update Annual Report Narrative',
     description:
-      'Stage an edit of the årsredovisning texts: förvaltningsberättelse, resultatdisposition and proposed dividend, AGM date and decision, ÅRL 5 kap. disclosures, K3 note texts. Only sent fields change; null resets to the generated text.',
+      'Stage an edit of the årsredovisning texts: förvaltningsberättelse, resultatdisposition, AGM date and decision, ÅRL 5 kap. disclosures, K3 note texts and K3 disclosure answers. Only sent fields change; null resets to the generated text.',
     keywords: ['förvaltningsberättelse', 'årsredovisning text', 'resultatdisposition', 'noter', 'årsstämma', 'ställda säkerheter', 'eventualförpliktelser'],
     stage: { pendingType: 'update_arsredovisning_narrative', title: () => 'Ändra årsredovisningens texter' },
   },
@@ -285,7 +293,7 @@ export const arsredovisningUpdateCompliance = defineOperation({
   docs: {
     summary: 'Answer the årsredovisning compliance questions and record the confirmations.',
     description:
-      'Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user\'s confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.',
+      'Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, the K3 scope questions (previous_year_framework: the framework of the previous årsredovisning, none for the first one; has_other_temporary_differences), reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user\'s confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.',
     useWhen: 'The validation (gnubok_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.',
     doNotUseFor: 'The document texts (POST .../arsredovisning/narrative) or the signer roster itself (POST .../arsredovisning/signatures).',
     pitfalls: [
@@ -435,6 +443,13 @@ export const arsredovisningListSignatories = defineOperation({
   output: z.object({ signatures: z.array(SignatureOut) }),
   errorCodes: ['PERIOD_NOT_FOUND'],
   http: { method: 'GET', path: `${BASE}/signatures`, pathParams: { id: 'fiscal_period_id' } },
+  mcp: {
+    name: 'gnubok_list_arsredovisning_signatories',
+    title: 'List Årsredovisning Signatories',
+    description:
+      'The årsredovisning signer roster for a fiscal period: each slot with role, name, status, signing date and method. Call before gnubok_add_arsredovisning_signature (avoid duplicates) and to see who has not signed. Declined slots are listed too.',
+    keywords: ['underskrifter årsredovisning', 'vem ska skriva under', 'undertecknare', 'styrelsens underskrifter', 'signaturer årsredovisning'],
+  },
   run: async (ctx, { fiscal_period_id }) =>
     mapped(await (await workflow()).listArsredovisningSignatories(ctx, fiscal_period_id), (rows) => ({
       signatures: rows.map(signatureOut),
@@ -495,13 +510,16 @@ export const arsredovisningRecordSignature = defineOperation({
     description:
       'status signed records the evidence of a signature made outside the product (a paper original or an advanced e-signature): the ready_for_signature version it is for, the method, where the original is kept (evidence_reference) and the signing time. status declined marks the slot declined. Only a pending slot of this period transitions, once. ÅRL requires each signer to date their signature; the date must fall between the version\'s finalization and today. Idempotent. Dry-runnable.',
     useWhen: 'The board has signed the printed or e-signed document and the signatures are to be registered.',
-    doNotUseFor: 'Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing (not available here).',
+    doNotUseFor: 'Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing in Accounted (POST .../versions/{versionId}/signing-request).',
     pitfalls: [
       'A version that is not ready_for_signature answers 409 ARSREDOVISNING_VERSION_NOT_SIGNABLE.',
       'A slot already signed or declined, bound to another version, or of another period answers 409 SIGNATURE_INVALID_TRANSITION.',
       'A signed_at before finalization or in the future answers 400 ARSREDOVISNING_SIGNATURE_DATE_INVALID.',
       'evidence_reference is archive:<ref>, document:<id> or receipt:<ref>, not free text.',
       'Recorded signatures cannot be undone: finalize a new version instead.',
+      'signing_method bankid answers 422 SIGNING_METHOD_RESERVED: it is set only when the board signs with BankID in Accounted. A BankID signature made in another service is advanced_e_signature.',
+      'A slot covered by an open or partly signed BankID signing request answers 409 ARSREDOVISNING_SIGNING_TRACK_MIXED: a version is signed one way.',
+      "A revisor's slot (the revisorspåteckning) is recorded only after every board slot of the version is signed (409 ARSREDOVISNING_PATECKNING_BEFORE_BOARD), in the board's medium: advanced_e_signature when the board signed electronically, paper_original when it signed on paper (409 ARSREDOVISNING_PATECKNING_MEDIUM_MIXED), and once the profile's auditor_opinion is answered (409 ARSREDOVISNING_PATECKNING_OPINION_MISSING). The opinion and auditor_firm_name are frozen on the slot as it is signed.",
     ],
     example: {
       request: {
@@ -549,12 +567,20 @@ export const arsredovisningRecordSignature = defineOperation({
     'ARSREDOVISNING_VERSION_NOT_SIGNABLE',
     'SIGNATURE_INVALID_TRANSITION',
     'ARSREDOVISNING_SIGNATURE_DATE_INVALID',
+    'SIGNING_METHOD_RESERVED',
+    'ARSREDOVISNING_SIGNING_TRACK_MIXED',
+    'ARSREDOVISNING_PATECKNING_BEFORE_BOARD',
+    'ARSREDOVISNING_PATECKNING_MEDIUM_MIXED',
+    'ARSREDOVISNING_PATECKNING_OPINION_MISSING',
   ],
   http: {
     method: 'PATCH',
     path: `${BASE}/signatures/:signatureId`,
     pathParams: { id: 'fiscal_period_id', signatureId: 'signature_id' },
   },
+  // An omitted signed_at defaults to the moment of the call, on the dry run
+  // and again on the commit; one the caller sent is pinned through the input.
+  volatilePreviewKeys: ['signed_at'],
   run: async (ctx, { fiscal_period_id, signature_id, ...body }, { dryRun }) => {
     const transition =
       body.status === 'signed'
@@ -571,6 +597,106 @@ export const arsredovisningRecordSignature = defineOperation({
       signatureOut,
     )
   },
+})
+
+const BoardSignerIn = z
+  .object({
+    signature_id: SIGNATURE_ID,
+    email: z.string().trim().email().max(254).nullish().describe('Where the board member gets their link. Without one, the answer carries the link for you to hand over.'),
+    user_id: z.string().uuid().nullish().describe('The board member is a member of the company: they can sign in the app, locked to their own BankID.'),
+  })
+  .strict()
+
+export const arsredovisningRequestSignatures = defineOperation({
+  id: 'arsredovisning.request-signatures',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'medium',
+  reversible: false,
+  docs: {
+    summary: 'Send a locked årsredovisning version to the board for BankID signing: one link per signer slot.',
+    description:
+      'For a ready_for_signature version. Renders the copy the board signs (no dates or lines to fill in: each date is in the BankID signature), archives it and creates a signing request with one signer per pending slot, mailed when an email is given. ' +
+      'Each BankID signature fills its slot (signing_method bankid, the signing time); when the last one lands the version is signed and can be filed. The signer\'s BankID name must match the slot\'s name, or the signature is refused (Bolagsverket checks the names). ' +
+      'Read progress with GET /signing-requests/{id}. The fastställelseintyg is signed at Bolagsverket after the årsstämma, not here. Dry-runnable.',
+    useWhen: 'The årsredovisning is locked and every board member and the VD can sign with Swedish BankID.',
+    doNotUseFor: 'A board where someone lacks Swedish BankID (sign elsewhere and record each signature with PATCH .../signatures/{signatureId}), or the fastställelseintyg.',
+    pitfalls: [
+      'Every pending slot gets a signer; list them with GET .../signatures. A slot you leave out is still included, without an email.',
+      'ARSREDOVISNING_SIGNING_TRACK_MIXED: a slot already has a signature recorded by hand; this version is signed that way.',
+      'SIGNING_REQUEST_ALREADY_OPEN: the version already waits in another request (details.signing_request_id).',
+      'A name in the roster that differs from the signer\'s BankID name is refused at signing (SIGNING_NAME_MISMATCH): fix the name and lock a new version.',
+      'Locking a new version cancels this request; signatures already made stay on the old version.',
+      'SIGNING_CAPABILITY_BLOCKED: signing is part of the paid plan and the trial; the company has neither.',
+    ],
+    example: {
+      request: { signers: [{ signature_id: '7c1a…', email: 'anna@example.se' }] },
+      response: {
+        data: {
+          signing_request_id: '8e1d…',
+          status: 'open',
+          title: 'Årsredovisning för räkenskapsåret 2026-01-01 till 2026-12-31',
+          document_id: '4f1c…',
+          document_sha256: '9b2e…',
+          expires_at: '2027-03-19T09:00:00.000Z',
+          signers: [{ signer_id: '2c7b…', position: 1, name: 'Anna Svensson', email: 'anna@example.se', annual_report_signature_id: '7c1a…', lock: 'none', email_sent: true, url: null }],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z
+    .object({
+      fiscal_period_id: FISCAL_PERIOD_ID,
+      version_id: z.string().uuid().describe('The ready_for_signature version (annual_report_version_id).'),
+      signers: z.array(BoardSignerIn).max(20).describe('Per slot: where its link goes. Slots not listed are included without an email.'),
+      message: z.string().max(1000).nullish().describe('A message to the board, shown in the mail and on the page.'),
+      expires_in_days: z.number().int().min(1).max(90).nullish().describe('How long the links work. Default 14.'),
+      send_email: z.boolean().optional().describe('Mail each signer with an email (default true).'),
+    })
+    .strict(),
+  output: SigningRequestCreatedOut,
+  errorCodes: [
+    'SIGNING_UNAVAILABLE',
+    'SIGNING_CAPABILITY_BLOCKED',
+    'ARSREDOVISNING_VERSION_NOT_SIGNABLE',
+    'ARSREDOVISNING_SIGNING_TRACK_MIXED',
+    'SIGNING_REQUEST_ALREADY_OPEN',
+    'SIGNING_SIGNERS_INVALID',
+    'PERIOD_NOT_FOUND',
+    'NOT_FOUND',
+  ],
+  http: {
+    method: 'POST',
+    path: `${BASE}/versions/:versionId/signing-request`,
+    pathParams: { id: 'fiscal_period_id', versionId: 'version_id' },
+  },
+  mcp: {
+    name: 'gnubok_request_arsredovisning_signatures',
+    title: 'Request Annual Report Signatures',
+    description:
+      'Stage sending a locked årsredovisning version to the board for BankID signing, one link per signer slot, mailed at approval. Each board member signs in person; the last signature makes the version signed.',
+    visibility: 'search',
+    keywords: ['signera årsredovisning', 'styrelsen signerar', 'underskrift årsredovisning', 'bankid årsredovisning', 'skicka årsredovisning för underskrift'],
+    stage: {
+      pendingType: 'request_arsredovisning_signatures',
+      title: () => 'Skicka årsredovisningen till styrelsen för underskrift med BankID',
+    },
+  },
+  run: async (ctx, input, { dryRun }) =>
+    (await boardSigning()).requestArsredovisningSignatures(
+      ctx,
+      {
+        fiscalPeriodId: input.fiscal_period_id,
+        versionId: input.version_id,
+        signers: input.signers.map((s) => ({ signatureId: s.signature_id, email: s.email ?? null, userId: s.user_id ?? null })),
+        message: input.message ?? null,
+        expiresInDays: input.expires_in_days ?? null,
+        sendEmail: input.send_email,
+        createdVia: ctx.pendingOperationId ? 'mcp' : 'api',
+      },
+      { dryRun },
+    ),
 })
 
 export const arsredovisningRemoveSignatory = defineOperation({
@@ -618,7 +744,10 @@ export const arsredovisningValidateIxbrl = defineOperation({
     doNotUseFor:
       'The ÅRL/K2 completeness checks per stage (gnubok_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).',
     pitfalls: [
-      'K2 aktiebolag only: the iXBRL generator does not produce K3 documents.',
+      // K3 documents exist only behind NEXT_PUBLIC_K3_IXBRL_ENABLED (default off).
+      k3IxbrlEnabled()
+        ? 'K2 and K3 aktiebolag: a K3 year is checked with the K3 rules (ACC-K3-*), and a K3 document built from fallbacks (equity from closing balances, the summary cash flow) does not pass.'
+        : 'K2 aktiebolag only: the iXBRL generator does not produce K3 documents.',
       'A validation with issues still answers 200; read ok and error_count.',
       'An unknown version_id answers 404 NOT_FOUND.',
     ],

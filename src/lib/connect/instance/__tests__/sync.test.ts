@@ -64,7 +64,7 @@ function makeSupabase(companyIds: string[]) {
   }
 }
 
-const CONFIG = { key: 'gnubok_ck_test', baseUrl: 'https://app.gnubok.se' }
+const CONFIG = { key: 'gnubok_ck_test', baseUrl: 'https://connect.accounted.se' }
 const NOW = new Date('2026-08-20T12:00:00.000Z')
 const C1 = '11111111-1111-4111-8111-111111111111'
 const C2 = '22222222-2222-4222-8222-222222222222'
@@ -119,7 +119,7 @@ describe('syncConnectorEntitlements', () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('https://app.gnubok.se/api/connect/entitlements')
+    expect(url).toBe('https://connect.accounted.se/api/connect/entitlements')
     expect(init.method).toBe('POST')
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer gnubok_ck_test')
     expect(JSON.parse(String(init.body))).toEqual({

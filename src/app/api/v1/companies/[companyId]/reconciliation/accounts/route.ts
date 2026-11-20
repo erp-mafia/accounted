@@ -80,7 +80,7 @@ registerEndpoint({
             account_number: '1630',
             name: 'Skattekonto',
             currency: 'SEK',
-            logo_url: '/logos/skatteverket_color.svg',
+            logo_url: null,
             source: { type: 'skatteverket_api', synced_at: '2026-08-20T04:00:12.000Z', stale: false },
             status: {
               state: 'open',

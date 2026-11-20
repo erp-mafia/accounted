@@ -7,6 +7,7 @@ import {
   aiConnectAction,
   aiPrefilledChatLink,
   connectedAiClients,
+  firstTaskClient,
   kvittojaktenSkillSlug,
   openAiConnector,
   NO_AI_CONNECTION,
@@ -185,5 +186,41 @@ describe('aiPrefilledChatLink', () => {
   it('names a skill per client', () => {
     expect(kvittojaktenSkillSlug('chatgpt')).toBe('kvittojakten-chatgpt')
     expect(kvittojaktenSkillSlug('grok')).toBe('kvittojakten-grok')
+  })
+})
+
+describe('firstTaskClient', () => {
+  const claude = aiConnection([{ client: 'claude' }])
+
+  it('asks the connected client for a first task until an agent has worked', () => {
+    expect(firstTaskClient(claude, false)).toBe('claude')
+  })
+
+  it('goes quiet for good once any agent has worked', () => {
+    expect(firstTaskClient(claude, true)).toBeNull()
+  })
+
+  it('asks nobody while nothing is connected', () => {
+    expect(firstTaskClient(NO_AI_CONNECTION, false)).toBeNull()
+  })
+
+  it('asks nobody for a connection it cannot open a chat in', () => {
+    expect(firstTaskClient(aiConnection([{ client: 'local' }]), false)).toBeNull()
+    expect(firstTaskClient(aiConnection([{ client: null }]), false)).toBeNull()
+  })
+
+  it('picks one client when several are connected', () => {
+    expect(firstTaskClient(aiConnection([{ client: 'grok' }, { client: 'chatgpt' }]), false)).toBe('chatgpt')
+  })
+})
+
+describe('the first task prompt', () => {
+  // It travels in a third-party URL (aiPrefilledChatLink), so it must stay
+  // fixed text: an ICU placeholder is how tenant data would get in.
+  it.each(['sv', 'en'])('is fixed text in %s', async (locale) => {
+    const messages = (await import(`@/messages/${locale}.json`)).default as { dashboard: Record<string, string> }
+    const prompt = messages.dashboard.kopplingar_agent_first_task_prompt
+    expect(prompt.length).toBeGreaterThan(0)
+    expect(prompt).not.toMatch(/[{}]/)
   })
 })

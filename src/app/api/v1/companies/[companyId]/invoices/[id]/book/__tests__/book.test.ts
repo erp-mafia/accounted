@@ -10,7 +10,7 @@
  * the real generator's lines and writes nothing.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeInvoice } from '@/tests/helpers'
+import { makeInvoice, isIdempotencyClaim } from '@/tests/helpers'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
@@ -58,6 +58,7 @@ vi.mock('@/lib/invoices/issue-and-book-invoice', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as bookRoute } from '../route'
 import { POST as bulkBookRoute } from '../../../bulk-book/route'
+import { toHandle } from '@/lib/handles'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -101,7 +102,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['invoices', 'journal_entries', 'journal_entry_lines', 'document_attachments'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INV_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -309,6 +310,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/book', () => {
       expect.objectContaining({ id: INV_ID }),
       'aktiebolag',
       'Kunden AB',
+      { posting: expect.any(Function) }, // what the door saw, read by the posting port only while POSTING_EVENTS is on
     )
     // The CAS-guarded claim: only an unbooked, bookable, uncredited row.
     expect(client.calls).toContainEqual({ table: 'invoices', method: 'is', args: ['journal_entry_id', null] })
@@ -391,7 +393,7 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-book', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.results).toEqual([
-      { id: INV_ID, status: 'booked', journal_entry_id: JE_ID },
+      { id: INV_ID, handle: toHandle('invoice', INV_ID), status: 'booked', journal_entry_id: JE_ID },
       // defer_invoice_booking: the draft is refused, never issued.
       expect.objectContaining({ id: INV_2, status: 'failed', error_code: 'INVOICE_BOOK_DEFERRED_DRAFT' }),
       expect.objectContaining({ id: unknown, status: 'failed', error_code: 'INVOICE_NOT_FOUND' }),

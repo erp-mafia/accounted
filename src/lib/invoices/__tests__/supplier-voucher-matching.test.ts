@@ -1,4 +1,25 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// The registration-first rule (defer_invoice_booking) has its own suites
+// (registration-first.test.ts and the deferred-door tests); here no invoice
+// needs its registration booked first.
+vi.mock('@/lib/supplier-invoices/registration-first', () => ({
+  planRegistrationBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planRegistrationBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  bookRegistrationBeforeSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryId: null,
+    bookedHere: false,
+    warnings: [],
+  })),
+  planRegistrationsBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+  bookRegistrationsBeforeBatchSettlement: vi.fn(async () => ({
+    ok: true,
+    journalEntryIds: {},
+    postedJournalEntryIds: {},
+    warnings: [],
+  })),
+}))
 import {
   validateVoucherForSupplierInvoiceLink,
   linkSupplierInvoiceToVoucher,
@@ -9,6 +30,10 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
+import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlementById,
+} from '@/lib/supplier-invoices/registration-first'
 
 // Issue #1259: settling the invoice retires the suggestion pointers at it.
 // Mocked so it consumes no slot in the queued Supabase mock; the helper's own
@@ -33,6 +58,61 @@ vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
 vi.mock('@/lib/invoices/supplier-settlement-side', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../supplier-settlement-side')>()
   return { ...actual, resolveSupplierSettlementSide: async () => actual.AP_DEBIT_SIDE }
+})
+
+// The signed bank payment read: mocked so it takes no slot in the queued
+// Supabase mock; pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+const { mockFindSignedBankPayment } = vi.hoisted(() => ({
+  mockFindSignedBankPayment: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+}))
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
+}))
+
+const SIGNED_ORDER = { id: 'order-1', status: 'accepted', requested_execution_date: '2026-11-03' }
+
+describe('a bank payment signed for the invoice still executes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFindSignedBankPayment.mockResolvedValue(null)
+  })
+
+  it('the link refuses before the RPC: the Befintlig verifikation tab pays the supplier twice otherwise', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockFindSignedBankPayment.mockResolvedValueOnce(SIGNED_ORDER)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SI_BANK_PAYMENT_UNDER_WAY',
+      details: {
+        payment_order_id: 'order-1',
+        payment_order_status: 'accepted',
+        requested_execution_date: '2026-11-03',
+      },
+    })
+    expect(mockFindSignedBankPayment).toHaveBeenCalledWith(supabase, 'company-1', 'si-1')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('the validator refuses it at staging, the way the commit will', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    mockFindSignedBankPayment.mockResolvedValueOnce(SIGNED_ORDER)
+
+    const result = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeSupplierInvoice({ id: 'si-1', remaining_amount: 1000, total: 1000, currency: 'SEK' }) as never,
+      'je-1',
+    )
+
+    expect(result).toMatchObject({ ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY' })
+  })
 })
 
 // ============================================================
@@ -69,6 +149,19 @@ describe('validateVoucherForSupplierInvoiceLink', () => {
     )
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('LINK_SI_VOUCHER_INVOICE_FULLY_PAID')
+  })
+
+  // A stored 0 is paid, as the RPC reads it: rounding drift across payments must
+  // not read as a tiny amount still owed (storedRemaining).
+  it('rejects when the stored remainder is 0 though total minus paid_amount is not', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const result = await validateVoucherForSupplierInvoiceLink(
+      supabase as never,
+      'company-1',
+      makeSupplierInvoice({ remaining_amount: 0, paid_amount: 999.99, total: 1000, currency: 'SEK' }) as never,
+      'je-1',
+    )
+    expect(result).toEqual({ ok: false, code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID' })
   })
 
   it('rejects when the voucher is missing', async () => {
@@ -349,6 +442,20 @@ describe('linkSupplierInvoiceToVoucher', () => {
     expect(mockAnchorSupplierDoc).not.toHaveBeenCalled()
   })
 
+  it('hands a door\'s named basis to the RPC, and sends none for a person', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND' }, error: null })
+    enqueue({ data: { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND' }, error: null })
+    const params = { supplierInvoiceId: 'si-1', journalEntryId: 'je-1' }
+
+    await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', { ...params, linkBasis: 'rule_counterparty' })
+    await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', params)
+
+    const calls = vi.mocked(supabase.rpc).mock.calls.filter(([fn]) => fn === 'link_supplier_invoice_to_voucher')
+    expect(calls[0][1]).toMatchObject({ p_link_basis: 'rule_counterparty' })
+    expect(calls[1][1]).not.toHaveProperty('p_link_basis')
+  })
+
   it('rejects with INVOICE_FULLY_PAID when the RPC reports the invoice is already paid', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -428,6 +535,8 @@ describe('linkSupplierInvoiceToVoucher', () => {
       expect(result.result.paymentId).toBe('sip-1')
     }
 
+    // supplier_invoice.paid only: a link with no kursdifferens posts no
+    // verifikat, so it announces no journal_entry.committed.
     expect(emitSpy).toHaveBeenCalledTimes(1)
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -449,6 +558,54 @@ describe('linkSupplierInvoiceToVoucher', () => {
     // The invoice's retained document is anchored to its verifikat right away
     // instead of waiting for the daily floating-document sweep.
     expect(mockAnchorSupplierDoc).toHaveBeenCalledWith(supabase, 'company-1', invoice.id)
+  })
+
+  // The link posts nothing of its own, except the kursdifferens verifikat
+  // (3960/7960) a foreign invoice settled on 244x at another rate needs. That
+  // one is posted in SQL, so the engine door announces it.
+  it('announces the kursdifferens verifikat the link posts with journal_entry.committed', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const fxEntry = { id: 'je-fx', company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 32, lines: [] }
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'sip-fx',
+        invoice_status: 'paid',
+        paid_amount: 100,
+        remaining_amount: 0,
+        payment_amount: 100,
+        journal_entry_id: 'je-1',
+        currency: 'EUR',
+        settlement_side: 'ap_debit',
+        fx_settled_sek: 1150,
+        fx_residual_sek: 12.5,
+        fx_journal_entry_id: 'je-fx',
+        fx_voucher_number: 32,
+      },
+      error: null,
+    })
+    enqueue({ data: fxEntry, error: null }) // the engine door reloads the kursdifferens verifikat
+    enqueue({ data: null, error: null }) // post-link invoice re-fetch
+
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-fx',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(emitSpy).toHaveBeenCalledTimes(1)
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'journal_entry.committed',
+      payload: { entry: fxEntry, userId: 'user-1', companyId: 'company-1' },
+    })
+    // The first journal_entries read is the door's reload, scoped to the
+    // company; later ones belong to the bank-feed reconcile.
+    expect(findCalls('journal_entries', 'eq').slice(0, 2)).toEqual([
+      ['id', 'je-fx'],
+      ['company_id', 'company-1'],
+    ])
   })
 
   it('still returns success even if the post-link invoice re-fetch is empty (event is best-effort)', async () => {
@@ -804,7 +961,7 @@ describe('findMatchingVouchersForSupplierInvoice', () => {
   // Desk crm#64 (2026-09-16): the substring test read ankomstnummer 14
   // inside "(1814)" and auto-linked a Tele2 payment of 859 kr as a partial
   // payment on a Postronic invoice of 3 156 kr at "99 % säkerhet". All 31
-  // arrival-number auto-links in prod were of that kind.
+  // arrival-number auto-links in production were of that kind.
   // ============================================================
 
   describe('reference matching', () => {
@@ -899,5 +1056,164 @@ describe('findMatchingVouchersForSupplierInvoice', () => {
       expect(result).toHaveLength(1)
       expect(result[0].confidence).toBe(0.99)
     })
+  })
+})
+
+// ============================================================
+// linkSupplierInvoiceToVoucher: a deferred invoice is booked first
+// ============================================================
+
+describe('linkSupplierInvoiceToVoucher: a deferring company whose invoice is not booked yet', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const requiredPlan = {
+    ok: true as const,
+    required: true as const,
+    supplierInvoiceId: 'si-1',
+    entry: {
+      entry_date: '2024-06-01',
+      description: 'Leverantörsfaktura',
+      lines: [
+        { account_number: '4010', debit_amount: 800, credit_amount: 0, line_description: null },
+        { account_number: '2641', debit_amount: 200, credit_amount: 0, line_description: null },
+        { account_number: '2440', debit_amount: 0, credit_amount: 1000, line_description: null },
+      ],
+      total_debit: 1000,
+      total_credit: 1000,
+      balanced: true,
+      note: '',
+    },
+    payableSek: 1000,
+    createsAccrualSchedules: false,
+  }
+  const postedVoucher = {
+    id: 'je-1',
+    voucher_series: 'B',
+    voucher_number: 12,
+    entry_date: '2024-06-15',
+    description: '',
+    status: 'posted',
+    source_type: 'manual',
+    fiscal_period_id: 'fp-1',
+    company_id: 'company-1',
+  }
+  const rpcOk = {
+    ok: true,
+    payment_id: 'sip-1',
+    invoice_status: 'paid',
+    paid_amount: 1000,
+    remaining_amount: 0,
+    payment_amount: 1000,
+    journal_entry_id: 'je-1',
+    currency: 'SEK',
+  }
+  const unbookedInvoice = () =>
+    makeSupplierInvoice({ id: 'si-1', remaining_amount: 1000, paid_amount: 0, total: 1000, currency: 'SEK' })
+
+  it('validates the link, books the registration, then links the voucher', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce(requiredPlan)
+    vi.mocked(bookRegistrationBeforeSettlement).mockResolvedValueOnce({
+      ok: true,
+      journalEntryId: 'je-registration',
+      bookedHere: true,
+      warnings: [],
+    })
+    enqueue({ data: unbookedInvoice() }) // the invoice, for the link validation
+    enqueue({ data: postedVoucher })
+    enqueue({
+      data: [
+        { account_number: '2440', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
+        { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+      ],
+    })
+    enqueue({ data: [], error: null }) // existing links on the voucher
+    enqueue({ data: [], error: null }) // this invoice's own links to it
+    enqueue({ data: rpcOk, error: null }) // link_supplier_invoice_to_voucher
+    enqueue({ data: unbookedInvoice(), error: null }) // re-fetch for the event
+    vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    if (result.ok) expect(result.result.registrationJournalEntryId).toBe('je-registration')
+    expect(vi.mocked(planRegistrationBeforeSettlementById)).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }),
+      'si-1',
+    )
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).toHaveBeenCalledWith(expect.anything(), requiredPlan)
+  })
+
+  it('a voucher that does not fit refuses before the registration is booked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce(requiredPlan)
+    enqueue({ data: unbookedInvoice() })
+    enqueue({ data: null, error: null }) // the voucher is missing
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-missing',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'LINK_SI_VOUCHER_VOUCHER_NOT_FOUND' })
+    expect(vi.mocked(bookRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+  })
+
+  it('a refused registration refuses the link with the Bokför code: no voucher is linked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce({
+      ok: false,
+      code: 'PERIOD_LOCKED',
+      details: { invoice_date: '2024-06-01', registration_first: true, supplier_invoice_id: 'si-1' },
+    })
+    // Would be the RPC's answer if it were (wrongly) called.
+    enqueue({ data: rpcOk, error: null })
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'PERIOD_LOCKED', details: { registration_first: true } })
+    expect(mockAnchorSupplierDoc).not.toHaveBeenCalled()
+  })
+
+  it('a typed bookkeeping error from the registration answers with its own code', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    vi.mocked(planRegistrationBeforeSettlementById).mockResolvedValueOnce({
+      ok: false,
+      code: 'SI_BOOK_FAILED',
+      error: Object.assign(new Error('accrual month locked'), { code: 'SI_ACCRUED_COST_PERIOD_LOCKED' }),
+      details: { registration_first: true, supplier_invoice_id: 'si-1' },
+    })
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'SI_ACCRUED_COST_PERIOD_LOCKED' })
+  })
+
+  it('the provider-migration pass never books a registration: it came in with the SIE journal', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rpcOk, error: null })
+    enqueue({ data: unbookedInvoice(), error: null })
+    vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      registrationInLedger: true,
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(vi.mocked(planRegistrationBeforeSettlementById)).not.toHaveBeenCalled()
+    if (result.ok) expect(result.result.registrationJournalEntryId).toBeNull()
   })
 })

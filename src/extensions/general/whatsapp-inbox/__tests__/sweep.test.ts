@@ -377,3 +377,147 @@ describe('runSweep: orphaned parked rows (#2062)', () => {
     expect(findCalls('whatsapp_messages', 'update')).toHaveLength(0)
   })
 })
+
+/**
+ * A re-claimed message can be a file the model reads for minutes, and a pass
+ * holds up to 25 of them: the run stops starting work at its deadline and
+ * leaves the rest, in the same durable state, to the run a minute later.
+ */
+describe('runSweep: run deadline', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    finalizeMock.mockResolvedValue(undefined)
+  })
+
+  it('starts no message at or after the deadline and counts what it left', async () => {
+    let now = 1_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    // Every message takes 90 s (a file the model reads).
+    processMock.mockImplementation(async () => {
+      now += 90_000
+      return { kind: 'media_processed', conversationId: 'conv-1' }
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [1, 2, 3, 4].map((n) => ({ id: `m-${n}`, attempts: 1, conversation_id: 'conv-1' })) }) // stuck received
+    enqueue({ data: [{ id: 'm-stuck', attempts: 1, conversation_id: 'conv-2' }] }) // stuck processing
+    enqueue({ data: [] }) // stale pending_ack
+    enqueue({ data: [] }) // unacked re-arm
+    enqueue({ data: [] }) // TTL scan
+    enqueue({ data: [] }) // pin scan
+    enqueue({ count: 0 }) // outbound failures
+    enqueue({ data: [] }) // orphan scan
+
+    try {
+      // Deadline at 200 s: messages start at 0, 90 and 180 s; the fourth would start at 270 s.
+      const summary = await runSweep(supabase as unknown as SupabaseClient, { deadlineAt: 1_200_000 })
+
+      expect(processMock.mock.calls.map((c) => c[1])).toEqual(['m-1', 'm-2', 'm-3'])
+      expect(summary.reclaimedReceived).toBe(3)
+      // m-4, the stuck processing row (never reset: it stays as it was) and the burst ack of conv-1.
+      expect(summary.deferred).toBe(3)
+      expect(summary.reclaimedProcessing).toBe(0)
+      expect(findCalls('whatsapp_messages', 'update')).toEqual([])
+      expect(finalizeMock).not.toHaveBeenCalled()
+      expect(summary.failedPasses).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('runs everything when no deadline is given, as before', async () => {
+    processMock.mockResolvedValue({ kind: 'media_processed', conversationId: 'conv-1' })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [1, 2, 3, 4].map((n) => ({ id: `m-${n}`, attempts: 1, conversation_id: 'conv-1' })) })
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+    expect(summary.reclaimedReceived).toBe(4)
+    expect(summary.deferred).toBe(0)
+  })
+})
+
+/**
+ * supabase-js answers a failed query with `error`; it does not throw. Every
+ * pass read only `data`, so a scan that failed looked like "nothing stuck".
+ */
+describe('runSweep: a pass that cannot read its work', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    processMock.mockResolvedValue({ kind: 'media_processed', conversationId: 'conv-1' })
+    finalizeMock.mockResolvedValue(undefined)
+  })
+
+  it('names the pass as failed and still runs the passes after it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'canceling statement due to statement timeout' } }) // stuck received
+    enqueue({ data: [{ id: 'm-stuck', attempts: 1, conversation_id: 'conv-2' }] }) // stuck processing
+    enqueue({ data: { id: 'm-stuck' } }) // guarded reset won
+    enqueue({ data: [] }) // stale pending_ack
+    enqueue({ data: [] }) // unacked re-arm
+    enqueue({ data: [] }) // TTL scan
+    enqueue({ data: [] }) // pin scan
+    enqueue({ count: 0 }) // outbound failures
+    enqueue({ data: [] }) // orphan scan
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    expect(summary.failedPasses).toEqual(['received'])
+    expect(summary.reclaimedReceived).toBe(0)
+    expect(summary.reclaimedProcessing).toBe(1)
+  })
+
+  it('reports every scan that fails, each under its own name', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    for (let i = 0; i < 8; i++) enqueue({ error: { message: 'connection refused' } })
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    expect(summary.failedPasses).toEqual([
+      'received',
+      'processing',
+      'pending_ack',
+      'unacked',
+      'question_ttl',
+      'pin_expiry',
+      'outbound_failures',
+      'orphaned_parked',
+    ])
+    expect(processMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps an expired company question as it is when its staged receipts cannot be counted: unknown is not zero', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // stuck received
+    enqueue({ data: [] }) // stuck processing
+    enqueue({ data: [] }) // stale pending_ack
+    enqueue({ data: [] }) // unacked re-arm
+    enqueue({
+      data: [
+        expiredConversation({
+          state: 'awaiting_company',
+          context: {
+            pending_question: { type: 'company', asked_at: new Date(Date.now() - 49 * HOURS).toISOString() },
+            company_options: [{ id: 'company-1', name: 'A AB' }],
+          },
+        }),
+      ],
+    }) // TTL scan
+    enqueue({ data: null }) // outer-bound stamp of the parked rows
+    enqueue({ error: { message: 'statement timeout' } }) // count of rows still staged
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    expect(summary.failedPasses).toContain('question_ttl')
+    expect(summary.expiredQuestions).toBe(0)
+    // The conversation was not written: its company options are still there for a late answer.
+    expect(findCalls('whatsapp_conversations', 'update')).toEqual([])
+  })
+
+  it('reports a clean run with no failed pass', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    for (let i = 0; i < 6; i++) enqueue({ data: [] })
+    enqueue({ count: 0 })
+    enqueue({ data: [] })
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+    expect(summary.failedPasses).toEqual([])
+    expect(summary.deferred).toBe(0)
+  })
+})

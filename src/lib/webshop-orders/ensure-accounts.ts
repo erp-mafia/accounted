@@ -1,5 +1,6 @@
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { WEBSHOP_PREFILL_ACCOUNTS } from './booking-lines'
+import { COUNTRY_PRESET_ACCOUNTS, OSS_REVENUE_ACCOUNT } from './country-routing'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 
@@ -34,9 +35,48 @@ export async function ensureWebshopPrefillAccounts(
   accountNumbers: string[],
   log?: Logger,
 ): Promise<void> {
-  const wanted = [...new Set(accountNumbers)].filter((n) =>
-    WEBSHOP_PREFILL_ACCOUNTS.includes(n),
+  await ensureBasAccounts(
+    supabase,
+    companyId,
+    userId,
+    accountNumbers.filter((n) => WEBSHOP_PREFILL_ACCOUNTS.includes(n)),
+    log,
   )
+}
+
+/**
+ * The same repair for the accounts the country presets name (3106, 2670,
+ * 3105) and the services accounts an order with nothing to ship books
+ * instead of a goods account (3305, 3308), run when a store saves rules that
+ * use them: the minimal seeded chart has none of them. 3106 is created with VAT code OSS so the
+ * momsdeklaration keeps it out of every ruta instead of listing it as revenue
+ * without one. Only that closed set; an account the user typed in a rule must
+ * already exist (the settings route says which one does not).
+ */
+export async function ensureCountryPresetAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  accountNumbers: string[],
+  log?: Logger,
+): Promise<void> {
+  await ensureBasAccounts(
+    supabase,
+    companyId,
+    userId,
+    accountNumbers.filter((n) => COUNTRY_PRESET_ACCOUNTS.includes(n)),
+    log,
+  )
+}
+
+async function ensureBasAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  accountNumbers: string[],
+  log?: Logger,
+): Promise<void> {
+  const wanted = [...new Set(accountNumbers)]
   if (wanted.length === 0) return
 
   try {
@@ -84,7 +124,7 @@ export async function ensureWebshopPrefillAccounts(
     // most eight accounts, only on first use, so the extra round trips are
     // cheaper than an unverifiable insert.
     for (const accountNumber of missing) {
-      // Every WEBSHOP_PREFILL_ACCOUNTS member is a real BAS 2026 account, so a
+      // Every account in both closed sets is a real BAS 2026 account, so a
       // miss here means the reference data drifted: skip rather than invent
       // metadata for an account we cannot describe.
       const bas = getBASReference(accountNumber)
@@ -106,6 +146,7 @@ export async function ensureWebshopPrefillAccounts(
           normal_balance: bas.normal_balance,
           sru_code: bas.sru_code ?? null,
           k2_excluded: bas.k2_excluded ?? false,
+          default_vat_treatment: accountNumber === OSS_REVENUE_ACCOUNT ? 'oss' : null,
           plan_type: 'full_bas',
           is_active: true,
           is_system_account: false,

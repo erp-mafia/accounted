@@ -1,9 +1,23 @@
 import type { Metadata } from 'next'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolvePayslipToken } from '@/lib/salary/payslips/links'
-import { formatCurrency } from '@/lib/utils'
+import { loadPayslip } from '@/lib/salary/payslips/load-payslip'
+import { effectiveRow, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
+import { formatCurrency, formatDate } from '@/lib/utils'
+import { getBranding } from '@/lib/branding/service'
+import { ArrowDownTrayIcon } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import {
+  StandaloneFacts,
+  StandaloneFile,
+  StandaloneFrom,
+  StandaloneHeading,
+  StandaloneMessage,
+  StandalonePage,
+  StandaloneSmall,
+} from '@/components/standalone/StandalonePage'
 
-// The token is the authentication — no session, no company context. Swedish
+// The token is the authentication: no session, no company context. Swedish
 // only (employee-facing). Never indexed.
 export const metadata: Metadata = {
   title: 'Lönespecifikation',
@@ -18,14 +32,7 @@ const MONTH_NAMES = [
 ]
 
 function MessageShell({ title, body }: { title: string; body: string }) {
-  return (
-    <main className="min-h-dvh bg-background flex items-center justify-center px-5">
-      <div className="max-w-md w-full rounded-lg border border-border p-6 space-y-2">
-        <h1 className="font-display text-2xl tracking-tight">{title}</h1>
-        <p className="text-sm text-muted-foreground">{body}</p>
-      </div>
-    </main>
-  )
+  return <StandaloneMessage title={title} body={body} />
 }
 
 export default async function PayslipPage({
@@ -64,27 +71,16 @@ export default async function PayslipPage({
 
   const { link } = resolved
 
-  const [{ data: run }, { data: sre }, { data: company }] = await Promise.all([
-    serviceClient
-      .from('salary_runs')
-      .select('period_year, period_month, payment_date')
-      .eq('id', link.salary_run_id)
-      .eq('company_id', link.company_id)
-      .single(),
-    serviceClient
-      .from('salary_run_employees')
-      .select('gross_salary, tax_withheld, tax_withheld_override, net_salary, employee:employees(first_name, last_name)')
-      .eq('salary_run_id', link.salary_run_id)
-      .eq('employee_id', link.employee_id)
-      .single(),
-    serviceClient
-      .from('companies')
-      .select('name')
-      .eq('id', link.company_id)
-      .single(),
-  ])
+  // The one payslip load (lib/salary/payslips/load-payslip.ts), so this page
+  // shows the employer name and the figures the PDF prints: the effective
+  // figures the booking and the AGI use (effectiveRow).
+  const loaded = await loadPayslip(serviceClient, {
+    companyId: link.company_id,
+    salaryRunId: link.salary_run_id,
+    employeeId: link.employee_id,
+  })
 
-  if (!run || !sre || !company) {
+  if (!loaded.ok) {
     return (
       <MessageShell
         title="Lönespecifikationen hittades inte"
@@ -93,57 +89,54 @@ export default async function PayslipPage({
     )
   }
 
-  const emp = sre.employee as unknown as { first_name: string; last_name: string } | null
-  const effectiveTax = (sre.tax_withheld_override as number | null) ?? (sre.tax_withheld as number)
-  const effectiveNet = (sre.net_salary as number) + ((sre.tax_withheld as number) - effectiveTax)
+  const { run, sre, employee: emp, company } = loaded.payslip
+  const figures = effectiveRow({
+    ...(sre as unknown as EffectiveFiguresInput),
+    employee: { f_skatt_status: emp.f_skatt_status ?? null },
+  })
   const monthName = MONTH_NAMES[run.period_month - 1]
 
+  const pdfHref = `/api/payslip/${token}/pdf`
+  const pdfName = `Lönespecifikation ${monthName} ${run.period_year}.pdf`
+
   return (
-    <main className="min-h-dvh bg-background flex items-center justify-center px-5 py-10">
-      <div className="max-w-md w-full rounded-lg border border-border p-6 space-y-6">
-        <div className="space-y-1">
-          <p className="text-sm text-muted-foreground">{company.name}</p>
-          <h1 className="font-display text-2xl tracking-tight">
-            Lönespecifikation {monthName} {run.period_year}
-          </h1>
-          {emp && (
-            <p className="text-sm text-muted-foreground">
-              {emp.first_name} {emp.last_name}
-            </p>
-          )}
-        </div>
-
-        <dl className="space-y-3 text-sm">
-          <div className="flex items-center justify-between">
-            <dt className="text-muted-foreground">Bruttolön</dt>
-            <dd className="tabular-nums">{formatCurrency(sre.gross_salary as number)}</dd>
-          </div>
-          <div className="flex items-center justify-between">
-            <dt className="text-muted-foreground">Skatteavdrag</dt>
-            <dd className="tabular-nums">−{formatCurrency(effectiveTax)}</dd>
-          </div>
-          <div className="flex items-center justify-between border-t border-border pt-3">
-            <dt className="font-medium">Nettolön</dt>
-            <dd className="font-display text-xl tabular-nums">{formatCurrency(effectiveNet)}</dd>
-          </div>
-          <div className="flex items-center justify-between">
-            <dt className="text-muted-foreground">Utbetalningsdag</dt>
-            <dd className="tabular-nums">{run.payment_date}</dd>
-          </div>
-        </dl>
-
-        <a
-          href={`/api/payslip/${token}/pdf`}
-          className="inline-flex h-10 w-full items-center justify-center rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
-        >
-          Ladda ner PDF (lönespecifikation)
-        </a>
-
-        <p className="text-xs text-muted-foreground">
-          Länken är personlig — dela den inte vidare. PDF-filen innehåller den
-          fullständiga specifikationen.
-        </p>
+    <StandalonePage width="link" brand={false}>
+      <StandaloneFrom name={company.name} via={`via ${getBranding().appName}`} />
+      <StandaloneHeading
+        className="mt-5"
+        eyebrow={emp ? <span data-ph-mask="">{emp.first_name} {emp.last_name}</span> : undefined}
+        title={`Lönespecifikation ${monthName} ${run.period_year}`}
+      />
+      <p className="mt-2 font-display text-2xl tabular-nums text-strong" data-ph-mask="">
+        {formatCurrency(figures.net_salary)}
+      </p>
+      <StandaloneFacts
+        className="mt-5"
+        rows={[
+          { label: 'Bruttolön', value: formatCurrency(figures.gross_salary) },
+          { label: 'Skatteavdrag', value: `−${formatCurrency(figures.tax_withheld)}` },
+          figures.extra_tax_withheld > 0
+            ? {
+                label: <span className="pl-3 text-xs text-muted-foreground">varav extra skatteavdrag (begärt)</span>,
+                value: <span className="text-xs">−{formatCurrency(figures.extra_tax_withheld)}</span>,
+              }
+            : null,
+          { label: 'Nettolön', value: <span className="font-medium text-strong">{formatCurrency(figures.net_salary)}</span> },
+          { label: 'Utbetalningsdag', value: formatDate(run.payment_date) },
+        ]}
+      />
+      <div className="mt-4">
+        <StandaloneFile name={pdfName} />
       </div>
-    </main>
+      <Button asChild size="lg" className="mt-5 w-full">
+        <a href={pdfHref} download>
+          <ArrowDownTrayIcon className="h-4 w-4" />
+          Ladda ner PDF
+        </a>
+      </Button>
+      <StandaloneSmall>
+        Länken är personlig: dela den inte vidare. PDF-filen innehåller den fullständiga specifikationen.
+      </StandaloneSmall>
+    </StandalonePage>
   )
 }

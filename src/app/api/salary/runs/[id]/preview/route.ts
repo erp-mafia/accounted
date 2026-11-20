@@ -1,23 +1,23 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import {
   buildSalaryRunEntryLines,
+  planRunVacationRemeasure,
   salaryRunDataFromRows,
   salaryRunDescription,
+  vacationVoucherDescription,
   type SalaryRosterRow,
   type SalaryRunRow,
 } from '@/lib/salary/salary-entries'
-import { roundOre } from '@/lib/money'
+import { runRemeasuresVacationLiability } from '@/lib/salary/vacation-liability-method'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 import { loadPostedSalaryRunEntries, PostedSalaryEntriesReadError } from '@/lib/salary/posted-run-entries'
 import type { CreateJournalEntryLineInput } from '@/types'
 
-ensureInitialized()
-
 /**
  * Preview the journal entries that would be created when booking this salary run.
- * Shows exact BAS accounts and amounts: this is a key differentiator.
+ * Shows exact BAS accounts and amounts.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.preview',
@@ -63,15 +63,35 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Load employees with line items: the columns the booking reads
     // (book-run.ts ROSTER_SELECT), so preview and voucher are built from
     // one input.
-    const { data: employees } = await supabase
+    const { data: employees, error: employeesError } = await supabase
       .from('salary_run_employees')
       .select(
-        '*, employee:employees(employment_type, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
+        '*, employee:employees(employment_type, personnel_category, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
       )
       .eq('salary_run_id', id)
 
-    if (!employees || employees.length === 0) {
-      return NextResponse.json({ error: 'Inga beräknade resultat: kör beräkning först' }, { status: 400 })
+    // A failed read must not masquerade as "run without employees".
+    if (employeesError || !employees) {
+      log.error('salary run preview: roster read failed', { salaryRunId: id, message: employeesError?.message })
+      return NextResponse.json({ error: 'Kunde inte läsa lönekörningens anställda' }, { status: 500 })
+    }
+
+    // A run without employees is valid: the calculation accepts an empty
+    // roster (run-calculation.ts, the nolldeklaration month) and the booking
+    // posts nothing for it (book-run.ts isNollkorning). So the preview is the
+    // empty one, every entry null, which the page renders as "inga verifikat
+    // bokförs". This used to answer 400, an error for a state that is not one
+    // (for #206).
+    if (employees.length === 0) {
+      return NextResponse.json({
+        data: {
+          balanced: true,
+          salaryEntry: null,
+          avgifterEntry: null,
+          vacationEntry: null,
+          pensionEntry: null,
+        },
+      })
     }
 
     // The preview IS the booking's line builder (buildSalaryRunEntryLines):
@@ -83,10 +103,18 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // (createSalaryRunEntries), so the previewed bank leg is the posted one.
     const runRow = run as SalaryRunRow
     const desc = salaryRunDescription(runRow)
+    // A run calculated under the 'remeasure' method previews the
+    // semesterlöneskuld remeasurement the booking computes the same way, as
+    // of its payment date with this run counted as booked.
+    const remeasure = runRemeasuresVacationLiability(runRow.calculation_params)
+    const remeasureLines = remeasure
+      ? (await planRunVacationRemeasure(supabase, companyId, runRow)).lines
+      : undefined
     const built = buildSalaryRunEntryLines(
       salaryRunDataFromRows(runRow, employees as SalaryRosterRow[]),
       desc,
       await resolvePrimaryBankAccount(supabase, companyId, log),
+      remeasureLines,
     )
 
     // Each entry is null when it has nothing to post: a nollkörning posts
@@ -100,15 +128,13 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // an unbalanced voucher at booking time, the preview never had a check.
     const toEntry = (description: string, lines: CreateJournalEntryLineInput[]) => {
       if (lines.every((l) => l.debit_amount === 0 && l.credit_amount === 0)) return null
-      const totalDebit = roundOre(lines.reduce((sum, l) => sum + l.debit_amount, 0))
-      const totalCredit = roundOre(lines.reduce((sum, l) => sum + l.credit_amount, 0))
-      const difference = roundOre(totalDebit - totalCredit)
-      return { description, lines, balanced: difference === 0, difference }
+      const { balanced, difference } = lineBalance(lines)
+      return { description, lines, balanced, difference }
     }
 
     const salaryEntry = toEntry(desc, built.salaryLines)
     const avgifterEntry = toEntry(`${desc}: Arbetsgivaravgifter`, built.avgifterLines)
-    const vacationEntry = toEntry(`${desc}: Semesteravsättning`, built.vacationLines)
+    const vacationEntry = built.vacationLines.length > 0 ? toEntry(vacationVoucherDescription(desc, remeasure), built.vacationLines) : null
     const pensionEntry = toEntry(`${desc}: Pensionsavsättning`, built.pensionLines)
 
     return NextResponse.json({

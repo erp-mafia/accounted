@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { daysUntilConsentExpiry, getChipState } from '../bank-sync-chip-state'
+import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 
 const NOW = Date.parse('2026-09-02T08:00:00Z')
 const HOUR_MS = 60 * 60 * 1000
@@ -12,6 +13,7 @@ function row(overrides: Partial<Parameters<typeof getChipState>[0][number]> = {}
     status: 'active',
     last_synced_at: at(-2 * HOUR_MS),
     consent_expires: at(60 * DAY_MS),
+    fetchesAccounts: true,
     ...overrides,
   }
 }
@@ -102,7 +104,7 @@ describe('getChipState', () => {
       [row({ id: 'waiting', status: 'pending_selection', last_synced_at: null })],
       { now: NOW },
     )
-    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', count: 1 })
+    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', aggregator: null, count: 1 })
   })
 
   it('ignores revoked rows next to the waiting one (a superseded earlier attempt)', () => {
@@ -113,7 +115,7 @@ describe('getChipState', () => {
       ],
       { now: NOW },
     )
-    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', count: 1 })
+    expect(state).toEqual({ kind: 'selection', connectionId: 'waiting', aggregator: null, count: 1 })
   })
 
   it('keeps a dead connection ahead of a waiting one: only BankID fixes that', () => {
@@ -122,6 +124,14 @@ describe('getChipState', () => {
       { now: NOW },
     )
     expect(state).toEqual({ kind: 'attention', count: 1 })
+  })
+
+  it('carries the waiting row\'s aggregator, so the chip links an Open Payments row to Koppla banken', () => {
+    const state = getChipState(
+      [row({ id: 'op', status: 'pending_selection', last_synced_at: null, aggregator: 'open_payments' })],
+      { now: NOW },
+    )
+    expect(state).toEqual({ kind: 'selection', connectionId: 'op', aggregator: 'open_payments', count: 1 })
   })
 
   it('does not ask for account selection on a consent that already lapsed', () => {
@@ -143,12 +153,64 @@ describe('getChipState', () => {
   it('reads stale after 36 hours without a sync', () => {
     expect(getChipState([row({ last_synced_at: at(-37 * HOUR_MS) })], { now: NOW })).toEqual({
       kind: 'stale',
-      mostRecent: at(-37 * HOUR_MS),
+      lastSynced: at(-37 * HOUR_MS),
     })
   })
 
+  it('reads stale when one active connection has stopped, although another syncs', () => {
+    // The newest sync across all rows used to decide: a connection stuck on a
+    // bank that keeps answering unavailable stayed hidden behind a healthy one.
+    const state = getChipState(
+      [
+        row({ id: 'healthy', last_synced_at: at(-2 * HOUR_MS) }),
+        row({ id: 'stuck', last_synced_at: at(-5 * DAY_MS) }),
+        row({ id: 'stuck-longer', last_synced_at: at(-9 * DAY_MS) }),
+      ],
+      { now: NOW },
+    )
+    // The age shown is the one that has waited longest.
+    expect(state).toEqual({ kind: 'stale', lastSynced: at(-9 * DAY_MS) })
+  })
+
+  it('never reads a revoked or superseded row as stale: its last sync time is frozen for good', () => {
+    const state = getChipState(
+      [
+        row({ id: 'old', status: 'revoked', last_synced_at: at(-40 * DAY_MS) }),
+        row({ id: 'new', last_synced_at: at(-2 * HOUR_MS) }),
+      ],
+      { now: NOW },
+    )
+    expect(state).toEqual({ kind: 'healthy', mostRecent: at(-2 * HOUR_MS) })
+  })
+
+  it('never reads a connection the syncs skip by design as stale: nothing to fetch, so its last sync never moves', () => {
+    // Every account switched off, or only a mirror card account (the caller
+    // works it out with isSyncedAccount): the chip would stay on for good
+    // beside a connection that syncs.
+    const healthy = row({ id: 'healthy', last_synced_at: at(-2 * HOUR_MS) })
+    const idle = row({ id: 'idle', last_synced_at: at(-27 * DAY_MS), fetchesAccounts: false })
+    expect(getChipState([healthy, idle], { now: NOW })).toEqual({ kind: 'healthy', mostRecent: at(-2 * HOUR_MS) })
+    const fetching = row({ id: 'fetching', last_synced_at: at(-27 * DAY_MS), fetchesAccounts: true })
+    expect(getChipState([healthy, fetching], { now: NOW })).toEqual({ kind: 'stale', lastSynced: at(-27 * DAY_MS) })
+  })
+
+  it('works out what to fetch with the rule the syncs and crons use', () => {
+    // The chip passes fetchesAccounts from this rule (BankSyncStatusChip).
+    expect([{ uid: 'A', enabled: false }].some(isSyncedAccount)).toBe(false)
+    expect([{ uid: 'M', name: 'BOKIO_Debit_Business', iban: null, bban: null }].some(isSyncedAccount)).toBe(false)
+    expect([{ uid: 'A', enabled: false }, { uid: 'B' }].some(isSyncedAccount)).toBe(true)
+  })
+
+  it('does not call a connection that has not synced yet stale', () => {
+    const state = getChipState(
+      [row({ id: 'new', last_synced_at: null }), row({ id: 'healthy', last_synced_at: at(-2 * HOUR_MS) })],
+      { now: NOW },
+    )
+    expect(state.kind).toBe('healthy')
+  })
+
   it('reads paused when the company lacks the bank_sync entitlement', () => {
-    // 56 of 191 active connections on prod sat in this state on 2026-09-01:
+    // A large share of active connections can sit in this state:
     // the cron skips them, so they are neither dead nor merely stale.
     const state = getChipState([row({ last_synced_at: at(-20 * DAY_MS) })], {
       now: NOW,

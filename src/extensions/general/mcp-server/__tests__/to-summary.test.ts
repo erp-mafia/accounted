@@ -4,7 +4,7 @@
  * gnubok_get_agent_briefing, so the client never truncates one mid-sentence.
  */
 import { describe, it, expect } from 'vitest'
-import { toSummary } from '../skills/atoms'
+import { toSummary } from '@/lib/agent-skills/atoms'
 
 describe('toSummary', () => {
   it('returns short input unchanged (idempotent)', () => {

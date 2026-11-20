@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
-import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
+import { seedCompany, insertAuthUser, insertCompanyMember, setActiveCompany } from './fixtures'
 
 /**
  * `booking_template_hidden` (migration 20260828100000).
@@ -10,15 +10,6 @@ import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
  * and viewers must not be able to hide anything. All writes go through the
  * authenticated role so the policies are what is actually under test.
  */
-
-async function setActiveCompany(userId: string, companyId: string) {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
-}
 
 async function systemTemplateId(): Promise<string> {
   const { rows } = await getPool().query(

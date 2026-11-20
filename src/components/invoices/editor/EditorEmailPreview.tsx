@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -58,7 +58,7 @@ export function EditorEmailPreview({
 
   if (!preview) {
     return (
-      <div className="space-y-3 rounded-lg border border-border bg-background p-6" aria-busy="true">
+      <div className="space-y-3 rounded-lg p-6 bg-control shadow-raised" aria-busy="true">
         {error ? (
           <p className="text-[13px] text-muted-foreground">{t('email_failed')}</p>
         ) : (
@@ -75,12 +75,12 @@ export function EditorEmailPreview({
   return (
     <div
       className={cn(
-        'flex min-h-full flex-col rounded-lg border border-border bg-background transition-opacity duration-150',
+        'flex min-h-full flex-col rounded-lg transition-opacity duration-150 bg-control shadow-raised',
         loading && 'opacity-80',
       )}
       aria-busy={loading}
     >
-      <div className="border-b border-border px-6 py-4 text-[13px]" data-ph-mask="">
+      <div className="border-b-hairline px-6 py-4 text-[13px]" data-ph-mask="">
         <div className={ROW_CLASS}>
           <span className={LABEL_CLASS}>{t('email_from')}</span>
           <span className="truncate">
@@ -107,7 +107,7 @@ export function EditorEmailPreview({
                 className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
                 onClick={() => setCopiesOpen(true)}
               >
-                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 {t('email_add_copy')}
               </button>
             )}
@@ -134,7 +134,7 @@ export function EditorEmailPreview({
                     aria-invalid={!!extraCcError}
                     className="h-9 text-[13px]"
                   />
-                  {extraCcError && <span className="text-[12.5px] text-destructive">{extraCcError}</span>}
+                  {extraCcError && <span className="text-xs text-destructive">{extraCcError}</span>}
                 </>
               )}
             </span>
@@ -195,7 +195,7 @@ export function EditorEmailPreview({
 
 function RecipientChip({ address }: { address: string }) {
   return (
-    <span className="inline-flex h-6 items-center rounded-full bg-secondary px-3 text-[12.5px]">
+    <span className="inline-flex h-6 items-center rounded-md bg-secondary px-3 text-xs">
       {address}
     </span>
   )

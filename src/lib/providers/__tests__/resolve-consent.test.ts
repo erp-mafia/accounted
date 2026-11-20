@@ -26,6 +26,20 @@ import { FortnoxOAuthError } from '../fortnox/oauth-error';
 import { ProviderCallError } from '../with-provider-call';
 import { currentExecutionBudget, ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget';
 import { TimeoutError } from '@/lib/http/fetch-with-timeout';
+import { openConsentToken, sealConsentToken } from '../consent-tokens';
+
+/** An update payload with its sealed tokens opened. */
+function opened(update: unknown[] | undefined): Record<string, unknown> {
+  const patch = { ...(update?.[0] as Record<string, unknown>) };
+  for (const column of ['access_token', 'refresh_token']) {
+    const value = patch[column];
+    if (typeof value === 'string') {
+      expect(value.startsWith('pct1:')).toBe(true);
+      patch[column] = openConsentToken(value);
+    }
+  }
+  return patch;
+}
 
 const consentRow = { id: 'c1', company_id: 'co1', provider: 'briox', status: 1 };
 
@@ -42,6 +56,7 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'test-personnummer-key');
     mock = createQueuedMockSupabase();
     vi.mocked(createServiceClient).mockReturnValue(mock.supabase as never);
     vi.mocked(refreshBrioxToken).mockResolvedValue({
@@ -52,7 +67,10 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     });
   });
 
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
 
   it('defers without rotating a token when the refresh and persistence reserve cannot fit', async () => {
     mock.enqueue({ data: [consentRow] });
@@ -76,7 +94,7 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     });
     const result = await withExecutionDeadline(deadline, 'credentials', () => resolveConsent('co1', 'c1'));
     expect(result.accessToken).toBe('rotated');
-    expect(mock.findCall('provider_consent_tokens', 'update')?.[0]).toMatchObject({ refresh_token: 'rotated-refresh' });
+    expect(opened(mock.findCall('provider_consent_tokens', 'update'))).toMatchObject({ refresh_token: 'rotated-refresh' });
   });
 
   it('does not turn a slow refresh into an expired-credentials instruction', async () => {
@@ -98,6 +116,50 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
 
     expect(result.accessToken).toBe('old-access');
     expect(refreshBrioxToken).not.toHaveBeenCalled();
+  });
+
+  describe('a token the provider refused (B11)', () => {
+    // Stamped valid for ten more minutes: our clock says alive, Fortnox said 401.
+    const liveByClock = { ...expiredTokens, token_expires_at: new Date(Date.now() + 600_000).toISOString() };
+    const fortnoxConsent = { ...consentRow, provider: 'fortnox' };
+
+    it('refreshes the refused token although its stamped expiry has not passed', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [liveByClock] });
+      mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'new-revision' }] });
+      vi.mocked(refreshFortnoxToken).mockResolvedValueOnce({ access_token: 'fresh', refresh_token: 'fresh-refresh', token_type: 'Bearer', expires_in: 3600 });
+
+      await expect(resolveConsent('co1', 'c1', { rejectedAccessToken: 'old-access' }))
+        .resolves.toMatchObject({ accessToken: 'fresh', credentialRevision: 'new-revision' });
+      expect(refreshFortnoxToken).toHaveBeenCalledOnce();
+    });
+
+    it('serves a token another request rotated since, without refreshing again', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [{ ...liveByClock, access_token: 'rotated-elsewhere' }] });
+
+      await expect(resolveConsent('co1', 'c1', { rejectedAccessToken: 'old-access' }))
+        .resolves.toMatchObject({ accessToken: 'rotated-elsewhere' });
+      expect(refreshFortnoxToken).not.toHaveBeenCalled();
+    });
+
+    it('answers a refused token whose refresh grant is gone with PROVIDER_AUTH_EXPIRED', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [liveByClock] });
+      mock.enqueue({ data: [liveByClock] }); // revision reconciliation: nobody renewed it
+      vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(new FortnoxOAuthError('refresh', 400, 'invalid_grant'));
+
+      await expect(resolveConsent('co1', 'c1', { rejectedAccessToken: 'old-access' }))
+        .rejects.toMatchObject({ code: 'PROVIDER_AUTH_EXPIRED', providerCode: 'invalid_grant' });
+    });
+
+    it('leaves a live token alone when no refusal is named', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [liveByClock] });
+
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'old-access' });
+      expect(refreshFortnoxToken).not.toHaveBeenCalled();
+    });
   });
 
   it('persists the rotated pair when the guarded update wins the race', async () => {
@@ -261,7 +323,7 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     expect(mock.findCalls('provider_consent_tokens', 'select')).toEqual([['*'], ['consent_id']]);
     expect(mock.findCalls('provider_consent_tokens', 'eq')).toContainEqual(['token_expires_at', legacyTokens.token_expires_at]);
     expect(mock.findCalls('provider_consent_tokens', 'eq').some(args => args[0] === 'credential_revision')).toBe(false);
-    expect(mock.findCall('provider_consent_tokens', 'update')?.[0]).toMatchObject({ refresh_token: 'new-refresh' });
+    expect(opened(mock.findCall('provider_consent_tokens', 'update'))).toMatchObject({ refresh_token: 'new-refresh' });
   });
 
   it('returns the revision of the saved Fortnox token, not the expired snapshot', async () => {
@@ -294,7 +356,7 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     expect(result.providerCompanyId).toBe('4711');
     // The rotated pair went through the guarded update, both tokens included
     const updateArgs = mock.findCall('provider_consent_tokens', 'update');
-    expect(updateArgs?.[0]).toMatchObject({
+    expect(opened(updateArgs)).toMatchObject({
       access_token: 'wint-new-access',
       refresh_token: 'wint-new-refresh',
     });
@@ -314,5 +376,65 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     expect(err).toBeInstanceOf(ProviderCallError);
     expect(err.code).toBe('PROVIDER_AUTH_EXPIRED');
     expect(err.provider).toBe('wint');
+  });
+
+  // accounted#58: the tokens were stored in plaintext. Every write now seals,
+  // a sealed row is opened on read, and a legacy plaintext row is sealed in
+  // place the first time it is served.
+  describe('sealed token storage', () => {
+    const live = { ...expiredTokens, token_expires_at: new Date(Date.now() + 3_600_000).toISOString() };
+
+    it('opens a sealed row and serves it without writing', async () => {
+      mock.enqueue({ data: [consentRow] });
+      mock.enqueue({ data: [{ ...live, access_token: sealConsentToken('old-access'), refresh_token: sealConsentToken('old-refresh') }] });
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'old-access', credentialRevision: 'old-revision' });
+      expect(mock.findCall('provider_consent_tokens', 'update')).toBeUndefined();
+    });
+
+    it('reseals a legacy plaintext row it serves, guarded on the revision, and hands out the new revision', async () => {
+      mock.enqueue({ data: [consentRow] });
+      mock.enqueue({ data: [live] });
+      mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'resealed-revision' }] });
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'old-access', credentialRevision: 'resealed-revision' });
+      expect(opened(mock.findCall('provider_consent_tokens', 'update'))).toEqual({ access_token: 'old-access', refresh_token: 'old-refresh' });
+      expect(mock.findCalls('provider_consent_tokens', 'eq')).toContainEqual(['credential_revision', 'old-revision']);
+      expect(refreshBrioxToken).not.toHaveBeenCalled();
+    });
+
+    it('still serves a legacy row when the reseal fails', async () => {
+      mock.enqueue({ data: [consentRow] });
+      mock.enqueue({ data: [live] });
+      mock.enqueue({ error: { message: 'connection reset' } });
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'old-access', credentialRevision: 'old-revision' });
+    });
+
+    it('reseals a legacy Bokio token, which never expires and so is never rewritten by a refresh', async () => {
+      mock.enqueue({ data: [{ ...consentRow, provider: 'bokio' }] });
+      mock.enqueue({ data: [{ credential_revision: 'old-revision', access_token: 'bokio-token', refresh_token: null, token_expires_at: null, provider_company_id: 'guid' }] });
+      mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'resealed-revision' }] });
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'bokio-token', providerCompanyId: 'guid' });
+      expect(opened(mock.findCall('provider_consent_tokens', 'update'))).toEqual({ access_token: 'bokio-token' });
+    });
+
+    it('opens a sealed expired pair for the refresh and writes the rotated pair sealed', async () => {
+      mock.enqueue({ data: [{ ...consentRow, provider: 'fortnox' }] });
+      mock.enqueue({ data: [{ ...expiredTokens, access_token: sealConsentToken('old-access'), refresh_token: sealConsentToken('old-refresh') }] });
+      mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'saved-revision' }] });
+      vi.mocked(refreshFortnoxToken).mockResolvedValueOnce({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'Bearer', expires_in: 3600 });
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'new-access', credentialRevision: 'saved-revision' });
+      expect(vi.mocked(refreshFortnoxToken).mock.calls[0]?.[1]).toBe('old-refresh');
+      const patch = mock.findCall('provider_consent_tokens', 'update')?.[0] as Record<string, string>;
+      expect(JSON.stringify(patch)).not.toContain('new-access');
+      expect(JSON.stringify(patch)).not.toContain('new-refresh');
+      expect(opened([patch])).toMatchObject({ access_token: 'new-access', refresh_token: 'new-refresh' });
+    });
+
+    it('opens the sealed pair a concurrent refresh won with', async () => {
+      mock.enqueue({ data: [consentRow] });
+      mock.enqueue({ data: [expiredTokens] });
+      mock.enqueue({ data: [] });
+      mock.enqueue({ data: [{ ...live, access_token: sealConsentToken('winner-access'), refresh_token: sealConsentToken('winner-refresh') }] });
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'winner-access' });
+    });
   });
 });

@@ -1,7 +1,6 @@
 'use client'
 
-import { ArrowDown } from 'lucide-react'
-import { AttnLine } from '@/components/ui/attn-line'
+import { ArrowDownIcon } from '@/components/icons'
 import { formatCurrency, formatDate } from '@/lib/utils'
 
 interface MatchTransactionInvoicePreviewProps {
@@ -23,14 +22,10 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
   const invoiceCurrency = (data.invoice_currency as string) || txCurrency
   const invoiceDate = data.invoice_date as string | undefined
   const customerName = data.customer_name as string | undefined
-  // Staged by the MCP tool when the duplicate check could not run, or when
-  // force=true books over a voucher that already looks like this payment
-  // (issue #2294). The server owns the wording; rendered verbatim so the
-  // /pending card and the agent read the same warning.
-  const complianceWarning =
-    typeof data.compliance_warning === 'string' && data.compliance_warning.trim()
-      ? data.compliance_warning
-      : null
+  // The staged compliance_warning (the duplicate check could not run, or
+  // force=true books over a voucher that already looks like this payment,
+  // issue #2294) is rendered verbatim by OperationPreview above every preview
+  // type, so the /pending card and the agent read the same warning.
 
   // BFL 5 kap 4§ requires bookings to be made "so soon as possible" relative
   // to the affärshändelse, so a transaction and invoice that diverge by more
@@ -44,7 +39,6 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
 
   return (
     <div className="space-y-3 text-sm">
-      {complianceWarning && <AttnLine>{complianceWarning}</AttnLine>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <PreviewCard label="Transaktion">
           {txDate && <Row label="Datum" value={formatDate(txDate)} tabular />}
@@ -67,7 +61,7 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
       </div>
 
       <div className="flex items-center justify-center text-xs text-muted-foreground">
-        <ArrowDown className="h-3.5 w-3.5 mr-1" />
+        <ArrowDownIcon className="h-3.5 w-3.5 mr-1" />
         matchas mot fakturan
       </div>
 
@@ -83,8 +77,8 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
 
 function PreviewCard({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border p-3 space-y-1.5">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="rounded-lg p-3 space-y-1.5 bg-control shadow-raised">
+      <p className="text-xs font-medium text-muted-foreground">
         {label}
       </p>
       {children}

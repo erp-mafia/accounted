@@ -54,10 +54,13 @@ export type DimensionRulePolicy = 'enforced' | 'exempt'
  *     schedule would strand every remaining installment (the daily cron
  *     retries the same impossible entry while the interim account stays
  *     overstated);
- *   - vat_settlement, rot_rut_payout, rot_rut_reclaim, expense_payout,
- *     stripe_payout: settlements computed from balances already booked
- *     (26xx, 1513, 2820/2893, the Stripe balance). Their only result lines
- *     (öresavrundning, Stripe fees) belong to no single project.
+ *   - vat_settlement, rot_rut_payout, rot_rut_reclaim,
+ *     rot_rut_reclassification, expense_payout, stripe_payout,
+ *     collection_settlement: settlements computed from balances already
+ *     booked (26xx, 1513, 2820/2893, the Stripe balance, the collections
+ *     clearing account). Their only result lines (öresavrundning, Stripe
+ *     fees, the collections provider's deductions) belong to no single
+ *     project.
  */
 export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, DimensionRulePolicy>> = {
   manual: 'enforced',
@@ -72,6 +75,7 @@ export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, Dime
   supplier_invoice_privately_paid: 'enforced',
   salary_payment: 'enforced',
   webshop_order: 'enforced',
+  pos_daily_sales: 'enforced',
   expense_claim: 'enforced',
   reminder_fee: 'enforced',
   opening_balance: 'exempt',
@@ -84,10 +88,19 @@ export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, Dime
   credit_note: 'exempt',
   supplier_credit_note: 'exempt',
   system: 'exempt',
+  tax_account: 'exempt',
   accrual: 'exempt',
   vat_settlement: 'exempt',
   rot_rut_payout: 'exempt',
   rot_rut_reclaim: 'exempt',
+  // Kundförlust is computed from the invoice's own booked lines (1510,
+  // 26xx, the reserve on 1519); a required rule could never be met by it.
+  customer_loss: 'exempt',
+  // Kvittning moves the two invoices' own open amounts; each line carries its
+  // invoice's default dimensions, a required rule could not be met here.
+  counterparty_setoff: 'exempt',
+  rot_rut_reclassification: 'exempt',
   expense_payout: 'exempt',
   stripe_payout: 'exempt',
+  collection_settlement: 'exempt',
 }

@@ -5,7 +5,9 @@
  *          (deliberate drill-in; caller already knows the id, has read scope,
  *          and has membership in the company).
  * PATCH : update a subset of fields. Idempotent (Idempotency-Key recommended,
- *          not enforced). Dry-runnable.
+ *          not enforced). Dry-runnable. is_active: true reactivates a
+ *          soft-deleted employee; is_active: false is the same soft delete
+ *          as DELETE (crm#1133).
  * DELETE: soft-delete via is_active=false. The employees table has no
  *          archived_at column; the row is preserved because past salary
  *          runs reference it via salary_run_employees and those
@@ -25,21 +27,16 @@ import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/reg
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { UpdateEmployeeSchema } from '@/lib/api/schemas'
-import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
+import { PersonnelCategorySchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
+import { JAMKNING_END_REQUIRED, JAMKNING_START_REQUIRED } from '@/lib/salary/jamkning-rules'
 import {
-  JAMKNING_END_REQUIRED,
-  JAMKNING_START_REQUIRED,
-  jamkningIssueFromDbError,
-  type JamkningFields,
-} from '@/lib/salary/jamkning-rules'
-import {
+  EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED,
   VAXA_START_REQUIRED,
-  validateEmployeeUpdate,
   type EmployeeUpdateIssue,
 } from '@/lib/salary/employee-update-rules'
 import { softDeleteEmployee } from '@/lib/salary/employee-soft-delete'
+import { updateEmployee } from '@/lib/salary/employee-commands'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -52,6 +49,9 @@ const EmployeeDetail = z.object({
   /** Full personnummer (12 digits). Detail endpoint only: never echoed on list. */
   personnummer: z.string(),
   employment_type: EmploymentType,
+  // BAS wage series for employment_type employee: arbetare 70xx, tjansteman
+  // 72xx (lib/salary/account-mapping.ts). Owners and board members ignore it.
+  personnel_category: PersonnelCategorySchema,
   employment_start: z.string(),
   employment_end: z.string().nullable(),
   employment_degree: z.number(),
@@ -78,6 +78,10 @@ const EmployeeDetail = z.object({
   address_line1: z.string().nullable(),
   postal_code: z.string().nullable(),
   city: z.string().nullable(),
+  // Fora uppmärkning (lib/salary/fora/markup.ts): the FOK code the employee
+  // is reported to Fora under every month, and the date it applies from.
+  fora_fok_id: z.string().nullable(),
+  fora_fok_start_date: z.string().nullable(),
   vaxa_stod_eligible: z.boolean(),
   vaxa_stod_start: z.string().nullable(),
   vaxa_stod_end: z.string().nullable(),
@@ -87,6 +91,13 @@ const EmployeeDetail = z.object({
   jamkning_percentage: z.number().nullable(),
   jamkning_valid_from: z.string().nullable(),
   jamkning_valid_to: z.string().nullable(),
+  // Förhöjt skatteavdrag the employee asked for (SFL 11 kap. 22 §): whole
+  // kronor per run, or a requested total percentage of taxable income
+  // (withhold the higher of the statutory tax and this share). At most one
+  // is set. Applied on top of the table or jämkning tax, never on
+  // sidoinkomst, F-skatt or an unverified status.
+  extra_tax_amount: z.number().nullable(),
+  extra_tax_percentage: z.number().nullable(),
   // Dimensions PR8: bag applied to the employee's P&L cost lines at booking.
   default_dimensions: z.record(z.string(), z.string()),
   is_active: z.boolean(),
@@ -95,7 +106,7 @@ const EmployeeDetail = z.object({
 })
 
 const EMPLOYEE_DETAIL_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, vacation_pay_rate, email, phone, address_line1, postal_code, city, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, default_dimensions, is_active, created_at, updated_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, vacation_pay_rate, email, phone, address_line1, postal_code, city, fora_fok_id, fora_fok_start_date, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, default_dimensions, is_active, created_at, updated_at'
 
 /**
  * Shape returned by PATCH (success + dry-run preview) and by no-change PATCH.
@@ -107,31 +118,11 @@ const EmployeeWriteResponse = EmployeeDetail
   .omit({ personnummer: true })
   .extend({ personnummer_masked: z.string() })
 
-type ExistingRow = {
-  id: string
-  personnummer: string
-  [key: string]: unknown
-}
-
 /**
  * Merged-state issues whose fix is a companion field the caller left out of
  * the PATCH: the 400 names that key.
  */
 const SEND_IN_SAME_PATCH = new Set([JAMKNING_START_REQUIRED, JAMKNING_END_REQUIRED, VAXA_START_REQUIRED])
-
-/**
- * Convert a freshly-fetched / updated employee row into the write-response
- * shape: drop `personnummer`, add `personnummer_masked`. Caller is
- * responsible for passing a row that includes the raw `personnummer` field
- * (always the case for EMPLOYEE_DETAIL_COLUMNS reads).
- */
-function maskExistingForResponse(row: ExistingRow): Record<string, unknown> {
-  const { personnummer, ...rest } = row
-  // personnummer is stored encrypted; decrypt before masking so the write
-  // response is birthdate-visible (YYYYMMDDXXXX), not fully redacted. The
-  // decrypt helper passes legacy plaintext rows through unchanged.
-  return { ...rest, personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer)) }
-}
 
 registerEndpoint({
   operation: 'employees.get',
@@ -158,6 +149,7 @@ registerEndpoint({
         // ISO A.5.34: do not embed production-format PII in OpenAPI docs.
         personnummer: 'YYYYMMDDNNNN',
         employment_type: 'employee',
+        personnel_category: 'tjansteman',
         employment_start: '2024-01-15',
         employment_end: null,
         salary_type: 'monthly',
@@ -223,16 +215,22 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id',
   summary: 'Update an employee.',
   description:
-    'Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.',
+    'Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). `is_active: true` reactivates a soft-deleted employee, and `is_active: false` deactivates one exactly as DELETE does. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.',
   useWhen:
-    'You need to change tax configuration, bank details, salary amount, or contact info on an existing employee.',
+    'You need to change tax configuration, bank details, salary amount, or contact info on an existing employee, or to reactivate an employee that was soft-deleted.',
   doNotUseFor:
-    'Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case). Soft-deleting (use DELETE).',
+    'Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case).',
   pitfalls: [
+    'is_active only decides whether the employee is on active rosters and picked up by NEW salary runs. Reactivating does not add the employee to a salary run that already exists: add them to a draft run with POST /salary-runs/{id}/employees. A run also leaves out an employee whose employment_end is before the pay period, active or not.',
     'personnummer in the body is ignored by this endpoint. To change it you must DELETE and recreate.',
     'salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.',
     'A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.',
     'tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.',
+    'extra_tax_amount and extra_tax_percentage are exclusive: setting one while the other is stored returns 400, so send the other as null in the same PATCH. A draft run picks the change up at its next calculation.',
+    'personnel_category (arbetare or tjansteman) is read when a salary run is booked: every unbooked run, including one already approved or paid, books on the new category. A booked run keeps the category it was booked with.',
+    'fora_fok_id (FOK plus six digits, from Fora\'s Mina sidor) and fora_fok_start_date go together: one without the other returns 400, and so does a code on company_owner or board_member. Changing employment_type away from employee needs fora_fok_id: null in the same PATCH. With a code the employee is in the monthly Fora report (GET /salary/fora-report).',
+    'An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).',
+    'Changing employment_degree on a sammaloneregeln employee returns 400 EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED (semesterlagen 16 § second paragraph points 3-4 then calculates holiday pay under procentregeln). Send vacation_rule: "procentregeln" in the same PATCH, or sammaloneregeln_kollektivavtal_confirmed: true when a central kollektivavtal keeps sammalöneregeln (2 a §); the confirmation is recorded in the audit trail. hours_per_week and workdays_per_week do not trigger it.',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],
   example: {
@@ -303,22 +301,6 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
-    // Fetch the existing row so dry-run + the eventual update see merged state
-    // (the Zod superRefine validates against the merged object). Also gives
-    // us a clean 404 path before any work happens.
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('employees')
-      .select(EMPLOYEE_DETAIL_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-
     // The Zod schema accepts all base fields as optional. Filter to the
     // explicitly-supplied keys so unmentioned columns aren't overwritten to
     // their `default()` values (e.g. is_sidoinkomst would silently reset
@@ -339,81 +321,58 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       }
     }
 
-    // Merged-state rules through the one copy every door runs (#3008): the
-    // schema cannot see the existing row, so a sparse PATCH that clears a
-    // field (null) or flips a flag alone is checked on the row as it would be
-    // stored. Covers salary amount, tax table, Växa-stöd start (a caller
-    // flipping `vaxa_stod_eligible: true` alone on a row without a start),
-    // jämkning (only when the PATCH names a jämkning key, #2058) and bank
-    // details (only when they change). The first issue is returned; a
-    // missing companion field names the key to send in the same PATCH.
-    const issueDetails = (issue: EmployeeUpdateIssue) => ({
-      field: issue.field,
-      message: SEND_IN_SAME_PATCH.has(issue.message)
-        ? `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`
-        : `${issue.message}.`,
+    // Merged-state rules, the EF-owner rule (#782) and the write are
+    // lib/salary/employee-commands.ts, the one update every door runs (#3008):
+    // a sparse PATCH that clears a field (null) or flips a flag alone is
+    // checked on the row as it would be stored. A dry run validates the
+    // merged row and writes nothing; an empty PATCH answers the row as it is.
+    // Rows come back masked (GDPR Art.5(1)(c)): the detail GET is the
+    // deliberate drill-in for the full value.
+    const result = await updateEmployee(ctx.supabase, {
+      companyId: ctx.companyId!,
+      employeeId: idParse.data,
+      patch: updates,
+      dryRun: ctx.dryRun,
+      columns: EMPLOYEE_DETAIL_COLUMNS,
+      userId: ctx.userId,
     })
-    const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
-    const [issue] = validateEmployeeUpdate(existing as Record<string, unknown>, updates)
-    if (issue) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: issueDetails(issue),
-      })
-    }
-
-    if (Object.keys(updates).length === 0) {
-      // GDPR Art.5(1)(c): no-change PATCH still returns a write-shape, so
-      // mask personnummer just like the POST + PATCH success path.
-      return ok(maskExistingForResponse(existing as ExistingRow), {
-        requestId: ctx.requestId,
-      })
+    if (!result.ok) {
+      if (result.code === 'EMPLOYEE_NOT_FOUND') {
+        return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
+      if (result.code === EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED) {
+        return v1ErrorResponseFromCode(EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED, ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'vacation_rule' },
+        })
+      }
+      if (result.code === 'VALIDATION_ERROR') {
+        // The first issue; a missing companion field names the key to send in
+        // the same PATCH.
+        const [issue] = (result.details?.issues as EmployeeUpdateIssue[] | undefined) ?? []
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: issue ? issueDetails(issue) : result.details,
+        })
+      }
+      return v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
     }
 
     if (ctx.dryRun) {
-      // Merge for the preview, then mask the natural-person identifier.
-      // Phase 5 PR-1 design: writes never echo back the supplied identity,
-      // only the GET drill-in does. The dry-run preview is a write-shape so
-      // it follows the write rule.
-      const merged = { ...(existing as ExistingRow), ...updates }
-      return dryRunPreview(maskExistingForResponse(merged), {
-        requestId: ctx.requestId,
-        log: ctx.log,
-      })
+      return dryRunPreview(result.data.row, { requestId: ctx.requestId, log: ctx.log })
     }
-
-    const { data, error } = await ctx.supabase
-      .from('employees')
-      .update(updates)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .select(EMPLOYEE_DETAIL_COLUMNS)
-      .single()
-
-    if (error) {
-      // The CHECK constraint refused the row (#2256): either the merged-state
-      // check above passed against a snapshot another request has since
-      // changed, or this is a legacy incomplete row (stored before #2240)
-      // whose next edit must complete or clear the beslut. Same
-      // VALIDATION_ERROR and details as that check, derived from the merged row.
-      const jamkningIssue = jamkningIssueFromDbError(error, mergedJamkning)
-      if (jamkningIssue) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: issueDetails(jamkningIssue),
-        })
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    // GDPR Art.5(1)(c): mask the natural-person identifier in the write
-    // response. The detail GET endpoint still returns the full value for
-    // callers who deliberately drill in.
-    return ok(maskExistingForResponse(data as ExistingRow), {
-      requestId: ctx.requestId,
-    })
+    return ok(result.data.row, { requestId: ctx.requestId })
   },
 )
+
+function issueDetails(issue: EmployeeUpdateIssue) {
+  return {
+    field: issue.field,
+    message: SEND_IN_SAME_PATCH.has(issue.message)
+      ? `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`
+      : `${issue.message}.`,
+  }
+}
 
 // ──────────────────────────────────────────────────────────────────
 // DELETE: soft-delete (is_active=false)
@@ -466,9 +425,16 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       dryRun: ctx.dryRun,
     })
     if (!result.ok) {
-      return result.code === 'EMPLOYEE_NOT_FOUND'
-        ? v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-        : v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
+      if (result.code === 'EMPLOYEE_NOT_FOUND') {
+        return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
+      if (result.code === 'VALIDATION_ERROR') {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: result.details,
+        })
+      }
+      return v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
     }
 
     if (!result.data.committed) {

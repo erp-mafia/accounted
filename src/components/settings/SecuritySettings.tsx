@@ -1,19 +1,27 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import {
+  fetchMfaStatus,
+  fetchSessionUser,
+  isInsufficientAal,
+  unenrollFactor,
+  verifiedTotpFactor,
+} from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
+import { ShieldCheckIcon, ShieldExclamationIcon, SpinnerIcon } from '@/components/icons'
 import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import { isSelfHosted as readSelfHostedFlag } from '@/lib/env/public-flags'
 import { AutoLogoutToggle } from '@/components/settings/AutoLogoutToggle'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
+import { SecurityKeySettings } from '@/components/settings/SecurityKeySettings'
 import { userHasPassword } from '@/lib/auth/has-password'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { passwordSavedDespiteFailure } from '@/lib/auth/password-change-result'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   SettingsGroup,
   SettingsInput,
@@ -28,6 +36,7 @@ const bankIdEnabled = isBankIdEnabled()
 
 export function SecuritySettings() {
   const t = useTranslations('settings_security')
+  const errorLocale = useLocale() as ErrorLocale
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isChangingPassword, setIsChangingPassword] = useState(false)
@@ -38,22 +47,17 @@ export function SecuritySettings() {
   const [hasPassword, setHasPassword] = useState<boolean | null>(null)
   const { toast } = useToast()
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     async function loadStatus() {
-      const [{ data: factors }, { data: userData }] = await Promise.all([
-        supabase.auth.mfa.listFactors(),
-        supabase.auth.getUser(),
-      ])
-      const verifiedFactor = factors?.totp?.find(f => f.status === 'verified')
+      const [mfaStatus, user] = await Promise.all([fetchMfaStatus(), fetchSessionUser()])
+      const verifiedFactor = verifiedTotpFactor(mfaStatus)
       setHasMfa(!!verifiedFactor)
       setMfaFactorId(verifiedFactor?.id ?? null)
-      setHasPassword(userData?.user ? userHasPassword(userData.user) : null)
+      setHasPassword(user ? userHasPassword(user) : null)
       setIsLoadingMfa(false)
     }
     loadStatus()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleChangePassword = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -94,19 +98,35 @@ export function SecuritySettings() {
       })
 
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        const body = (await res.json().catch(() => ({}))) as { error?: unknown }
         // Supabase rejects updateUser({password}) with this exact message when
         // the user has a TOTP factor enrolled but is at AAL1. Send them through
         // /mfa/verify to step up; on return they land back here and can retry.
-        if (body.error?.includes('AAL2')) {
+        if (typeof body.error === 'string' && body.error.includes('AAL2')) {
           router.push(
             `/mfa/verify?returnTo=${encodeURIComponent('/settings/account')}`,
           )
           return
         }
+        // The password IS saved; the auth server did not confirm that the
+        // other devices were signed out. Say that, never "could not update",
+        // and empty the form: the same password sent again is refused as
+        // unchanged. "Logga ut från alla enheter", which the message names,
+        // is on this page under Session.
+        if (passwordSavedDespiteFailure(body)) {
+          toast({
+            title: t('toast_password_saved_unconfirmed_title'),
+            description: getUserErrorMessage(body, { locale: errorLocale }),
+            variant: 'destructive',
+          })
+          setNewPassword('')
+          setConfirmPassword('')
+          setHasPassword(true)
+          return
+        }
         toast({
           title: t('toast_update_failed_title'),
-          description: body.error || t('toast_update_failed_description'),
+          description: getUserErrorMessage(body, { locale: errorLocale, fallback: t('toast_update_failed_description') }),
           variant: 'destructive',
         })
         return
@@ -135,12 +155,12 @@ export function SecuritySettings() {
     setIsUnenrolling(true)
 
     try {
-      const { error } = await supabase.auth.mfa.unenroll({ factorId: mfaFactorId })
+      const { error } = await unenrollFactor(mfaFactorId)
 
       if (error) {
         // mfa.unenroll requires AAL2: for BankID-linked users at AAL1 (the
         // shouldEnforceMfa skip path), this is the only way to step up.
-        if (error.message?.includes('AAL2')) {
+        if (isInsufficientAal(error)) {
           router.push(
             `/mfa/verify?returnTo=${encodeURIComponent('/settings/account')}`,
           )
@@ -183,7 +203,6 @@ export function SecuritySettings() {
         >
           <SettingsRowEnd>
             <Button
-              size="sm"
               onClick={() =>
                 router.push('/account/set-password?returnTo=/settings/account')
               }
@@ -233,7 +252,7 @@ export function SecuritySettings() {
               disabled={isChangingPassword}
             />
             <SettingsRowEnd>
-              <Button type="submit" size="sm" loading={isChangingPassword}>
+              <Button type="submit" loading={isChangingPassword}>
                 {isChangingPassword ? t('saving') : t('update_password_button')}
               </Button>
             </SettingsRowEnd>
@@ -256,7 +275,7 @@ export function SecuritySettings() {
         >
           {isLoadingMfa ? (
             <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
               {t('loading')}
             </span>
           ) : hasMfa ? (
@@ -271,11 +290,10 @@ export function SecuritySettings() {
                 ) : (
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={handleUnenrollMfa}
                     loading={isUnenrolling}
                   >
-                    {!isUnenrolling && <ShieldOff className="mr-2 h-3.5 w-3.5" />}
+                    {!isUnenrolling && <ShieldExclamationIcon className="h-3.5 w-3.5" />}
                     {isUnenrolling ? t('disabling') : t('disable_mfa')}
                   </Button>
                 )}
@@ -288,7 +306,6 @@ export function SecuritySettings() {
                 {hasPassword === false ? (
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={() =>
                       router.push('/account/set-password?returnTo=/mfa/enroll')
                     }
@@ -298,12 +315,11 @@ export function SecuritySettings() {
                 ) : (
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={() =>
                       router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)
                     }
                   >
-                    <ShieldCheck className="mr-2 h-3.5 w-3.5" />
+                    <ShieldCheckIcon className="h-3.5 w-3.5" />
                     {t('enable_mfa')}
                   </Button>
                 )}
@@ -312,6 +328,10 @@ export function SecuritySettings() {
           )}
         </SettingsRow>
       )}
+
+      {/* Security keys (crm#1448): renders nothing unless the WebAuthn MFA
+          flag is on, and never on self-hosted (the flag reads it). */}
+      <SecurityKeySettings />
 
       {/* Automatic logout: per-user opt-in, renders nothing on self-hosted */}
       <AutoLogoutToggle />

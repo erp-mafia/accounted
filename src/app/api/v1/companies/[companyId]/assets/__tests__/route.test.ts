@@ -30,6 +30,7 @@ vi.mock('@/lib/bokslut/assets/asset-service', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { listAssets, createAsset } from '@/lib/bokslut/assets/asset-service'
 import { GET, POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -90,36 +91,14 @@ function postRequest(url: string, body: unknown, headers: Record<string, string>
 }
 
 type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 function makeSupabase(extra: Record<string, MockResult | MockResult[]> = {}) {
-  return makeFlexibleSupabase({
+  return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     companies: { data: { accounting_framework: 'k2', entity_type: 'aktiebolag' }, error: null },
     depreciation_schedules: { data: [], error: null },
     ...extra,
-  })
+  }).supabase
 }
 
 function withScopes(scopes: string[]) {

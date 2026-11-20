@@ -14,14 +14,11 @@
  * retryable timeout arrives as an anonymous Error, misses every transient
  * check, and resolves to UNKNOWN_ERROR: "Något gick fel. Försök igen."
  *
- * Measured on production over 60 days (bot actors excluded): 1 024 real-agent
- * tool failures, 645 of them UNKNOWN_ERROR across 60 actors and 57 companies,
- * 537 carrying that exact generic string. `gnubok_query_journal` alone failed
- * 164 times at a p50 of 8 110 ms while every other failing tool sat between 1
- * and 315 ms: a timeout signature that should have been TRANSIENT_ERROR all
- * along. Agents cannot dispatch on "something went wrong", so they retried:
- * 82 streaks of three or more identical failures, 462 wasted repeat calls,
- * 53.1% of all real-agent error calls sitting inside a streak.
+ * Most agent tool failures used to arrive that way, as UNKNOWN_ERROR with
+ * that exact generic string, and a statement timeout among them looked like
+ * every other failure when it should have been TRANSIENT_ERROR all along.
+ * Agents cannot dispatch on "something went wrong", so they repeated the same
+ * failing call.
  *
  * ## Why attaching `code` is safe
  *
@@ -56,8 +53,8 @@ export interface DatabaseError extends Error {
 /**
  * @param error   the `error` half of a supabase-js `{ data, error }` result
  * @param context prefix for the message; defaults to the historical
- *                "Database error" so existing message-pattern matching in
- *                `inferCode()` keeps working unchanged. Pass `null` to keep
+ *                "Database error" so the message reads as before (and the
+ *                database lock refusals classifyError reads still match). Pass `null` to keep
  *                the driver's message verbatim, for call sites whose exact
  *                text callers already depend on.
  */

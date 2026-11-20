@@ -51,6 +51,22 @@ describe('invoices_credit_note_not_paid constraint', () => {
     ).rejects.toMatchObject({ code: '23514' })
   })
 
+  // A refund of the credit (lib/invoices/refund-credit-note.ts) is recorded
+  // in paid_amount and paid_at while the status stays out of the payment states.
+  it('lets a sent credit note carry its refund in paid_amount and paid_at', async () => {
+    const { creditNoteId } = await seedCustomerInvoicePair()
+
+    await getPool().query(
+      `UPDATE public.invoices SET paid_amount = -1000, paid_at = '2026-07-15T12:00:00Z' WHERE id = $1`,
+      [creditNoteId],
+    )
+    const { rows } = await getPool().query(
+      `SELECT status, paid_amount::float AS paid_amount FROM public.invoices WHERE id = $1`,
+      [creditNoteId],
+    )
+    expect(rows[0]).toEqual({ status: 'sent', paid_amount: -1000 })
+  })
+
   it('allows an ordinary customer invoice to be marked paid', async () => {
     const { originalInvoiceId } = await seedCustomerInvoicePair()
 

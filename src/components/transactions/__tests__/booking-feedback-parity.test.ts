@@ -81,16 +81,27 @@ describe('transactions page booking feedback', () => {
     expect(PAGE_SRC).toMatch(/setProcessingId\(\(prev\) => \(prev === id \? null : prev\)\)/)
   })
 
-  it('decrements the unbooked count on every path that removes a row', () => {
-    // finishBooking, handleTransactionBooked (manual booking dialog / voucher
-    // match), the three other single-row exits already on the page, the
-    // duplicate-dialog "Ignorera transaktionen" tail, handleDeleteTransaction
-    // (deleting a pending row must not leave the inbox badge stale: the
-    // realtime echo is not guaranteed for DELETE), and applyExpensePayoutBooked
-    // (a transfer booked as the repayment of utlägg leaves the inbox too).
-    expect(
-      PAGE_SRC.match(/setTotalUncategorizedCount\(\(prev\) => Math\.max\(0, \(prev \?\? 1\) - 1\)\)/g) ?? [],
-    ).toHaveLength(8)
+  it('derives the unbooked count from the rows the inbox shows', () => {
+    // The badge used to be a DB head count kept in step by hand: one
+    // decrement per exit path (eight of them, one once forgotten), bank rows
+    // only, blind to the source picker (crm#1056, crm#1043). It is now derived
+    // from the same pending rows and source predicate as the list
+    // (lib/transactions/inbox-scope), and a row on its way out leaves the
+    // count through exitingIds, so no exit path has a counter to forget.
+    expect(PAGE_SRC).not.toContain('setTotalUncategorizedCount')
+    expect(PAGE_SRC).toMatch(/count: inboxScope\.inScope/)
+    expect(PAGE_SRC).toMatch(/leaving: exitingIds/)
+    expect(PAGE_SRC).toMatch(/bankRowInSource\(tx\.cash_account_id, effectiveSourceFilter\)/)
+    expect(PAGE_SRC).toMatch(/skattekontoInSource\(effectiveSourceFilter\)/)
+  })
+
+  it('ships the hidden-by-filter strings it renders in both locales', () => {
+    for (const locale of ['sv', 'en'] as const) {
+      const messages = readMessages(locale, 'transactions')
+      for (const key of ['source_pending_hidden', 'source_show_all', 'period_pending_outside', 'period_show_all']) {
+        expect(messages[key], `${locale}.transactions.${key}`).toBeTruthy()
+      }
+    }
   })
 
   it('ships the undo strings it renders in both locales', () => {
@@ -213,6 +224,22 @@ describe('duplicate-guard 409 routing parity', () => {
       ]) {
         expect(messages[key], `${locale}.transactions.${key}`).toBeTruthy()
       }
+    }
+  })
+
+  it('names why the failed rows of a batch were refused (for #206)', () => {
+    // A silent row hands its reason to the batch instead of a toast of its own,
+    // and the batch toast renders the grouped reasons from the shared reducer.
+    expect(PAGE_SRC).toMatch(
+      /failureReason: getErrorMessage\(result, \{ context: 'transaction', statusCode: response\.status, locale: errorLocale \}\)/,
+    )
+    expect(PAGE_SRC).toMatch(
+      /tally\.failureReasons\.map\(\(group\) =>\s+t\('batch_categorize_failed_reason', \{ count: group\.count, reason: group\.reason \}\)/,
+    )
+    for (const locale of ['sv', 'en'] as const) {
+      const message = readMessages(locale, 'transactions').batch_categorize_failed_reason
+      expect(message, `${locale}.transactions.batch_categorize_failed_reason`).toContain('{reason}')
+      expect(message).toContain('{count, plural,')
     }
   })
 })

@@ -26,6 +26,7 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     // utbildning, 3004 momsfri försäljning); owner accounts in that column
     // become 2890 because a förening has no owner.
     templateColumn: 'ab',
+    skattekontoAccounts: ['1630'],
   },
   equity: {
     closing: '2099',
@@ -35,6 +36,9 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     hasOwners: false,
     settlement: { withdrawal: '2890', contribution: '2890' },
     memberCapital: true,
+    developmentFund: true,
+    maintenanceFund: null,
+    shareRegister: false,
   },
   filings: {
     incomeReturn: 'INK2',
@@ -43,7 +47,13 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     arsredovisning: true,
     frameworks: ['K2'],
     ixbrl: false,
+    // The K3 document's equity specification follows the aktiebolag's.
+    k3Document: false,
     auditorAlwaysRequired: true,
+    forenklatArsbokslut: null,
+    revisorspateckningLagrum: '8 kap. 32 § lagen om ekonomiska föreningar',
+    cashFlowStatement: 'larger',
+    housingKeyRatios: false,
   },
   glossary: { entity: 'föreningen', owner: 'Medlem', meeting: 'föreningsstämma' },
 }

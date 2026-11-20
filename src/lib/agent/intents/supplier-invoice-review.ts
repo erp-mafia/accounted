@@ -1,3 +1,4 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { defineAgentIntent } from './types'
 import { OPUS_MODEL, EFFORT_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
@@ -114,7 +115,7 @@ function sekEquivalent(
   if (amountSek != null && Number.isFinite(Number(amountSek))) return Number(amountSek)
   const rate = exchangeRate == null ? null : Number(exchangeRate)
   if (rate != null && Number.isFinite(rate) && rate > 0) {
-    return Math.round(Number(amount) * rate * 100) / 100
+    return sekOfForeign(Number(amount), rate)
   }
   return null
 }
@@ -326,7 +327,7 @@ export const supplierInvoiceReview = defineAgentIntent<
     lines.push(renderAgentGroundRules())
     lines.push('')
     lines.push('Granska denna leverantörsfaktura innan attestering:')
-    lines.push(`- Ankomst #${inv.arrival_number ?? '?'} / Fakturanummer ${inv.supplier_invoice_number ?? '?'}`)
+    lines.push(`- Ankomst #${inv.arrival_number ?? '?'} / Fakturanummer ${inv.supplier_invoice_number ?? 'saknas'}`)
     if (captured.supplier) {
       const s = captured.supplier
       const supplierLine: string[] = []
@@ -467,7 +468,7 @@ export const supplierInvoiceReview = defineAgentIntent<
     lines.push('5. Föreslå rätt BAS-konto för varje rad (eller för hela fakturan om bara en summarad finns). Följ leverantörens historik: gnubok_query_journal({ text: "<leverantörens namn>", source_type: "supplier_invoice", limit: 5 }): när du väljer konto.')
     lines.push('6. Om du är säker, staga attestering via gnubok_approve_supplier_invoice. Annars: peka på vad som ska klargöras innan attestering.')
     lines.push('')
-    lines.push('Svara på svenska, var direkt och konkret. Ditt första svar är det första användaren ser.')
+    lines.push('Var direkt och konkret. Ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

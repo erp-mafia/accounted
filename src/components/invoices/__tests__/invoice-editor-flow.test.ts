@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   deriveNextStep,
-  deriveForvalChips,
   deriveRequiresHousing,
   filterArticleSuggestions,
   isComposingKey,
@@ -9,7 +8,6 @@ import {
   planDueDateSync,
   planCustomerTermsFill,
   type NextStepInput,
-  type ForvalChipsInput,
 } from '@/components/invoices/invoice-editor-flow'
 
 function stepInput(overrides: Partial<NextStepInput> = {}): NextStepInput {
@@ -156,126 +154,6 @@ describe('deriveNextStep priority order', () => {
         stepInput({ isSelfBilled: true, externalInvoiceNumber: 'K-1', receivedDate: '2026-08-15' }),
       ),
     ).toEqual({ kind: 'ready' })
-  })
-})
-
-function chipsInput(overrides: Partial<ForvalChipsInput> = {}): ForvalChipsInput {
-  return {
-    isSelfBilled: false,
-    documentType: 'invoice',
-    currency: 'SEK',
-    invoiceDate: '2026-08-17',
-    dueDate: '2026-09-16',
-    receivedDate: '',
-    deliveryDate: '',
-    paymentLink: null,
-    oreRounding: true,
-    dims: null,
-    ...overrides,
-  }
-}
-
-describe('deriveForvalChips', () => {
-  it('shows currency, invoice date and due terms for an all-default invoice', () => {
-    expect(deriveForvalChips(chipsInput())).toEqual([
-      { kind: 'currency', currency: 'SEK' },
-      { kind: 'invoice_date', date: '2026-08-17' },
-      { kind: 'due_days', days: 30, date: '2026-09-16' },
-    ])
-  })
-
-  // Issue #1820: the invoice date silently defaulted to today inside the
-  // collapsed Förval panel; the chip makes the value visible in every mode.
-  it('surfaces the invoice date as a chip, and skips it while unset', () => {
-    expect(deriveForvalChips(chipsInput())).toContainEqual({
-      kind: 'invoice_date',
-      date: '2026-08-17',
-    })
-    expect(deriveForvalChips(chipsInput({ isSelfBilled: true }))).toContainEqual({
-      kind: 'invoice_date',
-      date: '2026-08-17',
-    })
-    expect(
-      deriveForvalChips(chipsInput({ invoiceDate: '' })).find((c) => c.kind === 'invoice_date'),
-    ).toBeUndefined()
-  })
-
-  it('surfaces a deviating document type first', () => {
-    expect(deriveForvalChips(chipsInput({ documentType: 'proforma' }))[0]).toEqual({
-      kind: 'doc_type',
-      documentType: 'proforma',
-    })
-  })
-
-  it('replaces the due chips with a valid-until chip for a quote', () => {
-    const chips = deriveForvalChips(
-      chipsInput({ documentType: 'quote', validUntil: '2026-09-16' }),
-    )
-    expect(chips[0]).toEqual({ kind: 'doc_type', documentType: 'quote' })
-    expect(chips).toContainEqual({ kind: 'valid_until', date: '2026-09-16' })
-    expect(chips.find((c) => c.kind === 'due_days')).toBeUndefined()
-    expect(chips.find((c) => c.kind === 'due_date')).toBeUndefined()
-  })
-
-  it('skips the valid-until chip while a quote has no expiry yet', () => {
-    const chips = deriveForvalChips(chipsInput({ documentType: 'quote', validUntil: '' }))
-    expect(chips.find((c) => c.kind === 'valid_until')).toBeUndefined()
-    expect(chips.find((c) => c.kind === 'due_days')).toBeUndefined()
-  })
-
-  it('falls back to a plain due date when the invoice date is missing or after', () => {
-    expect(deriveForvalChips(chipsInput({ invoiceDate: '' }))).toContainEqual({
-      kind: 'due_date',
-      date: '2026-09-16',
-    })
-    expect(
-      deriveForvalChips(chipsInput({ invoiceDate: '2026-10-01', dueDate: '2026-09-16' })),
-    ).toContainEqual({ kind: 'due_date', date: '2026-09-16' })
-  })
-
-  it('surfaces every deviation an edit/copy draft may carry', () => {
-    const chips = deriveForvalChips(
-      chipsInput({
-        documentType: 'proforma',
-        currency: 'EUR',
-        deliveryDate: '2026-08-20',
-        paymentLink: 'manual',
-        oreRounding: false,
-        dims: 'KS01 · P001',
-      }),
-    )
-    expect(chips).toContainEqual({ kind: 'doc_type', documentType: 'proforma' })
-    expect(chips).toContainEqual({ kind: 'currency', currency: 'EUR' })
-    expect(chips).toContainEqual({ kind: 'delivery', date: '2026-08-20' })
-    expect(chips).toContainEqual({ kind: 'payment_link', mode: 'manual' })
-    expect(chips).toContainEqual({ kind: 'dims', dims: 'KS01 · P001' })
-    // ore_off is SEK-only: an EUR invoice has no öresavrundning to disable.
-    expect(chips.find((c) => c.kind === 'ore_off')).toBeUndefined()
-  })
-
-  it('flags disabled öresavrundning on SEK invoices', () => {
-    expect(deriveForvalChips(chipsInput({ oreRounding: false }))).toContainEqual({
-      kind: 'ore_off',
-    })
-  })
-
-  it('reduces to currency, invoice date, due and received for self-billed mode', () => {
-    const chips = deriveForvalChips(
-      chipsInput({
-        isSelfBilled: true,
-        receivedDate: '2026-08-15',
-        documentType: 'proforma',
-        paymentLink: 'auto',
-        oreRounding: false,
-        dims: 'KS01',
-      }),
-    )
-    expect(chips).toEqual([
-      { kind: 'currency', currency: 'SEK' },
-      { kind: 'invoice_date', date: '2026-08-17' },
-      { kind: 'due_days', days: 30, date: '2026-09-16' },
-      { kind: 'received', date: '2026-08-15' },
-    ])
   })
 })
 

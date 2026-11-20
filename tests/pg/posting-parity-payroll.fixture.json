@@ -1,0 +1,1025 @@
+{
+  "dumps": [
+    {
+      "flow": "payroll: a salary run of two employees posts lön, arbetsgivaravgifter, semesteravsättning and pensionsavsättning",
+      "entries": [
+        {
+          "voucher_series": "L",
+          "voucher_number": 1,
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "55550",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Lön 2026-06: Nettolön",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "18000",
+              "exchange_rate": null,
+              "account_number": "2710",
+              "line_description": "Lön 2026-06: Personalskatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "450",
+              "exchange_rate": null,
+              "account_number": "2794",
+              "line_description": "Lön 2026-06: Fackföreningsavgifter",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "30000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7010",
+              "line_description": "Lön 2026-06: Löner kollektivanställda",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "44000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7210",
+              "line_description": "Lön 2026-06: Löner tjänstemän",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 2,
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "23250",
+              "exchange_rate": null,
+              "account_number": "2731",
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "0.8",
+              "exchange_rate": null,
+              "account_number": "3740",
+              "line_description": "Lön 2026-06: Öres- och kronutjämning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "23250.8",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7510",
+              "line_description": "Lön 2026-06: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 3,
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Semesteravsättning",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "8400",
+              "exchange_rate": null,
+              "account_number": "2920",
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2639.28",
+              "exchange_rate": null,
+              "account_number": "2940",
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3600",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7090",
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "4800",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7290",
+              "line_description": "Lön 2026-06: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2639.28",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7519",
+              "line_description": "Lön 2026-06: Sociala avgifter på semester",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 4,
+          "entry_date": "2026-06-25",
+          "description": "Lön 2026-06: Pensionsavsättning",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "770.01",
+              "exchange_rate": null,
+              "account_number": "2514",
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "3174",
+              "exchange_rate": null,
+              "account_number": "2740",
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3174",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7410",
+              "line_description": "Lön 2026-06: Pensionsförsäkringspremier",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "770.01",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7533",
+              "line_description": "Lön 2026-06: Särskild löneskatt 24,26%",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "payroll: a one-employee run approved from a staged operation posts lön and arbetsgivaravgifter",
+      "entries": [
+        {
+          "voucher_series": "L",
+          "voucher_number": 5,
+          "entry_date": "2026-07-25",
+          "description": "Lön 2026-07",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "23000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Lön 2026-07: Nettolön",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "7000",
+              "exchange_rate": null,
+              "account_number": "2710",
+              "line_description": "Lön 2026-07: Personalskatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "30000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7010",
+              "line_description": "Lön 2026-07: Löner kollektivanställda",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 6,
+          "entry_date": "2026-07-25",
+          "description": "Lön 2026-07: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "9426",
+              "exchange_rate": null,
+              "account_number": "2731",
+              "line_description": "Lön 2026-07: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "9426",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7510",
+              "line_description": "Lön 2026-07: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "payroll: a booking stopped after its first verifikat, booked again: the first is adopted, the rest posted",
+      "entries": [
+        {
+          "voucher_series": "L",
+          "voucher_number": 7,
+          "entry_date": "2026-08-25",
+          "description": "Lön 2026-08",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "55550",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Lön 2026-08: Nettolön",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "18000",
+              "exchange_rate": null,
+              "account_number": "2710",
+              "line_description": "Lön 2026-08: Personalskatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "450",
+              "exchange_rate": null,
+              "account_number": "2794",
+              "line_description": "Lön 2026-08: Fackföreningsavgifter",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "30000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7010",
+              "line_description": "Lön 2026-08: Löner kollektivanställda",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "44000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7210",
+              "line_description": "Lön 2026-08: Löner tjänstemän",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 8,
+          "entry_date": "2026-08-25",
+          "description": "Lön 2026-08: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "23250",
+              "exchange_rate": null,
+              "account_number": "2731",
+              "line_description": "Lön 2026-08: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "0.8",
+              "exchange_rate": null,
+              "account_number": "3740",
+              "line_description": "Lön 2026-08: Öres- och kronutjämning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "23250.8",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7510",
+              "line_description": "Lön 2026-08: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 9,
+          "entry_date": "2026-08-25",
+          "description": "Lön 2026-08: Semesteravsättning",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "8400",
+              "exchange_rate": null,
+              "account_number": "2920",
+              "line_description": "Lön 2026-08: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "2639.28",
+              "exchange_rate": null,
+              "account_number": "2940",
+              "line_description": "Lön 2026-08: Sociala avgifter på semester",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3600",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7090",
+              "line_description": "Lön 2026-08: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "4800",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7290",
+              "line_description": "Lön 2026-08: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "2639.28",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7519",
+              "line_description": "Lön 2026-08: Sociala avgifter på semester",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 10,
+          "entry_date": "2026-08-25",
+          "description": "Lön 2026-08: Pensionsavsättning",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "770.01",
+              "exchange_rate": null,
+              "account_number": "2514",
+              "line_description": "Lön 2026-08: Särskild löneskatt 24,26%",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "3174",
+              "exchange_rate": null,
+              "account_number": "2740",
+              "line_description": "Lön 2026-08: Pensionsförsäkringspremier",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3174",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7410",
+              "line_description": "Lön 2026-08: Pensionsförsäkringspremier",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "770.01",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7533",
+              "line_description": "Lön 2026-08: Särskild löneskatt 24,26%",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "payroll: a booked run corrected: every verifikat reversed and a correction run drafted",
+      "entries": [
+        {
+          "voucher_series": "L",
+          "voucher_number": 11,
+          "entry_date": "2026-09-25",
+          "description": "Lön 2026-09",
+          "source_type": "salary_payment",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "23000",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Lön 2026-09: Nettolön",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "7000",
+              "exchange_rate": null,
+              "account_number": "2710",
+              "line_description": "Lön 2026-09: Personalskatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "30000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7010",
+              "line_description": "Lön 2026-09: Löner kollektivanställda",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 12,
+          "entry_date": "2026-09-25",
+          "description": "Lön 2026-09: Arbetsgivaravgifter",
+          "source_type": "salary_payment",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "9426",
+              "exchange_rate": null,
+              "account_number": "2731",
+              "line_description": "Lön 2026-09: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "9426",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7510",
+              "line_description": "Lön 2026-09: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 13,
+          "entry_date": "2026-09-25",
+          "description": "Lön 2026-09: Semesteravsättning",
+          "source_type": "salary_payment",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "3600",
+              "exchange_rate": null,
+              "account_number": "2920",
+              "line_description": "Lön 2026-09: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1131.12",
+              "exchange_rate": null,
+              "account_number": "2940",
+              "line_description": "Lön 2026-09: Sociala avgifter på semester",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3600",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7090",
+              "line_description": "Lön 2026-09: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1131.12",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7519",
+              "line_description": "Lön 2026-09: Sociala avgifter på semester",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 14,
+          "entry_date": "2026-09-25",
+          "description": "Makulering: Lön 2026-09",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "23000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Reversal: Lön 2026-09: Nettolön",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "7000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2710",
+              "line_description": "Reversal: Lön 2026-09: Personalskatt",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "30000",
+              "exchange_rate": null,
+              "account_number": "7010",
+              "line_description": "Reversal: Lön 2026-09: Löner kollektivanställda",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 15,
+          "entry_date": "2026-09-25",
+          "description": "Makulering: Lön 2026-09: Arbetsgivaravgifter",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "9426",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2731",
+              "line_description": "Reversal: Lön 2026-09: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "9426",
+              "exchange_rate": null,
+              "account_number": "7510",
+              "line_description": "Reversal: Lön 2026-09: Arbetsgivaravgifter",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "L",
+          "voucher_number": 16,
+          "entry_date": "2026-09-25",
+          "description": "Makulering: Lön 2026-09: Semesteravsättning",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "3600",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2920",
+              "line_description": "Reversal: Lön 2026-09: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "1131.12",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "2940",
+              "line_description": "Reversal: Lön 2026-09: Sociala avgifter på semester",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "3600",
+              "exchange_rate": null,
+              "account_number": "7090",
+              "line_description": "Reversal: Lön 2026-09: Semesteravsättning",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "1131.12",
+              "exchange_rate": null,
+              "account_number": "7519",
+              "line_description": "Reversal: Lön 2026-09: Sociala avgifter på semester",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "payroll: semesterårsavslut books the drift between the computed semesterlöneskuld and the booked 2920 and 2940",
+      "entries": [
+        {
+          "voucher_series": "K",
+          "voucher_number": 1,
+          "entry_date": "2026-03-31",
+          "description": "Semesterårsavslut 2025: justering semesterlöneskuld",
+          "source_type": "salary_payment",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "187360",
+              "exchange_rate": null,
+              "account_number": "2920",
+              "line_description": "Justering semesterlöneskuld",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "0",
+              "credit_amount": "58868.51",
+              "exchange_rate": null,
+              "account_number": "2940",
+              "line_description": "Justering upplupna avgifter semester",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "78066.67",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7090",
+              "line_description": "Justering semesterlöneskuld",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "109293.33",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7290",
+              "line_description": "Justering semesterlöneskuld",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "sort_order": null,
+              "debit_amount": "58868.51",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "7519",
+              "line_description": "Justering upplupna avgifter semester",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "runs": [
+      {
+        "period_month": 6,
+        "status": "booked",
+        "is_correction": false,
+        "corrects_period_month": null,
+        "salary_voucher": 1,
+        "avgifter_voucher": 2,
+        "vacation_voucher": 3,
+        "pension_voucher": 4,
+        "claim_released": true
+      },
+      {
+        "period_month": 7,
+        "status": "booked",
+        "is_correction": false,
+        "corrects_period_month": null,
+        "salary_voucher": 5,
+        "avgifter_voucher": 6,
+        "vacation_voucher": null,
+        "pension_voucher": null,
+        "claim_released": true
+      },
+      {
+        "period_month": 8,
+        "status": "booked",
+        "is_correction": false,
+        "corrects_period_month": null,
+        "salary_voucher": 7,
+        "avgifter_voucher": 8,
+        "vacation_voucher": 9,
+        "pension_voucher": 10,
+        "claim_released": true
+      },
+      {
+        "period_month": 9,
+        "status": "corrected",
+        "is_correction": false,
+        "corrects_period_month": null,
+        "salary_voucher": 11,
+        "avgifter_voucher": 12,
+        "vacation_voucher": 13,
+        "pension_voucher": null,
+        "claim_released": true
+      },
+      {
+        "period_month": 9,
+        "status": "draft",
+        "is_correction": true,
+        "corrects_period_month": 9,
+        "salary_voucher": null,
+        "avgifter_voucher": null,
+        "vacation_voucher": null,
+        "pension_voucher": null,
+        "claim_released": true
+      }
+    ],
+    "closures": [
+      {
+        "vacation_year_start": "2025-04-01",
+        "adjustment_voucher": 1
+      }
+    ]
+  }
+}

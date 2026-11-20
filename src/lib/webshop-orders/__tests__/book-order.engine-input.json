@@ -1,0 +1,219 @@
+[
+  {
+    "name": "paid order in SEK at 25 % moms",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-01",
+          "description": "Order 1001 (Swish)",
+          "source_type": "webshop_order",
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Order 1001 (Swish)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 400,
+              "line_description": "Order 1001 (Swish)"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 100,
+              "line_description": "Order 1001 (Swish)"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-0"
+      ]
+    ]
+  },
+  {
+    "name": "refund row of an order",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-05",
+          "description": "Återbetalning order 1002",
+          "source_type": "webshop_order",
+          "source_id": "00000000-0000-4000-8000-000000000002",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 0,
+              "credit_amount": 125,
+              "line_description": "Återbetalning order 1002"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 100,
+              "credit_amount": 0,
+              "line_description": "Återbetalning order 1002"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 25,
+              "credit_amount": 0,
+              "line_description": "Återbetalning order 1002"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-1"
+      ]
+    ]
+  },
+  {
+    "name": "order in euro with a resolved SEK total, two rates",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-11",
+          "description": "Order 1003 (Swish)",
+          "source_type": "webshop_order",
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 688.5,
+              "credit_amount": 0,
+              "line_description": "Order 1003 (Swish)",
+              "currency": "EUR",
+              "amount_in_currency": 61.2,
+              "exchange_rate": 11.25
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 450,
+              "line_description": "Order 1003 (Swish)",
+              "currency": "EUR",
+              "amount_in_currency": 40,
+              "exchange_rate": 11.25
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 112.5,
+              "line_description": "Order 1003 (Swish)",
+              "currency": "EUR",
+              "amount_in_currency": 10,
+              "exchange_rate": 11.25
+            },
+            {
+              "account_number": "3002",
+              "debit_amount": 0,
+              "credit_amount": 112.5,
+              "line_description": "Order 1003 (Swish)",
+              "currency": "EUR",
+              "amount_in_currency": 10,
+              "exchange_rate": 11.25
+            },
+            {
+              "account_number": "2621",
+              "debit_amount": 0,
+              "credit_amount": 13.5,
+              "line_description": "Order 1003 (Swish)",
+              "currency": "EUR",
+              "amount_in_currency": 1.2,
+              "exchange_rate": 11.25
+            }
+          ]
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-2"
+      ]
+    ]
+  },
+  {
+    "name": "order with its own verifikationsserie and a note",
+    "createDraftEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        {
+          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
+          "entry_date": "2026-08-12",
+          "description": "Order 1004 (Kort)",
+          "source_type": "webshop_order",
+          "source_id": "00000000-0000-4000-8000-000000000004",
+          "voucher_series": "W",
+          "notes": "Underlag: orderunderlag från butiken.",
+          "lines": [
+            {
+              "account_number": "1686",
+              "debit_amount": 500,
+              "credit_amount": 0,
+              "line_description": "Order 1004 (Kort)"
+            },
+            {
+              "account_number": "3001",
+              "debit_amount": 0,
+              "credit_amount": 400,
+              "line_description": "Order 1004 (Kort)"
+            },
+            {
+              "account_number": "2611",
+              "debit_amount": 0,
+              "credit_amount": 100,
+              "line_description": "Order 1004 (Kort)"
+            }
+          ]
+        }
+      ]
+    ],
+    "commitEntry": [
+      [
+        4,
+        "<supabase>",
+        "00000000-0000-4000-8000-00000000c001",
+        "00000000-0000-4000-8000-00000000a001",
+        "je-3"
+      ]
+    ]
+  }
+]

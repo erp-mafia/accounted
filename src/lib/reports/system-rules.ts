@@ -30,6 +30,26 @@ export const SUPPLIER_INVOICE_ROUNDING_RULES = {
 } as const
 
 /**
+ * Kontantmetoden: a part payment of a customer invoice that never reached the
+ * ledger as a fordran (lib/bookkeeping/invoice-lines.ts
+ * buildInvoiceCashPartialLines, checked against the earlier installments by
+ * checkPriorCashRecognition). Listed for a cash-method company while
+ * CASH_PARTIAL_PAYMENTS_ENABLED is set, and for any company whose books hold
+ * a part payment the rule booked.
+ */
+export const CASH_PARTIAL_PAYMENT_RULE =
+  'En delbetalning av en kundfaktura som inte bokförts som fordran bokförs vid betalningen med intäkt och utgående moms per momssats i proportion till det inbetalda beloppet. Andelarna räknas på det sammanlagt inbetalda beloppet, så att delbetalningarna tillsammans ger exakt fakturans belopp per konto och varje delbetalnings moms per momssats avviker högst 1 öre från den exakta andelen. Regeln gäller inte fakturor i utländsk valuta, fakturor med ROT/RUT-avdrag eller skattereduktion för grön teknik, betalningar med egna konteringsrader, betalningar som registreras genom bankmatchning eller med API-nyckel, eller fakturor vars tidigare delbetalningar är bokförda på annat sätt. Då avvisas den automatiska bokföringen och betalningen bokförs manuellt. Programversion och driftsättning framgår av behandlingshistoriken.'
+
+/**
+ * Kvittning (lib/invoices/counterparty-setoff): a customer invoice and a
+ * supplier invoice of the same counterparty settled against each other.
+ * Listed while COUNTERPARTY_SETOFF_ENABLED is set, and for any company whose
+ * books hold a set-off voucher.
+ */
+export const COUNTERPARTY_SETOFF_RULE =
+  'En kundfaktura och en leverantörsfaktura till samma motpart (samma organisationsnummer) kan kvittas mot varandra med ett eget verifikat: debet leverantörsskulder och kredit kundfordringar på de konton fakturornas egna verifikat bokförde, med högst det lägsta av de två återstående beloppen. Momsen påverkas inte, eftersom den bokfördes när fakturorna registrerades. Båda fakturorna får en betalningsrad daterad kvittningsdagen och nettot matchas mot bankraden som en vanlig delbetalning. En kvittningsavräkning arkiveras som underlag på verifikatet. Kvittning görs bara i svenska kronor, för fakturor som bokförts som fordran respektive skuld (inte kontantmetoden), utan ROT/RUT-avdrag, utan pågående inkassoärende och utan pågående betalning av leverantörsfakturan. En felaktig kvittning rättas genom att verifikatet återförs (storno), vilket återställer båda fakturorna; verifikatet ändras aldrig i efterhand.'
+
+/**
  * How a verifikation lands in a series, in resolution order, plus the
  * exceptions. The concrete mappings live in the data tables named here.
  */
@@ -46,6 +66,23 @@ export const VOUCHER_SERIES_RULES = {
   ],
 } as const
 
+/**
+ * How a sales invoice gets its löpnummer (ML 17 kap 24 § p. 2): the series, the
+ * next number, and when a number is refused.
+ */
+export const INVOICE_NUMBER_RULES = {
+  serie:
+    'Kundfakturor och kreditfakturor numreras i företagets egen serie: fakturaprefixet följt av ett löpnummer med minst tre siffror. Proformafakturor har en egen serie (PF-) och tar inga nummer från fakturaserien. Offerter (OF-) och följesedlar (FS-) har egna serier.',
+  nasta_nummer:
+    'Nästa fakturanummer är det första lediga numret från den inställda startpunkten (Inställningar > Fakturor, Nästa fakturanummer). Nummer som redan finns, till exempel importerade från ett tidigare system, hoppas över; ett överhoppat nummer finns redan och är ingen lucka.',
+  unikt:
+    'Ett fakturanummer är ett värde: 1 och 001 är samma löpnummer. Databasen avvisar en faktura vars nummer redan finns skrivet på ett annat sätt, oavsett om fakturan skapas, importeras eller registreras via API.',
+  ordning:
+    'Ett nummer delas aldrig ut under ett högre nummer som redan finns i serien, eftersom det skulle fylla en lucka i serien eller starta om den. Då stoppas utfärdandet utan att något nummer förbrukas, och företaget anger var serien fortsätter: nästa nummer efter det högsta, eller ett nytt prefix för en ny serie. Inställningen avvisar ett nummer som redan finns eller ligger under det högsta. Varje ändring av nästa fakturanummer sparas i ändringsloggen (audit_log, i arkivet revision/behandlingshistorik.json) med tidpunkt och användare. Accounteds egna nummer i det äldre formatet med årtal före löpnumret (till exempel 2026383), utfärdade före den 11 maj 2026, räknas som en avslutad serie.',
+  andring:
+    'Regeln infördes med migration 20261012161600; programversion och första driftsättning framgår av behandlingshistoriken. Redan utfärdade fakturor och deras nummer ändras inte.',
+} as const
+
 /** What the supplier payment row means when a bank match settles a debt. */
 export const SUPPLIER_PAYMENT_RULES = {
   bankmatchning:
@@ -55,6 +92,63 @@ export const SUPPLIER_PAYMENT_RULES = {
   historik:
     'Äldre bankmatchningar med öresavrundning kan ha sparat utbetalt belopp i stället för reglerad skuld. Historiska reskontror och återföringar som använder dessa rader kan därför avvika med den tidigare avrundningen. Rättningen ändrar inte äldre betalningsrader eller redan avvikande fakturasaldon. Vid granskning jämförs raden med det ursprungliga betalningsverifikatet och banktransaktionen. Äldre delbetalningar utan avrundning har samma belopp enligt båda reglerna.',
 } as const
+
+/**
+ * The kontantmetoden year-end cut-off (#3440): årsomföring per invoice, no
+ * vändning. Shown in the systemdokumentation as a behandlingsregel.
+ */
+export const KONTANTMETOD_CUTOFF_RULES =
+  'Enligt kontantmetoden bokförs kund- och leverantörsfakturor som är obetalda vid räkenskapsårets utgång (BFL 5 kap 2 §) genom årsomföring: en verifikation per faktura, daterad räkenskapsårets sista dag och bokförd som fakturans registrering enligt faktureringsmetoden (intäkt eller kostnad, moms på de ordinarie momskontona, kundfordran på 1510 eller leverantörsskuld på 2440 och för ROT/RUT Skatteverkets del på 1513). Verifikationen kopplas till fakturan, så betalningen nästa år bokförs mot 1510 eller 2440 utan intäkt, kostnad eller moms, och momsen redovisas en gång, i den momsperiod som innehåller räkenskapsårets sista dag. Ingen vändning bokförs. En faktura som betalades efter årsskiftet men innan årsomföringen bokfördes rättas genom storno och rättelse av betalningsverifikationen på dess eget datum. En årsomföring kan bara ångras genom storno daterad samma dag, och bara så länge fakturan saknar betalningar och krediteringar. Äldre bokslutsavgränsningar med vändning ändras inte. Regeln infördes med ärende #3440; programversion och driftsättning framgår av behandlingshistoriken.'
+
+/**
+ * Kontantmetoden and an EU goods acquisition (#73): booked at registration,
+ * because ML 2023:200 7 kap. 26 and 40 §§ fix the moms period whatever the
+ * method. Shown in the systemdokumentation of a cash-method company.
+ */
+export const KONTANTMETOD_EU_GOODS_RULE =
+  'Enligt kontantmetoden bokförs leverantörsfakturor när de betalas. En faktura för varor från ett annat EU-land (unionsinternt förvärv, omvänd skattskyldighet) bokförs ändå när den registreras, daterad som under Varor från annat EU-land, registreringsdatum, och som en registrering enligt faktureringsmetoden (kostnad, beskattningsunderlag på 4515, 4516 eller 4517 mot 4598, beräknad moms på 2614, 2624 eller 2634 och 2645, leverantörsskuld på 2440), eftersom momsen ska redovisas för den period då fakturan utfärdats, senast för perioden med den 15:e i månaden efter leveransen (ML 7 kap. 26 och 40 §§). Betalningen bokförs sedan mot 2440 utan kostnad eller moms. Köp av tjänster från utlandet bokförs som tidigare vid betalning (ML 7 kap. 16 och 34 §§). Regeln infördes med ärende #73; programversion och driftsättning framgår av behandlingshistoriken.'
+
+/**
+ * The registration date of an EU goods acquisition (#93), both methods:
+ * supplierInvoiceRegistrationDate (lib/bookkeeping/booking-mode.ts).
+ */
+export const EU_GOODS_REGISTRATION_DATE_RULE =
+  'En leverantörsfaktura för varor från ett annat EU-land (unionsinternt förvärv, omvänd skattskyldighet) registreras daterad fakturadatum, men senast den 15:e i månaden efter den månad då varorna levererades när fakturan har ett leveransdatum, eftersom den beräknade utgående och ingående momsen ska redovisas senast för den period som omfattar den dagen (ML 7 kap. 12, 26 och 40 §§). Utan leveransdatum dateras registreringen fakturadatum. Regeln gäller enligt både faktureringsmetoden och kontantmetoden och infördes med ärende #93; programversion och driftsättning framgår av behandlingshistoriken. Redan bokförda verifikationer ändras inte.'
+
+/**
+ * Semesterlöneskuld (2920/2940): the automatkontering of the salary run's
+ * vacation verifikat under the company's booking method
+ * (company_settings.salary_vacation_liability_method), BFN vägledning
+ * Bokföring punkt 9.9 c. Text per method and day-value convention.
+ */
+export function vacationLiabilityRuleText(
+  method: 'accrual' | 'remeasure',
+  dayValue: 'daily_divisor' | 'percent_4_6',
+): string {
+  const dagvarde =
+    dayValue === 'percent_4_6'
+      ? 'Dagvärdet är vid sammalöneregeln 4,6 procent av månadslönen plus semestertillägget, och vid procentregeln semesterlöneprocenten av årslönen delad med antalet semesterdagar.'
+      : 'Dagvärdet är vid sammalöneregeln månadslönen delad med 21 vid femdagarsvecka (dagdivisorn för annat schema) plus semestertillägget, och vid procentregeln semesterlöneprocenten av årslönen delad med antalet semesterdagar.'
+  const berakning =
+    'Skulden beräknas per anställd som obetald semesterlön för intjänade dagar som inte är uttagna: återstående betalda dagar för semesteråret (vid sammanfallande semesterår den del av årets dagar som är intjänad), sparade dagar och, vid semesterår 1 april till 31 mars, dagar som tjänas in under pågående intjänandeår, gånger dagvärdet, plus obetald semesterlön på rörliga lönedelar enligt sammalöneregeln. Sociala avgifter beräknas med varje anställds avgiftssats för året efter värderingsdagen. ' +
+    dagvarde
+  const andring =
+    'Regeln infördes med migration 20261027213121; programversion och driftsättning framgår av behandlingshistoriken, och byte av metod sparas i ändringsloggen. Redan bokförda verifikationer ändras inte.'
+  if (method === 'remeasure') {
+    return (
+      'Vid varje bokförd lönekörning bokförs semesterlöneskulden till sitt beräknade värde: verifikatet för semesterlöneskuld är skillnaden mellan den beräknade skulden per lönekörningens utbetalningsdag, med lönekörningen inräknad, och det som är bokfört på 2920 och 2940. ' +
+      berakning +
+      ' Kostnadssidan bokförs per anställd på 7090 (kollektivanställda) eller 7290 (övriga) mot 2920 och på 7519 mot 2940, debet när skulden ökar och kredit när den minskar. Belopp inom 1 krona bokförs inte. Samma beräkning kan bokföras per ett passerat datum utan lönekörning (Stäm av i rapporten Semesterskuld), och vid byte till metoden bokförs en första justering per bytesdagen. Varje beräkning sparas som underlag för sitt verifikat. Vid semesterårsavslutet bokförs bara en kvarvarande skillnad. ' +
+      andring
+    )
+  }
+  return (
+    'Vid varje bokförd lönekörning bokförs en semesteravsättning: debet 7090 (kollektivanställda) eller 7290 (övriga) mot kredit 2920, och debet 7519 mot kredit 2940 med den anställdes avgiftssats. Enligt procentregeln är avsättningen semesterlöneprocenten av den semesterlönegrundande lönen, enligt sammalöneregeln semestertillägget för årets dagar och semesterlön på rörliga lönedelar. Uttagen semester bokförs som lönekostnad och minskar inte 2920 löpande. Vid semesterårsavslutet bokförs skillnaden mot den beräknade skulden som ett justeringsverifikat daterat semesterårets sista dag, och beräkningen sparas som underlag. ' +
+    berakning +
+    ' Rapporten Semesterskuld visar den beräknade skulden och det bokförda beloppet per datum, och skillnaden kan bokföras per ett passerat datum (Stäm av). ' +
+    andring
+  )
+}
 
 /** Retention and integrity of the stored räkenskapsinformation. */
 export const ARCHIVE_RULES = {
@@ -76,7 +170,7 @@ export const ANNUAL_REPORT_RULES = {
 /** BFNAR 2013:2 p. 9.15: where and how the behandlingshistorik is produced. */
 export const BEHANDLINGSHISTORIK_RULES = {
   beskrivning:
-    'Skapas automatiskt (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16): registreringstidpunkt och utförare för varje bokföringspost (journal_entries), förändringar via databasens oföränderliga ändringslogg audit_log (kontoplan, inställningar som styr bokföringen, räkenskapsår, API-nycklar, makuleringar, raderingar), rättelser i samma verifikat (journal_entry_rattelse_log) samt SIE-, bankfils- och migreringsloggar.',
+    'Skapas automatiskt (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16): registreringstidpunkt och utförare för varje bokföringspost (journal_entries), förändringar via databasens oföränderliga ändringslogg audit_log (kontoplan, inställningar som styr bokföringen, räkenskapsår, API-nycklar, anställdas lönegrunder, kopplingar och ignoreringar av skattekontohändelser, makuleringar, raderingar), rättelser i samma verifikat (journal_entry_rattelse_log) samt SIE-, bankfils- och migreringsloggar.',
   rapport: 'Rapporter > Export & arkiv > Behandlingshistorik: per räkenskapsår eller datumintervall, som PDF, CSV eller Excel',
   arkivfil: 'revision/behandlingshistorik.json i detta arkiv (råa loggrader)',
   tidszon: 'Europe/Stockholm i rapporten, UTC i JSON-filen',

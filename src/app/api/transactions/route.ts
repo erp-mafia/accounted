@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server'
-import { fetchJunctionLinkedTxIds, scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
+import { scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateTransactionSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { transactionTextSearchFilter } from '@/lib/transactions/text-search'
+import { resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 
 const MAX_ROWS = 500
+const LIST_COLUMNS =
+  'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id'
 
 // withRouteContext enforces auth (MFA on hosted) and resolves companyId; the
 // previous hand-rolled session lookup in this handler skipped the MFA gate.
@@ -30,6 +31,9 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   // surface a "Visa ignorerade" undo list. The default (no param) behaviour
   // continues to exclude ignored rows from unmatched results.
   const onlyIgnored = searchParams.get('only_ignored') === 'true'
+  // Free text over description and merchant: the bank-row pickers search here
+  // across every row instead of filtering a capped list in the browser.
+  const textFilter = transactionTextSearchFilter(searchParams.get('q') ?? '')
   // account_number selects which cash account to scope to. We resolve it to a
   // cash_accounts.id (ledger_account is unique per company) and scope
   // transactions by that id, falling back to currency for legacy rows whose
@@ -57,25 +61,18 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
     }
   }
 
+  // The open rows are open_bank_rows, ignored and private ones left out. Every
+  // other mode reads the table, with the junction so a caller can tell a row
+  // split over several verifikat (journal_entry_id NULL, #1553) from an unbooked
+  // one with lib/transactions/is-booked.ts getLinkedJournalEntryIds (crm#48).
+  const openRows = unmatched && !onlyIgnored
   let query = supabase
-    .from('transactions')
-    // The junction rides along in every mode so a caller can tell a row split
-    // over several verifikat (journal_entry_id NULL, #1553) from an unbooked
-    // one with lib/transactions/is-booked.ts getLinkedJournalEntryIds (crm#48).
-    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
+    .from(openRows ? 'open_bank_rows' : 'transactions')
+    .select(openRows ? LIST_COLUMNS : `${LIST_COLUMNS}, transaction_voucher_links(journal_entry_id, role)`)
     .eq('company_id', companyId)
 
   // unmatched and reconciled are mutually exclusive: unmatched wins if both set
-  if (unmatched) {
-    query = query.is('journal_entry_id', null)
-    // Hide rows the user has explicitly suppressed from the reconciliation
-    // view. Other callers (e.g. BookDirectlyDialog) also benefit: once
-    // ignored, the row stops surfacing in the "to book" funnel everywhere.
-    if (!onlyIgnored) query = query.eq('is_ignored', false)
-  } else if (reconciled) {
-    query = query.not('journal_entry_id', 'is', null)
-  }
-
+  if (!unmatched && reconciled) query = query.eq('is_booked', true)
   if (onlyIgnored) query = query.eq('is_ignored', true)
 
   // Scope to the selected cash account. With a resolved id, match that account
@@ -89,6 +86,7 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   }
   if (dateFrom) query = query.gte('date', dateFrom)
   if (dateTo) query = query.lte('date', dateTo)
+  if (textFilter) query = query.or(textFilter)
 
   // Fetch one extra row so we can tell the caller whether the result was truncated.
   query = query.order('date', { ascending: false }).limit(MAX_ROWS + 1)
@@ -99,25 +97,9 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
-  let rows = data || []
-  // has_more is decided on what the DB returned, before the junction filter
-  // below: a page that came back full means more rows exist past it whether
-  // or not some of this page's rows turn out to be booked.
+  const rows = data || []
   const hasMore = rows.length > MAX_ROWS
-  // journal_entry_id IS NULL is only the first of the three "booked" anchors
-  // (lib/transactions/is-booked.ts): a row bulk-booked into a
-  // samlingsverifikat or split over several verifikat (1:N, #1553) is
-  // anchored through transaction_voucher_links alone and must leave
-  // "Att bokföra" all the same.
-  if (unmatched && rows.length > 0) {
-    const junctionLinked = await fetchJunctionLinkedTxIds(
-      supabase,
-      companyId,
-      rows.map((row) => row.id as string),
-    )
-    if (junctionLinked.size > 0) rows = rows.filter((row) => !junctionLinked.has(row.id as string))
-  }
-  const truncated = rows.length > MAX_ROWS ? rows.slice(0, MAX_ROWS) : rows
+  const truncated = hasMore ? rows.slice(0, MAX_ROWS) : rows
 
   return NextResponse.json({ data: truncated, has_more: hasMore, limit: MAX_ROWS })
 })
@@ -140,11 +122,17 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
     const { date, description, amount, currency, category, notes } = validation.data
 
+    // The form names no bank account: the row takes the company's default
+    // account in its currency, the rule the MCP and v1 ingest doors use
+    // (crm#1171). Stored unbound it dropped out of every per-account view.
+    const cashAccountId = (await resolveDefaultCashAccount(supabase, companyId, currency))?.id ?? null
+
     const { data: transaction, error } = await supabase
       .from('transactions')
       .insert({
         company_id: companyId,
         user_id: user.id,
+        cash_account_id: cashAccountId,
         date,
         description,
         amount,

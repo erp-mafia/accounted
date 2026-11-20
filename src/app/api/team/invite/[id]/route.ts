@@ -1,13 +1,8 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, type NextRequest } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { sendTeamInviteMail } from '@/lib/email/send-team-invite'
-
-// Loads the email extension so the re-send path gets the Resend
-// implementation instead of the noop default (same as POST /api/team/invite).
-ensureInitialized()
 
 /**
  * Kept verbatim from the pre-unfreeze hardcoded 403: personal teams remain

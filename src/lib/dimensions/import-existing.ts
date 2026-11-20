@@ -18,6 +18,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { dimensionValueSnapshot, emitDimensionValuesCreated, type DimensionValueRow } from './value-events'
 
 interface LineRow {
   id: string
@@ -25,7 +26,7 @@ interface LineRow {
 }
 
 export async function importExistingDimensionCodes(
-  ctx: Pick<OperationContext, 'supabase' | 'companyId' | 'log'>,
+  ctx: Pick<OperationContext, 'supabase' | 'companyId' | 'userId' | 'log'>,
 ): Promise<OperationOutcome<{ created: number }>> {
   const { supabase, companyId, log } = ctx
 
@@ -77,13 +78,14 @@ export async function importExistingDimensionCodes(
     // 2. Registry state: dim_no → dimension_id, plus existing value codes.
     const { data: dims, error: dimsError } = await supabase
       .from('dimensions')
-      .select('id, sie_dim_no')
+      .select('id, sie_dim_no, name')
       .eq('company_id', companyId)
     if (dimsError) throw dimsError
 
-    const dimIdByNo = new Map<number, string>(
-      ((dims ?? []) as { id: string; sie_dim_no: number }[]).map((d) => [d.sie_dim_no, d.id]),
-    )
+    type DimRow = { id: string; sie_dim_no: number; name: string }
+    const dimIdByNo = new Map<number, string>(((dims ?? []) as DimRow[]).map((d) => [d.sie_dim_no, d.id]))
+    // For the events of the values created below.
+    const dimById = new Map<string, DimRow>(((dims ?? []) as DimRow[]).map((d) => [d.id, d]))
 
     // 3. Create registry rows for dim numbers seen on lines but missing from
     //    the registry (written via raw v1 JSON / MCP before the register
@@ -103,10 +105,11 @@ export async function importExistingDimensionCodes(
           })),
           { onConflict: 'company_id,sie_dim_no', ignoreDuplicates: true },
         )
-        .select('id, sie_dim_no')
+        .select('id, sie_dim_no, name')
       if (createDimsError) throw createDimsError
-      for (const d of (createdDims ?? []) as { id: string; sie_dim_no: number }[]) {
+      for (const d of (createdDims ?? []) as DimRow[]) {
         dimIdByNo.set(d.sie_dim_no, d.id)
+        dimById.set(d.id, d)
       }
     }
 
@@ -160,9 +163,19 @@ export async function importExistingDimensionCodes(
           onConflict: 'company_id,dimension_id,code',
           ignoreDuplicates: true,
         })
-        .select('id')
+        .select('id, dimension_id, code, name, is_active, start_date, end_date')
       if (insertError) throw insertError
-      created = (insertedValues ?? []).length
+      const rows = (insertedValues ?? []) as DimensionValueRow[]
+      created = rows.length
+      // Announce each registered code (dimension_value.created, archived).
+      await emitDimensionValuesCreated({
+        companyId,
+        userId: ctx.userId,
+        values: rows.flatMap((row) => {
+          const dimension = dimById.get(row.dimension_id)
+          return dimension ? [dimensionValueSnapshot(row, dimension)] : []
+        }),
+      })
     }
 
     return { ok: true, data: { created } }

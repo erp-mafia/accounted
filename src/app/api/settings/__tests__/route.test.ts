@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase, enqueue, enqueueMany, reset, findCall } = createQueuedMockSupabase()
+const { supabase, enqueue, enqueueMany, reset, findCall, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 // The payee write-through is its own unit (lib/cash-accounts/__tests__/invoice-payee.test.ts);
@@ -35,6 +35,13 @@ vi.mock('@/lib/auth/require-write', async (importOriginal) => {
   }
 })
 
+// The accounting method correction record goes to audit_log with the service role.
+const auditInsert = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/supabase/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/supabase/server')>()
+  return { ...actual, createServiceClient: () => ({ from: () => ({ insert: auditInsert }) }) }
+})
+
 const deadlineMocks = vi.hoisted(() => ({
   regenerate: vi.fn().mockResolvedValue(undefined),
 }))
@@ -49,6 +56,23 @@ vi.mock('@/lib/tax/deadline-generator', async (importOriginal) => {
     regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
   }
 })
+
+// The company's Stripe customer (crm#1378). Called only for a company with a
+// subscription row whose identity columns moved.
+const stripeMocks = vi.hoisted(() => ({
+  update: vi.fn(),
+  listTaxIds: vi.fn(),
+  createTaxId: vi.fn(),
+}))
+vi.mock('@/lib/stripe/client', () => ({
+  getStripe: () => ({
+    customers: {
+      update: stripeMocks.update,
+      listTaxIds: stripeMocks.listTaxIds,
+      createTaxId: stripeMocks.createTaxId,
+    },
+  }),
+}))
 
 import { PUT } from '../route'
 import { regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
@@ -115,6 +139,144 @@ describe('PUT /api/settings', () => {
     expect(status).toBe(200)
     expect(body.data.company_name).toBe('New Name')
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  // accounted#104: a pending reminder batch can no longer be approved once
+  // reminders are off; it used to wait in Att göra for the next cron sweep.
+  describe('turning reminders off', () => {
+    const put = (body: Record<string, unknown>) =>
+      PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+
+    it("withdraws the company's pending reminder batch as the cron would", async () => {
+      enqueueMany([
+        { data: { send_invoice_reminders: true } },            // fetch oldSettings
+        { data: { id: 's1', send_invoice_reminders: false } }, // update ... returning
+        { data: [{ id: 'op-1' }] },                            // pending_operations withdrawal
+        { data: null, count: 5 },                              // deadlines count
+      ])
+      const response = await put({ send_invoice_reminders: false })
+      expect(response.status).toBe(200)
+      expect(findCall('pending_operations', 'update')?.[0]).toMatchObject({
+        status: 'rejected',
+        rejection_category: 'superseded',
+        result_data: { auto_rejected: true, reason: 'reminders_off' },
+      })
+      expect(findCalls('pending_operations', 'eq')).toEqual([
+        ['company_id', 'company-1'],
+        ['operation_type', 'reminder_daily_batch'],
+        ['status', 'pending'],
+      ])
+    })
+
+    it('leaves the batch alone when reminders stay on, or were off already', async () => {
+      enqueueMany([
+        { data: { send_invoice_reminders: true, reminder_days_level_1: 15, reminder_days_level_2: 30, reminder_days_level_3: 45 } },
+        { data: { id: 's1', send_invoice_reminders: true, reminder_days_level_1: 10 } },
+        { data: null, count: 5 },
+      ])
+      expect((await put({ reminder_days_level_1: 10 })).status).toBe(200)
+
+      enqueueMany([
+        { data: { send_invoice_reminders: false } },
+        { data: { id: 's1', send_invoice_reminders: false } },
+        { data: null, count: 5 },
+      ])
+      expect((await put({ send_invoice_reminders: false })).status).toBe(200)
+      expect(findCall('pending_operations', 'update')).toBeUndefined()
+    })
+
+    it('still saves when the withdrawal fails: the cron sweeps behind it', async () => {
+      enqueueMany([
+        { data: { send_invoice_reminders: true } },
+        { data: { id: 's1', send_invoice_reminders: false } },
+        { data: null, error: { message: 'boom' } },
+        { data: null, count: 5 },
+      ])
+      const response = await put({ send_invoice_reminders: false })
+      const { status, body } = await parseJsonResponse<{ data: { send_invoice_reminders: boolean } }>(response)
+      expect(status).toBe(200)
+      expect(body.data.send_invoice_reminders).toBe(false)
+    })
+  })
+
+  // crm#1378: the identity reached the Stripe customer once, at checkout, so
+  // a company that changed its details kept getting renewal invoices made
+  // out to the old ones.
+  describe('the company identity on its Stripe customer', () => {
+    const IDENTITY = {
+      entity_type: 'aktiebolag',
+      company_name: 'Gamla Bolaget AB',
+      org_number: '5566778899',
+      address_line1: 'Storgatan 1',
+      address_line2: null,
+      postal_code: '111 22',
+      city: 'Stockholm',
+      country: 'SE',
+      vat_registered: true,
+      vat_number: 'SE556677889901',
+    }
+    const RENAMED = { ...IDENTITY, company_name: 'Nya Bolaget AB' }
+
+    beforeEach(() => {
+      stripeMocks.update.mockResolvedValue({})
+      stripeMocks.listTaxIds.mockResolvedValue({ data: [{ id: 'txi_1' }] })
+      stripeMocks.createTaxId.mockResolvedValue({})
+    })
+
+    function renameSave() {
+      enqueueMany([
+        { data: { ...IDENTITY, onboarding_complete: true } }, // fetch oldSettings
+        { data: { id: 's1', ...RENAMED } }, // update ... returning
+        { data: null, count: 5 }, // deadlines count
+        { data: { stripe_customer_id: 'cus_1' } }, // company_subscriptions
+        { data: { name: 'Nya Bolaget AB', org_number: '5566778899', entity_type: 'aktiebolag' } }, // companies
+        { data: RENAMED }, // company_settings, read for the identity
+      ])
+      return PUT(
+        createMockRequest('/api/settings', { method: 'PUT', body: { company_name: 'Nya Bolaget AB' } }),
+        { params: Promise.resolve({}) },
+      )
+    }
+
+    it('writes a changed company name onto the Stripe customer', async () => {
+      const { status } = await parseJsonResponse(await renameSave())
+
+      expect(status).toBe(200)
+      expect(stripeMocks.update).toHaveBeenCalledWith(
+        'cus_1',
+        expect.objectContaining({ name: 'Nya Bolaget AB', business_name: 'Nya Bolaget AB' }),
+      )
+      // The tax ID it already has is kept.
+      expect(stripeMocks.createTaxId).not.toHaveBeenCalled()
+    })
+
+    it('still saves when Stripe refuses the update', async () => {
+      stripeMocks.update.mockRejectedValue(new Error('stripe down'))
+
+      const { status, body } = await parseJsonResponse<{ data: { company_name: string } }>(await renameSave())
+
+      expect(status).toBe(200)
+      expect(body.data.company_name).toBe('Nya Bolaget AB')
+    })
+
+    it('leaves Stripe alone when no identity column changed', async () => {
+      enqueueMany([
+        { data: { ...IDENTITY, mileage_enabled: false } }, // fetch oldSettings
+        { data: { id: 's1', ...IDENTITY, mileage_enabled: true } }, // update ... returning
+        { data: null, count: 5 }, // deadlines count
+      ])
+
+      const { status } = await parseJsonResponse(
+        await PUT(
+          createMockRequest('/api/settings', { method: 'PUT', body: { mileage_enabled: true } }),
+          { params: Promise.resolve({}) },
+        ),
+      )
+
+      expect(status).toBe(200)
+      expect(findCall('company_subscriptions', 'select')).toBeUndefined()
+      expect(stripeMocks.update).not.toHaveBeenCalled()
+    })
   })
 
   it('stores voucher_series_labels with trimmed names and cleared letters stripped', async () => {
@@ -277,6 +439,38 @@ describe('PUT /api/settings', () => {
     expect(response.status).toBe(400)
   })
 
+  // crm#1735: the English fine print beside the Swedish one.
+  it('saves the English late fee and payment terms texts, and clears one with null', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true } }, // fetch oldSettings
+      { data: { id: 's1', invoice_late_fee_text_en: 'Interest is charged on late payments.', invoice_credit_terms_text_en: null } },
+      { data: null, count: 5 },                                               // deadlines count (has some -> no regen)
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_late_fee_text_en: 'Interest is charged on late payments.', invoice_credit_terms_text_en: null },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { invoice_late_fee_text_en: string | null } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.invoice_late_fee_text_en).toBe('Interest is charged on late payments.')
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({
+      invoice_late_fee_text_en: 'Interest is charged on late payments.',
+      invoice_credit_terms_text_en: null,
+    })
+  })
+
+  it('rejects an English fine print text that is not a string', async () => {
+    for (const body of [{ invoice_late_fee_text_en: 42 }, { invoice_credit_terms_text_en: { en: 'Pay in 30 days.' } }]) {
+      reset()
+      enqueueMany([{ data: { entity_type: 'enskild_firma', onboarding_complete: true } }])
+      const response = await PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+      expect(response.status, JSON.stringify(body)).toBe(400)
+      expect(findCall('company_settings', 'update')).toBeUndefined()
+    }
+  })
+
   it('round-trips share capital fields and clears them with null', async () => {
     const updates = { aktiekapital: 25000, antal_aktier: 500 }
     enqueueMany([
@@ -345,6 +539,97 @@ describe('PUT /api/settings', () => {
     expect(body.error).toContain('antal aktier')
     // The guard fired before the update: only the oldSettings fetch ran.
     expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  // ML 17 kap 24 § p. 2: a next number the series already has, or one under
+  // its highest number, would fill a hole in the series or restart it.
+  it('refuses a next invoice number the series already has, naming the number to use', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      {
+        data: { prefix: '', next_invoice_number: 667, next_number: '669', highest_number: 668, behind: false, first_allowed: 669 },
+      }, // invoice_number_series_status
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { next_invoice_number: 667 },
+    }), { params: Promise.resolve({}) })
+    // The settings page answers a refusal with its Swedish sentence.
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('upp till 668')
+    expect(body.error).toContain('669 eller högre')
+    expect(supabase.rpc).toHaveBeenCalledWith('invoice_number_series_status', {
+      p_company_id: 'company-1',
+      p_document_type: 'invoice',
+      p_prefix: '',
+      p_next_number: 667,
+    })
+    // Refused before the update: only the oldSettings fetch touched a table.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts a next invoice number past the highest one in the series', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      {
+        data: { prefix: '', next_invoice_number: 669, next_number: '669', highest_number: 668, behind: false, first_allowed: 669 },
+      }, // invoice_number_series_status
+      { data: { id: 's1', next_invoice_number: 669 } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { next_invoice_number: 669 },
+    }), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+  })
+
+  it('judges a new prefix as its own series', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      {
+        data: { prefix: 'F', next_invoice_number: 1, next_number: 'F001', highest_number: null, behind: false, first_allowed: 1 },
+      }, // invoice_number_series_status
+      { data: { id: 's1', invoice_prefix: 'F' } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_prefix: 'F' },
+    }), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'invoice_number_series_status',
+      expect.objectContaining({ p_prefix: 'F', p_next_number: 1 }),
+    )
+  })
+
+  it('leaves the series alone when the save keeps the prefix and the next number', async () => {
+    // A company an import left behind can still save other settings: the
+    // first issue asks where the series continues instead.
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      { data: { id: 's1', company_name: 'Nytt namn' } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { company_name: 'Nytt namn', invoice_prefix: '', next_invoice_number: 1 },
+    }), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('invoice_number_series_status', expect.anything())
   })
 
   it('rejects clearing only one half of a stored share-capital pair', async () => {
@@ -522,6 +807,181 @@ describe('PUT /api/settings', () => {
       'company_settings',
       'company_members',
     ])
+  })
+
+  // Swedbank's own ids for payment files (crm#1117): who the bank sees as the
+  // sender and under which agreement it pays, so owner/admin only.
+  it('saves the Swedbank payment-file ids normalised, for an admin', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'admin' } },
+      { data: { id: 's1', swedbank_signer_id: '123456789ORI0001', swedbank_corporate_pay_id: '123456789CPO0001' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '123456789-ori-0001', swedbank_corporate_pay_id: ' 123456789 CPO 0001 ' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({
+      swedbank_signer_id: '123456789ORI0001',
+      swedbank_corporate_pay_id: '123456789CPO0001',
+    })
+  })
+
+  it('clears a Swedbank payment-file id sent empty', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'owner' } },
+      { data: { id: 's1', swedbank_signer_id: null } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ swedbank_signer_id: null })
+  })
+
+  it('rejects a Swedbank id that is not in Swedbank format, naming the format', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '5566778899' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('123456789ORI0001')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('rejects Swedbank\'s ISO 1.0 agreement number, saying what it is and what to use instead', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '06 5566778899 B001' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('avtalsnummer för ISO 20022 1.0')
+    expect(JSON.stringify(body)).toContain('Betala via banken')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('rejects Swedbank payment-file id changes from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_corporate_pay_id: '123456789CPO0001' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  // Nordea's Signer ID (crm#1530): who Nordea sees as the sender, so owner/admin only.
+  it('saves the Nordea Signer ID normalised, for an admin', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'admin' } },
+      { data: { id: 's1', nordea_signer_id: 'NB10000123456' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_signer_id: 'nb 10000-123456' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ nordea_signer_id: 'NB10000123456' })
+  })
+
+  it('rejects a Nordea Signer ID change from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_signer_id: 'NB10000123456' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('rejects a Nordea Signer ID with other characters than letters and digits', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_signer_id: 'NB1000/0123' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('bokstäver och siffror')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  // Nordea's CCM agreement id (crm#1530): which agreement Nordea debits under, so owner/admin only.
+  it('saves the Nordea agreement id normalised, for an admin', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'admin' } },
+      { data: { id: 's1', nordea_agreement_id: 'NB123456' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_agreement_id: ' nb-123 456 ' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ nordea_agreement_id: 'NB123456' })
+  })
+
+  it('rejects a Nordea agreement id change from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_agreement_id: 'NB123456' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('rejects a Nordea agreement id with other characters than letters and digits', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_agreement_id: 'NB/123456' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('Avtals-ID får bara innehålla bokstäver och siffror')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
   })
 
   it('rejects invalid invoice recipients with otherwise valid payment accounts', async () => {
@@ -1147,5 +1607,276 @@ describe('PUT /api/settings', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
+  })
+})
+
+// crm#1790: the Lön settings page sends employer_registered only when the
+// person set the switch (lib/salary/employer-switches.ts). The save must keep
+// an omitted flag out of the write, so an unanswered NULL stays NULL and the
+// AGI rows can still come from a salaried employee (isAgiEmployer).
+describe('PUT /api/settings: employer flags', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  const put = (body: Record<string, unknown>) =>
+    PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+
+  const unanswered = {
+    company_id: 'company-1',
+    entity_type: 'aktiebolag',
+    onboarding_complete: true,
+    pays_salaries: false,
+    employer_registered: null,
+    employer_seasonal: false,
+  }
+
+  it('a save without employer_registered leaves it out of the write, so an unanswered flag stays NULL', async () => {
+    enqueueMany([
+      { data: unanswered },                                    // oldSettings
+      { data: { id: 's1', ...unanswered, salary_pay_day: 27 } }, // update ... returning
+    ])
+
+    const response = await put({ salary_pay_day: 27, pays_salaries: false, employer_seasonal: false })
+
+    expect(response.status).toBe(200)
+    // What reaches PostgREST: the payload names every column and JSON drops
+    // the ones the request left undefined.
+    const sent = JSON.parse(JSON.stringify(findCall('company_settings', 'update')?.[0]))
+    expect(sent).toMatchObject({ salary_pay_day: 27, pays_salaries: false, employer_seasonal: false })
+    expect(sent).not.toHaveProperty('employer_registered')
+    expect(deadlineMocks.regenerate).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ employer_registered: null }),
+    )
+  })
+
+  it('writes an explicit false, and seasonal goes off with it', async () => {
+    const registered = { ...unanswered, pays_salaries: true, employer_registered: true, employer_seasonal: true }
+    enqueueMany([
+      { data: registered },
+      { data: { id: 's1', ...registered, employer_registered: false, employer_seasonal: false } },
+    ])
+
+    const response = await put({ employer_registered: false, employer_seasonal: true })
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toMatchObject({
+      employer_registered: false,
+      employer_seasonal: false,
+    })
+  })
+
+  it('writes an explicit true over an unanswered flag', async () => {
+    enqueueMany([
+      { data: unanswered },
+      { data: { id: 's1', ...unanswered, employer_registered: true } },
+    ])
+
+    const response = await put({ pays_salaries: false, employer_registered: true, employer_seasonal: false })
+    const { body } = await parseJsonResponse<{ data: { employer_registered: boolean | null } }>(response)
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toMatchObject({ employer_registered: true })
+    expect(body.data.employer_registered).toBe(true)
+  })
+
+  it('returns 400 for an employer_registered that is not a boolean, and writes nothing', async () => {
+    const response = await put({ employer_registered: 'yes' })
+
+    expect(response.status).toBe(400)
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+})
+
+// crm#1206: the company's own org number is writable while no valid one is
+// stored (either copy), never replaced once one is (lib/company/org-number-rule.ts).
+describe('PUT /api/settings: org number', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  const put = (body: Record<string, unknown>) =>
+    PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+
+  it('fills in an empty org number after onboarding, on both copies, as ten digits', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: null } }, // oldSettings
+      { data: { org_number: null, entity_type: 'aktiebolag' } },                            // companies (stored copy)
+      { data: { id: 's1', org_number: '5560125790' } },                                     // update ... returning
+      { data: null },                                                                       // companies mirror
+      { data: null, count: 5 },                                                             // deadlines count
+    ])
+
+    const response = await put({ org_number: '556012-5790' })
+    const { status, body } = await parseJsonResponse<{ data: { org_number: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.org_number).toBe('5560125790')
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ org_number: '5560125790' })
+    expect(findCall('companies', 'update')?.[0]).toEqual({ org_number: '5560125790' })
+  })
+
+  it('fixes a stored number with a wrong check digit', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true, org_number: '121212-1213' } },
+      { data: { org_number: '1212121213', entity_type: 'enskild_firma' } },
+      { data: { id: 's1', org_number: '1212121212' } },
+      { data: null },
+      { data: null, count: 5 },
+    ])
+
+    const response = await put({ org_number: '19121212-1212' })
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ org_number: '1212121212' })
+  })
+
+  it('refuses to replace a valid number (409) and writes nothing', async () => {
+    enqueueMany([{ data: { entity_type: 'aktiebolag', onboarding_complete: false, org_number: '556012-5790' } }])
+
+    const response = await put({ org_number: '202100-5489', city: 'Malmö' })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error).toBe('Företaget har redan ett giltigt organisationsnummer, och det kan inte ändras.')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+    expect(findCall('companies', 'update')).toBeUndefined()
+  })
+
+  it('refuses a number with a wrong check digit (400)', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: '' } },
+      { data: { org_number: null, entity_type: 'aktiebolag' } },
+    ])
+
+    const response = await put({ org_number: '556012-5791' })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/^Organisationsnumret är inte giltigt/)
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('refuses a personnummer for an aktiebolag (400)', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: null } },
+      { data: { org_number: null, entity_type: 'aktiebolag' } },
+    ])
+
+    const response = await put({ org_number: '121212-1212' })
+
+    expect(response.status).toBe(400)
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('a save that sends the stored value back changes nothing about it, valid or not', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true, org_number: 'saknas' } },
+      { data: { id: 's1', city: 'Malmö' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await put({ org_number: 'saknas', city: 'Malmö' })
+
+    expect(response.status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ city: 'Malmö' })
+    expect(findCall('companies', 'select')).toBeUndefined()
+  })
+
+  it('returns 404 when the company has no settings row', async () => {
+    enqueueMany([
+      { data: null },                                            // oldSettings: none
+      { data: { org_number: null, entity_type: 'aktiebolag' } }, // companies
+      { data: null, error: { code: 'PGRST116', message: 'no rows' } }, // update ... single
+    ])
+
+    const response = await put({ org_number: '556012-5790' })
+
+    expect(response.status).toBe(404)
+    expect(findCall('companies', 'update')).toBeUndefined()
+  })
+
+  it('returns 400 for an org number that is not a string', async () => {
+    const response = await put({ org_number: 5560125790 })
+    expect(response.status).toBe(400)
+  })
+})
+
+// PH 187 / crm#1303: the accounting method rule is the service's, so the
+// settings page gets the same one as the API and MCP doors.
+describe('PUT /api/settings: accounting method mid-year', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    auditInsert.mockResolvedValue({ error: null })
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    isAdminMock.mockResolvedValue(true)
+  })
+
+  const put = (body: Record<string, unknown>) =>
+    PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+  const PERIOD = { data: { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' } }
+
+  it('refuses a switch in a fiscal year with posted verifikat when no reason is given', async () => {
+    enqueueMany([
+      { data: { id: 's1', accounting_method: 'accrual' } }, // oldSettings
+      PERIOD,                                                // current fiscal year
+      { data: null, count: 0 },                              // open invoices without verifikat
+      { data: null, count: 0 },                              // open supplier invoices without verifikat
+      { data: null, count: 112 },                            // posted verifikat
+    ])
+    const response = await put({ accounting_method: 'cash' })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    expect(status).toBe(409)
+    expect(body.error).toContain('rättelse')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+    expect(auditInsert).not.toHaveBeenCalled()
+  })
+
+  it('saves a stated correction and records the reason in audit_log', async () => {
+    enqueueMany([
+      { data: { id: 's1', accounting_method: 'accrual' } },
+      PERIOD,
+      { data: null, count: 0 },                              // open invoices without verifikat
+      { data: null, count: 0 },                              // open supplier invoices without verifikat
+      { data: null, count: 112 },                            // posted verifikat
+      { data: [], count: 0 },                                // invoice-flow verifikat this year
+      { data: { id: 's1', accounting_method: 'cash' } },    // update ... returning
+      { data: null, count: 5 },                              // deadlines count
+    ])
+    const response = await put({ accounting_method: 'cash', accounting_method_correction_reason: 'Fel metod valdes vid inflyttningen' })
+    expect(response.status).toBe(200)
+    const update = findCall('company_settings', 'update')?.[0] as Record<string, unknown>
+    expect(update).toMatchObject({ accounting_method: 'cash', defer_invoice_booking: false })
+    expect(update).not.toHaveProperty('accounting_method_correction_reason')
+    expect(auditInsert).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'GUARD_BYPASSED',
+      user_id: 'user-1',
+      record_id: 's1',
+      new_state: expect.objectContaining({ guard: 'accounting_method_mid_year', from: 'accrual', to: 'cash' }),
+    }))
+  })
+
+  it('leaves an unchanged method alone: no fiscal year read, no record', async () => {
+    enqueueMany([
+      { data: { id: 's1', accounting_method: 'accrual' } },
+      { data: { id: 's1', accounting_method: 'accrual' } },
+      { data: null, count: 5 },
+    ])
+    const response = await put({ accounting_method: 'accrual', default_voucher_series: 'A' })
+    expect(response.status).toBe(200)
+    expect(findCall('fiscal_periods', 'select')).toBeUndefined()
+    expect(auditInsert).not.toHaveBeenCalled()
   })
 })

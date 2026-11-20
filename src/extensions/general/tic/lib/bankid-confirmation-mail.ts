@@ -110,7 +110,7 @@ export async function sendBankIdSignupConfirmation(
     actionUrl: buildConfirmationUrl(origin, link.properties.hashed_token),
   })
 
-  const result = await getEmailService().sendEmail({
+  const result = await (await getEmailService()).sendEmail({
     to: input.email,
     subject: mail.subject,
     html: mail.html,

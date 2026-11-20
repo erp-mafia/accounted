@@ -4,7 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateDeadlineSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-// Sparse update: every Create field, optional. Validated — the previous
+// Sparse update: every Create field, optional. Validated - the previous
 // implementation type-asserted the raw JSON, so malformed values reached
 // Postgres and malformed JSON crashed the handler.
 const UpdateDeadlineSchema = CreateDeadlineSchema.partial()
@@ -77,7 +77,7 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
       .single()
 
     if (error) {
-      // PGRST116 = zero rows — the deadline doesn't exist in this company.
+      // PGRST116 = zero rows - the deadline doesn't exist in this company.
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
       }
@@ -149,7 +149,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
-    // Zero rows = wrong id / another company's deadline — not a success.
+    // Zero rows = wrong id / another company's deadline - not a success.
     if (count === 0) {
       return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
     }

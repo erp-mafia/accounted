@@ -45,6 +45,7 @@ vi.mock('@/extensions/general/enable-banking/lib/api-client', async () => {
 
 import { REAUTH_REQUIRED_MESSAGE } from '@/extensions/general/enable-banking/lib/api-client'
 import { GET } from '../route'
+import { createCronRequest } from '@/tests/helpers'
 
 function makeClient(state: ClientState) {
   return {
@@ -52,7 +53,7 @@ function makeClient(state: ClientState) {
       let inIds: unknown[] | null = null
       let updatePayload: Record<string, unknown> | null = null
       const chain: Record<string, unknown> = {}
-      for (const method of ['select', 'not', 'order', 'limit']) chain[method] = vi.fn(() => chain)
+      for (const method of ['select', 'eq', 'not', 'order', 'limit']) chain[method] = vi.fn(() => chain)
       chain.in = vi.fn((col: string, values: unknown[]) => {
         if (col === 'id') inIds = values
         return chain
@@ -107,25 +108,39 @@ afterEach(() => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceKey
 })
 
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/extensions/enable-banking/health-probe/cron')
-}
-
 describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
-  it('refuses to run when the extension is not enabled', async () => {
+  it('answers 200 skipped when the extension is not enabled', async () => {
     mocks.registryGet.mockReturnValue(undefined)
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
-    expect(response.status).toBe(503)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(mocks.probeSessionHealth).not.toHaveBeenCalled()
+  })
+
+  it('stays home once the Enable Banking feed has ended: no probe, no write, no mail', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    try {
+      state.candidates = [connection()]
+      mocks.probeSessionHealth.mockResolvedValue('dead')
+
+      const response = await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
+
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({ sunset: true, candidates: 0, sessions: 0, probed: 0, probedDead: 0, probeResults: [] })
+      expect(mocks.probeSessionHealth).not.toHaveBeenCalled()
+      expect(state.updates).toEqual([])
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('expires a connection whose session the bank has killed', async () => {
     state.candidates = [connection()]
     mocks.probeSessionHealth.mockResolvedValue('dead')
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ probedDead: 1 })
@@ -144,7 +159,7 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
     ]
     mocks.probeSessionHealth.mockResolvedValue('dead')
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     expect(mocks.probeSessionHealth).toHaveBeenCalledTimes(1)
     await expect(response.json()).resolves.toMatchObject({ probedDead: 2 })
@@ -157,7 +172,7 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
     state.candidates = [connection({ status: 'pending_selection' })]
     mocks.probeSessionHealth.mockResolvedValue('dead')
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     expect(mocks.probeSessionHealth).toHaveBeenCalledWith('sess-1')
     expect(state.updates[0].payload).toMatchObject({ status: 'expired' })
@@ -169,7 +184,7 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
     state.candidates = [connection()]
     mocks.probeSessionHealth.mockResolvedValue('unknown')
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     expect(state.updates).toHaveLength(0)
   })
@@ -178,7 +193,7 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
     state.candidates = [connection()]
     mocks.probeSessionHealth.mockResolvedValue('alive')
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     expect(state.updates).toHaveLength(0)
   })
@@ -191,7 +206,7 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
       connection({ id: 'synced', last_synced_at: new Date(Date.now() - 60 * 60 * 1000).toISOString() }),
     ]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     expect(mocks.probeSessionHealth).not.toHaveBeenCalled()
   })
@@ -201,7 +216,7 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
       connection({ last_synced_at: new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString() }),
     ]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     expect(mocks.probeSessionHealth).toHaveBeenCalledTimes(1)
   })
@@ -214,7 +229,7 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
     ]
     mocks.probeSessionHealth.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce('dead')
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
     await expect(response.json()).resolves.toMatchObject({ probed: 2, probedDead: 1 })
     consoleError.mockRestore()

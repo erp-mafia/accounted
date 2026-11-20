@@ -49,7 +49,7 @@ const PERIOD_ID = '11111111-1111-4111-8111-111111111111'
 const REPORT = {
   generated_at: '2026-09-25T10:00:00Z',
   app_version: 'abc1234',
-  company: { name: 'Väla Redovisning AB', org_number: '5592383508' },
+  company: { name: 'Exempel Redovisning AB', org_number: '5577889909' },
   period: { id: PERIOD_ID, name: 'Räkenskapsår 2026', start: '2026-01-01', end: '2026-12-31', is_closed: false, locked_at: null },
 }
 

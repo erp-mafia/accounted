@@ -2,7 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatRowAmount } from '@/lib/utils'
 import type { KPIReport } from '@/types'
 import { monthsTableRows } from './months-table'
 
@@ -21,12 +21,12 @@ export function KPIMonthsTable({ report }: { report: KPIReport }) {
   return (
     <div>
       <div className="mb-1 flex items-center gap-3 px-1">
-        <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-xs text-muted-foreground">
           {t('trend_title')}
         </h2>
         <div className="h-px flex-1 bg-border/60" />
       </div>
-      <div className="overflow-x-auto">
+      <div className="-mx-2 overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
@@ -38,12 +38,12 @@ export function KPIMonthsTable({ report }: { report: KPIReport }) {
           </thead>
           <tbody>
             {rows.map((m) => (
-              <tr key={m.label} className={cn(m.inactive && 'text-muted-foreground/60')}>
+              <tr key={m.label} className={cn(m.inactive && 'text-muted-foreground')}>
                 <td className={cn(TD_CLASS, 'whitespace-nowrap')}>{m.label}</td>
-                <td className={cn(TD_CLASS, numeric)}>{formatCurrency(m.income)}</td>
-                <td className={cn(TD_CLASS, numeric)}>{formatCurrency(m.expenses)}</td>
+                <td className={cn(TD_CLASS, numeric)}>{formatRowAmount(m.income)}</td>
+                <td className={cn(TD_CLASS, numeric)}>{formatRowAmount(m.expenses)}</td>
                 <td className={cn(TD_CLASS, numeric, m.net < 0 && !m.inactive && 'text-destructive')}>
-                  {formatCurrency(m.net)}
+                  {formatRowAmount(m.net)}
                 </td>
               </tr>
             ))}

@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { huntCompany, resolveAllowlist } from '@/lib/receipt-hunt/hunt'
-
-ensureInitialized()
 
 /**
  * GET /api/receipt-hunt/cron, daily 05:30 UTC.

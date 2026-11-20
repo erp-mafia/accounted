@@ -20,7 +20,6 @@ vi.mock('../lib/api-client', async (importOriginal) => {
     startAuthorization: (...args: unknown[]) => mockStartAuthorization(...args),
     // index.ts resolves the pinned auth method (with metadata for logging)
     // through the details variant; both point at one mock for simplicity.
-    getPreferredAuthMethod: (...args: unknown[]) => mockGetPreferredAuthMethod(...args),
     getPreferredAuthMethodDetails: (...args: unknown[]) => mockGetPreferredAuthMethod(...args),
   }
 })
@@ -35,9 +34,17 @@ vi.mock('@/lib/branding/resolve', () => ({
 // step in disconnect-route.test.ts. Here only the decision to remove matters.
 vi.mock('../lib/retire-connection', () => ({ retireBankConnection: vi.fn() }))
 
+// Whether Open Payments already reads the bank is its own lookup, covered in
+// lib/__tests__/open-payments-sibling.test.ts. Here: none, unless a test says.
+vi.mock('../lib/open-payments-sibling', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/open-payments-sibling')>()
+  return { ...actual, findOpenPaymentsSibling: vi.fn() }
+})
+
 import { enableBankingExtension } from '../index'
 import { deleteSession } from '../lib/api-client'
 import { retireBankConnection } from '../lib/retire-connection'
+import { findOpenPaymentsSibling } from '../lib/open-payments-sibling'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -135,19 +142,19 @@ describe('POST /connect credential prefill', () => {
         { name: 'companyId', required: true, template: '^\\d{10}$' },
       ],
     })
-    const ctx = ctxWithCompany('556809-8239')
+    const ctx = ctxWithCompany('554455-6672')
     const response = await connectRoute().handler(makeConnectRequest(), ctx)
     expect(response.status).toBe(200)
     expect(mockStartAuthorization).toHaveBeenCalledTimes(1)
     const args = mockStartAuthorization.mock.calls[0]
     expect(args[5]).toBe('BANKID')
-    expect(args[7]).toEqual({ companyId: '5568098239' })
+    expect(args[7]).toEqual({ companyId: '5544556672' })
     // The value never reaches the log line; only which keys were sent.
     const started = (ctx.log.info as ReturnType<typeof vi.fn>).mock.calls.find(
       (c) => String(c[0]).includes('Starting bank connection'),
     )
     expect(started?.[1]).toMatchObject({ credentials_prefilled: ['companyId'] })
-    expect(JSON.stringify(started?.[1])).not.toContain('5568098239')
+    expect(JSON.stringify(started?.[1])).not.toContain('5544556672')
   })
 
   it('sends no companyId for a sole trader: the person types it on the bank page (Nordea business)', async () => {
@@ -165,7 +172,7 @@ describe('POST /connect credential prefill', () => {
 
   it('sends no credentials, and never reads the company, when the method declares none', async () => {
     mockGetPreferredAuthMethod.mockResolvedValue({ name: 'BANKID', approach: 'DECOUPLED', hidden_method: true })
-    const ctx = ctxWithCompany('556809-8239')
+    const ctx = ctxWithCompany('554455-6672')
     const response = await connectRoute().handler(makeConnectRequest(), ctx)
     expect(response.status).toBe(200)
     expect(mockStartAuthorization.mock.calls[0][7]).toBeUndefined()
@@ -747,5 +754,68 @@ describe('POST /connect existing-connection guard', () => {
       )
       expect(guardIn).toBeUndefined()
     }
+  })
+})
+
+describe('POST /connect when Open Payments already reads the bank', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireCapability).mockResolvedValue(null)
+    mockGetPreferredAuthMethod.mockResolvedValue(undefined)
+    mockStartAuthorization.mockResolvedValue({ url: 'https://bank.example/auth', authorization_id: 'auth-1' })
+  })
+
+  function freshConnect(body: Record<string, unknown>) {
+    return new Request('https://test.local/api/extensions/ext/enable-banking/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('refuses before the bank login and names the connection that holds the bank', async () => {
+    vi.mocked(findOpenPaymentsSibling).mockResolvedValue({ id: 'op-conn', bank_name: 'Länsförsäkringar' })
+    const ctx = makeContext(() => makeChain({ data: null }))
+
+    const response = await connectRoute().handler(
+      freshConnect({ aspsp_name: 'Länsförsäkringar Bank', aspsp_country: 'SE', psu_type: 'business' }),
+      ctx,
+    )
+
+    expect(response.status).toBe(409)
+    const body = (await response.json()) as { error: string; code: string; existing_connection_id: string }
+    expect(body.code).toBe('OPEN_PAYMENTS_CONNECTION_EXISTS')
+    expect(body.existing_connection_id).toBe('op-conn')
+    expect(body.error).toContain('Länsförsäkringar')
+    expect(body.error).toContain('Koppla bort')
+    expect(findOpenPaymentsSibling).toHaveBeenCalledWith(ctx.supabase, 'company-1', 'Länsförsäkringar Bank')
+    expect(mockStartAuthorization).not.toHaveBeenCalled()
+    // Nothing was written: no pending row for an attempt that never starts.
+    expect(ctx.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('force_new does not pass it: the callback would refuse the accounts all the same', async () => {
+    vi.mocked(findOpenPaymentsSibling).mockResolvedValue({ id: 'op-conn', bank_name: 'Länsförsäkringar' })
+    const ctx = makeContext(() => makeChain({ data: null }))
+
+    const response = await connectRoute().handler(
+      freshConnect({ aspsp_name: 'Länsförsäkringar Bank', aspsp_country: 'SE', force_new: true }),
+      ctx,
+    )
+
+    expect(response.status).toBe(409)
+    expect(mockStartAuthorization).not.toHaveBeenCalled()
+  })
+
+  it('a reconnect of an Enable Banking row is not asked: that row already holds its own accounts', async () => {
+    vi.mocked(findOpenPaymentsSibling).mockResolvedValue({ id: 'op-conn', bank_name: 'Länsförsäkringar' })
+    const ctx = makeContext(() =>
+      makeChain({ data: { id: 'eb-conn', bank_name: 'Länsförsäkringar Bank', provider: 'lansforsakringar-bank-se', session_id: null, psu_type: 'business' } }),
+    )
+
+    const response = await connectRoute().handler(freshConnect({ connection_id: 'eb-conn' }), ctx)
+
+    expect(findOpenPaymentsSibling).not.toHaveBeenCalled()
+    expect(response.status).not.toBe(409)
   })
 })

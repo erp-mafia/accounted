@@ -1,6 +1,7 @@
 import type { ArsredovisningData } from './types'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import type { AccountingFramework } from '@/types'
+import type { AuditorOpinion } from './workflow-schemas'
 
 export const ANNUAL_REPORT_SCHEMA_VERSION = '1.0' as const
 
@@ -30,9 +31,17 @@ export interface AnnualReportProfile {
   has_convertible_debt: boolean | null
   building_revenue_share_pct: number | null
   has_material_deferred_tax: boolean | null
+  /** K3: the framework of the previous årsredovisning when Accounted cannot tell (none: no previous one). */
+  previous_year_framework: 'k2' | 'k3' | 'none' | null
+  /** K3: temporary differences other than obeskattade reserver (K3 29). */
+  has_other_temporary_differences: boolean | null
   reporting_currency: 'SEK' | 'EUR'
   auditor_report_required: boolean | null
   auditor_report_included: boolean
+  /** Registered revisionsbolag elected as revisor; null for a natural person. */
+  auditor_firm_name: string | null
+  /** What the revisionsberättelse says, for the revisorspåteckning; null until answered. */
+  auditor_opinion: AuditorOpinion | null
   dividend_prudence_confirmed: boolean | null
   narrative_confirmed_at: string | null
   k2_assessment_confirmed_at: string | null
@@ -155,9 +164,13 @@ export function emptyAnnualReportProfile(
     has_convertible_debt: null,
     building_revenue_share_pct: null,
     has_material_deferred_tax: null,
+    previous_year_framework: null,
+    has_other_temporary_differences: null,
     reporting_currency: 'SEK',
     auditor_report_required: null,
     auditor_report_included: false,
+    auditor_firm_name: null,
+    auditor_opinion: null,
     dividend_prudence_confirmed: null,
     narrative_confirmed_at: null,
     k2_assessment_confirmed_at: null,

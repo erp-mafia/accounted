@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useFormat } from '@/lib/hooks/use-format'
+import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -23,6 +24,11 @@ import { OptRow, OptRows, Sentence } from '../ui/Sentence'
 import { VerdictList, Wait, type Verdict } from '../ui/Verdicts'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
+import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
+import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const EB = '/api/extensions/ext/enable-banking'
 const POPULAR = ['Swedbank', 'SEB', 'Nordea', 'Handelsbanken', 'Danske Bank', 'Länsförsäkringar', 'Skandiabanken', 'ICA Banken']
@@ -41,10 +47,6 @@ interface SyncSummary {
   requested_from: string
   returned_min_date: string | null
   returned_max_date: string | null
-}
-
-function isoToday(): string {
-  return new Date().toISOString().slice(0, 10)
 }
 
 /**
@@ -66,6 +68,13 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const supabase = useMemo(() => createClient(), [])
 
   const [attn, setAttn] = useState<string | null>(landedError)
+  // Bank reading through Open Payments, when switched on for the company,
+  // replaces the Enable Banking popup: the Koppla banken dialog runs here
+  // and the step reads its verdict from the findings once the bank is live.
+  const openPayments = useOpenPaymentsAvailability()
+  const bankFlow = useBankConnectFlow('onboarding')
+  // Back from a bank that signs on its own page (?station=bank&bank_connect=<id>): reopen the flow, once.
+  useBankConnectResume(bankFlow, openPayments.status === 'available')
   const [banks, setBanks] = useState<Bank[] | null>(null)
   const [psuType, setPsuType] = useState<'personal' | 'business' | undefined>(undefined)
   const [more, setMore] = useState(false)
@@ -136,38 +145,32 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   // page posts its outcome back and closes itself, so this page never
   // navigates. A blocked popup falls back to the full-page flow, which the
   // first-session gate carries back here with ?select_accounts=.
-  const popupRef = useRef<Window | null>(null)
   const popupWatch = useRef<number | null>(null)
   // The popup posts and then closes: the close watcher must not undo an outcome that already arrived.
   const outcomeRef = useRef(false)
   const stopPopupWatch = useCallback(() => {
     if (popupWatch.current) window.clearInterval(popupWatch.current)
     popupWatch.current = null
-    popupRef.current = null
   }, [])
   useEffect(() => stopPopupWatch, [stopPopupWatch])
 
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
-      const data = event.data as { type?: string; url?: string } | null
-      if (data?.type !== 'enable-banking-connected' || typeof data.url !== 'string') return
-      outcomeRef.current = true
-      stopPopupWatch()
-      let target: URL
-      try { target = new URL(data.url, window.location.origin) } catch { return }
-      const id = target.searchParams.get('select_accounts')
-      const bankError = target.searchParams.get('bank_error')
-      if (id) {
-        dispatch({ type: 'BANK_AUTHED', name: state.bankName ?? '', connectionId: id })
-      } else {
-        setAttn(bankError || t('bank_connect_failed'))
-        dispatch({ type: 'BANK_PICK_FAILED' })
-      }
+  // Only the bank popup pickBank opened is heard; it stays set after the
+  // popup closes so a message that lands after the close still counts.
+  const popupRef = useOAuthPopup<{ type?: string; url?: string }>((data) => {
+    if (data?.type !== 'enable-banking-connected' || typeof data.url !== 'string') return
+    outcomeRef.current = true
+    stopPopupWatch()
+    let target: URL
+    try { target = new URL(data.url, window.location.origin) } catch { return }
+    const id = target.searchParams.get('select_accounts')
+    const bankError = target.searchParams.get('bank_error')
+    if (id) {
+      dispatch({ type: 'BANK_AUTHED', name: state.bankName ?? '', connectionId: id })
+    } else {
+      setAttn(bankError || t('bank_connect_failed'))
+      dispatch({ type: 'BANK_PICK_FAILED' })
     }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [dispatch, state.bankName, stopPopupWatch, t])
+  })
 
   async function pickBank(b: Bank) {
     setAttn(null)
@@ -281,7 +284,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   }, [tickedList, claims, picks, chartNumbers])
   const chartNames = useMemo(() => Object.fromEntries(chart.map((a) => [a.account_number, a.account_name])), [chart])
 
-  const today = isoToday()
+  const today = todayIsoStockholm()
   const fiscalYearStart = useMemo(() => {
     const cur = periods.find((p) => p.period_start <= today && p.period_end >= today)
     return cur?.period_start ?? periods[periods.length - 1]?.period_start ?? null
@@ -383,7 +386,14 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const bankVerdicts = useMemo<Verdict[]>(() => {
     if (!findings?.bank.connected) return []
     const k = findings.bank
-    const out: Verdict[] = [{ tone: 'ok', text: t('v_bank_connected', { bank: k.bankName ?? t('answer_connected'), count: k.transactions }) }]
+    // A connection that has delivered nothing is no success to tick off: say
+    // so instead of "kopplad · 0 transaktioner hämtade" in the ok tone (PH 195).
+    const bank = k.bankName ?? t('answer_connected')
+    const out: Verdict[] = [
+      k.transactions > 0
+        ? { tone: 'ok', text: t('v_bank_connected', { bank, count: k.transactions }) }
+        : { tone: 'warn', text: t('v_bank_connected_empty', { bank }), href: '/import?mode=bank' },
+    ]
     if (k.sweep) {
       out.push({ tone: 'ok', text: t('v_bank_matched', { count: k.sweep.auto_linked }) })
       if (k.sweep.unmatched + k.sweep.suggested > 0) out.push({ tone: 'warn', text: t('v_bank_review', { count: k.sweep.unmatched + k.sweep.suggested }), href: '/transactions' })
@@ -408,6 +418,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       <div className="jny-qstep" style={{ textAlign: 'center' }}>
         <h1 className="jny-qtitle"><InkText text={title} /></h1>
         {phase === 'authed' ? <p className="jny-qsub">{t('bank_sub_authed')}</p> : null}
+        {/* What connecting gives, before the choice: the way out below says what it costs. */}
+        {phase === 'pick' && !alreadyConnected && (flags.hasBanking || openPayments.status === 'available') ? <p className="jny-qsub">{t('bank_sub')}</p> : null}
         {attn ? <p className="jny-attn" style={{ margin: '0 0 16px' }}>{attn}</p> : null}
       </div>
 
@@ -416,8 +428,20 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'pick' && !alreadyConnected ? (
         !findings ? (
           <div className="jny-qactions is-stack">
-            {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
+            {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
+          </div>
+        ) : openPayments.status === 'loading' ? (
+          <Wait text={t('bank_loading')} height={96} />
+        ) : openPayments.status === 'available' ? (
+          <div className="jny-qactions is-stack">
+            <Button size="lg" onClick={() => bankFlow.open('new')}>
+              {t('bank_open_flow')}
+            </Button>
+            <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_open_flow_hint')}</p>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+              {t('bank_manual')}
+            </Button>
           </div>
         ) : !flags.hasBanking ? (
           <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_unavailable')}</p>
@@ -431,7 +455,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             </div>
             <div className="bank-picker-actions">
               {orderedBanks.length > PICK_COUNT || query ? (
-                <Button variant="ghost" size="sm" className="text-muted-foreground" aria-expanded={more || !!query.trim()} aria-controls="onboarding-bank-list" onClick={() => { setMore(!more && !query.trim()); setQuery('') }}>
+                <Button variant="ghost" className="text-muted-foreground" aria-expanded={more || !!query.trim()} aria-controls="onboarding-bank-list" onClick={() => { setMore(!more && !query.trim()); setQuery('') }}>
                   {more || query.trim() ? t('bank_less') : t('bank_more')}
                 </Button>
               ) : null}
@@ -445,9 +469,9 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             </div>
             {shownBanks.length === 0 ? <p className="jny-qsub">{t('bank_no_matches')}</p> : null}
             {aliasHint ? <p className="jny-qsub">{t('bank_alias_hint', { product: aliasHint.product, bank: aliasHint.bank })}</p> : null}
-            {/* The way out sits under the banks, quiet: connecting is the point of the step (founder direction 2026-09-14). */}
+            {/* The way out sits under the banks, quiet: connecting is the point of the step (product direction 2026-09-14). */}
             <div className="bank-exit">
-              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+              <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
                 {t('bank_manual')}
               </Button>
             </div>
@@ -604,6 +628,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       </div>
       ) : null}
 
+      <BankConnectDialog flow={bankFlow} onConnected={() => void loadFindings()} />
+
       {/* One column: the primary alone, Hoppa över quietly under it. Tillbaka lives at the top of the act. */}
       <div className="jny-qactions is-stack">
         {(phase === 'connected' && landed) || alreadyConnected ? (
@@ -617,7 +643,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
           </Button>
         ) : null}
         {(phase === 'pick' && !alreadyConnected && (!flags.hasBanking || banks === null)) || phase === 'authed' ? (
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
             {t('bank_skip')}
           </Button>
         ) : null}

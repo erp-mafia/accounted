@@ -189,7 +189,7 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
 
 describe('DELETE usage-check query shape', () => {
   it('must not filter invoice_items by company_id (column does not exist)', async () => {
-    // Regression pin for the odinaero support case: invoice_items has no
+    // Regression pin for a support case: invoice_items has no
     // company_id column, so filtering on it made PostgREST answer 42703 and
     // the route mapped that to ARTICLE_DELETE_FAILED for EVERY delete. The
     // queued supabase mock swallows chained filters, so no behavioral mock

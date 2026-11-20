@@ -6,9 +6,8 @@ import {
 } from '@/lib/core/bookkeeping/year-end-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { linkBasisColumns } from '@/lib/links/stamp'
+import { bolagsskattOnLedger } from '@/lib/bokslut/dispositions-proposal-builder'
 
 /** GET: validate readiness + preview the year-end entries. */
 export const GET = withRouteContext(
@@ -23,6 +22,18 @@ export const GET = withRouteContext(
         validateYearEndReadiness(supabase, companyId!, user.id, id),
         previewYearEndClosing(supabase, companyId!, user.id, id),
       ])
+      // Real state only (accounted#180): "no tax booked" is for a profit year
+      // whose ledger, as it stands, carries bolagsskatt. A failed check keeps
+      // the line: it is advisory and never blocks Verkställ.
+      if (preview.bolagsskattMissing) {
+        try {
+          if ((await bolagsskattOnLedger(supabase, companyId!, id)) === 0) {
+            preview.bolagsskattMissing = false
+          }
+        } catch (taxError) {
+          opLog.warn('bolagsskatt check for the year-end preview failed', { error: String(taxError) })
+        }
+      }
       return NextResponse.json({ data: { validation, preview } })
     } catch (err) {
       opLog.error('year-end preview failed', err as Error)
@@ -44,7 +55,14 @@ export const POST = withRouteContext(
     const opLog = log.child({ periodId: id })
 
     try {
-      const result = await executeYearEndClosing(supabase, companyId!, user.id, id)
+      const result = await executeYearEndClosing(
+        supabase,
+        companyId!,
+        user.id,
+        id,
+        // The posting port's events, while POSTING_EVENTS is on: the person closed the year.
+        () => ({ linkBasis: linkBasisColumns('user_created') }),
+      )
       return NextResponse.json({ data: result })
     } catch (err) {
       const message = err instanceof Error ? err.message : ''

@@ -14,7 +14,6 @@
  */
 
 import { z } from 'zod'
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -22,9 +21,9 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateSupplierSchema } from '@/lib/api/schemas'
-import { eventBus } from '@/lib/events'
-import type { Logger } from '@/lib/logger'
-import type { Supplier } from '@/types'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import type { OperationContext } from '@/lib/operations/types'
+import { createSupplier } from '@/lib/suppliers/create-supplier'
 
 const BulkCreateRequest = z.object({
   suppliers: z.array(CreateSupplierSchema).min(1).max(50),
@@ -52,9 +51,6 @@ const BulkCreateResponse = z.object({
     failed: z.number().int(),
   }),
 })
-
-const SUPPLIER_RESPONSE_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, iban, bic, default_expense_account, default_payment_terms, default_currency, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'suppliers.bulk-create',
@@ -107,127 +103,42 @@ interface ResultItem {
   error?: { code: string; message: string; details?: unknown }
 }
 
+/**
+ * One item through the register's one create path (createSupplier,
+ * lib/suppliers/create-supplier.ts), the same insert as POST /suppliers, the
+ * dashboard and the agent approval. This loop used to insert its own copy,
+ * which dropped clearing_number and account_number and stored '' for an
+ * empty field.
+ */
 async function createOneSupplier(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+  ctx: OperationContext,
   index: number,
   input: z.infer<typeof CreateSupplierSchema>,
   dryRun: boolean,
-  log: Logger,
 ): Promise<ResultItem> {
-  if (dryRun) {
-    return {
-      ok: true,
-      request_index: index,
-      data: {
-        preview: {
-          id: null,
-          name: input.name,
-          supplier_type: input.supplier_type,
-          email: input.email ?? null,
-          phone: input.phone ?? null,
-          address_line1: input.address_line1 ?? null,
-          address_line2: input.address_line2 ?? null,
-          postal_code: input.postal_code ?? null,
-          city: input.city ?? null,
-          country: input.country ?? 'SE',
-          org_number: input.org_number ?? null,
-          vat_number: input.vat_number ?? null,
-          bankgiro: input.bankgiro ?? null,
-          plusgiro: input.plusgiro ?? null,
-          bank_account: input.bank_account ?? null,
-          iban: input.iban ?? null,
-          bic: input.bic ?? null,
-          default_expense_account: input.default_expense_account ?? null,
-          default_payment_terms: input.default_payment_terms ?? 30,
-          default_currency: input.default_currency ?? 'SEK',
-          notes: input.notes ?? null,
-          archived_at: null,
-          created_at: null,
-          updated_at: null,
-        },
-      },
-    }
-  }
-
-  const { data, error } = await supabase
-    .from('suppliers')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      name: input.name,
-      supplier_type: input.supplier_type,
-      email: input.email ?? null,
-      phone: input.phone ?? null,
-      address_line1: input.address_line1 ?? null,
-      address_line2: input.address_line2 ?? null,
-      postal_code: input.postal_code ?? null,
-      city: input.city ?? null,
-      country: input.country ?? 'SE',
-      org_number: input.org_number ?? null,
-      vat_number: input.vat_number ?? null,
-      bankgiro: input.bankgiro ?? null,
-      plusgiro: input.plusgiro ?? null,
-      bank_account: input.bank_account ?? null,
-      iban: input.iban ?? null,
-      bic: input.bic ?? null,
-      default_expense_account: input.default_expense_account ?? null,
-      default_payment_terms: input.default_payment_terms ?? 30,
-      default_currency: input.default_currency ?? 'SEK',
-      notes: input.notes ?? null,
-    })
-    .select(SUPPLIER_RESPONSE_COLUMNS)
-    .single()
-
-  if (error) {
-    if (error.code === '23505') {
-      return {
-        ok: false,
-        request_index: index,
-        error: {
-          code: 'SUPPLIER_DUPLICATE_ORG_NUMBER',
-          message: 'A supplier with this org_number already exists in this company.',
-          details: { field: 'org_number' },
-        },
-      }
-    }
-    log.error('bulk-create: supplier insert failed', error, {
-      request_index: index,
-      companyId,
-      pgCode: error.code,
-    })
+  const outcome = await createSupplier(ctx, input, { dryRun })
+  if (!outcome.ok) {
     return {
       ok: false,
       request_index: index,
       error: {
-        code: 'SUPPLIER_CREATE_FAILED',
-        message: 'Supplier insert failed.',
-        details: { pg_code: error.code },
+        code: outcome.code,
+        message: getErrorEntry(outcome.code)?.message_en ?? outcome.code,
+        details:
+          outcome.code === 'SUPPLIER_CREATE_FAILED'
+            ? { pg_code: (outcome.error as { code?: string } | undefined)?.code ?? null }
+            : outcome.details,
       },
     }
   }
-
-  try {
-    await eventBus.emit({
-      type: 'supplier.created',
-      payload: {
-        supplier: {
-          ...(data as Record<string, unknown>),
-          user_id: userId,
-          company_id: companyId,
-        } as unknown as Supplier,
-        companyId,
-        userId,
-      },
-    })
-  } catch (err) {
-    log.warn('bulk-create: supplier.created emit failed', err as Error, {
+  if (outcome.dryRun) {
+    return {
+      ok: true,
       request_index: index,
-    })
+      data: { preview: { id: null, ...outcome.preview, archived_at: null, created_at: null, updated_at: null } },
+    }
   }
-
-  return { ok: true, request_index: index, data }
+  return { ok: true, request_index: index, data: outcome.data }
 }
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
@@ -264,13 +175,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const results: ResultItem[] = []
     for (let i = 0; i < body.suppliers.length; i++) {
       const item = await createOneSupplier(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
+        { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
         i,
         body.suppliers[i],
         ctx.dryRun,
-        ctx.log,
       )
       results.push(item)
     }

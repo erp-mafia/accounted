@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import {
   buildSalaryPaymentFile,
   type SalaryPaymentFileError,
 } from '@/lib/salary/payment/build-payment-file'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
+import { SALARY_IN_BANK_PAYMENT_FILE_SV } from '@/lib/salary/payment/in-bank-payment'
+import { CORRECTION_NOTHING_TO_PAY_SV } from '@/lib/salary/payment/payable'
 
 /**
  * Generate Bankgirot LB-fil for a salary run.
@@ -26,7 +26,7 @@ ensureInitialized()
 // The settings overview shows a bankgiro from the Bolagsverket snapshot,
 // which is display data only; point at the field this route reads.
 const BANKGIRO_MISSING_MESSAGE =
-  'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa Bankgirot LB-fil.'
+  'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturor för att skapa Bankgirot LB-fil.'
 
 function legacyError(result: SalaryPaymentFileError): NextResponse {
   const stage = result.code === 'DB_ERROR' ? result.stage : undefined
@@ -44,6 +44,10 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
         { error: 'Bankgironumret i företagsinställningar är ogiltigt (felaktig kontrollsiffra).' },
         { status: 400 }
       )
+    case 'IN_BANK_PAYMENT':
+      return NextResponse.json({ error: SALARY_IN_BANK_PAYMENT_FILE_SV }, { status: 409 })
+    case 'NOTHING_TO_PAY':
+      return NextResponse.json({ error: CORRECTION_NOTHING_TO_PAY_SV }, { status: 400 })
     case 'NO_EMPLOYEES':
       return NextResponse.json({ error: 'Inga anställda i lönekörningen' }, { status: 400 })
     case 'EMPLOYEE_BANK_MISSING':
@@ -90,12 +94,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // ISO 8859-1 encoding: re-encode the JS string to Latin-1 bytes.
     const buffer = Buffer.from(result.content, 'latin1')
 
-    return new Response(buffer, {
-      headers: {
-        'Content-Type': 'text/plain; charset=iso-8859-1',
-        'Content-Disposition': `attachment; filename="${result.filename}"`,
-      },
-    })
+    return fileResponse(buffer, { filename: result.filename, contentType: 'text/plain; charset=iso-8859-1' })
   },
   { requireWrite: true },
 )

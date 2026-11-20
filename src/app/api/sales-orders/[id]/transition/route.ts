@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SalesOrderTransitionSchema } from '@/lib/api/schemas'
 import { transitionSalesOrder } from '@/lib/sales-orders/transitions'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
-
-ensureInitialized()
 
 /** POST /api/sales-orders/[id]/transition: confirm | cancel | reopen. */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(

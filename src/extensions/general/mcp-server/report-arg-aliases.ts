@@ -1,26 +1,32 @@
 /**
- * Argument aliases for the read-only report tools.
+ * Argument aliases for read-only tools.
  *
- * The report tools name the same idea differently (period_id vs the
+ * The read tools name the same idea differently (period_id vs the
  * fiscal_period_id agents guess; from_date on the income statement, date_from
- * on query_journal), and prod telemetry shows a steady stream of calls
- * rejected for exactly those names. For READ-ONLY report tools a known
- * synonym is mapped to the tool's own parameter before the unknown-argument
- * guard runs. Nothing changes in tools/list: schemas stay strict and only
- * advertise the canonical names.
+ * on query_journal, since on the missing-underlag list), and prod telemetry
+ * shows a steady stream of calls rejected for exactly those names. For
+ * READ-ONLY tools a known synonym is mapped to the tool's own parameter
+ * before the unknown-argument guard runs. Nothing changes in tools/list:
+ * schemas stay strict and only advertise the canonical names.
  *
- * Deliberately narrow: only read-only report tools (a wrong guess can at
- * worst return the wrong report, never write), only explicit per-tool
- * mappings (no fuzzy matching), and an alias that overlaps a parameter the
- * caller also sent is refused rather than resolved, so an ambiguous call
- * never silently picks a side.
+ * Covered: the report tools (income statement, balance sheet, trial balance,
+ * general ledger, KPI report, query_journal) and, from the 2026-10 autopsy
+ * of agent sessions, list_verifikat_without_documents, list_accounts,
+ * load_skill and get_record; from the 2026-11 telemetry, get_measure.
+ *
+ * Deliberately narrow: only read-only tools (a wrong guess can at worst
+ * answer the wrong question, never write), only explicit per-tool mappings
+ * (no fuzzy matching), and an alias that overlaps a parameter the caller
+ * also sent is refused rather than resolved, so an ambiguous call never
+ * silently picks a side.
  *
  * A mapping must never turn a loud rejection into a silent wrong answer. An
  * alias whose value the tool would not read the way the caller meant (a
- * voucher "A12B", a ledger account "19" fanned out to both range bounds)
- * therefore has a value guard: the rule's `map` returns null and the alias
- * stays in the arguments, so the unknown-parameter guard rejects the call
- * with a "Did you mean" hint instead.
+ * voucher "A12B", a ledger account "19" fanned out to both range bounds, a
+ * record type that names no record kind) therefore has a value guard: the
+ * rule's `map` returns null and the alias stays in the arguments, so the
+ * unknown-parameter guard rejects the call with a "Did you mean" hint
+ * instead.
  *
  * Every other tool gets suggestArgKey instead: the unknown-parameter error
  * names the parameter the caller most likely meant, and never runs the call.
@@ -31,12 +37,19 @@ interface AliasRule {
   /** Every canonical key this alias may write (the tests check each is published). */
   to: readonly string[]
   /**
-   * Value guard and transform in one: the canonical keys and values to write,
-   * or null when the value has a shape this alias cannot map safely. Null
-   * leaves the alias in the arguments, where the unknown-parameter guard
-   * rejects it. Default: the value unchanged under every key in `to`.
+   * Sibling keys the mapping reads beside the alias, consumed with it when
+   * the rule maps: get_record's `type` next to `id` names the record kind.
+   * Never a published parameter (the tests check).
    */
-  map?: (value: unknown) => Record<string, unknown> | null
+  reads?: readonly string[]
+  /**
+   * Value guard and transform in one: the canonical keys and values to write,
+   * or null when the value (with the siblings it reads) has a shape this
+   * alias cannot map safely. Null leaves the alias and its siblings in the
+   * arguments, where the unknown-parameter guard rejects them. Default: the
+   * value unchanged under every key in `to`.
+   */
+  map?: (value: unknown, args: Readonly<Record<string, unknown>>) => Record<string, unknown> | null
 }
 
 /** A single ledger account, as the string the ledger compares: "1930". */
@@ -76,6 +89,47 @@ function mapVoucherNumber(value: unknown): Record<string, unknown> | null {
   return { voucher_series: ref[1].toUpperCase(), voucher_number_from: n, voucher_number_to: n }
 }
 
+const VOUCHER: AliasRule = {
+  to: ['voucher_series', 'voucher_number_from', 'voucher_number_to'],
+  map: mapVoucherNumber,
+}
+
+/**
+ * A skill slug sent as name or skill. Never a private own/<uuid> slug: the
+ * dispatcher sets the scope a load_skill call needs (agent:read for own/)
+ * from `slug` before aliases apply, so a mapped own/ slug would skip that
+ * check. Sent as slug, the dispatcher checks it like any other.
+ */
+function mapSkillSlug(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'string' && !value.trim().startsWith('own/') ? { slug: value } : null
+}
+
+const RECORD_KINDS = new Set(['document', 'agreement', 'party', 'journal_entry', 'fact'])
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const RECORD_TYPE_KEYS = ['type', 'record_type'] as const
+
+/**
+ * A record's id under its own name: {type: "document", id} is the record_ref
+ * "document:<id>". An id sent alone stays as it is (a uuid, whose kind
+ * gnubok_get_record looks up, or a whole record_ref). A type that names no
+ * record kind, both type keys, or an id that is neither is left for the
+ * guard.
+ */
+function mapRecordId(value: unknown, args: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+  if (typeof value !== 'string') return null
+  const id = value.trim()
+  const typeKeys = RECORD_TYPE_KEYS.filter((key) => Object.hasOwn(args, key))
+  if (typeKeys.length === 0) {
+    const [kind, refId] = id.split(':')
+    return UUID_RE.test(id) || (RECORD_KINDS.has(kind) && UUID_RE.test(refId ?? '')) ? { record_ref: id } : null
+  }
+  const kind = args[typeKeys[0]]
+  const normalized = typeof kind === 'string' ? kind.trim().toLowerCase() : ''
+  return typeKeys.length === 1 && UUID_RE.test(id) && RECORD_KINDS.has(normalized)
+    ? { record_ref: `${normalized}:${id}` }
+    : null
+}
+
 const PERIOD = { fiscal_period_id: { to: ['period_id'] } }
 
 export const REPORT_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string, AliasRule>>>> = {
@@ -99,6 +153,10 @@ export const REPORT_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string,
   },
   gnubok_get_general_ledger: {
     ...PERIOD,
+    date_from: { to: ['from_date'] },
+    start_date: { to: ['from_date'] },
+    date_to: { to: ['to_date'] },
+    end_date: { to: ['to_date'] },
     // Fanned out to both bounds, which the ledger compares as strings: only
     // an exact account is safe. "19" or "1930 Företagskonto" would return an
     // empty ledger instead of the account that was meant.
@@ -128,17 +186,61 @@ export const REPORT_ARG_ALIASES: Readonly<Record<string, Readonly<Record<string,
     to_date: { to: ['date_to'] },
     end_date: { to: ['date_to'] },
     query: { to: ['text'] },
+    q: { to: ['text'] },
     search: { to: ['text'] },
     search_text: { to: ['text'] },
     // Passed through unchanged: `accounts` already reads a string, a
     // comma-separated list, a number or an array, and rejects anything else.
     account_number: { to: ['accounts'] },
     account: { to: ['accounts'] },
-    voucher_number: {
-      to: ['voucher_series', 'voucher_number_from', 'voucher_number_to'],
-      map: mapVoucherNumber,
+    voucher_number: VOUCHER,
+    voucher: VOUCHER,
+  },
+  // since and until bound the entry date, both inclusive.
+  gnubok_list_verifikat_without_documents: {
+    date_from: { to: ['since'] },
+    from_date: { to: ['since'] },
+    start_date: { to: ['since'] },
+    date_to: { to: ['until'] },
+    to_date: { to: ['until'] },
+    end_date: { to: ['until'] },
+  },
+  gnubok_list_accounts: {
+    // Text or an account number, which search reads as its digits.
+    query: {
+      to: ['search'],
+      map: (value) =>
+        typeof value === 'string' || (typeof value === 'number' && Number.isInteger(value)) ? { search: value } : null,
     },
   },
+  gnubok_load_skill: {
+    name: { to: ['slug'], map: mapSkillSlug },
+    skill: { to: ['slug'], map: mapSkillSlug },
+  },
+  gnubok_get_record: {
+    id: { to: ['record_ref'], reads: RECORD_TYPE_KEYS, map: mapRecordId },
+  },
+  // `measure` was refused 33 times in 14 days (2026-10-30..
+  // 11-12). An id that names no measure is still refused by the tool.
+  gnubok_get_measure: {
+    measure: { to: ['measure_id'] },
+  },
+}
+
+/**
+ * What a tool's parameter list cannot say: that the question belongs to
+ * another tool. Appended to that tool's unknown-parameter refusal.
+ */
+const UNKNOWN_ARG_NOTES: Readonly<Record<string, string>> = {
+  // 31 calls in 14 days sent a date, a date range or an
+  // account range, and read back only "Valid parameters: period_id, dimensions".
+  gnubok_get_trial_balance:
+    "The trial balance covers one whole fiscal period: period_id from gnubok_list_fiscal_periods, or none for the most recent. For a date or an account range, gnubok_get_general_ledger takes from_date, to_date, account_from and account_to and gives each account's opening and closing balance.",
+}
+
+/** The note for a tool's unknown-parameter refusal, or null. */
+export function unknownArgNote(toolName: string): string | null {
+  return Object.hasOwn(UNKNOWN_ARG_NOTES, toolName) ? UNKNOWN_ARG_NOTES[toolName] : null
 }
 
 export interface AliasConflict {
@@ -179,7 +281,7 @@ export function normalizeReportArgAliases(
     if (!Object.hasOwn(args, alias)) continue
     const value = args[alias]
     const mapped = rule.map
-      ? rule.map(value)
+      ? rule.map(value, args)
       : Object.fromEntries(rule.to.map((key) => [key, value]))
     if (mapped === null) continue
 
@@ -198,6 +300,7 @@ export function normalizeReportArgAliases(
       writtenBy.set(key, alias)
     }
     delete out[alias]
+    for (const sibling of rule.reads ?? []) delete out[sibling]
     applied.push({ alias, to: keys })
   }
   return { args: out, applied, conflicts }
@@ -332,9 +435,6 @@ export function suggestArgKey(
   }
   return structuralArgKey(unknownKey, validKeys, context)
 }
-
-const RECORD_KINDS = new Set(['document', 'agreement', 'party', 'journal_entry', 'fact'])
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * The record_ref the call already holds under other names, in the

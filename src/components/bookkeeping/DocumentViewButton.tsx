@@ -1,7 +1,7 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { Eye } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, PaperClipIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -10,6 +10,11 @@ interface DocumentViewButtonProps {
   documentId: string
   label?: string
   className?: string
+  /**
+   * An icon-sm button with the label as its aria-label and tooltip, for a
+   * top bar where the document is one action among several.
+   */
+  iconOnly?: boolean
 }
 
 
@@ -25,7 +30,7 @@ interface DocumentViewButtonProps {
  * catch (the previous signed-URL fetch needed openDeferredTab for exactly that
  * reason). The browser's own viewer still offers saving the file.
  */
-export function DocumentViewButton({ documentId, label = 'Visa dokument', className }: DocumentViewButtonProps) {
+export function DocumentViewButton({ documentId, label = 'Visa dokument', className, iconOnly = false }: DocumentViewButtonProps) {
   const { toast } = useToast()
   const { appName } = useBranding()
 
@@ -58,15 +63,34 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
     }
   }
 
+  if (iconOnly) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        onClick={handleClick}
+        className={className}
+        aria-label={label}
+        title={label}
+      >
+        {/* Icon-only, the glyph names the thing (the attached underlag);
+            the tooltip says it opens. */}
+        <PaperClipIcon className="h-4 w-4" aria-hidden />
+      </Button>
+    )
+  }
+
   return (
     <Button
       type="button"
       variant="outline"
-      size="sm"
       onClick={handleClick}
       className={className}
     >
-      <Eye className="mr-1.5 h-3.5 w-3.5" />
+      {/* It opens a new tab, which is what this glyph says; the eye it
+          replaced reads as a show/hide toggle (crm#1003). */}
+      <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden />
       {label}
     </Button>
   )

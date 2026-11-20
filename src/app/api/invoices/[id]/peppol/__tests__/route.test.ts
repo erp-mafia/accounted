@@ -162,6 +162,110 @@ describe('GET /api/invoices/[id]/peppol', () => {
   })
 })
 
+describe('GET /api/invoices/[id]/peppol?preview=1 (accounted#44)', () => {
+  const draft = { ...invoice, status: 'draft' as const, invoice_number: null }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user, supabase: mockSupabase, error: null })
+  })
+
+  it('returns 401 when the caller is not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await GET(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol?preview=1`),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+
+    expect(response.status).toBe(401)
+  })
+
+  it('returns 400 for a preview value it does not know', async () => {
+    const response = await GET(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol?preview=yes`),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.fields).toHaveProperty('preview')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+  })
+
+  it('returns 404 when the invoice does not exist in the active company', async () => {
+    enqueue({ data: null, error: { message: 'not found' } })
+
+    const response = await GET(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol?preview=1`),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+
+    expect(response.status).toBe(404)
+    expect((await response.json()).error.code).toBe('INVOICE_NOT_FOUND')
+  })
+
+  it('still refuses a draft without a number when no preview is asked for', async () => {
+    enqueue({ data: draft, error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await GET(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol`),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.details.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'INVOICE_NUMBER_REQUIRED' }),
+    ]))
+  })
+
+  it('downloads a draft as a marked preview with a placeholder number and a preview file name', async () => {
+    enqueue({ data: draft, error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await GET(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol?preview=1`),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const xml = await response.text()
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
+      .toBe(`peppol-invoice-preview-${INVOICE_ID}.xml`)
+    expect(xml).toContain('<!-- ACCOUNTED-PEPPOL-PREVIEW')
+    expect(xml).toContain('<cbc:ID>UTKAST-00000</cbc:ID>')
+    expect(xml).toContain('<cbc:PaymentID>000000</cbc:PaymentID>')
+    // Reading a preview writes nothing.
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('answers the real document for an invoice that already has its number', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await GET(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol?preview=1`),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const xml = await response.text()
+
+    expect(response.status).toBe(200)
+    expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
+      .toBe('peppol-invoice-F-2026-42.xml')
+    expect(xml).not.toContain('ACCOUNTED-PEPPOL-PREVIEW')
+    expect(xml).toContain('<cbc:ID>F-2026-42</cbc:ID>')
+  })
+})
+
 describe('POST /api/invoices/[id]/peppol', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -274,6 +378,23 @@ describe('POST /api/invoices/[id]/peppol', () => {
     expect(response.status).toBe(expectedStatus)
     expect(body.error.code).toBe(expectedCode)
     expect(body.error.details).toMatchObject({ pgCode: code })
+  })
+
+  it('never stages a draft preview: a preview query on the stage route is ignored and the draft is refused', async () => {
+    enqueue({ data: { ...invoice, status: 'draft', invoice_number: null }, error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await POST(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol?preview=1`, { method: 'POST' }),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.details.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'INVOICE_NUMBER_REQUIRED' }),
+    ]))
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
   it('names the missing fiscal year when the stage RPC has no retention basis for the invoice date', async () => {

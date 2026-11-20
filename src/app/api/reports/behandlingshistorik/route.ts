@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { BehandlingshistorikQuerySchema } from '@/lib/api/schemas'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -16,7 +14,7 @@ import {
   generateBehandlingshistorik,
   resolveUserLabelsFromProfiles,
 } from '@/lib/reports/behandlingshistorik'
-import { BehandlingshistorikPDF } from '@/lib/reports/behandlingshistorik-pdf-template'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * @react-pdf/renderer lays out every row on the CPU (measured ~25 ms per event
@@ -102,25 +100,25 @@ export const GET = withRouteContext('report.behandlingshistorik', async (request
       if (report.total_events > PDF_EVENT_LIMIT) {
         return errorResponseFromCode('REPORT_PDF_TOO_LARGE', log, { requestId })
       }
+      const [{ renderToBuffer }, { BehandlingshistorikPDF }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/reports/behandlingshistorik-pdf-template'),
+      ])
       const pdf = await renderToBuffer(BehandlingshistorikPDF({ report }))
       const date = report.mode === 'fiscal_year' ? report.period.end : report.range.to
       const filename = `behandlingshistorik-${slugifyCompanyName(report.company.name)}-${date.replace(/-/g, '')}.pdf`
-      return new NextResponse(new Uint8Array(pdf), {
-        headers: {
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': contentDisposition('attachment', filename),
-          'Cache-Control': 'private, no-store',
-        },
+      return fileResponse(new Uint8Array(pdf), {
+        filename: filename,
+        contentType: 'application/pdf',
+        cacheControl: 'private, no-store',
       })
     }
 
-    const file = buildBehandlingshistorikExport(report, format)
-    return new NextResponse(new Uint8Array(file.buffer), {
-      headers: {
-        'Content-Type': file.contentType,
-        'Content-Disposition': contentDisposition('attachment', file.filename),
-        'Cache-Control': 'private, no-store',
-      },
+    const file = await buildBehandlingshistorikExport(report, format)
+    return fileResponse(new Uint8Array(file.buffer), {
+      filename: file.filename,
+      contentType: file.contentType,
+      cacheControl: 'private, no-store',
     })
   } catch (err) {
     // Raw message stays server-side: it can carry table names / SQL.

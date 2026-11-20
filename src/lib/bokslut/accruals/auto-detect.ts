@@ -1,8 +1,14 @@
+import { OWED_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EntityType } from '@/types'
 import { roundOre } from '@/lib/money'
-import { simplifiedYearEndRegelverk } from '@/lib/company/entity-type'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { parseInvoiceDateRange } from './date-range-parser'
+import {
+  accountingFrameworkForYear,
+  accrualMateriality,
+  type AccrualMateriality,
+} from './materiality'
 
 export type PeriodiseringSource = 'invoice' | 'supplier_invoice'
 export type PeriodiseringConfidence = 'high' | 'medium' | 'low'
@@ -11,22 +17,19 @@ export type PeriodiseringConfidence = 'high' | 'medium' | 'low'
 export type PeriodiseringEntityType = EntityType
 
 /**
- * Materiality floor for auto-detected periodiseringar, in SEK.
- *
- * Both simplification tracks land on the same number: K1 (BFNAR 2006:1,
- * förenklat årsbokslut for enskild firma) has no requirement to accrue posts
- * below 5 000 kr, and K2 (BFNAR 2016:10) lets a company skip accruing
- * individual recurring costs below 5 000 kr. Suggestions under the floor are
- * TAGGED as low confidence rather than dropped: the relief is a MAY, never a
- * MUST, so the user can still accept them. Personnel costs (BAS 70xx-76xx)
- * must always be accrued regardless of amount, so the floor never applies
- * there. The floor is a SEK threshold: for foreign-currency invoices it is
- * compared against the subtotal_sek-derived amount, and when no SEK amount
- * can be resolved the floor is skipped entirely rather than compared against
- * a number in the wrong currency (mirrors the accrual-k2-hint decision,
- * DECISIONS.md archive 2026-07-26).
+ * Materiality floor for auto-detected periodiseringar: the limit below which
+ * the rules that apply to the company and the räkenskapsår say an inkomst or
+ * utgift need not be accrued (accrualMateriality: K1 5 000 kr, K2 5 000 or
+ * 7 000 kr by the year, K3 none). Suggestions under it are TAGGED as low
+ * confidence rather than dropped: the relief is a MAY, never a MUST, so the
+ * user can still accept them. The test is the invoice's net amount, not the
+ * computed periodiseringsbelopp (BFN's kommentar to K2 2.4). Personnel costs
+ * (BAS 70xx-76xx) keep their confidence whatever the amount. The limit is in
+ * SEK: a foreign-currency invoice is compared through subtotal_sek, and when
+ * no SEK amount can be resolved the floor is skipped entirely rather than
+ * compared against a number in the wrong currency (mirrors the
+ * accrual-k2-hint decision, DECISIONS.md archive 2026-07-26).
  */
-export const PERIODISERING_MATERIALITY_FLOOR_SEK = 5000
 
 export interface PeriodiseringSuggestion {
   /** Underlying source invoice id (invoices.id or supplier_invoices.id). */
@@ -70,7 +73,7 @@ interface InvoiceRow {
 
 interface SupplierInvoiceRow {
   id: string
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
   invoice_date: string
   subtotal: number
   currency: string | null
@@ -78,6 +81,11 @@ interface SupplierInvoiceRow {
   notes: string | null
   suppliers: { name: string } | null
   supplier_invoice_items: { description: string; account_number: string }[] | null
+}
+
+/** Whole kronor with a space between thousands, as the wizard copy writes them ("7 000"). */
+function formatKronor(amount: number): string {
+  return String(Math.trunc(amount)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
 }
 
 /** Compute the inclusive number of days between two ISO dates. */
@@ -126,11 +134,11 @@ function buildSuggestion(args: {
   itemAccounts: string[]
   sourceLabel: string
   periodEnd: string
-  /** Drives the regelverk cited in the materiality wording: K1 (BFNAR
-   *  2006:1) for enskild firma, K2 (BFNAR 2016:10) otherwise. */
-  entityType?: PeriodiseringEntityType | null
+  /** The accrual relief that applies (accrualMateriality): its limit and the
+   *  regelverk the wording cites. */
+  materiality: AccrualMateriality
 }): PeriodiseringSuggestion | null {
-  const { sourceId, sourceType, netAmount, currency, netAmountSek, description, itemDescriptions, itemAccounts, sourceLabel, periodEnd, entityType } = args
+  const { sourceId, sourceType, netAmount, currency, netAmountSek, description, itemDescriptions, itemAccounts, sourceLabel, periodEnd, materiality } = args
   if (!Number.isFinite(netAmount) || netAmount <= 0) return null
 
   // Try the head text first, then each item: first hit wins.
@@ -173,34 +181,37 @@ function buildSuggestion(args: {
     ? `Leverantörsfakturan löper ${parsed.startDate}: ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
     : `Kundfakturan löper ${parsed.startDate}: ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
 
-  // Materiality floor: below 5 000 kr the K1/K2 simplifications say the post
-  // normally need not be accrued, so downgrade to "low" (the wizard only
-  // pre-ticks "high") and say why. Personnel costs (BAS 70xx-76xx) are exempt
-  // from the relief and keep their confidence: they must always be accrued.
-  // 78xx (avskrivningar) and 79xx (övriga rörelsekostnader) are NOT personnel
-  // costs, so they get the relief like any other cost.
+  // Materiality floor: an invoice under the limit normally need not be
+  // accrued (K1/K2 2.4), so downgrade to "low" (the wizard only pre-ticks
+  // "high") and say why. K3 has no such limit (limitSek null). Personnel costs
+  // (BAS 70xx-76xx) keep their confidence. 78xx (avskrivningar) and 79xx
+  // (övriga rörelsekostnader) are NOT personnel costs, so they get the relief
+  // like any other cost.
   //
-  // The floor is a SEK threshold. For a foreign-currency invoice the
-  // comparison uses the periodisation share of subtotal_sek; when no SEK
-  // amount is available the floor is SKIPPED entirely, because tagging on an
-  // amount in the wrong currency is strictly worse than not tagging
+  // The test is the invoice's net amount, not the periodiseringsbelopp: "Det
+  // är beloppet på varje enskild faktura, avtal eller liknande handling som
+  // ska understiga" the limit (BFN's kommentar to K2 2.4). It is in SEK: a
+  // foreign-currency invoice is compared through subtotal_sek, and when no
+  // SEK amount is available the floor is SKIPPED entirely, because tagging on
+  // an amount in the wrong currency is strictly worse than not tagging
   // (accrual-k2-hint precedent, DECISIONS.md archive 2026-07-26).
   const touchesPersonnelCost = itemAccounts.some((a) => /^7[0-6]/.test(a ?? ''))
   const isSek = !currency || currency === 'SEK'
-  let periodisationAmountSek: number | null = null
+  let invoiceAmountSek: number | null = null
   if (isSek) {
-    periodisationAmountSek = periodisationAmount
+    invoiceAmountSek = netAmount
   } else if (netAmountSek != null && Number.isFinite(netAmountSek) && netAmountSek > 0) {
-    periodisationAmountSek = roundOre(netAmountSek * ratio)
+    invoiceAmountSek = netAmountSek
   }
+  const { limitSek, regelverk } = materiality
   if (
-    periodisationAmountSek !== null &&
-    periodisationAmountSek < PERIODISERING_MATERIALITY_FLOOR_SEK &&
+    limitSek !== null &&
+    invoiceAmountSek !== null &&
+    invoiceAmountSek < limitSek &&
     !touchesPersonnelCost
   ) {
     confidence = 'low'
-    const regelverk = entityType ? simplifiedYearEndRegelverk(entityType) : 'K2'
-    reason = `${reason} Under 5 000 kr: behöver normalt inte periodiseras (${regelverk}).`
+    reason = `${reason} Under ${formatKronor(limitSek)} kr: behöver normalt inte periodiseras (${regelverk}).`
   }
 
   return {
@@ -233,9 +244,9 @@ export async function detectPeriodisering(
   companyId: string,
   fiscalPeriodId: string,
   options?: {
-    /** Company entity type: chooses the regelverk the materiality wording
-     *  cites (K1 for enskild_firma, K2 otherwise). Optional so callers that
-     *  cannot resolve it still get suggestions with the K2 default. */
+    /** Company entity type: an årsbokslut form follows its förenklat
+     *  årsbokslut (K1). Optional so callers that cannot resolve it still get
+     *  suggestions, under the framework's rules. */
     entityType?: PeriodiseringEntityType | null
   },
 ): Promise<PeriodiseringSuggestion[]> {
@@ -259,49 +270,70 @@ export async function detectPeriodisering(
   // suggested again at year-end: that would periodisera the same belopp
   // twice. Cancelled schedules don't exclude: their invoice was credited and
   // the status filters below drop it anyway.
-  const { data: scheduleRows } = await supabase
-    .from('accrual_schedules')
-    .select('supplier_invoice_id, invoice_id')
-    .eq('company_id', companyId)
-    .neq('status', 'cancelled')
+  // All three reads are paged: past 1,000 rows a schedule went missing (its
+  // invoice was suggested a second time) or an invoice was never looked at.
+  const scheduleRows = await fetchAllRows<{ supplier_invoice_id: string | null; invoice_id: string | null }>(
+    ({ from, to }) =>
+      supabase
+        .from('accrual_schedules')
+        .select('supplier_invoice_id, invoice_id')
+        .eq('company_id', companyId)
+        .neq('status', 'cancelled')
+        .order('id', { ascending: true })
+        .range(from, to),
+  )
   const coveredSupplierInvoices = new Set(
-    ((scheduleRows ?? []) as Array<{ supplier_invoice_id: string | null }>)
-      .map((row) => row.supplier_invoice_id)
-      .filter(Boolean),
+    scheduleRows.map((row) => row.supplier_invoice_id).filter(Boolean),
   )
   const coveredInvoices = new Set(
-    ((scheduleRows ?? []) as Array<{ invoice_id: string | null }>)
-      .map((row) => row.invoice_id)
-      .filter(Boolean),
+    scheduleRows.map((row) => row.invoice_id).filter(Boolean),
   )
 
   // Customer invoices: only "real" ones (sent/paid). Drafts and overdue
   // get skipped: drafts haven't moved through the engine, overdue is just a
   // status label that overlaps with sent here. Proformas, delivery notes and
   // quotes are never booked, so there is no revenue to periodise.
-  const { data: invoiceRows } = await supabase
-    .from('invoices')
-    .select('id, invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, customers(name), invoice_items(description)')
-    .eq('company_id', companyId)
-    .eq('document_type', 'invoice')
-    .gte('invoice_date', periodStart)
-    .lte('invoice_date', periodEnd)
-    .in('status', ['sent', 'partially_paid', 'paid', 'overdue'])
+  const invoiceRows = await fetchAllRows<InvoiceRow>(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('id, invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, customers(name), invoice_items(description)')
+      .eq('company_id', companyId)
+      .eq('document_type', 'invoice')
+      .gte('invoice_date', periodStart)
+      .lte('invoice_date', periodEnd)
+      .in('status', [...OWED_INVOICE_STATUSES, 'paid'])
+      .order('invoice_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: InvoiceRow[] | null; error: { message: string } | null }>,
+  )
 
   // Supplier invoices: approved or paid (registration journal entry exists).
-  const { data: supplierRows } = await supabase
-    .from('supplier_invoices')
-    .select(
-      'id, supplier_invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, suppliers(name), supplier_invoice_items(description, account_number)',
-    )
-    .eq('company_id', companyId)
-    .gte('invoice_date', periodStart)
-    .lte('invoice_date', periodEnd)
-    .in('status', ['approved', 'partially_paid', 'paid'])
+  const supplierRows = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
+    supabase
+      .from('supplier_invoices')
+      .select(
+        'id, supplier_invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, suppliers(name), supplier_invoice_items(description, account_number)',
+      )
+      .eq('company_id', companyId)
+      .gte('invoice_date', periodStart)
+      .lte('invoice_date', periodEnd)
+      .in('status', ['approved', 'partially_paid', 'paid'])
+      .order('invoice_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: SupplierInvoiceRow[] | null; error: { message: string } | null }>,
+  )
+
+  // Read after the invoices: the floor depends on the framework that applies
+  // to this räkenskapsår (accountingFrameworkForYear is the one read).
+  const materiality = accrualMateriality({
+    entityType,
+    framework: await accountingFrameworkForYear(supabase, companyId, fiscalPeriodId),
+    fiscalYear: { period_start: periodStart, period_end: periodEnd },
+  })
 
   const suggestions: PeriodiseringSuggestion[] = []
 
-  for (const row of (invoiceRows ?? []) as unknown as InvoiceRow[]) {
+  for (const row of invoiceRows) {
     if (coveredInvoices.has(row.id)) continue
     const itemDescs = (row.invoice_items ?? []).map((i) => i.description).filter(Boolean)
     const customerName = row.customers?.name ?? 'Okänd kund'
@@ -319,19 +351,21 @@ export async function detectPeriodisering(
       itemAccounts: [],
       sourceLabel,
       periodEnd,
-      entityType,
+      materiality,
     })
     if (s) suggestions.push(s)
   }
 
-  for (const row of (supplierRows ?? []) as unknown as SupplierInvoiceRow[]) {
+  for (const row of supplierRows) {
     if (coveredSupplierInvoices.has(row.id)) continue
     const itemDescs = (row.supplier_invoice_items ?? []).map((i) => i.description).filter(Boolean)
     const itemAccounts = (row.supplier_invoice_items ?? [])
       .map((i) => i.account_number)
       .filter(Boolean)
     const supplierName = row.suppliers?.name ?? 'Okänd leverantör'
-    const sourceLabel = `${supplierName} (lev.faktura ${row.supplier_invoice_number})`
+    const sourceLabel = row.supplier_invoice_number
+      ? `${supplierName} (lev.faktura ${row.supplier_invoice_number})`
+      : supplierName
     const s = buildSuggestion({
       sourceId: row.id,
       sourceType: 'supplier_invoice',
@@ -343,7 +377,7 @@ export async function detectPeriodisering(
       itemAccounts,
       sourceLabel,
       periodEnd,
-      entityType,
+      materiality,
     })
     if (s) suggestions.push(s)
   }

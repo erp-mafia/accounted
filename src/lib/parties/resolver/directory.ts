@@ -10,6 +10,7 @@
  * company produced.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { companiesWithPoolingOff } from '@/lib/legal/data-choices-store'
 import { DIRECTORY_SEED, type DirectoryEntry, type DirectoryKind } from './directory-seed'
 import type { Precleaned } from './preclean'
 
@@ -174,6 +175,10 @@ export interface PromotionCandidate {
  * out of the same key in enough companies. Counts live alias rows across the
  * fleet, so a reading stays private to one company until another company
  * independently produced it.
+ *
+ * Only companies that pool count (Inställningar → Datadelning och AI, on by
+ * default): a company that opted out never makes a reading shared. When the
+ * opt-outs cannot be read, nothing is promoted.
  */
 export async function promoteIfShared(service: SupabaseClient, c: PromotionCandidate): Promise<boolean> {
   if (!PROMOTABLE_KINDS.has(c.kind)) return false
@@ -187,6 +192,13 @@ export async function promoteIfShared(service: SupabaseClient, c: PromotionCandi
     .limit(50)
   if (error || !data) return false
   const companies = new Set((data as Array<{ company_id: string }>).map((r) => r.company_id))
+  let optedOut: Set<string>
+  try {
+    optedOut = await companiesWithPoolingOff(service, [...companies])
+  } catch {
+    return false
+  }
+  for (const id of optedOut) companies.delete(id)
   if (companies.size < PROMOTION_MIN_COMPANIES) return false
   const { error: upsertError } = await service.from('counterparty_directory').upsert(
     {

@@ -1,5 +1,7 @@
 import type { Invoice } from '@/types'
+import { isCreditNoteDocument } from '@/lib/bookkeeping/credit-note-state'
 import { effectiveQuoteStatus } from './quote-status'
+import { isInvoiceOverdue, isInvoiceOwed } from './overdue'
 
 /**
  * The invoice list's status views. One predicate for the visible rows, the
@@ -12,6 +14,15 @@ import { effectiveQuoteStatus } from './quote-status'
 export const INVOICE_LIST_MAIN_TABS = ['all', 'unpaid', 'overdue', 'unsent', 'draft'] as const
 export const INVOICE_LIST_MORE_TABS = [
   'paid',
+  // "Hos inkasso": open collection cases past delivery (a registered claim
+  // included), plus the cases a person must look at (the Att göra row lands
+  // here). The ids come from collection_open_invoice_ids (in_collection) and
+  // collection_attention_case_ids, passed in as the context; without it the
+  // view is empty.
+  'collections',
+  // "Kundförlust": invoices written off as a konstaterad kundförlust
+  // (lib/customer-loss); shown once there is one.
+  'written_off',
   'proforma',
   'delivery_note',
   'credit',
@@ -30,6 +41,29 @@ export type QuoteListTab = (typeof QUOTE_LIST_TABS)[number]
 
 /** Either list's view id: the two pages share one list component. */
 export type AnyListTab = InvoiceListTab | QuoteListTab
+
+/**
+ * The views each list shows as visible segments, first in the toolbar (V7
+ * list toolbars: at most five view segments, the rest in the status picker).
+ * "Alla" stays the default view and sits last. While collections is in play
+ * "Hos inkasso" takes the place of "Osända", which then lives in the picker.
+ * A view has one door: the status picker leaves the segment views out, and
+ * while one of them is active the picker shows its neutral label with nothing
+ * checked.
+ */
+export function invoiceListSegmentTabs(collectionsShown: boolean): InvoiceListTab[] {
+  return ['unpaid', 'overdue', collectionsShown ? 'collections' : 'unsent', 'draft', 'all']
+}
+export const QUOTE_LIST_SEGMENT_TABS: readonly QuoteListTab[] = ['open', 'accepted', 'declined', 'expired', 'all']
+
+export function statusPickerTabs<T extends string>(tabs: readonly T[], segmentTabs: readonly string[]): T[] {
+  return tabs.filter((tab) => !segmentTabs.includes(tab))
+}
+
+/** Whether the active view belongs to the segmented control rather than the status picker. */
+export function segmentViewActive(tab: string, segmentTabs: readonly string[]): boolean {
+  return segmentTabs.includes(tab)
+}
 
 /** ?status= values that are not tab ids: older bookmarks and the words users
  *  reach for ("godkända" is what Visma calls a finalized, unsent invoice). */
@@ -53,10 +87,16 @@ export function parseQuoteListTab(param: string | null): QuoteListTab | null {
 }
 
 type ListInvoice = Pick<Invoice, 'status' | 'invoice_number' | 'credited_invoice_id'> & {
+  id?: string
   document_type?: string | null
   is_self_billed?: boolean | null
   quote_status?: string | null
   valid_until?: string | null
+  /** Förfallna follows the due date and the open remainder (lib/invoices/overdue.ts). */
+  due_date?: string | null
+  remaining_amount?: number | null
+  /** A credit note is a link or a total below zero (isCreditNoteDocument). */
+  total?: number | null
 }
 
 export function documentTypeOf(invoice: Pick<ListInvoice, 'document_type'>): string {
@@ -78,22 +118,39 @@ export function isUnsentNumberedInvoice(invoice: ListInvoice): boolean {
     invoice.status === 'draft' &&
     !!invoice.invoice_number &&
     documentTypeOf(invoice) === 'invoice' &&
-    !invoice.credited_invoice_id &&
+    !isCreditNoteDocument(invoice) &&
     !invoice.is_self_billed
   )
 }
 
-export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab): boolean {
+/** Facts a view needs beyond the invoice row itself. */
+export interface InvoiceListTabContext {
+  /** Invoices with an open collection case past the delivery stages ("Hos inkasso"). */
+  inCollection?: ReadonlySet<string>
+  /** Invoices whose collection case needs a person (a refused handover, a failed read). */
+  collectionAttention?: ReadonlySet<string>
+  /** Today (Stockholm, YYYY-MM-DD) for Förfallna; defaults to the current day. */
+  today?: string
+}
+
+export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab, context: InvoiceListTabContext = {}): boolean {
   if (isQuoteRow(invoice)) return false
-  const isCreditNote = !!invoice.credited_invoice_id
+  const isCreditNote = isCreditNoteDocument(invoice)
   const docType = documentTypeOf(invoice)
+  const inCollectionsView =
+    !!invoice.id && (!!context.inCollection?.has(invoice.id) || !!context.collectionAttention?.has(invoice.id))
   switch (tab) {
     case 'all':
       return invoice.status !== 'cancelled'
     case 'unpaid':
-      return ['sent', 'overdue'].includes(invoice.status) && !isCreditNote && docType === 'invoice'
+      // What the customer still owes (lib/invoices/overdue.ts isInvoiceOwed):
+      // a partly paid invoice with money left is unpaid too.
+      return isInvoiceOwed(invoice)
     case 'overdue':
-      return invoice.status === 'overdue' && !isCreditNote && docType === 'invoice'
+      // Derived, never the stored status (crm#1084): an owed invoice past its
+      // due date, partly paid included. One "Hos inkasso" lists is that
+      // view's, as in the Att göra group (lib/worklist overdue_invoice).
+      return !inCollectionsView && isInvoiceOverdue(invoice, context.today)
     case 'unsent':
       return isUnsentNumberedInvoice(invoice)
     case 'draft':
@@ -104,7 +161,12 @@ export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab)
         !isUnsentNumberedInvoice(invoice)
       )
     case 'paid':
-      return invoice.status === 'paid'
+      // An imported credit note can carry 'paid': it is in Kreditfakturor.
+      return invoice.status === 'paid' && !isCreditNote
+    case 'written_off':
+      return invoice.status === 'written_off'
+    case 'collections':
+      return inCollectionsView
     case 'credit':
       return isCreditNote && invoice.status !== 'cancelled'
     case 'proforma':

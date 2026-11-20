@@ -106,9 +106,42 @@ export function unitPickerOptions(
 }
 
 /**
- * What the picker's "Annan enhet" field commits: trimmed, inner whitespace
- * collapsed, capped at UNIT_MAX_LENGTH. Empty means nothing to commit.
+ * The "Annan enhet" text as the picker would commit it: trimmed, inner
+ * whitespace collapsed. Never shortened: a unit over UNIT_MAX_LENGTH is
+ * refused by customUnitOutcome, not silently cut to a different word.
+ * Empty means nothing to commit.
  */
 export function normalizeCustomUnit(text: string): string {
-  return text.trim().replace(/\s+/g, ' ').slice(0, UNIT_MAX_LENGTH).trim()
+  return text.trim().replace(/\s+/g, ' ')
+}
+
+/**
+ * What ends an "Annan enhet" entry: Enter in the field, the list closing any
+ * other way (a click outside, Tab, the trigger clicked again), or Escape.
+ */
+export type CustomUnitTrigger = 'enter' | 'close' | 'escape'
+
+export type CustomUnitOutcome =
+  /** Commit `unit` to the field and close the list. */
+  | { action: 'commit'; unit: string }
+  /** Close the list and leave the field as it was. */
+  | { action: 'close' }
+  /** Keep the list open; `invalid` marks the text as one the API would refuse. */
+  | { action: 'keep_open'; invalid: boolean }
+
+/**
+ * What the picker does with the typed "Annan enhet" text when an entry ends.
+ * Before this, only Enter committed it, so a user who typed "EUR" and clicked
+ * outside lost the unit without a word (PH 180). Now closing the list commits
+ * it too; Escape is the one way to leave without it. Blank text never
+ * overwrites the field, and text over UNIT_MAX_LENGTH keeps the list open
+ * rather than committing a unit the API would answer with a 400.
+ */
+export function customUnitOutcome(text: string, trigger: CustomUnitTrigger): CustomUnitOutcome {
+  if (trigger === 'escape') return { action: 'close' }
+  const unit = normalizeCustomUnit(text)
+  if (unit.length > UNIT_MAX_LENGTH) return { action: 'keep_open', invalid: true }
+  if (unit !== '') return { action: 'commit', unit }
+  // Enter on an empty field does nothing; any other close just closes.
+  return trigger === 'enter' ? { action: 'keep_open', invalid: false } : { action: 'close' }
 }

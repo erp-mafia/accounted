@@ -62,6 +62,25 @@ describe('bookResidualAndLink', () => {
     expect(await bookResidualAndLink(supabase as never, COMPANY, USER, KEY, { external_ids: [T1], journal_entry_id: E1, kind: 'bank_fee' })).toBeNull()
   })
 
+  it('refuses a foreign bank account before it reads or books anything (accounted#58)', async () => {
+    // +101 EUR of rows against a 1,150 kr bank leg used to read as a 1,049 kr
+    // residual: the rows' currency subtracted from kronor.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1932', currency: 'EUR' } })
+    await expect(
+      bookResidualAndLink(
+        supabase as never,
+        COMPANY,
+        USER,
+        KEY,
+        { external_ids: [T1], journal_entry_id: E1, kind: 'rounding' },
+        { dryRun: true },
+      ),
+    ).rejects.toMatchObject({ code: 'RESIDUAL_FOREIGN_CURRENCY' })
+    expect(matchMock).not.toHaveBeenCalled()
+    expect(createEntryMock).not.toHaveBeenCalled()
+  })
+
   it('previews a bank fee: expense on 6570 against the bank account, dated on the transaction', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK' } })
@@ -104,12 +123,24 @@ describe('bookResidualAndLink', () => {
       kind: 'bank_fee',
     })
     expect(result).toMatchObject({ dry_run: false, residual_journal_entry_id: RES, residual_amount: -10 })
-    expect(matchMock).toHaveBeenCalledWith(supabase, COMPANY, USER, KEY, { pairs: [{ external_ids: [T1], journal_entry_ids: [E1] }] }, { dryRun: false })
+    // The row (-1010) takes the 10 kr fee beyond the verifikat's -1000: the
+    // residual verifikat booked in the same act explains it (GitHub #3507).
+    expect(matchMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      USER,
+      KEY,
+      { pairs: [{ external_ids: [T1], journal_entry_ids: [E1] }] },
+      { dryRun: false, bankLegOverrun: -10 },
+    )
     expect(createEntryMock).toHaveBeenCalledWith(
       supabase,
       COMPANY,
       USER,
       expect.objectContaining({ fiscal_period_id: 'fp-1', entry_date: '2026-08-05', source_type: 'manual' }),
+      // The posting port's ledger adapter passes the commitMethod and rubricVersion positions.
+      undefined,
+      undefined,
     )
     expect(findCall('transaction_voucher_links', 'insert')?.[0]).toMatchObject({
       transaction_id: T1,

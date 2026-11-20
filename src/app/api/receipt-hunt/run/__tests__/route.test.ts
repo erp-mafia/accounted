@@ -52,6 +52,7 @@ vi.mock('@/lib/api/with-route-context', () => ({
 }))
 
 import { POST } from '../route'
+import { currentAiDeadline } from '@/lib/ai/call-limit'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -98,6 +99,22 @@ describe('POST /api/receipt-hunt/run', () => {
     const [, , , options] = mockHuntCompany.mock.calls[0]
     expect(options.mailSearchLimit).toBeGreaterThan(0)
     expect(options.maxReceipts).toBeGreaterThan(0)
+  })
+
+  it('ends every model call of the press before the function is killed: four mail batches of three minutes would not fit', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    let modelStop: number | undefined
+    mockHuntCompany.mockImplementation(async () => {
+      modelStop = currentAiDeadline()
+      return { companyId: 'co-1', candidates: 0, poolSize: 0, proposed: 0 }
+    })
+    try {
+      await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
+    } finally {
+      clock.mockRestore()
+    }
+    // 240 s into a 300 s function.
+    expect(modelStop).toBe(1_240_000)
   })
 
   it('reports what is left, so pressing again is an informed choice', async () => {

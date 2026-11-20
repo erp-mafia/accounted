@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { CreateCashAccountSchema } from '@/lib/api/schemas'
+import { CreateCashAccountRequestSchema, splitCreateCashAccountRequest } from '@/lib/api/schemas'
 import { listForCompany } from '@/lib/cash-accounts/service'
-import { createCashAccount } from '@/lib/cash-accounts/manage'
+import { createCardAccount, createCashAccount } from '@/lib/cash-accounts/manage'
 import { sessionFailureResponse } from '@/lib/operations/session'
 
 /**
@@ -35,16 +35,24 @@ export const GET = withRouteContext('cash_accounts.list', async (request, ctx) =
  * A bank account the user types in (no bank connection): name, currency and
  * the payee details customers pay to. Gets the next free 19xx ledger slot
  * for its currency unless one is given. Owner/admin only: it becomes a
- * printable payee. The rules live in lib/cash-accounts/manage.ts, shared
+ * printable payee.
+ *
+ * With kind 'card': a company card (företagskort) on a liability account
+ * (2480-2489, 2890, 2894, 2896, 2899), the suggested one unless given. Also
+ * owner/admin only. The rules live in lib/cash-accounts/manage.ts, shared
  * with the v1 operation cash-accounts.create and gnubok_create_cash_account.
  */
 export const POST = withRouteContext(
   'cash_accounts.create',
   async (request, { supabase, companyId, log, requestId, user }) => {
-    const validation = await validateBody(request, CreateCashAccountSchema)
+    const validation = await validateBody(request, CreateCashAccountRequestSchema)
     if (!validation.success) return validation.response
 
-    const outcome = await createCashAccount({ supabase, companyId, userId: user.id, log }, validation.data)
+    const ctx = { supabase, companyId, userId: user.id, log }
+    const split = splitCreateCashAccountRequest(validation.data)
+    const outcome = split.kind === 'card'
+      ? await createCardAccount(ctx, split.input)
+      : await createCashAccount(ctx, split.input)
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data }, { status: 201 })

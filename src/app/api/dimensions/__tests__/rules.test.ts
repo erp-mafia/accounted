@@ -1,6 +1,6 @@
 /**
  * Tests for /api/dimensions/rules (list + create) and
- * /api/dimensions/rules/[id] (update + delete) — dimensions PR10.
+ * /api/dimensions/rules/[id] (update + delete) - dimensions PR10.
  *
  * Exercises the routes through the real withRouteContext wrapper, mocking
  * only its auth/company dependencies and injecting a queued Supabase mock via
@@ -125,7 +125,7 @@ describe('GET /api/dimensions/rules', () => {
       value_name: 'Projekt Alpha',
       is_active: true,
     })
-    // A required rule has no value — the DTO carries explicit nulls.
+    // A required rule has no value - the DTO carries explicit nulls.
     expect(body.data.rules[1]).toMatchObject({
       rule_type: 'required',
       value_id: null,

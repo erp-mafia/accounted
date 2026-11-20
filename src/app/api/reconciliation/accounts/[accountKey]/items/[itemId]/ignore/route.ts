@@ -5,9 +5,6 @@ import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { setItemIgnored } from '@/lib/reconciliation/actions'
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 const IgnoreBodySchema = z.object({ ignored: z.boolean().optional() })
 
@@ -19,7 +16,7 @@ const IgnoreBodySchema = z.object({ ignored: z.boolean().optional() })
  */
 export const POST = withRouteContext<{ params: Promise<{ accountKey: string; itemId: string }> }>(
   'reconciliation.accounts.items.ignore',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, user }, { params }) => {
     const { accountKey, itemId } = await params
     if (!AccountKeySchema.safeParse(accountKey).success || !z.string().uuid().safeParse(itemId).success) {
       return NextResponse.json({ error: 'Okänd rad' }, { status: 404 })
@@ -38,7 +35,7 @@ export const POST = withRouteContext<{ params: Promise<{ accountKey: string; ite
     }
     const ignored = parsed.data.ignored ?? true
     try {
-      const result = await setItemIgnored(supabase, companyId, accountKey, itemId, ignored)
+      const result = await setItemIgnored(supabase, companyId, accountKey, itemId, ignored, user.id)
       if (!result) {
         return NextResponse.json({ error: 'Okänt konto för det här företaget' }, { status: 404 })
       }

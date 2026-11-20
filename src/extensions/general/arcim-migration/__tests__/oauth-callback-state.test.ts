@@ -34,6 +34,9 @@ vi.mock('../lib/provider-client', () => ({
   listConsents: vi.fn(),
   generateOtc: vi.fn(),
   consumeOAuthState: vi.fn(),
+  peekOAuthState: vi.fn(),
+  oauthStateRejectionReason: vi.fn(),
+  consentHoldsTokens: vi.fn(),
   mintHandoff: vi.fn(),
   consumeHandoff: vi.fn(),
   getAuthUrl: vi.fn(),
@@ -71,6 +74,9 @@ import { requireFlowInitiator } from '@/lib/auth/oauth-flow-binding'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import {
   consumeOAuthState,
+  peekOAuthState,
+  oauthStateRejectionReason,
+  consentHoldsTokens,
   mintHandoff,
   consumeHandoff,
   exchangeAuthToken,
@@ -131,6 +137,7 @@ describe('white-label OAuth callback handoff', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(consumeOAuthState).mockResolvedValue(state)
+    vi.mocked(peekOAuthState).mockResolvedValue(state)
     vi.mocked(mintHandoff).mockResolvedValue({ code: 'fresh-handoff', consentId: 'consent-1', expiresAt: '' })
     vi.mocked(consumeHandoff).mockResolvedValue(storedHandoff)
     vi.mocked(requireFlowInitiator).mockResolvedValue({ ok: true, userId: 'user-1' })
@@ -193,6 +200,9 @@ describe('white-label OAuth callback handoff', () => {
   it('hands provider denial off and shows it on the brand without exchanging tokens', async () => {
     const first = await callbackHandler(request(APP_URL, { state: 'state', error: 'access_denied' }))
     expect(first.status).toBe(302)
+    // The denial carries no code, so hop 1 reads the state without spending it.
+    expect(peekOAuthState).toHaveBeenCalledWith('state')
+    expect(consumeOAuthState).not.toHaveBeenCalled()
     const result = vi.mocked(mintHandoff).mock.calls[0][3]
     expect(result.providerError).toContain('Du avbröt anslutningen')
     expect(requireFlowInitiator).not.toHaveBeenCalled()
@@ -281,7 +291,7 @@ describe('white-label OAuth callback handoff', () => {
     const connect = findRoute('POST', '/connect').handler as RouteHandler
     const response = await connect(createMockRequest(`${origin}/api/extensions/ext/arcim-migration/connect`, {
       method: 'POST', body: { provider: 'fortnox', origin: 'https://attacker.test' },
-    }), { supabase, companyId: 'company-1' } as unknown as ExtensionContext)
+    }), { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext)
     expect(response.status).toBe(200)
     expect(generateOtc).toHaveBeenCalledWith('consent-new', 'user-1', expected)
   })
@@ -298,7 +308,9 @@ describe('white-label OAuth callback handoff', () => {
     vi.mocked(getAuthUrl).mockResolvedValue({ url: 'https://provider.test/login' })
     const ctx = {
       companyId: 'company-1',
-      supabase: { auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) } },
+      userId: 'user-1',
+      supabase: {},
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as ExtensionContext
     const connect = findRoute('POST', '/connect').handler as RouteHandler
     const response = await connect(createMockRequest(`${APP_URL}/api/extensions/ext/arcim-migration/connect`, {
@@ -506,7 +518,7 @@ describe('GET /callback: full-page fallback when there is no opener', () => {
   })
 
   it('includes the consent id when a full-page provider error can be resumed', async () => {
-    ;(consumeOAuthState as Mock).mockResolvedValue({
+    ;(peekOAuthState as Mock).mockResolvedValue({
       consentId: 'consent-1',
       provider: 'fortnox',
       userId: 'user-1',
@@ -550,7 +562,7 @@ describe('OAuth redirect_uri symmetry between authorize and exchange', () => {
     ;(supabase as unknown as { auth: unknown }).auth = {
       getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
     }
-    return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+    return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
   }
 
   beforeEach(() => {
@@ -704,7 +716,7 @@ describe('GET /preview: cross-tenant consent status oracle', () => {
     ;(supabase as unknown as { auth: unknown }).auth = {
       getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
     }
-    return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+    return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
   }
 
   it('scopes the consent read to the caller company', async () => {
@@ -798,5 +810,227 @@ describe('GET /callback: the spent callback URL cannot come back', () => {
     // The anti-oracle property stands: a consumed state still reads exactly
     // like a forged one.
     expect(html).toContain(GENERIC_REJECTION)
+  })
+})
+
+/**
+ * A cancel at the provider (error=access_denied, no code) must not spend the
+ * state. It used to: the callback consumed the state on every delivery, and a
+ * week of production logs (5 to 12 Nov 2026) showed what that cost. The same
+ * cancelled callback URL delivered again seconds later (the error popup stays
+ * open, so a reload or a browser re-request lands on it) was answered with
+ * "Ingen giltig migrationssession" instead of the cancel sentence, and a user
+ * who cancelled, went Back at the provider and approved came home with a code
+ * for a state the cancel had already used.
+ *
+ * The cancel path now only reads the state (peekOAuthState); a callback with a
+ * code is the one thing that consumes it. The fake row below works the same
+ * way: a consume spends it, a peek does not.
+ */
+describe('GET /callback: a cancel at the provider keeps the state', () => {
+  const CANCEL_SENTENCE = 'Du avbröt anslutningen i leverantörens inloggning'
+  const CALLBACK_URL = `${APP_URL}/api/extensions/ext/arcim-migration/callback`
+  const flow = {
+    consentId: 'consent-1',
+    provider: 'fortnox',
+    companyId: 'company-1',
+    userId: 'user-1',
+    origin: null,
+  } as const
+
+  /** One provider_otc state row behind the mocked client. */
+  function useStateRow(code: string) {
+    let spent = false
+    vi.mocked(peekOAuthState).mockImplementation(async (state) =>
+      state === code && !spent ? flow : null)
+    vi.mocked(consumeOAuthState).mockImplementation(async (state) => {
+      if (state !== code || spent) return null
+      spent = true
+      return flow
+    })
+  }
+
+  /** The whole HTTP answer. A fixed nonce: the proxy's differs per request. */
+  async function answer(params: Record<string, string>) {
+    const res = await callbackHandler(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/callback', {
+        searchParams: params,
+        headers: { 'x-nonce': 'cHJveHktbm9uY2UtMTIzNDU2Nzg=' },
+      }),
+    )
+    return JSON.stringify([res.status, [...res.headers.entries()], await res.text()])
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // clearAllMocks keeps implementations, and earlier describes left theirs.
+    vi.mocked(peekOAuthState).mockReset()
+    vi.mocked(consumeOAuthState).mockReset()
+    vi.mocked(oauthStateRejectionReason).mockReset()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    vi.stubEnv('FORTNOX_REDIRECT_URI', '')
+    vi.stubEnv('VISMA_REDIRECT_URI', '')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('reads the state without spending it and answers with the cancel sentence', async () => {
+    useStateRow('S')
+
+    const res = await callbackHandler(callbackRequest({ error: 'access_denied', state: 'S' }))
+    const html = await res.text()
+
+    expect(peekOAuthState).toHaveBeenCalledWith('S')
+    expect(consumeOAuthState).not.toHaveBeenCalled()
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+    expect(html).toContain(CANCEL_SENTENCE)
+    expect(html).toContain('cancelled: true')
+  })
+
+  it('answers the cancel sentence both times when the same cancel is delivered twice', async () => {
+    useStateRow('S')
+    const cancel = async () =>
+      (await callbackHandler(callbackRequest({ error: 'access_denied', state: 'S' }))).text()
+
+    const first = await cancel()
+    const second = await cancel()
+
+    expect(first).toContain(CANCEL_SENTENCE)
+    expect(second).toContain(CANCEL_SENTENCE)
+    expect(second).not.toContain(GENERIC_REJECTION)
+    expect(oauthStateRejectionReason).not.toHaveBeenCalled()
+  })
+
+  it('connects when the user cancels, goes Back at the provider and approves with the same state', async () => {
+    useStateRow('S')
+
+    const cancelled = await callbackHandler(callbackRequest({ error: 'access_denied', state: 'S' }))
+    expect(await cancelled.text()).toContain(CANCEL_SENTENCE)
+
+    const approved = await callbackHandler(callbackRequest({ code: 'C', state: 'S' }))
+    expect(await approved.text()).toContain('Anslutningen lyckades')
+    expect(consumeOAuthState).toHaveBeenCalledWith('S')
+    expect(exchangeAuthToken).toHaveBeenCalledWith('consent-1', 'fortnox', 'C', CALLBACK_URL)
+
+    // The approval spent the state: it is still one-time for the exchange.
+    const replay = await callbackHandler(callbackRequest({ code: 'C', state: 'S' }))
+    expect(await replay.text()).toContain(GENERIC_REJECTION)
+    expect(exchangeAuthToken).toHaveBeenCalledTimes(1)
+  })
+
+  // 2026-11-12 13:36 and 17:11: Fortnox refused the login because the Fortnox
+  // company lacked a licence a requested scope needs. The popup showed
+  // "error_missing_license: Resource owner is not licensed for the requested
+  // scope(s).": the licence check looked for "missing license" with a space.
+  it('names the Fortnox licences when Fortnox refuses a first connect for a scope licence', async () => {
+    useStateRow('S')
+    vi.mocked(consentHoldsTokens).mockResolvedValue(false)
+
+    const res = await callbackHandler(callbackRequest({
+      error: 'error_missing_license',
+      error_description: 'Resource owner is not licensed for the requested scope(s).',
+      state: 'S',
+    }))
+    const html = await res.text()
+
+    expect(html).toContain('Fortnox-företaget du loggade in på saknar licens för något som Accounted läser vid flytten')
+    expect(html).toContain('Bokföring och Kundfaktura (eller Order)')
+    expect(html).not.toContain('Resource owner is not licensed')
+    expect(html).toContain('cancelled: false')
+    expect(consentHoldsTokens).toHaveBeenCalledWith('consent-1')
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+    // The state is kept: logging in again to the right company finishes the flow.
+    const approved = await callbackHandler(callbackRequest({ code: 'C', state: 'S' }))
+    expect(await approved.text()).toContain('Anslutningen lyckades')
+  })
+
+  // A renewal (an expired token, or Hämta underlag asking for the archive as
+  // well) asked for scopes the callback cannot see: the first-connect licences
+  // and the SIE advice would be wrong there, so it names none.
+  it('names no licence when Fortnox refuses a login that renews an existing connection', async () => {
+    useStateRow('S')
+    vi.mocked(consentHoldsTokens).mockResolvedValue(true)
+
+    const html = await (await callbackHandler(callbackRequest({
+      error: 'error_missing_license',
+      error_description: 'Resource owner is not licensed for the requested scope(s).',
+      state: 'S',
+    }))).text()
+
+    expect(html).toContain('Fortnox-företaget saknar licens för något som Accounted bad om att få läsa')
+    expect(html).toContain('Anslutningen du redan har påverkas inte')
+    expect(html).not.toContain('Kundfaktura')
+    expect(html).not.toContain('SIE-filer')
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+  })
+
+  it('keeps the integration sentence for the app licence refusal', async () => {
+    useStateRow('S')
+
+    const html = await (await callbackHandler(callbackRequest({
+      error: 'error_missing_app_license',
+      error_description: 'Resource owner does not have enough licenses.',
+      state: 'S',
+    }))).text()
+
+    expect(html).toContain('Fortnox Integration')
+  })
+
+  it('gives a cancel with an unknown state the one generic rejection and nothing else', async () => {
+    vi.mocked(peekOAuthState).mockResolvedValue(null)
+    vi.mocked(consumeOAuthState).mockResolvedValue(null)
+    vi.mocked(oauthStateRejectionReason).mockResolvedValue('unknown')
+
+    const cancelled = await answer({ error: 'access_denied', state: 'never-minted' })
+
+    expect(cancelled).toContain(GENERIC_REJECTION)
+    expect(cancelled).not.toContain(CANCEL_SENTENCE)
+    expect(cancelled).toContain('cancelled: false')
+    expect(cancelled).not.toContain('never-minted')
+    expect(cancelled).not.toContain('consentId')
+    expect(requireFlowInitiator).not.toHaveBeenCalled()
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+    // A dead state reads the same whether the callback carried a cancel or a code.
+    expect(cancelled).toBe(await answer({ code: 'C', state: 'never-minted' }))
+  })
+
+  it('logs why a state was dead and answers every reason with the same bytes', async () => {
+    vi.mocked(consumeOAuthState).mockResolvedValue(null)
+    const answers: string[] = []
+
+    for (const reason of ['used', 'expired', 'unknown'] as const) {
+      vi.mocked(oauthStateRejectionReason).mockResolvedValue(reason)
+
+      answers.push(await answer({ code: 'C', state: 'dead-state' }))
+
+      expect(oauthStateRejectionReason).toHaveBeenLastCalledWith('dead-state')
+      expect(console.error).toHaveBeenLastCalledWith('OAuth callback state rejected', {
+        hasCode: true,
+        stateLength: 'dead-state'.length,
+        reason,
+      })
+    }
+
+    expect(answers[0]).toContain(GENERIC_REJECTION)
+    expect(new Set(answers).size).toBe(1)
+  })
+
+  it('looks a rejected handoff up by its own token, not by a state on the same request', async () => {
+    vi.mocked(consumeHandoff).mockResolvedValue(null)
+    vi.mocked(oauthStateRejectionReason).mockResolvedValue('handoff')
+
+    const res = await callbackHandler(callbackRequest({ handoff: 'handoff-token', state: 'injected' }))
+
+    expect(await res.text()).toContain(GENERIC_REJECTION)
+    expect(oauthStateRejectionReason).toHaveBeenCalledWith('handoff-token')
+    expect(console.error).toHaveBeenCalledWith(
+      'OAuth callback state rejected',
+      expect.objectContaining({ reason: 'handoff' }),
+    )
   })
 })

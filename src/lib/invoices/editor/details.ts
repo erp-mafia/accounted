@@ -54,6 +54,8 @@ export type DetailsReason =
   | 'delivery_date'
   /** The date falls in a locked or closed period: it cannot be booked. */
   | 'date_locked'
+  /** The date falls in a momsperiod whose declaration is filed: it can be booked, and changes that declaration. */
+  | 'date_filed_vat'
   /** A quote valid until before its own date. */
   | 'quote_validity'
 
@@ -68,6 +70,8 @@ export interface DetailsExpansionInput {
   validUntil: string
   /** invoiceDateLock() of the invoice date, only where sending books it. */
   dateLock: InvoiceDateLock | null
+  /** The invoice date lies in a filed momsperiod, only where sending books it and the date is open. */
+  dateFiledVat?: boolean
 }
 
 /**
@@ -91,6 +95,7 @@ export function resolveDetailsExpansion(input: DetailsExpansionInput): DetailsRe
     }
   }
   if (input.dateLock) reasons.push('date_locked')
+  else if (input.dateFiledVat) reasons.push('date_filed_vat')
   if (
     !input.isSelfBilled &&
     input.documentType === 'quote' &&

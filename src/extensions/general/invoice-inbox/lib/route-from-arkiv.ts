@@ -1,6 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivSectionRollout, isArkivSectionEnabled } from '@/lib/arkiv/flag'
-import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
+import { isOwnIssuedInvoice, resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
+import { inboxSourceForIntake, intakeSourceFromUploadSource } from '@/lib/intake/sources'
+import { isInboxItemTaken, isOpenInboxItem, whereInboxItemFree, whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
+import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
+import { hasQueuedOrBookedTwin } from '@/lib/documents/queued-inbox-item'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { matchSupplierId, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
+import { isArchiveOnlyUpload } from '@/lib/documents/archive-only'
+import { UNDERLAG_DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 
 /**
  * Arkiv phase 7: the queue is decided by what the document is, not by the
@@ -16,26 +24,39 @@ import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-ki
  * ARKIV_COMPANY_IDS. Outside it the document stays in Underlag, and the
  * sweep brings back what was routed before (requeueHiddenRoutedItems).
  */
-export const VOUCHER_TYPES = new Set(['receipt', 'supplier_invoice', 'credit_note'])
+export const VOUCHER_TYPES: ReadonlySet<string> = new Set(UNDERLAG_DOC_TYPES)
 
 /**
  * A queue item stays in Underlag, whatever Arkiv typed its document, when the inbox reader saw a bill in it:
  * a receipt or supplier invoice, or an amount on a government letter or on a document Arkiv could only call
- * "other". Where the two readers disagree, a person decides, and a person only sees Underlag. Prod 2026-09-25:
+ * "other". Where the two readers disagree, a person decides, and a person only sees Underlag. Seen 2026-09-25:
  * congestion-tax bills typed as Skatteverket decisions, credit notes typed "other" and supplier invoices typed
- * as customer invoices left the queue for a section their companies could not open.
+ * as customer invoices left the queue for a section their companies could not open. The company's own sales
+ * invoice stays too (crm#1830): Underlag is where it is linked to the payment it brought in, or dropped.
+ * The amount counts whatever its sign (crm#1887): a bank's advice of money paid out reads as a negative total,
+ * and it is as much a verifikat's underlag as a bill is.
  */
 export function inboxSawABill(extracted: Record<string, unknown> | null | undefined, arkivType: string): boolean {
   if (!extracted) return false
+  if (isOwnIssuedInvoice(extracted)) return true
   const kind = typeof extracted.documentKind === 'string' ? extracted.documentKind : null
   if (kind === 'receipt' || kind === 'supplier_invoice' || kind === 'credit_note') return true
   const totals = extracted.totals as { total?: unknown } | null | undefined
   const total = typeof totals?.total === 'number' ? totals.total : Number(totals?.total ?? 0)
-  if (!(Number.isFinite(total) && total > 0)) return false
+  if (!(Number.isFinite(total) && total !== 0)) return false
   return kind === 'government_letter' || arkivType === 'other'
 }
 
-export type RouteOutcome = 'queued' | 'requeued' | 'retyped' | 'already_queued' | 'booked' | 'routed_to_arkiv' | 'left' | 'not_found'
+export type RouteOutcome =
+  | 'queued'
+  | 'requeued'
+  | 'retyped'
+  | 'already_queued'
+  | 'booked'
+  | 'duplicate_of_queued_or_booked'
+  | 'routed_to_arkiv'
+  | 'left'
+  | 'not_found'
 
 /** The queue item's hint for a voucher type: a credit note comes from a supplier, so its hint is supplier_invoice. */
 const kindHintFor = (docType: string): 'receipt' | 'supplier_invoice' => (docType === 'receipt' ? 'receipt' : 'supplier_invoice')
@@ -65,8 +86,8 @@ export function personsAnswer(
 
 /**
  * Only a document classified within a day of arriving is put in the queue as new work. The Arkiv backfill
- * types documents uploaded long before, and queueing those handed 30 companies 152 to-dos nobody asked for
- * overnight (prod 2026-09-25, 85 of them one company's upload from eight days earlier). An old document
+ * types documents uploaded long before, and queueing those handed companies to-dos nobody asked for
+ * overnight (seen 2026-09-25, 85 of them one company's upload from eight days earlier). An old document
  * a person wants booked is booked from Arkiv, not pushed into their queue by a background job.
  */
 export const QUEUE_NEW_WITHIN_MS = 24 * 60 * 60 * 1000
@@ -77,6 +98,10 @@ interface DocumentRow {
   created_at?: string | null
   journal_entry_id: string | null
   extracted_data: Record<string, unknown> | null
+  extraction_model?: string | null
+  upload_source?: string | null
+  file_name?: string | null
+  sha256_hash?: string | null
 }
 
 interface ItemRow {
@@ -89,15 +114,13 @@ interface ItemRow {
   matched_transaction_id: string | null
 }
 
-const consumed = (i: ItemRow) => !!(i.created_supplier_invoice_id || i.created_journal_entry_id || i.matched_transaction_id)
-
 export async function routeClassifiedDocument(
   supabase: SupabaseClient,
   input: { documentId: string; companyId: string; userId: string | null; docType: string; admission: 'admitted' | 'held'; decidedBy?: 'model' | 'human' },
 ): Promise<RouteOutcome> {
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
-    .select('id, user_id, journal_entry_id, extracted_data, created_at')
+    .select('id, user_id, journal_entry_id, extracted_data, extraction_model, created_at, upload_source, file_name, sha256_hash')
     .eq('id', input.documentId)
     .eq('company_id', input.companyId)
     .maybeSingle()
@@ -114,8 +137,8 @@ export async function routeClassifiedDocument(
   const now = new Date().toISOString()
 
   if (VOUCHER_TYPES.has(input.docType) && input.admission === 'admitted') {
-    if (d.journal_entry_id || items.some(consumed)) return 'booked'
-    const open = items.find((i) => !consumed(i))
+    if (d.journal_entry_id || items.some(isInboxItemTaken)) return 'booked'
+    const open = items.find((i) => !isInboxItemTaken(i))
     if (open) {
       // Only a person's type is written on the item: a model's type never overrides the inbox reader, since where
       // the two readers disagree a person decides (inboxSawABill). Retyping in Dokument is the only place a person
@@ -125,30 +148,40 @@ export async function routeClassifiedDocument(
       // Guarded on the open-item predicate like the duplicate-upload hint (upload-and-extract.ts): an item booked
       // or matched since it was read keeps what it was booked as. A voucher type belongs in Underlag, so the
       // routing is cleared either way; undefined is dropped by supabase-js, so only what the answer changes moves.
-      const { data: updated, error } = await supabase
-        .from('invoice_inbox_items')
-        .update({
-          routed_to_arkiv_at: null,
-          routed_doc_type: null,
-          kind_hint: answer?.kind_hint,
-          extracted_data: answer?.extracted_data,
-        })
-        .eq('id', open.id)
-        .eq('company_id', input.companyId)
-        .is('created_supplier_invoice_id', null)
-        .is('created_journal_entry_id', null)
-        .is('matched_transaction_id', null)
-        .select('id')
+      const { data: updated, error } = await whereInboxItemFree(
+        supabase
+          .from('invoice_inbox_items')
+          .update({
+            routed_to_arkiv_at: null,
+            routed_doc_type: null,
+            kind_hint: answer?.kind_hint,
+            extracted_data: answer?.extracted_data,
+          })
+          .eq('id', open.id)
+          .eq('company_id', input.companyId),
+      ).select('id')
       if (error) throw new Error(`inbox item update failed: ${error.message}`)
       if (((updated as Array<{ id: string }> | null) ?? []).length === 0) return 'booked'
       return open.routed_to_arkiv_at ? 'requeued' : 'retyped'
     }
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() > QUEUE_NEW_WITHIN_MS) return 'left'
+    // An agent archived it for a verifikat that is already posted and links it next (archive_only on the MCP upload,
+    // lib/documents/archive-only.ts): the model's type files nothing in Underlag meanwhile. A person's type in
+    // Dokument still queues it, and it stays listed in Dokument and in gnubok_list_records either way.
+    if (input.decidedBy !== 'human' && isArchiveOnlyUpload(d)) return 'left'
+    // A byte-identical copy of a document that is already booked or already has its place in the queue gets no
+    // second item: queueing it is a double-booking risk. Not every upload door dedupes on content, so the routing
+    // that would put the copy in front of a person checks it here.
+    if (await hasQueuedOrBookedTwin(supabase, input.companyId, d)) return 'duplicate_of_queued_or_booked'
+    // The door the document came through, not 'upload' for all of them: the source column keeps the closest value
+    // its CHECK allows, and the canonical door rides beside it in channel_context (lib/intake/sources.ts).
+    const intakeSource = intakeSourceFromUploadSource(d.upload_source, { fileName: d.file_name }) ?? 'upload'
     const { error } = await supabase.from('invoice_inbox_items').insert({
       company_id: input.companyId,
       user_id: input.userId || d.user_id,
       status: 'received',
-      source: 'upload',
+      source: inboxSourceForIntake(intakeSource),
+      channel_context: { intake_source: intakeSource },
       document_id: input.documentId,
       kind_hint: kindHintFor(input.docType),
       // A credit note is a supplier document (the hint) that credits an
@@ -161,11 +194,12 @@ export async function routeClassifiedDocument(
       extraction_skipped: d.extracted_data == null,
     })
     if (error) throw new Error(`inbox item insert failed: ${error.message}`)
+    if (d.extracted_data == null) await fillIfReadSince(supabase, input.companyId, input.documentId)
     return 'queued'
   }
 
   if (!isArkivSectionEnabled(input.companyId)) return 'left'
-  const waiting = items.filter((i) => !consumed(i) && !i.routed_to_arkiv_at && !inboxSawABill(i.extracted_data ?? d.extracted_data, input.docType))
+  const waiting = items.filter((i) => isOpenInboxItem(i) && !inboxSawABill(i.extracted_data ?? d.extracted_data, input.docType))
   if (waiting.length === 0) return 'left'
   const { error } = await supabase
     .from('invoice_inbox_items')
@@ -179,6 +213,29 @@ export async function routeClassifiedDocument(
 }
 
 /**
+ * Queued unread: the document is usually still being read (document-extraction runs beside the classifier and
+ * fills the item when its reading lands, lib/documents/inbox-extraction/carry-to-queue.ts). A reading that landed
+ * between the fetch above and the insert found no item to fill, so one look after filing closes that gap: whichever
+ * finishes second fills the item. Best effort, never the routing's failure: the inbox list shows the document's
+ * reading either way.
+ */
+async function fillIfReadSince(supabase: SupabaseClient, companyId: string, documentId: string): Promise<void> {
+  try {
+    const { data } = await supabase.from('document_attachments').select('extracted_data').eq('id', documentId).eq('company_id', companyId).maybeSingle()
+    const reading = (data as { extracted_data?: Record<string, unknown> | null } | null)?.extracted_data ?? null
+    if (!reading) return
+    const filled = await carryReadingToQueuedItems(
+      supabase,
+      { companyId, documentId, reading },
+      { supplierFor: () => matchSupplierId(supabase, companyId, supplierIdentityFrom(reading.supplier)) },
+    )
+    for (const itemId of filled) await proposeBankMatchForInboxItem(supabase, companyId, itemId)
+  } catch {
+    // The reader fills it when it lands, and the list reads the document's reading meanwhile.
+  }
+}
+
+/**
  * The sweep's catch-up: queue rows whose document Arkiv has since classified
  * as something not booked from here (a handler that was not wired, an event
  * lost in a deploy) leave the queue the same way the live route does, for
@@ -187,14 +244,12 @@ export async function routeClassifiedDocument(
 export async function routeStaleQueueItems(supabase: SupabaseClient): Promise<number> {
   const section = arkivSectionRollout()
   if (section !== 'all' && section.length === 0) return 0
-  let query = supabase
-    .from('invoice_inbox_items')
-    .select('id, document_id, extracted_data, document_attachments!inner(doc_type, admission_state)')
-    .is('routed_to_arkiv_at', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .not('document_id', 'is', null)
+  let query = whereInboxItemOpen(
+    supabase
+      .from('invoice_inbox_items')
+      .select('id, document_id, extracted_data, document_attachments!inner(doc_type, admission_state)')
+      .not('document_id', 'is', null),
+  )
   if (section !== 'all') query = query.in('company_id', section)
   const { data, error } = await query.limit(500)
   if (error) throw new Error(`stale queue select failed: ${error.message}`)

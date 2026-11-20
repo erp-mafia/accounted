@@ -5,14 +5,16 @@ import { useLocale, useTranslations } from 'next-intl'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { SIEJobFailedError } from '@/lib/import/sie-job-client'
 import { formatImportFailure } from '@/lib/import/import-failure'
-import { countSieVouchers, importProviderYears, planProviderYears, providerYearsComplete, type ProviderYearsOutcome } from '@/lib/onboarding-books/provider-years'
+import { importProviderYears, planProviderYears, providerYearsComplete, type ProviderYearsOutcome } from '@/lib/onboarding-books/provider-years'
 import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
+import { previewCountsForSelection } from '@/lib/providers/preview-counts'
+import { missingTokenCredential, tokenCredentials } from '@/lib/providers/catalog'
+import { defaultFiscalYearSelection, fiscalYearSelectionProblem, needsSeveralRuns, toggleFiscalYear } from '@/lib/providers/year-selection'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { BRANCH_PROVIDERS } from '@/lib/onboarding-journey/branch'
-import type { ParsedSIEFile } from '@/lib/import/types'
 import { InkText } from '@/components/onboarding/journey/ink'
 import type { TheaterApi } from '../engines/theater-engine'
 import { Theater, type TheaterLine, type TheaterModelInput } from '../ui/Theater'
@@ -21,10 +23,14 @@ import { InsightPanel } from '../ui/InsightPanel'
 import { Pill, Pills } from '../ui/Pills'
 import { OptRow, OptRows, Sentence, Switch } from '../ui/Sentence'
 import {
-  openProviderWindow, pointWindow, providerAccept, providerConnect, providerImportSie, providerMigrate, providerPreview, providerSieData,
-  providerSubmitToken, takeReturnedConsentId, useProviderMessage, type ProviderPreview, type ProviderSieData,
+  openProviderWindow, pointWindow, providerAccept, providerConnect, providerImportRegisters, providerImportSie, providerMigrate,
+  providerPreview, providerSieData, providerSubmitToken, takeReturnedConsentId, useProviderMessage, type MigrateResults,
+  type ProviderPreview, type ProviderSieData,
 } from '../lib/provider'
+import { migrationRefusalMessageValues, type MigrationResource } from '@/lib/providers/migration-contract'
 import type { BooksCtx } from '../context'
+import { trackMigrationConnectClicked, trackMigrationConnectFinished, type MigrationConnectOutcome } from '@/components/extensions/general/arcim-connect-track'
+import { watchArcimOAuthPopup } from '@/components/extensions/general/arcim-document-import-flow'
 import { Button } from '@/components/ui/button'
 
 type Phase = 'connect' | 'connecting' | 'token' | 'loading' | 'preview' | 'importing' | 'imported'
@@ -67,6 +73,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const providerId = state.provider
   const provName = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.name ?? t('provider_generic'), [providerId, t])
   const provLogo = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.logo ?? null, [providerId])
+  const provMark = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.mark ?? null, [providerId])
   // What the provider charges or requires before its login can succeed,
   // said before the click in the migration workspace's own words, so the
   // paid add-on is not first met on the provider's page.
@@ -85,6 +92,11 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const [optsOpen, setOptsOpen] = useState(false)
   const [tokenA, setTokenA] = useState('')
   const [tokenB, setTokenB] = useState('')
+  // The token form asks for what /submit-token checks (lib/providers/catalog):
+  // for Björn Lundén that is the company key alone.
+  const credentials = tokenCredentials(providerId ?? '')
+  // The popup is Lundify's activation, not a login: the key can be typed instead.
+  const [activating, setActivating] = useState(false)
   const [model, setModel] = useState<TheaterModelInput | null>(null)
   const [shown, setShown] = useState(0)
   const [tick, setTick] = useState(0)
@@ -113,7 +125,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     try {
       const p = await providerPreview(cId)
       setPreview(p)
-      setYears((p.sourceYears ?? []).filter((y) => y.inDefaultSelection).map((y) => y.year))
+      setYears(defaultFiscalYearSelection(p.sourceYears ?? [], p.maxSelectedYears ?? 6, p.importedFiscalYears))
       setPhase('preview')
     } catch (err) {
       setError(getErrorMessage(err, { locale }))
@@ -121,18 +133,40 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     }
   }, [locale])
 
+  // The connect being measured, the Import page's funnel
+  // (migration_connect_clicked and _finished): most connects start here.
+  const attempt = useRef<string | null>(null)
+  const stopWatch = useRef<(() => void) | null>(null)
+  const finishAttempt = useCallback((outcome: MigrationConnectOutcome) => {
+    stopWatch.current?.()
+    stopWatch.current = null
+    const provider = attempt.current
+    attempt.current = null
+    if (provider) trackMigrationConnectFinished(provider, outcome)
+  }, [])
+
   // A full-page round trip brought a consentId in the URL.
   const returned = useRef(false)
   useEffect(() => {
     if (returned.current) return
     returned.current = true
     const cId = takeReturnedConsentId()
-    if (cId) void loadPreview(cId)
-  }, [loadPreview])
+    if (!cId) return
+    // The click was measured before the page left for the provider.
+    if (providerId) trackMigrationConnectFinished(providerId, 'success')
+    void loadPreview(cId)
+  }, [loadPreview, providerId])
 
-  useProviderMessage(
-    (cId) => void loadPreview(cId),
-    (reason) => { setError(getErrorMessage(reason, { locale })); setPhase('connect') },
+  const popupRef = useProviderMessage(
+    (cId) => { finishAttempt('success'); void loadPreview(cId) },
+    (reason, cancelled) => {
+      finishAttempt(cancelled ? 'cancelled' : 'provider_error')
+      // A cancel at the provider ends like a closed login window: try again,
+      // or take the SIE upload below. The callback's own sentence only said
+      // "try again", and most who saw it never connected (PostHog, 10-24..10-29).
+      setError(cancelled ? t('provider_cancelled', { provider: provName }) : getErrorMessage(reason, { locale }))
+      setPhase('connect')
+    },
   )
 
   // The login popup belongs to this step. Leaving it (SIE instead, Tillbaka)
@@ -150,31 +184,72 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   async function connect() {
     if (!providerId) return
     setError(null)
+    setActivating(false)
     setPhase('connecting')
+    attempt.current = providerId
+    trackMigrationConnectClicked(providerId)
     const popup = openProviderWindow()
+    popupRef.current = popup
     login.current.popup = popup
     try {
       const r = await providerConnect(providerId)
       if (login.current.left) return
       setConsentId(r.consentId)
-      if (r.alreadyConnected) { popup?.close(); void loadPreview(r.consentId); return }
-      if (r.authType === 'oauth' && r.authUrl) { pointWindow(popup, r.authUrl); return }
+      if (r.alreadyConnected) { popup?.close(); finishAttempt('success'); void loadPreview(r.consentId); return }
+      if (r.authType === 'oauth' && r.authUrl) { pointWindow(popup, r.authUrl); watchLogin(popup); return }
+      // Björn Lundén: Lundify activates the integration and hands the company
+      // key back through the same callback and message as a provider login.
+      if (r.activationUrl) { setActivating(true); pointWindow(popup, r.activationUrl); watchLogin(popup); return }
       popup?.close()
       setPhase('token')
     } catch (err) {
       popup?.close()
+      finishAttempt('provider_error')
       setError(getErrorMessage(err, { locale }))
       setPhase('connect')
     }
   }
 
+  // A login window shut before it answered: Fortnox's licence page, for one,
+  // sends nothing back, and the step used to wait on it for good. The popup
+  // posts its answer and then closes, so a close waits 3 s for a late answer,
+  // as on the Import page.
+  function watchLogin(popup: Window | null) {
+    if (!popup) return
+    stopWatch.current?.()
+    stopWatch.current = watchArcimOAuthPopup(popup, () => {
+      stopWatch.current = null
+      finishAttempt('window_closed')
+      if (login.current.left) return
+      setActivating(false)
+      setError(t('provider_window_closed', { provider: provName }))
+      setPhase('connect')
+    }, 500, 3000)
+  }
+
+  // Activated in Lundify already: the key is typed in and the window shut.
+  function enterKeyByHand() {
+    stopWatch.current?.()
+    stopWatch.current = null
+    login.current.popup?.close()
+    setActivating(false)
+    setPhase('token')
+  }
+
   async function submitToken() {
     if (!consentId || !providerId) return
     setPhase('connecting')
+    // A retry after a refused key is a press of its own.
+    if (!attempt.current) {
+      attempt.current = providerId
+      trackMigrationConnectClicked(providerId)
+    }
     try {
       await providerSubmitToken(consentId, providerId, tokenA, tokenB)
+      finishAttempt('success')
       void loadPreview(consentId)
     } catch (err) {
+      finishAttempt('provider_error')
       setError(getErrorMessage(err, { locale }))
       setPhase('token')
     }
@@ -182,7 +257,11 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
 
   /* ── preview: the facts, the years, the sentence ─────────────────── */
   const sourceYears = useMemo(() => preview?.sourceYears ?? [], [preview])
+  const previewCounts = previewCountsForSelection(preview?.sieStats, years)
   const maxYears = preview?.maxSelectedYears ?? 6
+  // A tick always lands; over the run's limit the step says so and keeps the
+  // import closed (lib/providers/year-selection).
+  const tooManyYears = fiscalYearSelectionProblem(years, maxYears) === 'too_many'
   const companyName = preview?.companyInfo?.company_name || preview?.consent.companyName || ''
   const scopeParts = useMemo(() => {
     const parts: string[] = []
@@ -255,26 +334,22 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       let voucherTotal = 0
       if (preview?.sieAvailable !== false) {
         data = await providerSieData(consentId, years)
-        try {
-          const { buildTheaterModel } = await import('@/lib/import/theater-model')
-          const m = buildTheaterModel(data.parsed as unknown as ParsedSIEFile)
-          setModel({
-            company: m.companyName || companyName,
-            accounts: m.accounts.map((a) => ({ number: a.number, name: a.name, weight: a.weight })),
-            counterparties: m.counterparties.map((c) => ({ name: c.name, account: c.account, weight: c.weight })),
-          })
-          voucherTotal = m.totalVouchers
-          setTotal(voucherTotal)
-        } catch {
-          setModel({ company: companyName, accounts: [], counterparties: [] })
-        }
+        // Built on the server: the parse behind it stays there with the files.
+        const m = data.theater
+        setModel({
+          company: m.companyName || companyName,
+          accounts: m.accounts.map((a) => ({ number: a.number, name: a.name, weight: a.weight })),
+          counterparties: m.counterparties.map((c) => ({ name: c.name, account: c.account, weight: c.weight })),
+        })
+        voucherTotal = m.totalVouchers
+        setTotal(voucherTotal)
         setAccountsN(data.mappingStats.total)
         setShown(2)
         at(200, () => apiRef.current?.spawnAccounts())
         // The server decided every target it can (class 9 amounts to 2999).
         // A blank left over that no chart can hold stops here, before any
         // write: mapped onto itself it was refused one call later (#3312).
-        const resolved = resolveOnboardingMappings(data.mappings, data.parsed.accounts)
+        const resolved = resolveOnboardingMappings(data.mappings, data.accounts)
         if (resolved.unresolved.length > 0) {
           throw new Error(t('accounts_outside_bas', { count: resolved.unresolved.length, accounts: resolved.unresolved.join(', ') }))
         }
@@ -294,8 +369,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         const plan = planProviderYears(data)
         setKeptYears(plan.alreadyImported)
         if (plan.alreadyImported.length > 0) {
-          const files = data.rawContent
-          voucherTotal = plan.pending.reduce((n, f) => n + countSieVouchers(files[f.index]), 0)
+          const files = data.fileStatuses
+          voucherTotal = plan.pending.reduce((n, f) => n + files[f.index].voucherCount, 0)
           setTotal(voucherTotal)
         }
         // The feed runs for as long as the job does; the count is held at
@@ -304,12 +379,12 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         apiRef.current?.feedVouchers(15 * 60_000, Math.max(1, voucherTotal))
         apiRef.current?.setFeedCap(0)
         setJobPhase('preparing')
-        const importedAccounts: string[] = data.parsed.accounts.map((a) => a.number)
+        const importedAccounts: string[] = data.accounts.map((a) => a.number)
         let writtenBefore = 0
-        const outcome = await importProviderYears(data, async (rawContent) => {
+        const outcome = await importProviderYears(data, async (file) => {
           setJobPhase('preparing')
           setPrepared(0)
-          const result = await providerImportSie(rawContent, mappings, voucherSeries, (job) => {
+          const result = await providerImportSie(file, mappings, voucherSeries, (job) => {
             const { written, phase } = jobProgress(job)
             setJobPhase(phase)
             setPrepared(job.prepared_through ?? 0)
@@ -343,9 +418,21 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       setShown(4)
       if (wantsRegisters) {
         setRegText(t('reg_running'))
-        const results = await providerMigrate(consentId, { importCustomers: opts.kunder, importSuppliers: opts.lev, importSalesInvoices: opts.kf, importSupplierInvoices: opts.lf, importAssets: opts.anl }, (step) => {
-          if (step) setRegText(step)
-        })
+        // Customers, suppliers and invoices go through the background import,
+        // which reads every record in full (crm#1436); /migrate keeps the
+        // asset register.
+        const resources = ([
+          opts.kunder && 'customers', opts.lev && 'suppliers', opts.kf && 'salesInvoices', opts.lf && 'supplierInvoices',
+        ] as const).filter((resource): resource is MigrationResource => !!resource)
+        const results: MigrateResults = resources.length > 0
+          ? await providerImportRegisters(consentId, resources, (imported, total) => {
+            setRegText(total > 0 ? t('reg_progress', { imported, total }) : t('reg_running'))
+          })
+          : {}
+        if (opts.anl) {
+          const assets = await providerMigrate(consentId, { importAssets: true }, (step) => { if (step) setRegText(step) })
+          if (assets.stepErrors?.length) results.stepErrors = assets.stepErrors
+        }
         const invoices = (results.salesInvoices?.imported ?? 0) + (results.supplierInvoices?.imported ?? 0)
         setRegText(t('reg_summary', { customers: results.customers?.imported ?? 0, suppliers: results.suppliers?.imported ?? 0, invoices }))
         await new Promise<void>((resolve) => {
@@ -354,7 +441,16 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           api.registerStage({ source: provName, ms: Math.min(6000, Math.max(2200, invoices * 25)), invoices: [['1510', results.salesInvoices?.imported ?? 0], ['2440', results.supplierInvoices?.imported ?? 0]], onProgress: (r) => { if (r.done) resolve() } })
           at(8000, () => resolve())
         })
-        if (results.stepErrors?.length) setRegText(results.stepErrors.map((e) => getErrorMessage(e, { locale })).join(' '))
+        // A refused register imports nothing: say which one and what unblocks
+        // it, in the Import page's words, beside any failed step.
+        const register = (resource: MigrationResource) => tx(`ext_arcim_job_resource_${resource}`)
+        const notes = [
+          ...(results.refused ?? []).map((group) => `${tx('ext_arcim_job_refused', {
+            resources: group.resources.map(register).join(', '),
+          })}. ${tx(group.messageKey, migrationRefusalMessageValues(group.resources, provName, register))}`),
+          ...(results.stepErrors ?? []).map((e) => getErrorMessage(e, { locale })),
+        ]
+        if (notes.length > 0) setRegText(notes.join(' '))
       } else {
         setRegText(t('reg_skipped'))
       }
@@ -398,18 +494,27 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={provLogo} alt="" />
               </span>
+            ) : provMark ? (
+              <span className="pmark" aria-hidden="true">{provMark}</span>
             ) : null}
             {t('provider_login', { provider: provName })}
           </Button>
         </div>
       ) : null}
       {phase === 'connecting' ? <Wait text={t('provider_connecting', { provider: provName })} /> : null}
+      {phase === 'connecting' && activating ? (
+        <div className="bks-center-col" style={{ marginTop: 12 }}>
+          <Button variant="link" className="h-auto whitespace-normal text-center text-muted-foreground" onClick={enterKeyByHand}>
+            {tx('ext_arcim_bl_manual_key_toggle')}
+          </Button>
+        </div>
+      ) : null}
       {/* The SIE way round the login, on the same screen. Also while
           connecting: a popup closed on the provider's licence page sends
           no message back, so the step would otherwise wait there. */}
       {phase === 'connect' || phase === 'connecting' ? (
         <div className="bks-center-col" style={{ marginTop: 18 }}>
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'PICK_SIE' })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'PICK_SIE' })}>
             {t('provider_sie_instead')}
           </Button>
           <p className="brandhint">
@@ -422,11 +527,16 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'loading' ? <Wait text={t('provider_reading', { provider: provName })} /> : null}
       {phase === 'token' ? (
         <div className="tokfields">
-          <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={t('tok_company', { provider: provName })} />
-          <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName })} autoComplete="off" />
+          {credentials.companyId ? (
+            <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={providerId === 'bjornlunden' ? t('tok_bl_key') : t('tok_company', { provider: provName })} />
+          ) : null}
+          {credentials.secret ? (
+            <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName })} autoComplete="off" />
+          ) : null}
+          {providerId === 'bjornlunden' ? <p className="brandhint">{tx('ext_arcim_bl_token_help')}</p> : null}
           <div className="jny-qactions" style={{ marginTop: 12 }}>
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
-            <Button size="lg" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
+            <Button size="lg" disabled={missingTokenCredential(providerId ?? '', { apiToken: tokenA, companyId: tokenB }) !== null} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
           </div>
         </div>
       ) : null}
@@ -439,25 +549,37 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={provLogo} alt="" />
               </span>
+            ) : provMark ? (
+              <span className="pmark" aria-hidden="true">{provMark}</span>
             ) : null}
             <span>{t('provider_connected', { provider: provName })}</span>
             {companyName ? <span style={{ color: 'hsl(var(--muted-foreground))' }}>· {companyName}</span> : null}
           </p>
+          {/* The facts speak for the ticked years (crm#1037). The account and
+              voucher counts were read from the default years only, so they
+              show while exactly those years are ticked; otherwise the tile
+              says they are counted when the years are fetched. The year tile
+              used to count the source's years beside those counts, which read
+              as five years holding the three default years' vouchers. */}
           <dl className="stats">
             <div className="stat" style={{ animationDelay: '0ms' }}>
               <dt>{t('stat_years')}</dt>
               <dd>
-                {sourceYears.length || preview.sieStats?.fiscalYears.length || 0}
-                {sourceYears.length > 1 ? <small>{sourceYears[0].year} till {sourceYears[sourceYears.length - 1].year}</small> : null}
+                {years.length}
+                {years.length > 1 ? <small>{years[0]} till {years[years.length - 1]}</small> : null}
               </dd>
             </div>
             <div className="stat" style={{ animationDelay: '120ms' }}>
               <dt>{t('stat_accounts')}</dt>
-              <dd>{(preview.sieStats?.accountCount ?? 0).toLocaleString('sv-SE')}</dd>
+              {previewCounts
+                ? <dd>{previewCounts.accounts.toLocaleString('sv-SE')}</dd>
+                : <dd className="later">{t('stat_counted_on_fetch')}</dd>}
             </div>
             <div className="stat" style={{ animationDelay: '240ms' }}>
               <dt>{t('stat_vouchers')}</dt>
-              <dd>{(preview.sieStats?.transactionCount ?? 0).toLocaleString('sv-SE')}</dd>
+              {previewCounts
+                ? <dd>{previewCounts.vouchers.toLocaleString('sv-SE')}</dd>
+                : <dd className="later">{t('stat_counted_on_fetch')}</dd>}
             </div>
           </dl>
           {sourceYears.length > 1 ? (
@@ -472,7 +594,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                       index={i}
                       toggle
                       on={on}
-                      onClick={() => setYears((prev) => (on ? prev.filter((v) => v !== y.year) : prev.length >= maxYears ? prev : [...prev, y.year].sort()))}
+                      onClick={() => setYears((prev) => toggleFiscalYear(prev, y.year))}
                       trailing={!y.inDefaultSelection ? <span className="old">{t('years_older')}</span> : undefined}
                     >
                       {y.year}
@@ -480,6 +602,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                   )
                 })}
               </Pills>
+              {tooManyYears ? <p className="jny-attn" role="status">{tx('ext_arcim_year_select_too_many', { max: maxYears })}</p> : null}
+              {!tooManyYears && needsSeveralRuns(sourceYears, maxYears) ? <p className="mt-2.5 text-center text-xs text-muted-foreground">{tx('ext_arcim_year_select_oldest_first', { max: maxYears })}</p> : null}
             </div>
           ) : null}
           <Sentence open={optsOpen} onToggle={() => setOptsOpen((v) => !v)} changeLabel={t('change')} closeLabel={t('close')}>
@@ -494,7 +618,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             </OptRows>
           ) : null}
           <div className="jny-qactions">
-            <Button size="lg" disabled={years.length === 0 && preview.sieAvailable !== false} onClick={() => void runImport()}>
+            <Button size="lg" disabled={(years.length === 0 && preview.sieAvailable !== false) || tooManyYears} onClick={() => void runImport()}>
               {years.length === 0 && preview.sieAvailable !== false ? t('years_pick_one') : t('sie_import', { count: years.length })}
             </Button>
           </div>
@@ -515,8 +639,6 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             prepared,
           } : undefined}
           onApi={(api) => { apiRef.current = api }}
-          groupLabels={{ tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') }}
-          reviewLabel={t('grp_review')}
         />
       ) : null}
 
@@ -548,11 +670,11 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
               retry. Back to the years instead, where it can be left out as
               on a first run; the preview is still in memory. */}
           {unfetched.length > 0 && sourceYears.length > 1 ? (
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => { setShown(0); setTick(0); setImportError(null); setPhase('preview') }}>
+            <Button variant="ghost" className="text-muted-foreground" onClick={() => { setShown(0); setTick(0); setImportError(null); setPhase('preview') }}>
               {t('provider_pick_years')}
             </Button>
           ) : null}
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
             {t('provider_change_source')}
           </Button>
         </div>

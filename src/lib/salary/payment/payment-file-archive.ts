@@ -28,6 +28,13 @@ export interface ArchivedSalaryPaymentFile {
   employee_count: number
   total_amount: number
   generated_at: string
+  /**
+   * The run's payment file version the file carries (crm#1219): a new version
+   * has new MsgId and EndToEndIds; 1 for Bankgirot LB.
+   */
+  version: number
+  /** The person confirmed the earlier file was not approved at the bank: true on the row that made the version. */
+  previous_not_approved_confirmed: boolean
   /** The file exactly as generated. */
   content: string
 }
@@ -50,6 +57,8 @@ type Row = {
   employee_count: number
   total_amount: number | string
   generated_at: string
+  version: number
+  previous_not_approved_confirmed: boolean
   content: string
 }
 
@@ -76,7 +85,7 @@ export async function listSalaryPaymentFiles(
   // guard (tests/schema) can check every name against the migration.
   let query = supabase
     .from('salary_payment_files')
-    .select('id, format, filename, content_type, charset, sha256, byte_size, payment_date, employee_count, total_amount, generated_at, content')
+    .select('id, format, filename, content_type, charset, sha256, byte_size, payment_date, employee_count, total_amount, generated_at, version, previous_not_approved_confirmed, content')
     .eq('company_id', input.companyId)
     .eq('salary_run_id', input.salaryRunId)
     .order('generated_at', { ascending: false })
@@ -115,6 +124,8 @@ export async function listSalaryPaymentFiles(
       // PostgREST may serialize numeric as a string on some stacks.
       total_amount: Number(r.total_amount),
       generated_at: r.generated_at,
+      version: r.version,
+      previous_not_approved_confirmed: r.previous_not_approved_confirmed,
       content: r.content,
     })),
   }

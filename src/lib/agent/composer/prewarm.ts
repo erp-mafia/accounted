@@ -25,7 +25,7 @@ export async function preWarmAtomCache(opts: {
   const bodies = atomBodies.filter((b) => b && b.length > 0)
   if (bodies.length === 0) return
 
-  const anthropic = getAnthropic()
+  const anthropic = await getAnthropic()
   try {
     await anthropic.messages.create({
       model: SONNET_MODEL,

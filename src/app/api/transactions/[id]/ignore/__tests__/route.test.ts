@@ -10,6 +10,14 @@ import {
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
@@ -27,13 +35,6 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { POST, DELETE } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
-
-/** The three junction lookups the shared core runs for an unbooked row. */
-function enqueueNoAnchors() {
-  enqueue({ data: [], error: null }) // transaction_voucher_links
-  enqueue({ data: [], error: null }) // invoice_payments
-  enqueue({ data: [], error: null }) // supplier_invoice_payments
-}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -86,7 +87,7 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('returns 409 when the transaction is already booked', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: 'je-1', is_ignored: false }, error: null })
+    enqueue({ data: { id: 'tx-1', journal_entry_id: 'je-1', is_booked: true, is_ignored: false }, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
@@ -100,10 +101,7 @@ describe('POST /api/transactions/[id]/ignore', () => {
   it('returns 409 for a bulk-booked row whose verifikat lives in transaction_voucher_links (issue #1661)', async () => {
     // journal_entry_id stays NULL for N>1 bulk bookings: the old bare check
     // would have let this row be ignored while a verifikat still carries it.
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_ignored: false }, error: null })
-    enqueue({ data: [{ transaction_id: 'tx-1' }], error: null }) // transaction_voucher_links
-    enqueue({ data: [], error: null })
-    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: true, is_ignored: false }, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
@@ -115,8 +113,7 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('is idempotent when the transaction is already ignored', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_ignored: true }, error: null })
-    enqueueNoAnchors()
+    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: true }, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
@@ -128,8 +125,7 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('marks the transaction ignored (happy path)', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_ignored: false }, error: null }) // fetch
-    enqueueNoAnchors()
+    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: false }, error: null }) // fetch
     enqueue({ data: null, error: null }) // update
 
     const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
@@ -142,8 +138,7 @@ describe('POST /api/transactions/[id]/ignore', () => {
   })
 
   it('returns 500 when the update fails', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_ignored: false }, error: null }) // fetch
-    enqueueNoAnchors()
+    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: false }, error: null }) // fetch
     enqueue({ data: null, error: { message: 'db down' } }) // update fails
 
     const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'POST' })
@@ -197,7 +192,7 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
   })
 
   it('clears the ignore flag (happy path)', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_ignored: true }, error: null }) // fetch
+    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: true }, error: null }) // fetch
     enqueue({ data: null, error: null }) // update
 
     const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'DELETE' })
@@ -210,7 +205,7 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
   })
 
   it('returns 500 when the update fails', async () => {
-    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_ignored: true }, error: null }) // fetch
+    enqueue({ data: { id: 'tx-1', journal_entry_id: null, is_booked: false, is_ignored: true }, error: null }) // fetch
     enqueue({ data: null, error: { message: 'db down' } }) // update fails
 
     const request = createMockRequest('/api/transactions/tx-1/ignore', { method: 'DELETE' })

@@ -1,12 +1,12 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import { useAssistantAvailable } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useAssistantChatEnabled } from '@/contexts/CompanyContext'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -24,10 +24,12 @@ import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { resolveInitialMode } from '@/lib/ui-state/client'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, LayoutTemplate, Sparkles } from 'lucide-react'
+import { PlusIcon, RectangleGroupIcon, SparklesIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
+import { formatAmountInput } from '@/lib/money'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 
 const NewJournalEntryDialog = dynamic(
   () => import('@/components/bookkeeping/NewJournalEntryDialog'),
@@ -53,23 +55,25 @@ export default function BookkeepingPage() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { canWrite, lockedTitle } = useViewerLock()
+  // A read-only member gets no create dialog from a deep link either.
   const copyFromId = useMemo<string | null>(() => {
     const raw = searchParams.get('copy_from')
-    return raw && UUID_RE.test(raw) ? raw : null
-  }, [searchParams])
-  // Deep link from the dashboard "Verifikat utan underlag" card (and the
-  // push-notification link): open the list with the saknade-underlag filter
-  // already on. Read once on mount: the param stays in the URL (shareable),
-  // and later in-page filter changes must not be fought by the URL.
-  const [initialShowMissingOnly] = useState(
-    () => searchParams.get('missingUnderlag') === 'true',
+    return canWrite && raw && UUID_RE.test(raw) ? raw : null
+  }, [searchParams, canWrite])
+  // The list's own view (filters, search, page, and the deep links from Hem
+  // and the bokslut preflight) lives in the same query and is the list's to
+  // read and write (lib/bookkeeping/verifikat-list-query.ts). The deep links
+  // below consume only their own key, so that view survives them (crm#1998).
+  const replaceWithout = useCallback(
+    (key: string) => {
+      const rest = new URLSearchParams(window.location.search)
+      rest.delete(key)
+      const qs = rest.toString()
+      router.replace(qs ? `/bookkeeping?${qs}` : '/bookkeeping')
+    },
+    [router],
   )
-  // Deep link from the bokslut preflight ("Förklara luckan"): scope the list
-  // to the räkenskapsår whose voucher gap blocked the bokslut. Read once, as above.
-  const [initialGapPeriodId] = useState<string | null>(() => {
-    const raw = searchParams.get('gaps')
-    return raw && UUID_RE.test(raw) ? raw : null
-  })
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [showNewEntry, setShowNewEntry] = useState(false)
@@ -82,6 +86,8 @@ export default function BookkeepingPage() {
   const [nextVoucher, setNextVoucher] = useState<NextVoucher | null>(null)
   const t = useTranslations('bookkeeping')
   const tStart = useTranslations('start_cards')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const { openAgentSheet } = useAgentSheet()
   const { uiState, loaded: uiStateLoaded } = useUiState()
   // The 'assistent' mode opens the tool-loop runtime (verifikation.draft via
@@ -89,9 +95,11 @@ export default function BookkeepingPage() {
   // cannot run (#2204): drop it from the split button and the pristine cards
   // rather than offer a door into a 503. One list feeds both surfaces, and a
   // persisted last-used 'assistent' falls back to 'tomt' through
-  // resolveInitialMode's validity check.
+  // resolveInitialMode's validity check. The same where the built-in chat is
+  // switched off (ASSISTANT_CHAT_ENABLED): the mode opens its panel.
   const assistantAvailable = useAssistantAvailable()
-  const createModes: readonly CreateMode[] = assistantAvailable
+  const assistantChatEnabled = useAssistantChatEnabled()
+  const createModes: readonly CreateMode[] = assistantAvailable && assistantChatEnabled
     ? CREATE_MODES
     : CREATE_MODES.filter((mode) => mode !== 'assistent')
 
@@ -126,8 +134,8 @@ export default function BookkeepingPage() {
           const credit = Number(l.credit_amount) || 0
           return {
             account_number: l.account_number,
-            debit_amount: debit > 0 ? debit.toFixed(2) : '',
-            credit_amount: credit > 0 ? credit.toFixed(2) : '',
+            debit_amount: debit > 0 ? formatAmountInput(debit, '.') : '',
+            credit_amount: credit > 0 ? formatAmountInput(credit, '.') : '',
             line_description: l.line_description || '',
           }
         })
@@ -150,9 +158,9 @@ export default function BookkeepingPage() {
         setIsLoadingCopy(false)
         // Clear copy_from so a refresh doesn't re-trigger and so clicking the
         // same entry's Kopiera button again re-fires this effect.
-        router.replace('/bookkeeping')
+        replaceWithout('copy_from')
       })
-  }, [copyFromId, toast, router])
+  }, [copyFromId, toast, replaceWithout])
 
   // React to the skattekonto deep link the same way: consume the staged
   // payload (single-use, sessionStorage; the URL carries only the opaque id),
@@ -160,16 +168,28 @@ export default function BookkeepingPage() {
   // re-trigger. copy_from wins if both are somehow present. A missing or
   // invalid payload (shared/stale link) degrades to the plain list.
   useEffect(() => {
-    if (copyFromId) return
+    if (copyFromId || !canWrite) return
     const rawId = searchParams.get('skv_tx')
     if (!rawId) return
     const prefill = takeSkvManualPrefill(rawId)
-    router.replace('/bookkeeping')
+    replaceWithout('skv_tx')
     if (!prefill) return
     setSkvLink(prefill)
     setCopyPrefill(null)
     setShowNewEntry(true)
-  }, [searchParams, copyFromId, router])
+  }, [searchParams, copyFromId, replaceWithout, canWrite])
+
+  // ?new opens the empty "Nytt verifikat" dialog: the Bokföring area's create
+  // button in the sidebar links here. The param is consumed so a refresh or
+  // the back button does not reopen the dialog. The other deep links win.
+  const wantsNew = canWrite && searchParams.has('new')
+  useEffect(() => {
+    if (!wantsNew || copyFromId || searchParams.get('skv_tx')) return
+    replaceWithout('new')
+    setCopyPrefill(null)
+    setSkvLink(null)
+    setShowNewEntry(true)
+  }, [wantsNew, copyFromId, searchParams, replaceWithout])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const skvPrefill = useMemo<SkvLinkPrefill | null>(() => {
@@ -246,7 +266,7 @@ export default function BookkeepingPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={t('title')}
+        title={tNav('v3_vouchers')}
         action={
           <SplitButton
             // Remount once ui_state loads so the primary face re-resolves
@@ -260,8 +280,10 @@ export default function BookkeepingPage() {
                 label: nextVoucher
                   ? `${t('create_tomt')} (${nextVoucher.series}${nextVoucher.next})`
                   : t('create_tomt'),
-                icon: Plus,
+                icon: PlusIcon,
                 description: t('create_tomt_desc'),
+                disabled: !canWrite,
+                disabledTitle: lockedTitle,
                 onSelect: () => {
                   setCopyPrefill(null)
                   setSkvLink(null)
@@ -271,15 +293,19 @@ export default function BookkeepingPage() {
               {
                 key: 'mall',
                 label: t('create_mall'),
-                icon: LayoutTemplate,
+                icon: RectangleGroupIcon,
                 description: t('create_mall_desc'),
+                disabled: !canWrite,
+                disabledTitle: lockedTitle,
                 onSelect: () => setShowTemplateDialog(true),
               },
               {
                 key: 'assistent',
                 label: t('create_with_assistant'),
-                icon: Sparkles,
+                icon: SparklesIcon,
                 description: t('create_assistent_desc'),
+                disabled: !canWrite,
+                disabledTitle: lockedTitle,
                 onSelect: () =>
                   openAgentSheet({
                     intentId: 'verifikation.draft',
@@ -296,8 +322,6 @@ export default function BookkeepingPage() {
           losing expansion/selection/scroll. */}
       <JournalEntryList
         refreshToken={refreshKey}
-        initialShowMissingOnly={initialShowMissingOnly}
-        initialGapPeriodId={initialGapPeriodId}
         pristineSlot={
           <div className="animate-fade-in space-y-4">
             <StartCard
@@ -334,7 +358,9 @@ export default function BookkeepingPage() {
                   key={mode}
                   type="button"
                   onClick={onClick}
-                  className="rounded-lg border border-border bg-background p-4 text-left transition-colors duration-150 hover:bg-secondary/35 active:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  disabled={!canWrite}
+                  title={lockedTitle}
+                  className="rounded-lg p-4 text-left transition-colors duration-150 hover:bg-secondary/35 active:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
                 >
                   <div className="text-[13px] font-medium">{tStart(`bookkeeping_mini_${mode}_title`)}</div>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">

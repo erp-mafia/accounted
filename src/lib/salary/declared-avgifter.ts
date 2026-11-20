@@ -285,3 +285,70 @@ export function computeDeclaredAvgifterWithOverrides(
 
   return { totalAmount, totalUnderlag, byCategory }
 }
+
+/** One salary_run_employees row as stored, with the F-skatt join. */
+export interface DeclaredAvgifterRunRow {
+  avgifter_basis: number
+  avgifter_basis_override?: number | null
+  avgifter_amount_override?: number | null
+  avgifter_rate: number
+  avgifter_category?: string | null
+  removed_from_agi?: boolean | null
+  employee?: { f_skatt_status?: string | null } | null
+}
+
+/**
+ * The arbetsgivaravgifter a run's AGI declares (FK487) and Skatteverket
+ * draws, computed from the stored roster rows. The AGI generator files
+ * exactly this number, and every screen or PDF that shows the declared
+ * figure next to the öre-exact computed avgift calls it too, so the two can
+ * never disagree (crm#1149: the run page showed the öre-exact avgift with
+ * nothing explaining the lower whole-krona amount the AGI declared).
+ *
+ * Row rules, the AGI's own:
+ *  - removed_from_agi rows (FK205 borttag tombstones) contribute nothing:
+ *    the earlier submission's amounts stay on file at Skatteverket;
+ *  - F-skatt rows contribute nothing, overrides included (isFSkattStatus);
+ *  - a row with an avgifter_amount_override contributes that manual amount
+ *    (with its override-coalesced basis);
+ *  - every other row computes from the FILED basis. A basis override of 0
+ *    reaches the IU, as pay that is no underlag for socialavgifter,
+ *    FK131-FK134, and is only saved or filed together with an amount
+ *    override of 0 (crm#1372). A partial basis override above 0 is refused
+ *    at save and at AGI generation (#91): no IU field can carry it, so a
+ *    legacy row stored with one stays inert here.
+ */
+export function declaredAvgifterForRun(
+  rows: DeclaredAvgifterRunRow[],
+  calculationParams: Record<string, unknown> | null | undefined,
+): DeclaredAvgifterWithOverrides {
+  return computeDeclaredAvgifterWithOverrides(
+    declaredAvgifterRowsForRun(rows),
+    resolveDeclaredAvgifterParams(calculationParams),
+  )
+}
+
+/**
+ * The stored roster rows as the AGI declares them (the row rules above):
+ * borttag tombstones dropped, F-skatt rows at basis 0, amount overrides
+ * carried with their override-coalesced basis. Shared with the regionalt
+ * stöd underlag (regional-support.ts) so FK471 reads the rows FK487 reads.
+ */
+export function declaredAvgifterRowsForRun(rows: DeclaredAvgifterRunRow[]): DeclaredAvgifterHybridRow[] {
+  return rows
+    .filter((sre) => !sre.removed_from_agi)
+    .map((sre) => {
+      const fSkatt = isFSkattStatus(sre.employee?.f_skatt_status)
+      const overridden = !fSkatt && sre.avgifter_amount_override != null
+      return {
+        basis: fSkatt
+          ? 0
+          : overridden
+            ? (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
+            : sre.avgifter_basis || 0,
+        rate: sre.avgifter_rate,
+        category: sre.avgifter_category ?? null,
+        overrideAmount: overridden ? sre.avgifter_amount_override : null,
+      }
+    })
+}

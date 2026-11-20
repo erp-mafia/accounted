@@ -29,7 +29,7 @@ Response `200`:
 ```ts
 {
   data: {
-    webhooks: { id: string, name: string, event_type: string, webhook_url: string, active: boolean, api_version_pinned: string, disabled_at: string | null, disabled_reason: string | null, created_at: string, verification_status: "verified" | "pending" | "grace_period" | "paused", verified_at: string | null, verification_grace_ends_at: string | null, verification_attempts: number, verification_last_attempt_at: string | null, verification_last_error: string | null, verification_next_attempt_at: string | null }[]
+    webhooks: { id: string, handle?: string, name: string, event_type: string, event_types: string[], webhook_url: string, active: boolean, api_version_pinned: string, disabled_at: string | null, disabled_reason: string | null, created_at: string, verification_status: "verified" | "pending" | "grace_period" | "paused", verified_at: string | null, verification_grace_ends_at: string | null, verification_attempts: number, verification_last_attempt_at: string | null, verification_last_error: string | null, verification_next_attempt_at: string | null }[]
   },
   meta: {
     request_id: string,
@@ -52,6 +52,10 @@ Example response `200`:
         "id": "a8f1…",
         "name": "CRM sync",
         "event_type": "invoice.paid",
+        "event_types": [
+          "invoice.paid",
+          "credit_note.created"
+        ],
         "webhook_url": "https://example.com/hooks/gnubok",
         "active": true,
         "api_version_pinned": "2026-05-12",
@@ -82,13 +86,15 @@ Example response `200`:
 **Register a webhook subscription.**
 `scope:webhooks:manage · risk:low · idempotent · dry-run · reversible`
 
-Creates a webhook subscription for one event type. The response includes a freshly generated HMAC signing secret, returned EXACTLY ONCE: store it on the receiver side immediately. The webhook is pinned to the current API version on creation; payload shapes for this webhook will not change until you explicitly upgrade. The webhook starts with verification_status 'pending': no event is delivered until the URL passes the ownership handshake. Accounted POSTs a signed webhook.verification event whose data.object.challenge your endpoint must return as {"challenge": "<value>"} with a 2xx within 10 seconds; call POST /webhooks/{id}/verify once your receiver answers it, or let the automatic attempts (after 1m, 5m, 30m, 2h, 12h, then daily, 8 in all) pick it up.
+Creates a webhook subscription for one or more event types (event_types; the single event_type is still accepted). Each delivery carries one event, named by its type field and the X-Gnubok-Event header. The response includes a freshly generated HMAC signing secret, returned EXACTLY ONCE: store it on the receiver side immediately. The webhook is pinned to the current API version on creation; payload shapes for this webhook will not change until you explicitly upgrade. The webhook starts with verification_status 'pending': no event is delivered until the URL passes the ownership handshake. Accounted POSTs a signed webhook.verification event whose data.object.challenge your endpoint must return as {"challenge": "<value>"} with a 2xx within 10 seconds; call POST /webhooks/{id}/verify once your receiver answers it, or let the automatic attempts (after 1m, 5m, 30m, 2h, 12h, then daily, 8 in all) pick it up.
 
 **Use when:** You are wiring a downstream integration that needs push notifications instead of polling.
 **Do not use for:** Subscribing to internal MCP telemetry events (mcp.tool_called etc. are not delivered as webhooks). Replacing an existing webhook URL: use PATCH instead.
 
 **Pitfalls:**
 - The secret is returned exactly once. If lost, rotate it with POST /webhooks/{id}/rotate-secret: a fresh secret is issued in place, the webhook id and delivery history are kept.
+- Listing salary_run.* or agi.generated in event_types requires payroll:read in addition to webhooks:manage, as for a single event_type.
+- A receiver that missed deliveries catches up from GET /api/events (scope events:read), which serves every deliverable event type from a sequence cursor.
 - Delivery is at-least-once with exponential backoff (1m / 5m / 30m / 2h / 12h / 24h / 48h). Receivers MUST be idempotent.
 - HTTP 410 from your receiver auto-disables the webhook (sets active=false + disabled_reason).
 - Events emitted while verification_status is 'pending' are not delivered later: they are skipped, as for a disabled webhook. Verify before you depend on the webhook.
@@ -101,7 +107,8 @@ Creates a webhook subscription for one event type. The response includes a fresh
 Request body:
 ```ts
 {
-  event_type: "invoice.created" | "invoice.sent" | "invoice.paid" | "credit_note.created" | "supplier.created" | "supplier_invoice.registered" | "supplier_invoice.approved" | "supplier_invoice.paid" | "supplier_invoice.credited" | "supplier_invoice.uncredited" | "customer.created" | "journal_entry.committed" | "journal_entry.reversed" | "journal_entry.corrected" | "transaction.categorized" | "transaction.reconciled" | "reconciliation.matched" | "reconciliation.unmatched" | "reconciliation.signed_off" | "reconciliation.reopened" | "period.locked" | "period.unlocked" | "period.year_closed" | "salary_run.created" | "salary_run.approved" | "salary_run.booked" | "agi.generated" | "document.uploaded",
+  event_types?: ("invoice.created" | "invoice.sent" | "invoice.paid" | "credit_note.created" | "supplier.created" | "supplier_invoice.registered" | "supplier_invoice.approved" | "supplier_invoice.paid" | "supplier_invoice.credited" | "supplier_invoice.uncredited" | "customer.created" | "dimension_value.created" | "dimension_value.renamed" | "dimension_value.archived" | "dimension_value.unarchived" | "journal_entry.committed" | "journal_entry.reversed" | "journal_entry.corrected" | "transaction.categorized" | "transaction.reconciled" | "reconciliation.matched" | "reconciliation.unmatched" | "reconciliation.signed_off" | "reconciliation.reopened" | "period.locked" | "period.unlocked" | "period.year_closed" | "period.lock_date_changed" | "salary_run.created" | "salary_run.approved" | "salary_run.booked" | "agi.generated" | "document.uploaded" | "signing.signer_signed" | "signing.declined" | "signing.completed")[],
+  event_type?: "invoice.created" | "invoice.sent" | "invoice.paid" | "credit_note.created" | "supplier.created" | "supplier_invoice.registered" | "supplier_invoice.approved" | "supplier_invoice.paid" | "supplier_invoice.credited" | "supplier_invoice.uncredited" | "customer.created" | "dimension_value.created" | "dimension_value.renamed" | "dimension_value.archived" | "dimension_value.unarchived" | "journal_entry.committed" | "journal_entry.reversed" | "journal_entry.corrected" | "transaction.categorized" | "transaction.reconciled" | "reconciliation.matched" | "reconciliation.unmatched" | "reconciliation.signed_off" | "reconciliation.reopened" | "period.locked" | "period.unlocked" | "period.year_closed" | "period.lock_date_changed" | "salary_run.created" | "salary_run.approved" | "salary_run.booked" | "agi.generated" | "document.uploaded" | "signing.signer_signed" | "signing.declined" | "signing.completed",
   webhook_url: string,
   name: string,
   description?: string
@@ -111,7 +118,10 @@ Request body:
 Example request:
 ```json
 {
-  "event_type": "invoice.paid",
+  "event_types": [
+    "invoice.paid",
+    "credit_note.created"
+  ],
   "webhook_url": "https://example.com/hooks/gnubok",
   "name": "CRM sync"
 }
@@ -122,8 +132,10 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     event_type: string,
+    event_types: string[],
     webhook_url: string,
     active: boolean,
     api_version_pinned: string,
@@ -159,6 +171,10 @@ Example response `200`:
     "id": "a8f1…",
     "name": "CRM sync",
     "event_type": "invoice.paid",
+    "event_types": [
+      "invoice.paid",
+      "credit_note.created"
+    ],
     "webhook_url": "https://example.com/hooks/gnubok",
     "active": true,
     "api_version_pinned": "2026-05-12",
@@ -207,9 +223,11 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     description: string | null,
     event_type: string,
+    event_types: string[],
     webhook_url: string,
     active: boolean,
     api_version_pinned: string,
@@ -245,6 +263,9 @@ Example response `200`:
     "name": "CRM sync",
     "description": null,
     "event_type": "invoice.paid",
+    "event_types": [
+      "invoice.paid"
+    ],
     "webhook_url": "https://example.com/hooks/gnubok",
     "active": true,
     "api_version_pinned": "2026-05-12",
@@ -274,15 +295,16 @@ Example response `200`:
 **Update a webhook subscription.**
 `scope:webhooks:manage · risk:low · idempotent · dry-run · reversible`
 
-Update the URL, name, description, or active flag. event_type is immutable: delete and recreate to change it. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410. A new webhook_url resets verification to 'pending' (and ends any grace window): nothing is delivered to the new URL until it passes the ownership handshake, which Accounted attempts within a minute; POST /webhooks/{id}/verify runs it immediately.
+Update the URL, name, description, active flag, or the event types the webhook receives (event_types replaces the list; a single event_type is still accepted). api_version_pinned is kept. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410. A new webhook_url resets verification to 'pending' (and ends any grace window): nothing is delivered to the new URL until it passes the ownership handshake, which Accounted attempts within a minute; POST /webhooks/{id}/verify runs it immediately.
 
 **Use when:** You need to point an existing webhook at a new URL or temporarily pause delivery.
-**Do not use for:** Rotating the signing secret: use POST /webhooks/{id}/rotate-secret, which issues a fresh secret in place and keeps the webhook id and delivery history. Changing event_type: delete and recreate.
+**Do not use for:** Rotating the signing secret: use POST /webhooks/{id}/rotate-secret, which issues a fresh secret in place and keeps the webhook id and delivery history.
 
 **Pitfalls:**
 - Re-enabling a webhook (active: true) does NOT replay deliveries that went to dead status while it was disabled: those need POST /webhook-deliveries/{id}/retry.
 - Changing webhook_url withholds deliveries until the new URL is verified: have the new receiver answer webhook.verification before you switch.
 - active: true does not bypass verification: a pending or paused endpoint stays without deliveries until it passes the handshake.
+- event_types replaces the whole list: send every type the webhook should keep. Listing salary_run.* or agi.generated requires payroll:read.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -292,7 +314,14 @@ Update the URL, name, description, or active flag. event_type is immutable: dele
 
 Request body:
 ```ts
-{ name?: string, description?: string | null, webhook_url?: string, active?: boolean }
+{
+  name?: string,
+  description?: string | null,
+  webhook_url?: string,
+  active?: boolean,
+  event_types?: ("invoice.created" | "invoice.sent" | "invoice.paid" | "credit_note.created" | "supplier.created" | "supplier_invoice.registered" | "supplier_invoice.approved" | "supplier_invoice.paid" | "supplier_invoice.credited" | "supplier_invoice.uncredited" | "customer.created" | "dimension_value.created" | "dimension_value.renamed" | "dimension_value.archived" | "dimension_value.unarchived" | "journal_entry.committed" | "journal_entry.reversed" | "journal_entry.corrected" | "transaction.categorized" | "transaction.reconciled" | "reconciliation.matched" | "reconciliation.unmatched" | "reconciliation.signed_off" | "reconciliation.reopened" | "period.locked" | "period.unlocked" | "period.year_closed" | "period.lock_date_changed" | "salary_run.created" | "salary_run.approved" | "salary_run.booked" | "agi.generated" | "document.uploaded" | "signing.signer_signed" | "signing.declined" | "signing.completed")[],
+  event_type?: "invoice.created" | "invoice.sent" | "invoice.paid" | "credit_note.created" | "supplier.created" | "supplier_invoice.registered" | "supplier_invoice.approved" | "supplier_invoice.paid" | "supplier_invoice.credited" | "supplier_invoice.uncredited" | "customer.created" | "dimension_value.created" | "dimension_value.renamed" | "dimension_value.archived" | "dimension_value.unarchived" | "journal_entry.committed" | "journal_entry.reversed" | "journal_entry.corrected" | "transaction.categorized" | "transaction.reconciled" | "reconciliation.matched" | "reconciliation.unmatched" | "reconciliation.signed_off" | "reconciliation.reopened" | "period.locked" | "period.unlocked" | "period.year_closed" | "period.lock_date_changed" | "salary_run.created" | "salary_run.approved" | "salary_run.booked" | "agi.generated" | "document.uploaded" | "signing.signer_signed" | "signing.declined" | "signing.completed"
+}
 ```
 
 Example request:
@@ -307,9 +336,11 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     name: string,
     description: string | null,
     event_type: string,
+    event_types: string[],
     webhook_url: string,
     active: boolean,
     api_version_pinned: string,
@@ -345,6 +376,9 @@ Example response `200`:
     "name": "CRM sync",
     "description": null,
     "event_type": "invoice.paid",
+    "event_types": [
+      "invoice.paid"
+    ],
     "webhook_url": "https://example.com/hooks/gnubok",
     "active": true,
     "api_version_pinned": "2026-05-12",
@@ -416,7 +450,7 @@ Returns deliveries for the webhook in newest-first order. Each row carries the c
 Response `200`:
 ```ts
 {
-  data: { id: string, webhook_id: string, event_type: string, status: "pending" | "in_flight" | "delivered" | "failed" | "dead", attempts: number, next_attempt_at: string, response_status: number | null, response_body: string | null, error: string | null, request_id: string | null, created_at: string, delivered_at: string | null }[],
+  data: { id: string, handle?: string, webhook_id: string, event_type: string, status: "pending" | "in_flight" | "delivered" | "failed" | "dead", attempts: number, next_attempt_at: string, response_status: number | null, response_body: string | null, error: string | null, request_id: string | null, created_at: string, delivered_at: string | null }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -461,7 +495,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret`
 
 **Rotate the HMAC signing secret on a webhook.**
-`scope:webhooks:manage · risk:medium`
+`scope:webhooks:manage · risk:medium · idempotent`
 
 Generates a fresh HMAC signing secret for the webhook and returns it EXACTLY ONCE. The previous secret is invalidated immediately. There is no grace period: coordinate the rotation on the receiver side BEFORE calling this endpoint, or temporarily disable the webhook (PATCH active=false) to pause delivery while you swap secrets.
 
@@ -480,7 +514,7 @@ Generates a fresh HMAC signing secret for the webhook and returns it EXACTLY ONC
 Response `200`:
 ```ts
 {
-  data: { id: string, secret: string, rotated_at: string },
+  data: { id: string, handle?: string, secret: string, rotated_at: string },
   meta: {
     request_id: string,
     api_version: string,
@@ -564,7 +598,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/webhooks/{id}/verify`
 
 **Verify a webhook endpoint's ownership now.**
-`scope:webhooks:manage · risk:low`
+`scope:webhooks:manage · risk:low · idempotent`
 
 Runs the ownership handshake against the webhook URL immediately and returns the result. Accounted POSTs a signed webhook.verification event (same X-Gnubok-Signature scheme and envelope as every delivery) whose data.object.challenge is a random value; the endpoint passes by answering, within 10 seconds and without a redirect, any 2xx with the JSON body {"challenge": "<the same value>"}. A pass sets verified_at and opens the webhook to deliveries; a failure answers 422 WEBHOOK_VERIFICATION_FAILED with details.reason. A webhook that is already verified is returned as-is without contacting the URL.
 
@@ -587,6 +621,7 @@ Response `200`:
 {
   data: {
     id: string,
+    handle?: string,
     webhook_url: string,
     verification_status: "verified" | "pending" | "grace_period" | "paused",
     verified_at: string | null,
@@ -636,13 +671,14 @@ Example response `200`:
 **Retry a webhook delivery.**
 `scope:webhooks:manage · risk:medium`
 
-Re-enqueues a dead (or delivered) delivery as a fresh pending row. The new delivery references the same webhook + payload; the dispatcher picks it up at the next per-minute cron tick. The original row is preserved in the audit log.
+Re-enqueues a dead (or delivered) delivery as a fresh pending row. The new delivery references the same webhook + payload; the dispatcher is kicked at once, and the per-minute cron picks it up if that attempt is missed. The original row is preserved in the audit log.
 
 **Use when:** After a receiver outage you want to replay deliveries that died, or after fixing a receiver-side bug you want to redeliver a successful one.
 **Do not use for:** Retrying live deliveries (pending / in_flight / failed): the dispatcher is already managing them.
 
 **Pitfalls:**
 - Retrying a delivered delivery causes the receiver to see the event twice. Receivers MUST be idempotent (check the X-Gnubok-Delivery header).
+- Every call queues a new delivery with its own X-Gnubok-Delivery id. Send an Idempotency-Key: a repeat with the same key answers the first call's webhook_delivery_id (Idempotent-Replayed: true) instead of queueing another.
 - The webhook must be deliverable: an endpoint whose verification_status is 'pending' or 'paused' answers 409 WEBHOOK_NOT_VERIFIED until it passes POST /webhooks/{id}/verify.
 
 | Parameter | In | Type | Required | Notes |

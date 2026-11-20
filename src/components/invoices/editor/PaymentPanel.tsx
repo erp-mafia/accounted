@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeftIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { QrModeRadioGroup } from '@/components/settings/PdfPrintSettings'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { EditorSection } from './EditorSection'
@@ -44,11 +44,11 @@ interface PaymentPanelProps {
   onClose: () => void
 }
 
-const ROW_CLASS = 'flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]'
+const ROW_CLASS = 'flex items-center justify-between gap-4 border-b-hairline py-3 text-[13px]'
 
 // A text that grows with its content, in the form field look.
 const TEXT_FIELD_CLASS =
-  'w-full rounded-lg border border-input bg-card px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20'
+  'w-full rounded-lg px-4 py-2 text-[13px] transition-colors duration-150 placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20 bg-control shadow-raised'
 
 /**
  * "Betalning och utseende": what the Betalning summary's "Ändra" opens in
@@ -77,7 +77,7 @@ export function PaymentPanel({
 }: PaymentPanelProps) {
   const t = useTranslations('invoice_editor_panel')
   const tPdf = useTranslations('settings_pdf_print')
-  const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const [creditTerms, setCreditTerms] = useState(settings.invoice_credit_terms_text ?? '')
   const [lateFee, setLateFee] = useState(settings.invoice_late_fee_text ?? '')
   const effectiveScope: PaymentPanelScope = canEditCompany ? scope : 'this'
@@ -88,17 +88,7 @@ export function PaymentPanel({
   }, [])
 
   async function save(updates: Partial<CompanySettings>) {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      })
-      if (!response.ok) throw new Error()
-      onSettingsSaved(updates)
-    } catch {
-      toast({ title: tPdf('toast_save_failed'), variant: 'destructive' })
-    }
+    if (await saveSettings(updates, { failedTitle: tPdf('toast_save_failed') })) onSettingsSaved(updates)
   }
 
   const showRows: Array<{ field: ShowField; label: string; value: string | null; hint?: string; defaultOn: boolean }> = [
@@ -137,11 +127,11 @@ export function PaymentPanel({
   return (
     <div ref={rootRef} className="scroll-mt-6 space-y-8">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onClose} className="-ml-2">
-          <ArrowLeft className="mr-1 h-4 w-4" aria-hidden="true" />
+        <Button type="button" variant="ghost" size="toolbar" onClick={onClose} className="-ml-2">
+          <ArrowLeftIcon className="h-4 w-4" aria-hidden="true" />
           {t('back')}
         </Button>
-        <h2 className="font-display text-[15px]">{t('title')}</h2>
+        <h2 className="text-[15px]">{t('title')}</h2>
         {canEditCompany && (
           <SegmentedControl
             className="ml-auto"
@@ -173,7 +163,7 @@ export function PaymentPanel({
                     <Label htmlFor={`panel-${row.field}`} className="text-[13px] font-normal">
                       {row.label}
                     </Label>
-                    {row.hint && <p className="text-[12.5px] text-muted-foreground">{row.hint}</p>}
+                    {row.hint && <p className="text-xs text-muted-foreground">{row.hint}</p>}
                   </div>
                   <div className="flex items-center gap-4">
                     {row.value && <span className="tabular-nums text-muted-foreground">{row.value}</span>}
@@ -250,7 +240,7 @@ export function PaymentPanel({
         </>
       ) : (
         <>
-          {!canEditCompany && <p className="text-[12.5px] text-muted-foreground">{t('member_note')}</p>}
+          {!canEditCompany && <p className="text-xs text-muted-foreground">{t('member_note')}</p>}
           {payeeField && <EditorSection label={t('section_payee')}>{payeeField}</EditorSection>}
           <EditorSection label={tPdf('qr_mode_label')} aside={t('qr_one_per_invoice')}>
             <QrModeRadioGroup<string>
@@ -265,7 +255,7 @@ export function PaymentPanel({
       )}
 
       <div className="flex justify-end">
-        <Button type="button" variant="secondary" size="sm" onClick={onClose}>
+        <Button type="button" variant="outline" onClick={onClose}>
           {t('done')}
         </Button>
       </div>

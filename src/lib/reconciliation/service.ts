@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { daysBetweenIso, toIsoDate } from '@/lib/dates/iso'
+import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getReconciliationStatus as getBankReconciliationStatus } from './bank-reconciliation'
+import { checkBankBalance } from './bank-balance-check'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
   bankAccountKey,
@@ -14,8 +15,9 @@ import {
   type ReconciliationStatus,
 } from './schemas'
 import { getLatestSignoff, getLatestSignoffs } from './signoff-store'
-import { bankLogoUrl } from './bank-logos'
-import { getManualReconciliationStatus, listManualAccounts } from './manual-reconciliation'
+import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
+import { supersededTwins } from '@/lib/cash-accounts/twins'
+import { getManualReconciliationStatus, listManualAccounts, type BalanceSheetSnapshot } from './manual-reconciliation'
 
 const log = createLogger('reconciliation/service')
 
@@ -42,6 +44,12 @@ export interface ListAccountsOptions {
   /** Window for the bank bridge ("i perioden"). Defaults to the calendar year of `today`. */
   windowFrom?: string
   windowTo?: string
+  /**
+   * The balances through windowTo when the caller reads them anyway
+   * (loadBalanceSheetSnapshot(windowTo)): the manual accounts use them and,
+   * through loadSpecificationAmounts, share their specification reads.
+   */
+  balanceSheet?: Promise<BalanceSheetSnapshot | null>
 }
 
 interface CashAccountRow {
@@ -51,13 +59,14 @@ interface CashAccountRow {
   currency: string | null
   iban: string | null
   enabled: boolean | null
-  is_primary: boolean | null
+  is_primary: boolean
   source: string | null
   bank_connection_id: string | null
   balance: number | null
   available_balance: number | null
   balance_updated_at: string | null
-  updated_at: string | null
+  balance_reference: unknown
+  created_at: string
 }
 
 function defaultWindow(today: string): { from: string; to: string } {
@@ -133,6 +142,19 @@ function bankBridge(status: Awaited<ReturnType<typeof getBankReconciliationStatu
       items_bucket: 'unmatched_ledger',
     })
   }
+  // Verifikat settled against a verifikat dated outside the window (a wrong
+  // booking corrected the month after): explained, so not in the line above,
+  // but their amounts are still part of this period's difference.
+  if (status.settled_gl_entry_count > 0) {
+    lines.push({
+      key: 'settled_ledger',
+      label_sv: `Verifikationer på ${accountNumber} kopplade mot verifikat utanför perioden`,
+      label_en: `Vouchers on ${accountNumber} settled against vouchers outside the period`,
+      amount: status.settled_gl_line_total,
+      count: status.settled_gl_entry_count,
+      items_bucket: 'matched',
+    })
+  }
   if (status.ignored_transaction_count > 0) {
     lines.push({
       key: 'ignored',
@@ -143,10 +165,14 @@ function bankBridge(status: Awaited<ReturnType<typeof getBankReconciliationStatu
       items_bucket: 'ignored',
     })
   }
+  // Verifikat dated before the bank's history are outside the comparison
+  // (crm#1221): the ledger side then starts where the bank's does. They are
+  // no bridge line; the bank block carries their count and total.
+  const from = status.before_history_count > 0 ? status.history_start : null
   lines.push({
     key: 'ledger_balance',
-    label_sv: `Bokfört på ${accountNumber} i perioden`,
-    label_en: `Booked on ${accountNumber} in the period`,
+    label_sv: from ? `Bokfört på ${accountNumber} från ${from}` : `Bokfört på ${accountNumber} i perioden`,
+    label_en: from ? `Booked on ${accountNumber} from ${from}` : `Booked on ${accountNumber} in the period`,
     amount: status.gl_1930_period_movement,
     count: null,
     items_bucket: null,
@@ -161,19 +187,23 @@ async function bankStatus(
   window: { from: string; to: string },
   today: string,
   connectionSyncedAt?: string | null,
+  /** The account's sync time when the caller reads it anyway (the list). */
+  syncedAtRead?: Promise<string | null>,
 ): Promise<ReconciliationStatus> {
   const currency = account.currency ?? 'SEK'
-  const raw = await getBankReconciliationStatus(
-    supabase,
-    companyId,
-    window.from,
-    window.to,
-    account.ledger_account,
-    currency,
-    account.id,
-    Boolean(account.is_primary),
-  )
-  const syncedAt = await latestBankSyncAt(supabase, companyId, account, connectionSyncedAt)
+  const [raw, syncedAt] = await Promise.all([
+    getBankReconciliationStatus(
+      supabase,
+      companyId,
+      window.from,
+      window.to,
+      account.ledger_account,
+      currency,
+      account.id,
+      Boolean(account.is_primary),
+    ),
+    syncedAtRead ?? latestBankSyncAt(supabase, companyId, account, connectionSyncedAt),
+  ])
   const stale = !syncedAt || daysBetweenIso(syncedAt.slice(0, 10), today) > STALE_AFTER_DAYS
   // The bank-reported (booked) balance, mirrored from the last PSD2 balance
   // refresh. Point-in-time and dated by balance_updated_at, NOT by any
@@ -193,6 +223,12 @@ async function bankStatus(
     reportedBalance == null || account.available_balance == null
       ? null
       : Number(account.available_balance)
+  // No bank row at all on the account, from any source (the feed, a bank
+  // file, the API): there is no outside side to compare with, so nothing is
+  // avstämt, however equal two zeros are. A connected account the bank has
+  // delivered nothing for read "Banken och bokföringen stämmer" (PH 195).
+  const noBankRows =
+    raw.history_start === null && raw.bank_transaction_count === 0 && raw.ignored_transaction_count === 0
   return {
     account_key: bankAccountKey(account.id),
     kind: 'bank',
@@ -205,7 +241,7 @@ async function bankStatus(
     ledger_balance: raw.gl_1930_period_movement,
     difference: raw.difference,
     unexplained_difference: raw.unexplained_difference,
-    is_reconciled: raw.is_reconciled,
+    is_reconciled: raw.is_reconciled && !noBankRows,
     bridge: bankBridge(raw, account.ledger_account),
     counts: {
       proposed: 0,
@@ -222,6 +258,9 @@ async function bankStatus(
       bank_reported_balance: reportedBalance,
       bank_reported_available_balance: reportedAvailable,
       bank_balance_updated_at: reportedBalance == null ? null : account.balance_updated_at,
+      // True when the account holds no bank row at all: the page says that
+      // instead of a verdict, and the status is never avstämt (PH 195).
+      no_bank_rows: noBankRows,
     },
   }
 }
@@ -248,7 +287,7 @@ function stateOf(status: ReconciliationStatus | null): ReconciliationAccount['st
 /**
  * Every account with an outside truth, as the side list shows them: enabled
  * cash accounts (deduplicated per IBAN + currency, the reconnect-duplicate
- * case measured at 25 rows in 17 companies) plus the skattekonto when the
+ * case) plus the skattekonto when the
  * company has a saldo snapshot or rows.
  */
 export async function listReconciliationAccounts(
@@ -256,48 +295,37 @@ export async function listReconciliationAccounts(
   companyId: string,
   options: ListAccountsOptions = {},
 ): Promise<ReconciliationAccount[]> {
-  const today = options.today ?? toIsoDate(new Date())
+  const today = options.today ?? todayIsoStockholm()
   const withStatus = options.withStatus ?? true
   const window = {
     from: options.windowFrom ?? defaultWindow(today).from,
     to: options.windowTo ?? defaultWindow(today).to,
   }
 
-  const { data, error } = await supabase
+  const cashAccountsRead = supabase
     .from('cash_accounts')
-    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
+    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, created_at')
     .eq('company_id', companyId)
     .eq('enabled', true)
     .order('is_primary', { ascending: false })
     .order('ledger_account', { ascending: true })
+  // Latest active sign-off per account, one query, read alongside the cash
+  // accounts; the rail shows "avstämt t.o.m." next to the live status. A
+  // failed read must not hide the accounts.
+  const signoffsRead = getLatestSignoffs(supabase, companyId).catch((err) => {
+    log.warn('sign-off read failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+    return new Map<string, Awaited<ReturnType<typeof getLatestSignoff>>>()
+  })
+  const { data, error } = await cashAccountsRead
   if (error) throw new Error(`Kunde inte hämta kassakonton: ${error.message}`)
   const cashAccounts = (data ?? []) as CashAccountRow[]
 
-  // Reconnect duplicates: same IBAN and currency twice. Keep the most recently
-  // updated row as the live one and mark the other as superseded so a rail
-  // can fold it away; never drop it silently, it may still hold unlinked rows.
-  const supersededBy = new Map<string, string>()
-  const byIban = new Map<string, CashAccountRow[]>()
-  for (const a of cashAccounts) {
-    if (!a.iban) continue
-    const k = `${a.iban}|${a.currency ?? 'SEK'}`
-    byIban.set(k, [...(byIban.get(k) ?? []), a])
-  }
-  for (const group of byIban.values()) {
-    if (group.length < 2) continue
-    const sorted = [...group].sort((x, y) => (y.updated_at ?? '').localeCompare(x.updated_at ?? ''))
-    const keep = sorted[0]
-    for (const other of sorted.slice(1)) supersededBy.set(other.id, bankAccountKey(keep.id))
-  }
+  // Reconnect duplicates: a rail folds the superseded row away, never drops it
+  // silently, it may still hold unlinked rows.
+  const twins = await supersededTwins(supabase, companyId, cashAccounts)
+  const supersededBy = new Map([...twins].map(([id, keeper]) => [id, bankAccountKey(keeper)]))
 
-  // Latest active sign-off per account, one query; the rail shows "avstämt
-  // t.o.m." next to the live status. A failed read must not hide the accounts.
-  let signoffs = new Map<string, Awaited<ReturnType<typeof getLatestSignoff>>>()
-  try {
-    signoffs = await getLatestSignoffs(supabase, companyId)
-  } catch (err) {
-    log.warn('sign-off read failed', { companyId, error: err instanceof Error ? err.message : String(err) })
-  }
+  const signoffs = await signoffsRead
 
   // One read per company for the connections: bank_name resolves the logo,
   // last_synced_at dates the account. A failed read costs the logos and the
@@ -319,14 +347,19 @@ export async function listReconciliationAccounts(
     }
   }
 
-  const bankAccounts = await Promise.all(
+  // The three groups read independently: the bank accounts, the skattekonto
+  // and the rest of the balance sheet.
+  const bankAccountsRead = Promise.all(
     cashAccounts.map(async (a): Promise<ReconciliationAccount> => {
       let status: ReconciliationStatus | null = null
       let syncedAt: string | null = null
       const connectionSyncedAt = a.bank_connection_id ? (syncedAtByConnection.get(a.bank_connection_id) ?? null) : null
+      // One read of the sync time serves both the status and the row.
+      const syncedAtRead = latestBankSyncAt(supabase, companyId, a, connectionSyncedAt)
+      syncedAtRead.catch(() => undefined)
       if (withStatus) {
         try {
-          status = await bankStatus(supabase, companyId, a, window, today, connectionSyncedAt)
+          status = await bankStatus(supabase, companyId, a, window, today, connectionSyncedAt, syncedAtRead)
         } catch (err) {
           log.warn('bank status failed for account', {
             companyId,
@@ -336,7 +369,7 @@ export async function listReconciliationAccounts(
         }
       }
       try {
-        syncedAt = await latestBankSyncAt(supabase, companyId, a, connectionSyncedAt)
+        syncedAt = await syncedAtRead
       } catch {
         syncedAt = null
       }
@@ -356,21 +389,23 @@ export async function listReconciliationAccounts(
         status: stateOf(status),
         superseded_by: supersededBy.get(a.id) ?? null,
         signed_off_through: signoffs.get(bankAccountKey(a.id))?.through_date ?? null,
+        balance: a.balance ?? null,
+        balance_at: a.balance_updated_at ?? null,
       }
     }),
   )
 
-  let skattekonto: ReconciliationAccount | null = null
-  try {
+  const skattekontoRead = (async (): Promise<ReconciliationAccount | null> => {
     const s = await getSkattekontoReconciliationStatus(supabase, companyId, { today })
     if (s) {
-      skattekonto = {
+      return {
         account_key: SKATTEKONTO_ACCOUNT_KEY,
         kind: 'skattekonto',
         account_number: s.account_number,
         name: 'Skattekonto',
         currency: 'SEK',
-        logo_url: '/logos/skatteverket_color.svg',
+        // Skatteverket's API terms forbid its logo: the row shows a monogram.
+        logo_url: null,
         source: {
           type: 'skatteverket_api',
           synced_at: s.skattekonto?.fetched_at ?? null,
@@ -379,31 +414,38 @@ export async function listReconciliationAccounts(
         status: s.skattekonto?.fetched_at ? stateOf(s) : { ...stateOf(s)!, state: 'not_configured' },
         superseded_by: null,
         signed_off_through: signoffs.get(SKATTEKONTO_ACCOUNT_KEY)?.through_date ?? null,
-      }
+        // Skatteverket's saldo: the skattekonto has no cash account to read it from.
+        balance: s.external_balance,
+        balance_at: s.skattekonto?.fetched_at ?? null,
+      } satisfies ReconciliationAccount
     }
-  } catch (err) {
+    return null
+  })().catch((err) => {
     log.warn('skattekonto status failed', {
       companyId,
       error: err instanceof Error ? err.message : String(err),
     })
-  }
+    return null
+  })
 
   // The rest of the balance sheet: every account the two feeds above do not
   // own, reconciled against a system specification or the signer's underlag.
   // A failed read costs only this group, never the bank or skattekonto rows.
-  let manualAccounts: ReconciliationAccount[] = []
-  try {
-    const exclude = new Set<string>(cashAccounts.map((a) => a.ledger_account))
-    if (skattekonto) exclude.add(skattekonto.account_number)
-    manualAccounts = await listManualAccounts(supabase, companyId, {
-      asOf: window.to,
-      exclude,
-      signoffs,
-      withStatus,
-    })
-  } catch (err) {
+  // The skattekonto's own account leaves the list once that read answers (it
+  // carries no specification, so nothing else about the list depends on it).
+  const manualRead = listManualAccounts(supabase, companyId, {
+    asOf: window.to,
+    balanceSheet: options.balanceSheet,
+    exclude: new Set<string>(cashAccounts.map((a) => a.ledger_account)),
+    signoffs,
+    withStatus,
+  }).catch((err): ReconciliationAccount[] => {
     log.warn('manual accounts failed', { companyId, error: err instanceof Error ? err.message : String(err) })
-  }
+    return []
+  })
+
+  const [bankAccounts, skattekonto, manual] = await Promise.all([bankAccountsRead, skattekontoRead, manualRead])
+  const manualAccounts = skattekonto ? manual.filter((a) => a.account_number !== skattekonto.account_number) : manual
 
   return [...bankAccounts, ...(skattekonto ? [skattekonto] : []), ...manualAccounts]
 }
@@ -426,7 +468,7 @@ export async function getAccountStatus(
 ): Promise<ReconciliationStatus | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? toIsoDate(new Date())
+  const today = options.today ?? todayIsoStockholm()
 
   let status: ReconciliationStatus | null = null
   if (parsed.kind === 'skattekonto') {
@@ -440,7 +482,7 @@ export async function getAccountStatus(
   if (parsed.kind === 'bank') {
     const { data, error } = await supabase
       .from('cash_accounts')
-      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
+      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, balance_reference, created_at')
       .eq('company_id', companyId)
       .eq('id', parsed.cashAccountId)
       .maybeSingle()
@@ -450,7 +492,28 @@ export async function getAccountStatus(
       from: options.windowFrom ?? defaultWindow(today).from,
       to: options.windowTo ?? defaultWindow(today).to,
     }
-    status = await bankStatus(supabase, companyId, data as CashAccountRow, window, today)
+    const account = data as CashAccountRow
+    // The bank's balance against the books on the bank's own day, beside the
+    // movement bridge (lib/reconciliation/bank-balance-check.ts). Read for one
+    // account only: the rail stays one status read per account. A failed read
+    // costs this block, never the status.
+    const [bank, balanceCheck] = await Promise.all([
+      bankStatus(supabase, companyId, account, window, today),
+      checkBankBalance(supabase, companyId, account).catch((err) => {
+        log.warn('bank balance check failed', {
+          companyId,
+          cashAccountId: account.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return null
+      }),
+    ])
+    status = bank
+    status.bank = {
+      ...status.bank,
+      balance_check: balanceCheck?.check ?? null,
+      balance_check_refusal: balanceCheck?.refusal ?? null,
+    }
   }
   if (parsed.kind === 'manual') {
     status = await getManualReconciliationStatus(supabase, companyId, parsed.accountNumber, {

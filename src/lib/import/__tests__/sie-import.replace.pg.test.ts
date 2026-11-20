@@ -1,24 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { describe,expect,it } from 'vitest'
-import { getPool,runAsServiceRole,withUserContext } from '@/tests/pg/setup'
+import { getPool,runAsServiceRole } from '@/tests/pg/setup'
 import { seedCompany } from '@/tests/pg/fixtures'
 
 // Period-wide deletion has been retired. The replacement handoff, retained
 // originals and exact batch storno are exercised in sie-job.pg.test.ts.
 describe('retired SIE RPCs cannot bypass durable jobs',()=>{
-  it.each(['import_sie_journal_entries','replace_sie_import','undo_sie_import'])('%s has no network-role execute grant',async(name)=>{
-    const result=await getPool().query(`SELECT r.role,has_function_privilege(r.role,p.oid,'EXECUTE') allowed
-      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-      CROSS JOIN (VALUES('anon'),('authenticated'),('service_role')) r(role)
-      WHERE n.nspname='public' AND p.proname=$1`,[name])
-    expect(result.rows.length).toBeGreaterThanOrEqual(3)
-    expect(result.rows.every(row=>row.allowed===false)).toBe(true)
-  })
-  it('rejects both service-role and owner calls before any legacy replacement write',async()=>{
-    const {companyId,userId}=await seedCompany()
-    const sql='SELECT replace_sie_import($1,$2,$3)'
-    await expect(runAsServiceRole(c=>c.query(sql,[companyId,randomUUID(),userId]))).rejects.toMatchObject({code:'42501'})
-    await expect(withUserContext(userId,c=>c.query(sql,[companyId,randomUUID(),userId]))).rejects.toMatchObject({code:'42501'})
+  // Revoked from every API role at the job cutover (20260911140532), dropped
+  // in 20261012100200: no overload of any of the three may come back.
+  it.each(['import_sie_journal_entries','replace_sie_import','undo_sie_import'])('%s no longer exists',async(name)=>{
+    const result=await getPool().query(`SELECT p.oid::regprocedure::text signature
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE p.proname=$1`,[name])
+    expect(result.rows).toEqual([])
   })
   it('keeps unknown legacy executions behind reviewed reconciliation',async()=>{
     const {companyId,userId,fiscalPeriodId}=await seedCompany()

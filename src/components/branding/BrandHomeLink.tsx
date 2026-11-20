@@ -11,7 +11,7 @@
  * With `showLabel` (expanded sidebar) a branded host without an uploaded
  * logo renders the brand's app name beside the mark (byra-editable in the
  * Varumärke settings). With an uploaded logo the logo carries the brand
- * alone (same founder call as BrandWordmark, 2026-08-05: byrå logos usually
+ * alone (same product call as BrandWordmark, 2026-08-05: byrå logos usually
  * carry their own name, so logo + text read as a duplicate). Unbranded
  * hosts never show a label.
  */
@@ -19,6 +19,8 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { useBranding } from '@/lib/branding/brand-context'
+import { DEFAULT_LOGO_PATH } from '@/lib/branding/service'
+import { cn } from '@/lib/utils'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 
 export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
@@ -30,14 +32,17 @@ export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
   const byraTeam = useCompanyOptional()?.byraTeam
   const homeHref = byraTeam ? '/byra' : '/'
   return (
-    <Link href={homeHref} aria-label={appName} className="flex items-center gap-2 rounded-lg">
+    <Link href={homeHref} aria-label={appName} className="flex min-w-0 items-center gap-2 rounded-md">
       {logoUrl ? (
         <Image
           src={logoUrl}
           alt=""
           width={26}
           height={26}
-          className="h-[26px] w-[26px] rounded-lg object-contain"
+          // Byrå logos are mostly wide wordmarks (up to 8:1), not square
+          // marks: a fixed 26px square shrank them to a few pixels tall. Keep
+          // the row height, let the width follow the logo up to the sidebar.
+          className="h-[26px] w-auto max-w-full rounded-lg object-contain object-left"
           // Tenant logos live on the deployment's Supabase Storage host, and
           // the image optimizer only allows that host when
           // NEXT_PUBLIC_SUPABASE_URL was known at BUILD time. The generic
@@ -53,9 +58,12 @@ export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
         <Image
           src={logoPath}
           alt=""
-          width={26}
-          height={26}
-          className="h-[26px] w-[26px] rounded-lg"
+          width={20}
+          height={20}
+          // Stil v3 sidebar: a 20px mark with the 6px radius of the controls.
+          // The built-in mark is a dark tile: it inverts on the dark frame, as
+          // the dark boards draw it (a deployment's own logo is left as it is).
+          className={cn('h-5 w-5 rounded-md', logoPath === DEFAULT_LOGO_PATH && 'dark:invert')}
         />
       )}
       {showLabel && label && (

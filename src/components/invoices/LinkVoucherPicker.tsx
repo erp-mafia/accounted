@@ -1,15 +1,29 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { parseVoucherNumber, voucherNumberMatches } from '@/lib/invoices/voucher-label'
+import { formatAmountInput, roundOre } from '@/lib/money'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Search } from 'lucide-react'
+import { MagnifyingGlassIcon } from '@/components/icons'
+import {
+  canChooseAmount,
+  checkLinkAmount,
+  defaultLinkAmount,
+  leavesPartOfVoucher,
+  linkRequestBody,
+  voucherLeft,
+  voucherTotal,
+} from './link-voucher-amount'
 
 interface VoucherCandidate {
   journal_entry_id: string
@@ -19,6 +33,7 @@ interface VoucherCandidate {
   description: string
   // Customer side returns ar_credit_amount; supplier side returns ap_debit_amount.
   // The picker treats them interchangeably: same UX, opposite sign convention.
+  // Either is what the voucher has LEFT after the invoices already linked to it.
   ar_credit_amount?: number
   ap_debit_amount?: number
   currency: string
@@ -27,6 +42,13 @@ interface VoucherCandidate {
   period_locked: boolean
   confidence: number
   match_reason: string
+  /** The voucher has more left than the invoice needs (it settles several
+   *  invoices or debts): the invoice's remainder, the share proposed. */
+  link_amount?: number
+  /** What payment rows for other invoices already use of the voucher. */
+  already_linked?: number
+  /** SEK-booked fallback: the link settles the whole remainder, no share. */
+  whole_remainder?: true
 }
 
 /**
@@ -52,16 +74,8 @@ interface LinkVoucherPickerProps {
   accountingMethod?: 'accrual' | 'cash'
 }
 
-function candidateAmount(c: VoucherCandidate): number {
-  return c.ar_credit_amount ?? c.ap_debit_amount ?? 0
-}
-
 function voucherLabel(c: VoucherCandidate): string {
-  if (c.voucher_series && c.voucher_number != null) {
-    return `${c.voucher_series}-${c.voucher_number}`
-  }
-  if (c.voucher_number != null) return String(c.voucher_number)
-  return c.journal_entry_id.slice(0, 8)
+  return c.voucher_number ? formatVoucher(c) : c.journal_entry_id.slice(0, 8)
 }
 
 function confidenceBadge(confidence: number): {
@@ -125,9 +139,19 @@ export default function LinkVoucherPicker({
 
   const [candidates, setCandidates] = useState<VoucherCandidate[] | null>(null)
   const [loading, setLoading] = useState(true)
+  // The candidates could not be read: said in place of the list, with
+  // "Försök igen" (bumps retryKey), instead of reading as "none".
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [amountText, setAmountText] = useState('')
   const [search, setSearch] = useState('')
+  // A voucher named by its number that the suggestions do not hold: the
+  // suggestions only search around the due date, and a konstaterad kundförlust
+  // or a late payment is often booked long after it (crm#1434). The server
+  // looks the number up at any date.
+  const [lookup, setLookup] = useState<{ key: string; candidates: VoucherCandidate[] } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -138,6 +162,7 @@ export default function LinkVoucherPicker({
         if (!response.ok) {
           if (cancelled) return
           setCandidates([])
+          setLoadFailed(true)
           return
         }
         const body = await response.json()
@@ -145,8 +170,11 @@ export default function LinkVoucherPicker({
         const side = body?.data?.settlement_side
         setSupplierSide(side === 'bank_credit' || side === 'ap_debit' ? side : 'ap_debit')
         setCandidates(body?.data?.candidates ?? [])
+        setLoadFailed(false)
       } catch {
-        if (!cancelled) setCandidates([])
+        if (cancelled) return
+        setCandidates([])
+        setLoadFailed(true)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -155,32 +183,78 @@ export default function LinkVoucherPicker({
     return () => {
       cancelled = true
     }
-  }, [apiBase])
+  }, [apiBase, retryKey])
+
+  const wanted = useMemo(() => parseVoucherNumber(search), [search])
+  const lookupKey = wanted ? (wanted.series ? `${wanted.series}-${wanted.number}` : String(wanted.number)) : null
+  const suggestionsHoldWanted =
+    wanted !== null && (candidates ?? []).some((c) => voucherNumberMatches(wanted, c.voucher_series, c.voucher_number))
+  const needsLookup = lookupKey !== null && !loading && !suggestionsHoldWanted
+  const lookupPending = needsLookup && lookup?.key !== lookupKey
+
+  useEffect(() => {
+    if (!needsLookup || !lookupKey || lookup?.key === lookupKey) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      let found: VoucherCandidate[] = []
+      try {
+        const response = await fetch(`${apiBase}/voucher-candidates?voucher=${encodeURIComponent(lookupKey)}`)
+        if (response.ok) {
+          const body = await response.json()
+          found = body?.data?.candidates ?? []
+        }
+      } catch {
+        found = []
+      }
+      if (!cancelled) setLookup({ key: lookupKey, candidates: found })
+    }, 300)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [apiBase, needsLookup, lookupKey, lookup?.key])
 
   const filtered = useMemo(() => {
     if (!candidates) return [] as VoucherCandidate[]
-    if (!search.trim()) return candidates
     const needle = search.trim().toLowerCase()
-    return candidates.filter((c) => {
-      const label = voucherLabel(c).toLowerCase()
-      const desc = c.description?.toLowerCase() ?? ''
-      return label.includes(needle) || desc.includes(needle)
-    })
-  }, [candidates, search])
+    const matches = !needle
+      ? candidates
+      : candidates.filter((c) => {
+          const label = voucherLabel(c).toLowerCase()
+          const desc = c.description?.toLowerCase() ?? ''
+          return (
+            label.includes(needle) ||
+            desc.includes(needle) ||
+            (wanted !== null && voucherNumberMatches(wanted, c.voucher_series, c.voucher_number))
+          )
+        })
+    const looked = lookup && lookup.key === lookupKey ? lookup.candidates : []
+    const extra = looked.filter((c) => !matches.some((m) => m.journal_entry_id === c.journal_entry_id))
+    return [...matches, ...extra]
+  }, [candidates, search, wanted, lookup, lookupKey])
 
   const selected = useMemo(
     () => (selectedId ? filtered.find((c) => c.journal_entry_id === selectedId) ?? null : null),
     [filtered, selectedId],
   )
+  const amountCheck = selected ? checkLinkAmount(selected, amountText) : null
+
+  const select = (c: VoucherCandidate) => {
+    setSelectedId(c.journal_entry_id)
+    setAmountText(formatAmountInput(defaultLinkAmount(c)))
+  }
 
   const handleConfirm = async () => {
-    if (!selected) return
+    if (!selected || !amountCheck?.ok) return
     setSubmitting(true)
     try {
       const response = await fetch(`${apiBase}/link-to-voucher`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ journal_entry_id: selected.journal_entry_id }),
+        // A voucher that settles several invoices is linked with this
+        // invoice's share; without it the server refuses rather than split on
+        // a guess. A link of all the voucher has left reads as it always did.
+        body: JSON.stringify(linkRequestBody(selected, amountCheck.amount)),
       })
       if (!response.ok) {
         const body = await response.json().catch(() => null)
@@ -218,7 +292,7 @@ export default function LinkVoucherPicker({
       <p className="text-sm text-muted-foreground">{t(introKey)}</p>
 
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <MagnifyingGlassIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -227,17 +301,24 @@ export default function LinkVoucherPicker({
         />
       </div>
 
-      {loading ? (
-        <div className="space-y-2">
+      {loading || (lookupPending && filtered.length === 0) ? (
+        <LateReveal className="space-y-2">
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
-        </div>
+        </LateReveal>
+      ) : loadFailed && filtered.length === 0 ? (
+        <LoadError onRetry={() => setRetryKey((key) => key + 1)} />
       ) : filtered.length === 0 ? (
-        <div className="rounded-lg border border-dashed bg-muted/30 p-6 text-center">
-          <p className="text-sm font-medium">{t('empty_title')}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{t(emptyDescriptionKey)}</p>
-        </div>
+        <EmptyState
+          title={t('empty_title')}
+          description={
+            <div className="space-y-1">
+              <p>{t(emptyDescriptionKey)}</p>
+              {wanted === null && <p>{t('empty_search_hint')}</p>}
+            </div>
+          }
+        />
       ) : (
         <ul className="space-y-2 max-h-[320px] overflow-y-auto">
           {filtered.map((c) => {
@@ -247,7 +328,7 @@ export default function LinkVoucherPicker({
               <li key={c.journal_entry_id}>
                 <button
                   type="button"
-                  onClick={() => setSelectedId(c.journal_entry_id)}
+                  onClick={() => select(c)}
                   className={`w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-secondary/60 ${
                     isSelected ? 'border-foreground' : 'border-border'
                   }`}
@@ -276,8 +357,13 @@ export default function LinkVoucherPicker({
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-sm font-medium tabular-nums">
-                        {formatCurrency(candidateAmount(c), invoiceCurrency)}
+                        {formatCurrency(voucherLeft(c), invoiceCurrency)}
                       </p>
+                      {(c.already_linked ?? 0) > 0 && (
+                        <p className="text-xs tabular-nums text-muted-foreground">
+                          {t('left_of_total', { total: formatCurrency(voucherTotal(c), invoiceCurrency) })}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -288,14 +374,44 @@ export default function LinkVoucherPicker({
       )}
 
       {selected && (
-        <div className="rounded-lg border bg-secondary/40 p-3">
-          <p className="text-sm">
-            {t('confirmation', {
-              voucher: voucherLabel(selected),
-              amount: formatCurrency(candidateAmount(selected), invoiceCurrency),
-            })}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">{t('no_new_je_note')}</p>
+        <div className="space-y-3 rounded-lg bg-secondary/40 p-3 bg-control shadow-raised">
+          {canChooseAmount(selected) && (
+            <div className="space-y-1.5">
+              <Label htmlFor="link-voucher-amount">{t('amount_label')}</Label>
+              <Input
+                id="link-voucher-amount"
+                inputMode="decimal"
+                value={amountText}
+                onChange={(e) => setAmountText(e.target.value)}
+                aria-invalid={amountCheck?.ok === false}
+                className="w-full sm:w-48 text-right tabular-nums"
+              />
+              {amountCheck && !amountCheck.ok ? (
+                <p className="text-xs text-destructive">
+                  {t(`amount_${amountCheck.reason}`, { max: formatCurrency(amountCheck.max, invoiceCurrency) })}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {t('amount_help', { max: formatCurrency(defaultLinkAmount(selected), invoiceCurrency) })}
+                </p>
+              )}
+            </div>
+          )}
+          {amountCheck?.ok && (
+            <p className="text-sm">
+              {leavesPartOfVoucher(selected, amountCheck.amount)
+                ? t('confirmation_part', {
+                    voucher: voucherLabel(selected),
+                    amount: formatCurrency(amountCheck.amount, invoiceCurrency),
+                    left: formatCurrency(roundOre(voucherLeft(selected) - amountCheck.amount), invoiceCurrency),
+                  })
+                : t('confirmation', {
+                    voucher: voucherLabel(selected),
+                    amount: formatCurrency(amountCheck.amount, invoiceCurrency),
+                  })}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">{t('no_new_je_note')}</p>
         </div>
       )}
 
@@ -305,7 +421,7 @@ export default function LinkVoucherPicker({
         </Button>
         <Button
           onClick={handleConfirm}
-          disabled={!selected}
+          disabled={!selected || !amountCheck?.ok}
           loading={submitting}
         >
           {t('confirm')}

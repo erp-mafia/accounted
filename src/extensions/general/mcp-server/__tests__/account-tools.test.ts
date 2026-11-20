@@ -521,10 +521,66 @@ describe('gnubok_update_account', () => {
 
     expect(result.preview.changes).toEqual({ default_vat_treatment: null })
   })
+
+  // Agent feedback seq 1088767: the REVENUE_ACCOUNT_WITHOUT_RUTA hint says to
+  // set default_vat_rate 0 on a non-sales class 3 account, and the client sent
+  // the untyped enum value as the string "0", refused as VALIDATION_ERROR.
+  it('publishes default_vat_rate as a typed enum', () => {
+    const properties = updateAccount.inputSchema.properties as Record<string, Record<string, unknown>>
+    expect(properties.default_vat_rate).toEqual({ type: ['number', 'null'], enum: [0, 0.06, 0.12, 0.25, null] })
+  })
+
+  it.each([0, '0', '0.0'])('stages default_vat_rate 0 sent as %j', async (rate) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '3990', account_name: 'Övriga ersättningar och intäkter', default_vat_rate: null,
+        default_vat_treatment: null, is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '3990', default_vat_rate: rate, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({ default_vat_rate: 0 })
+  })
+
+  it('reads "0.25" and "null" back as the rate and the clearing null', async () => {
+    const current = {
+      data: {
+        account_number: '3041', account_name: 'Försäljning', default_vat_rate: 0.12,
+        default_vat_treatment: null, is_active: true,
+      },
+    }
+    const set = createQueuedMockSupabase()
+    set.enqueue(current)
+    const setResult = (await updateAccount.execute(
+      { account_number: '3041', default_vat_rate: '0.25', dry_run: true },
+      'company-1', 'user-1', set.supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+    expect(setResult.preview.changes).toEqual({ default_vat_rate: 0.25 })
+
+    const clear = createQueuedMockSupabase()
+    clear.enqueue(current)
+    const clearResult = (await updateAccount.execute(
+      { account_number: '3041', default_vat_rate: 'null', dry_run: true },
+      'company-1', 'user-1', clear.supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+    expect(clearResult.preview.changes).toEqual({ default_vat_rate: null })
+  })
+
+  it('still refuses a rate outside the set, as a number or a string', async () => {
+    for (const rate of [25, '25', 'zero']) {
+      await expect(
+        updateAccount.execute({ account_number: '3990', default_vat_rate: rate }, 'company-1', 'user-1', noopSupabase),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^Invalid arguments: default_vat_rate: /) })
+    }
+  })
 })
 
 describe('gnubok_list_accounts: compact detail and paging', () => {
-  // Easy Online Stores brief 2026-09-16, F6: 379 accounts came back as 88 kB
+  // An agent evaluation brief 2026-09-16, F6: 379 accounts came back as 88 kB
   // in one answer. Both options are opt-in so every existing caller keeps the
   // rows it had; `total` rides along on every answer.
   const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
@@ -585,5 +641,38 @@ describe('gnubok_list_accounts: compact detail and paging', () => {
       listAccounts.execute({ offset: -1 }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/offset must be a non-negative integer/)
     expect(calls).toHaveLength(0)
+  })
+
+  // 2026-10 session autopsy: search (27 calls) and query (24, now an alias)
+  // were refused, with no parameter to map them to.
+  const search = async (args: Record<string, unknown>) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    return (await listAccounts.execute(args, 'company-1', 'user-1', supabase as never)) as Page
+  }
+
+  it('search matches the start of an account number', async () => {
+    expect((await search({ search: '19' })).accounts.map((a) => a.account_number)).toEqual(['1930'])
+    expect((await search({ search: '4545' })).accounts.map((a) => a.account_number)).toEqual(['4545'])
+  })
+
+  it('search matches any part of the name, whatever its case, and totals the matches', async () => {
+    expect(await search({ search: 'IMPORT', detail: 'compact' })).toEqual({ accounts: [compactRows[2]], count: 1, total: 1 })
+    expect((await search({ search: 'företags' })).accounts.map((a) => a.account_number)).toEqual(['1930'])
+  })
+
+  it('reads a search sent as a number as the digits of an account number', async () => {
+    expect((await search({ search: 2617 })).accounts.map((a) => a.account_number)).toEqual(['2617'])
+  })
+
+  it('refuses an empty search or one that is not text before any query', async () => {
+    for (const value of ['  ', { text: 'bank' }, 19.5]) {
+      const { supabase, calls } = createQueuedMockSupabase()
+      await expect(
+        listAccounts.execute({ search: value }, 'company-1', 'user-1', supabase as never),
+        JSON.stringify(value),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^search must be text/) })
+      expect(calls).toHaveLength(0)
+    }
   })
 })
