@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
-vi.mock('next/headers', () => ({ cookies: vi.fn(async () => ({ get: () => undefined })) }))
+vi.mock('next/headers', () => ({
+  cookies: vi.fn(async () => ({ get: () => undefined })),
+  headers: vi.fn(async () => new Headers()),
+}))
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`NEXT_REDIRECT:${url}`)
