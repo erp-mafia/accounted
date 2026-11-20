@@ -55,13 +55,11 @@ describe('report catalog: the library footnote', () => {
   // reports.catalog_footnote says most reports open for the period you choose
   // and can be downloaded as PDF or Excel (#1307: it used to claim every
   // report exports to PDF, true for a minority). Keep the claim true.
-  it('gives an export and a period to most reports, and PDF to only some', () => {
+  it('gives most reports both a period and an export, and PDF to only some', () => {
     const total = REPORT_CATALOG.length
-    const withExport = REPORT_CATALOG.filter((r) => (r.exports ?? []).length > 0).length
-    const withPeriod = REPORT_CATALOG.filter((r) => r.params !== 'none').length
+    const withBoth = REPORT_CATALOG.filter((r) => r.params !== 'none' && (r.exports ?? []).length > 0).length
     const withPdf = REPORT_CATALOG.filter((r) => r.exports?.includes('pdf')).length
-    expect(withExport * 2).toBeGreaterThan(total)
-    expect(withPeriod * 2).toBeGreaterThan(total)
+    expect(withBoth * 2).toBeGreaterThan(total)
     expect(withPdf).toBeLessThan(total)
   })
 })
