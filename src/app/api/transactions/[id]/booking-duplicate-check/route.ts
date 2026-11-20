@@ -17,6 +17,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import {
   detectBookingDuplicate,
   type BookedDuplicateCandidate,
@@ -42,8 +43,13 @@ export const GET = withRouteContext(
       return errorResponseFromCode('TX_CATEGORIZE_TX_NOT_FOUND', log, { requestId })
     }
 
-    // Already linked: nothing left to book, so no twin to warn about.
-    if (transaction.journal_entry_id) {
+    // Already booked (the pointer, a bank_line voucher link or a verifikat
+    // naming the row, the same answer POST /book and /categorize give):
+    // nothing left to book, so no twin to warn about; the booking door
+    // refuses it with its own message. A failed read answers null here too,
+    // and the door, which fails closed, decides.
+    const bookable = await assertTransactionBookable(supabase, companyId!, transaction)
+    if (!bookable.ok) {
       return NextResponse.json({ candidate: null })
     }
 

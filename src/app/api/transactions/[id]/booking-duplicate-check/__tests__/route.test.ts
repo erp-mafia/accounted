@@ -21,6 +21,11 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: mockDetect,
 }))
 
+const { mockAssertBookable } = vi.hoisted(() => ({ mockAssertBookable: vi.fn() }))
+vi.mock('@/lib/transactions/is-booked', () => ({
+  assertTransactionBookable: mockAssertBookable,
+}))
+
 import { GET } from '../route'
 
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
@@ -48,6 +53,7 @@ describe('GET /api/transactions/[id]/booking-duplicate-check', () => {
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 't@t.se' } } })
     mockDetect.mockResolvedValue(null)
+    mockAssertBookable.mockResolvedValue({ ok: true })
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -65,10 +71,26 @@ describe('GET /api/transactions/[id]/booking-duplicate-check', () => {
 
   it('returns null for a row that is already linked, without detecting', async () => {
     enqueue({ data: { id: TX_UUID, date: '2026-10-23', amount: -42387, currency: 'SEK', journal_entry_id: 'je-live' }, error: null })
+    mockAssertBookable.mockResolvedValue({ ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: 'je-live', via: 'pointer' })
     const response = await GET(createMockRequest(URL), createMockRouteParams({ id: TX_UUID }))
     const { status, body } = await parseJsonResponse<{ candidate: unknown }>(response)
     expect(status).toBe(200)
     expect(body).toEqual({ candidate: null })
+    expect(mockDetect).not.toHaveBeenCalled()
+  })
+
+  // A bulk-booked or split row has a NULL pointer and is anchored by a
+  // bank_line voucher link: POST /book refuses it as already booked, so the
+  // probe must not show a duplicate dialog for a booking that cannot happen.
+  it('returns null for a link-only row the booking doors call booked, without detecting', async () => {
+    const tx = { id: TX_UUID, date: '2026-10-23', amount: -42387, currency: 'SEK', journal_entry_id: null }
+    enqueue({ data: tx, error: null })
+    mockAssertBookable.mockResolvedValue({ ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: 'je-bulk', via: 'link' })
+    const response = await GET(createMockRequest(URL), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ candidate: unknown }>(response)
+    expect(status).toBe(200)
+    expect(body).toEqual({ candidate: null })
+    expect(mockAssertBookable).toHaveBeenCalledWith(mockSupabase, 'company-1', tx)
     expect(mockDetect).not.toHaveBeenCalled()
   })
 
