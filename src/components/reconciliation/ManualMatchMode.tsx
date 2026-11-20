@@ -1,13 +1,20 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  DEFAULT_RECON_SORT,
+  nextReconSort,
+  sortReconciliationItems,
+  type ReconSort,
+  type ReconSortColumn,
+} from '@/lib/reconciliation/item-sort'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton, LateReveal } from '@/components/ui/skeleton'
 import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { SortableTh, TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { PAGE_BOTTOM_BAR_PROPS } from '@/components/ui/fab-clearance'
 import { useToast } from '@/components/ui/use-toast'
 import { chunk, cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
@@ -56,6 +63,11 @@ const LIMIT = 200
 /** Most rows one pair may carry (ReconciliationPairSchema). */
 const MAX_ROWS_PER_PAIR = 50
 
+/** A column's sort for SortableTh: its direction, or null when the table is sorted on another column. */
+function sortDirection(sort: ReconSort, column: ReconSortColumn): ReconSort['direction'] | null {
+  return sort.column === column ? sort.direction : null
+}
+
 export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeProps) {
   const t = useTranslations('reconciliation')
   const tCommon = useTranslations('common')
@@ -67,6 +79,32 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const [pickedEntries, setPickedEntries] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [residualKind, setResidualKind] = useState<ResidualKind | ''>('')
+
+  // One sort per table, not one shared: the two sides hold different rows and
+  // the whole task is comparing them, so pinning both to the same order would
+  // work against the person doing the matching.
+  const [ledgerSort, setLedgerSort] = useState<ReconSort>(DEFAULT_RECON_SORT)
+  const [externalSort, setExternalSort] = useState<ReconSort>(DEFAULT_RECON_SORT)
+  const onLedgerSort = useCallback(
+    (column: ReconSortColumn) => setLedgerSort((s) => nextReconSort(s, column)),
+    [],
+  )
+  const onExternalSort = useCallback(
+    (column: ReconSortColumn) => setExternalSort((s) => nextReconSort(s, column)),
+    [],
+  )
+
+  // Sorted copies for rendering. Memoised so a re-render from selection state
+  // does not resort on every checkbox click. Selection is keyed by item_id, so
+  // reordering never disturbs what is picked.
+  const sortedLedger = useMemo(
+    () => (ledger ? sortReconciliationItems(ledger, ledgerSort) : null),
+    [ledger, ledgerSort],
+  )
+  const sortedExternal = useMemo(
+    () => (external ? sortReconciliationItems(external, externalSort) : null),
+    [external, externalSort],
+  )
 
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
   const isSkv = account.kind === 'skattekonto'
@@ -331,13 +369,13 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                       />
                     )}
                   </th>
-                  <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_date')}</th>
-                  <th className={TH_CLASS}>{t('col_event')}</th>
-                  <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
+                  <SortableTh label={t('col_date')} direction={sortDirection(externalSort, 'date')} onSort={() => onExternalSort('date')} className="w-[96px]" />
+                  <SortableTh label={t('col_event')} direction={sortDirection(externalSort, 'description')} onSort={() => onExternalSort('description')} />
+                  <SortableTh label={t('col_amount')} direction={sortDirection(externalSort, 'amount')} onSort={() => onExternalSort('amount')} className="w-[120px] text-right" align="right" />
                 </tr>
               </thead>
               <tbody className="stagger-enter">
-                {external.map((item) => {
+                {(sortedExternal ?? []).map((item) => {
                   const picked = pickedExternal.has(item.item_id)
                   return (
                     <tr
@@ -390,14 +428,14 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-8 px-2')} />
-                  <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_date')}</th>
-                  <th className={cn(TH_CLASS, 'w-[90px]')}>{t('col_voucher')}</th>
-                  <th className={TH_CLASS}>{t('col_event')}</th>
-                  <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
+                  <SortableTh label={t('col_date')} direction={sortDirection(ledgerSort, 'date')} onSort={() => onLedgerSort('date')} className="w-[96px]" />
+                  <SortableTh label={t('col_voucher')} direction={sortDirection(ledgerSort, 'voucher')} onSort={() => onLedgerSort('voucher')} className="w-[90px]" />
+                  <SortableTh label={t('col_event')} direction={sortDirection(ledgerSort, 'description')} onSort={() => onLedgerSort('description')} />
+                  <SortableTh label={t('col_amount')} direction={sortDirection(ledgerSort, 'amount')} onSort={() => onLedgerSort('amount')} className="w-[120px] text-right" align="right" />
                 </tr>
               </thead>
               <tbody className="stagger-enter">
-                {ledger.map((item) => {
+                {(sortedLedger ?? []).map((item) => {
                   const picked = pickedEntries.has(item.item_id)
                   return (
                     <tr
