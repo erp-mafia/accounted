@@ -9,6 +9,7 @@ import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import { isRevokedCredentialsError, listPurchasesPage } from './api-client'
 import { encryptCredential, refreshTokenOf } from './credentials'
 import { isRevokedOAuthError, refreshAccessToken } from './oauth'
+import { zettleStoreDisplayName } from './organization-name'
 import type { ZettleConnection, ZettlePayment, ZettlePurchase } from '../types'
 
 const defaultLog = createLogger('zettle/order-sync')
@@ -294,6 +295,7 @@ export function mapLineItems(purchase: ZettlePurchase): WebshopOrderLineItem[] {
   return items
 }
 
+/** Maps one Zettle purchase to webshop order rows; store_label uses organization_name, not the UUID. */
 export function mapPurchaseToWebshopRows(
   connection: Pick<ZettleConnection, 'id' | 'organization_name'>,
   storeScope: string,
@@ -318,7 +320,7 @@ export function mapPurchaseToWebshopRows(
       {
         platform: 'zettle',
         store_scope: storeScope,
-        store_label: connection.organization_name,
+        store_label: zettleStoreDisplayName(connection.organization_name),
         connection_id: connection.id,
         row_type: 'order',
         parent_external_id: null,
@@ -373,7 +375,7 @@ export function mapPurchaseToWebshopRows(
       {
         platform: 'zettle',
         store_scope: storeScope,
-        store_label: connection.organization_name,
+        store_label: zettleStoreDisplayName(connection.organization_name),
         connection_id: connection.id,
         row_type: 'refund',
         parent_external_id: parentUuid

@@ -5,6 +5,7 @@ import {
   exchangeCodeForTokens,
   fetchUserSelf,
 } from '@/extensions/general/zettle/lib/oauth'
+import { ZETTLE_DEFAULT_ORGANIZATION_NAME } from '@/extensions/general/zettle/lib/organization-name'
 
 /**
  * GET /api/extensions/zettle/callback
@@ -41,7 +42,8 @@ export function GET(request: Request) {
       const connectedAt = new Date().toISOString()
       return {
         organization_uuid: userSelf.organizationUuid,
-        organization_name: null,
+        // users/self has no display name; default until the merchant renames.
+        organization_name: ZETTLE_DEFAULT_ORGANIZATION_NAME,
         refresh_token_encrypted: encryptCredential(tokens.refresh_token),
         connected_at: connectedAt,
         last_order_synced_at: connectedAt,

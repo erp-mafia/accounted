@@ -1078,6 +1078,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/zettle/sync': gap('P3', EXT_SYNC),
   'POST /api/extensions/ext/zettle/backfill': covered(['gnubok_backfill_feed']),
   'POST /api/extensions/ext/zettle/transaction-sync': gap('P3', EXT_SYNC_SWITCH),
+  'POST /api/extensions/ext/zettle/organization-name': gap('P3', 'name the Zettle store shown as Butik on the Orders page; no door'),
 }
 
 /**
@@ -1150,4 +1151,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 163 -> 162 (2026-11-19, crm#1967): confirming the opening balance review,
  * through the staged gnubok_acknowledge_opening_balance_review.
  */
-export const GAP_CEILING = 162
+export const GAP_CEILING = 163
