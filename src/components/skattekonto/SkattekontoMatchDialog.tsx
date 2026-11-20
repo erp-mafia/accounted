@@ -306,29 +306,37 @@ export function SkattekontoMatchDialog({
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>
-                    <TableCell className="max-w-[260px] date-figures">
-                      <span className="block truncate">{c.description}</span>
-                      {c.combined_with && c.combined_with.length > 0 && (
-                        /* data-ph-mask: event texts and amounts are user data */
-                        <span className="mt-1 block text-xs text-muted-foreground" data-ph-mask="">
-                          {t('combined_note', {
-                            count: c.combined_with.length,
-                            total: formatRowAmount(c.combined_total ?? 0),
-                            skattekonto: skattekontoAccount,
-                          })}
-                          {c.combined_with.map((o) => (
-                            <span key={o.id} className="block truncate tabular-nums">
-                              {formatDate(o.transaktionsdatum)} {o.transaktionstext}{' '}
-                              {formatRowAmount(o.belopp_skatteverket)}
-                            </span>
-                          ))}
-                        </span>
-                      )}
-                      {!!c.joins_linked_count && (
-                        <span className="mt-1 block text-xs text-muted-foreground">
-                          {t('joins_linked_note', { count: c.joins_linked_count, skattekonto: skattekontoAccount })}
-                        </span>
-                      )}
+                    {/* The cap sits on an inner block, not the td: max-width
+                        on a table cell is undefined per CSS 2.1 10.4 and
+                        Firefox ignores it when sizing columns, so a long
+                        description widened the table there and scrolled
+                        Koppla out of view. 228 = the old 260 minus the
+                        cell's px-4. */}
+                    <TableCell className="date-figures">
+                      <div className="max-w-[228px]">
+                        <span className="block truncate">{c.description}</span>
+                        {c.combined_with && c.combined_with.length > 0 && (
+                          /* data-ph-mask: event texts and amounts are user data */
+                          <span className="mt-1 block text-xs text-muted-foreground" data-ph-mask="">
+                            {t('combined_note', {
+                              count: c.combined_with.length,
+                              total: formatRowAmount(c.combined_total ?? 0),
+                              skattekonto: skattekontoAccount,
+                            })}
+                            {c.combined_with.map((o) => (
+                              <span key={o.id} className="block truncate tabular-nums">
+                                {formatDate(o.transaktionsdatum)} {o.transaktionstext}{' '}
+                                {formatRowAmount(o.belopp_skatteverket)}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        {!!c.joins_linked_count && (
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {t('joins_linked_note', { count: c.joins_linked_count, skattekonto: skattekontoAccount })}
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {/* Chips mark exceptions: posted is the normal case. */}
