@@ -216,12 +216,17 @@ describe('where a shop feed lands names the tool that reads it (crm#1931)', () =
 
   it('the connection status says where the rows of each connected feed are read, and of no other', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    // Two reads per feed: the newest attempts, then the active rows.
     enqueue({ data: [] }) // stripe
+    enqueue({ data: [] })
     enqueue({ data: [] }) // shopify
+    enqueue({ data: [] })
     enqueue({
       data: [{ id: 'conn-2', status: 'active', connected_at: '2026-10-01T08:00:00.000Z', error_message: null, transaction_sync_enabled: true, last_order_synced_at: '2026-11-16T03:00:00.000Z' }],
     }) // woocommerce
+    enqueue({ data: [] })
     enqueue({ data: [] }) // zettle
+    enqueue({ data: [] })
     const result = (await list.execute({}, 'company-1', 'user-1', supabase as never)) as {
       connections: Array<Record<string, unknown>>
       instructions: string
@@ -262,7 +267,74 @@ describe('gnubok_list_feed_connections', () => {
       },
     ])
     expect(findCalls('stripe_connections', 'eq')).toContainEqual(['company_id', 'company-1'])
-    expect(findCalls('stripe_connections', 'neq')).toContainEqual(['status', 'revoked'])
+  })
+
+  it('lists per store the live connection, not the failed attempts before it (crm#2056)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const shop = 'https://shop.example.se'
+    const row = (id: string, status: string, store_url: string) => ({
+      id,
+      status,
+      store_url,
+      connected_at: status === 'active' ? '2026-11-13T10:30:10.810Z' : null,
+      error_message: status === 'error' ? 'Butiken svarade inte.' : null,
+      transaction_sync_enabled: status === 'active',
+      last_order_synced_at: null,
+    })
+    enqueue({
+      data: [
+        row('live', 'active', shop),
+        row('gone', 'revoked', shop),
+        ...Array.from({ length: 9 }, (_, i) => row(`retry-${i}`, 'error', shop)),
+        row('other', 'error', 'https://www.shop.example.se'),
+      ],
+    })
+    const result = (await list.execute({ provider: 'woocommerce' }, 'company-1', 'user-1', supabase as never)) as {
+      connections: Array<Record<string, unknown>>
+    }
+    expect(result.connections.map((c) => [c.connection_id, c.status])).toEqual([
+      ['live', 'active'],
+      ['other', 'error'],
+    ])
+  })
+
+  it("keeps a store's live connection when another store's newer attempts fill the window", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const row = (id: string, status: string, store_url: string, created_at: string) => ({
+      id,
+      status,
+      store_url,
+      created_at,
+      connected_at: status === 'active' ? created_at : null,
+      error_message: null,
+      transaction_sync_enabled: status === 'active',
+      last_order_synced_at: null,
+    })
+    const other = 'https://other.example.se'
+    enqueue({
+      data: Array.from({ length: 25 }, (_, i) =>
+        row(`b-${i}`, 'revoked', other, `2026-11-${String(30 - i).padStart(2, '0')}T10:00:00.000Z`),
+      ),
+    })
+    enqueue({ data: [row('a-live', 'active', 'https://shop.example.se', '2026-10-01T10:00:00.000Z')] })
+    const result = (await list.execute({ provider: 'woocommerce' }, 'company-1', 'user-1', supabase as never)) as {
+      connections: Array<Record<string, unknown>>
+    }
+    expect(result.connections.map((c) => [c.connection_id, c.status])).toEqual([['a-live', 'active']])
+  })
+
+  it('drops a single-store feed whose newest attempt was revoked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'gone', status: 'revoked', connected_at: null, error_message: null, transaction_sync_enabled: false },
+        { id: 'old', status: 'error', connected_at: null, error_message: 'x', transaction_sync_enabled: false },
+      ],
+    })
+    const result = (await list.execute({ provider: 'shopify' }, 'company-1', 'user-1', supabase as never)) as {
+      connections: unknown[]
+    }
+    expect(result.connections).toEqual([])
   })
 
   it('reads all four feeds when no provider is named', async () => {
@@ -273,7 +345,7 @@ describe('gnubok_list_feed_connections', () => {
     }
     expect(result.connections).toEqual([])
     for (const table of ['stripe_connections', 'shopify_connections', 'woocommerce_connections', 'zettle_connections']) {
-      expect(findCalls(table, 'select')).toHaveLength(1)
+      expect(findCalls(table, 'select')).toHaveLength(2)
     }
     expect(result.instructions).toMatch(/No Stripe/)
   })

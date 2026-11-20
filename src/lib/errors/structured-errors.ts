@@ -2968,6 +2968,20 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'This is a credit note with no link to its original, so it cannot be issued as an ordinary invoice. Delete the draft and credit the original invoice.',
   },
+  INVOICE_SEND_CREDIT_NOTE_DRAFT: {
+    httpStatus: 409,
+    message_sv:
+      'En kreditfaktura skickas inte den här vägen. Utkastet skickas från kreditfakturans sida i Accounted, där den också utfärdas och bokförs.',
+    message_en:
+      "A credit note is not sent this way. The draft is sent from the credit note's page in Accounted, which also issues and books it.",
+  },
+  INVOICE_SEND_CREDIT_NOTE_ISSUED: {
+    httpStatus: 409,
+    message_sv:
+      'Kreditfakturan är redan utfärdad, och Accounted mejlar den inte i efterhand. Ladda ner PDF:en på kreditfakturans sida och skicka den själv till kunden.',
+    message_en:
+      "The credit note is already issued, and Accounted does not email it afterwards. Download its PDF from the credit note's page and send it to the customer yourself.",
+  },
   INVOICE_SEND_CANCELLED: {
     httpStatus: 400,
     message_sv: 'Makulerade fakturor kan inte skickas. Skapa en ny faktura istället.',
