@@ -2036,7 +2036,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/mileage-trips`
 
 **Log a körjournal trip (mileage log entry).**
-`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+`scope:payroll:write · risk:low · idempotent · dry-run`
 
 Records one business trip with what Skatteverket expects of a körjournal: date, start and destination, distance, purpose (ärende) and who was visited, plus odometer readings and the vehicle. The trip is saved as a draft; nothing is booked. Milersättning is booked later for a whole period at the tax-free schablon rate for the vehicle type. A förmånsbil trip must name the vehicle (vehicle_registration). Idempotent. Dry-runnable: the preview carries the schablon rate and the allowance the trip would add.
 

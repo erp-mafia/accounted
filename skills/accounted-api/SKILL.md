@@ -666,7 +666,7 @@ PUT /companies/{companyId}/employees/{id}/worked-days : Register worked hours pe
 DELETE /companies/{companyId}/employees/{id}/worked-days : Delete worked days for an employee in a date range [scope:payroll:write risk:low idempotent dry-run]
 PUT /companies/{companyId}/employees/opening-balances : Bulk-set payroll cutover opening balances (atomic) [scope:payroll:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/mileage-trips : List körjournal trips (mileage log) with total and unbooked distance [scope:payroll:read risk:low idempotent]
-POST /companies/{companyId}/mileage-trips : Log a körjournal trip (mileage log entry) [scope:payroll:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/mileage-trips : Log a körjournal trip (mileage log entry) [scope:payroll:write risk:low idempotent dry-run]
 GET /companies/{companyId}/salary/fora-report : The Fora monthly report for a payment month: each coded worker, their FOK code and the pay Fora is told about [scope:payroll:read risk:low idempotent]
 GET /companies/{companyId}/salary/premium-rules : List OB and overtime premium rules [scope:payroll:read risk:low idempotent]
 POST /companies/{companyId}/salary/premium-rules : Create an OB or overtime premium rule [scope:payroll:write risk:low idempotent dry-run reversible]

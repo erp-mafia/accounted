@@ -319,6 +319,17 @@ describe('POST /api/v1/companies/:companyId/mileage-trips', () => {
     expect(res.status).toBe(500)
   })
 
+  it('a dry run estimates the allowance the way the booking computes it (summarizeTrips)', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
+    const res = await post(
+      { ...validTrip, distance_km: 0.7, vehicle_type: 'company_car_electric', vehicle_registration: 'ABC123' },
+      '?dry_run=true',
+    )
+    expect(res.status).toBe(200)
+    // 0,07 mil at 9,50 kr: 0,665 kr, booked as 0,67.
+    expect((await res.json()).data.preview).toMatchObject({ rate_per_mil: 9.5, estimated_allowance_sek: 0.67 })
+  })
+
   it('a dry run estimates the allowance from the distance as stored (one decimal)', async () => {
     mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
     const res = await post({ ...validTrip, distance_km: 10.04 }, '?dry_run=true')

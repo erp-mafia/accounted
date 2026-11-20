@@ -10,8 +10,8 @@
  */
 import { z } from 'zod'
 import { CreateMileageTripSchema } from '@/lib/api/schemas'
-import { createTrip, listTrips, ratePerMil, storedDistanceKm } from '@/lib/mileage/mileage-service'
-import { loadPayrollConfig, PayrollConfigMissingError } from '@/lib/salary/payroll-config'
+import { createTrip, listTrips, storedDistanceKm, summarizeTrips } from '@/lib/mileage/mileage-service'
+import { loadPayrollConfig, PayrollConfigMissingError, type PayrollConfig } from '@/lib/salary/payroll-config'
 import { roundOre } from '@/lib/money'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import type { MileageTrip } from '@/types'
@@ -171,18 +171,20 @@ async function checkTrip(
 
 /**
  * The schablon allowance the trip would add when booked, from the distance as
- * stored; null when the year's rates are not loaded. Any other failure is an
- * error, never reported as missing rates.
+ * stored and through summarizeTrips, the rule the booking itself uses; null
+ * when the year's rates are not loaded. Any other failure is an error, never
+ * reported as missing rates.
  */
 async function estimateAllowance(ctx: OperationContext, input: CreateInput, distanceKm: number) {
+  let config: PayrollConfig
   try {
-    const config = await loadPayrollConfig(ctx.supabase, Number(input.trip_date.slice(0, 4)))
-    const rate = ratePerMil(config, input.vehicle_type)
-    return { rate_per_mil: rate, estimated_allowance_sek: roundOre((distanceKm / 10) * rate) }
+    config = await loadPayrollConfig(ctx.supabase, Number(input.trip_date.slice(0, 4)))
   } catch (err) {
     if (err instanceof PayrollConfigMissingError) return { rate_per_mil: null, estimated_allowance_sek: null }
     throw err
   }
+  const [summary] = summarizeTrips([{ vehicle_type: input.vehicle_type, distance_km: distanceKm }], config)
+  return { rate_per_mil: summary.rate_per_mil, estimated_allowance_sek: summary.amount }
 }
 
 export const mileageTripsCreate = defineOperation({
@@ -190,7 +192,7 @@ export const mileageTripsCreate = defineOperation({
   kind: 'write',
   scope: 'payroll:write',
   risk: 'low',
-  reversible: true,
+  reversible: false,
   docs: {
     summary: 'Log a körjournal trip (mileage log entry).',
     description:
