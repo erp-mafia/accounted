@@ -12,6 +12,7 @@ import { payslipLineFlags } from '@/lib/salary/line-item-roles'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { roundOre } from '@/lib/money'
+import { storedDistanceKm } from './stored-distance'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import {
   isOwnerDeposit,
@@ -91,11 +92,6 @@ export function summarizeTrips(
     })
   }
   return summaries.sort((a, b) => a.vehicle_type.localeCompare(b.vehicle_type))
-}
-
-/** A trip's distance as the numeric(10,1) column stores it, in km. */
-export function storedDistanceKm(km: number): number {
-  return Math.round(km * 10) / 10
 }
 
 export interface ListTripsFilter {

@@ -229,6 +229,20 @@ describe('POST /api/v1/companies/:companyId/mileage-trips', () => {
     expect(wroteTrips(client)).toBe(false)
   })
 
+  it('400 VALIDATION_ERROR on distance_km for a distance that stores as zero, on a dry run too', async () => {
+    const client = makeClient({ company_members: MEMBER })
+    mockServiceClient.mockReturnValue(client)
+    for (const query of ['', '?dry_run=true']) {
+      const res = await post({ ...validTrip, distance_km: 0.04 }, query)
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(JSON.stringify(body.error)).toContain('distance_km')
+    }
+    expect((await post({ ...validTrip, distance_km: 0.05 }, '?dry_run=true')).status).toBe(200)
+    expect(wroteTrips(client)).toBe(false)
+  })
+
   it('400 VALIDATION_ERROR on vehicle_registration for a förmånsbil trip without one, and writes nothing', async () => {
     const client = makeClient({ company_members: MEMBER })
     mockServiceClient.mockReturnValue(client)

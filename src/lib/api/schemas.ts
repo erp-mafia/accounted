@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { PURCHASE_CATEGORY_CODES } from '@/lib/categories/purchase-categories'
 import { MILEAGE_COUNTER_ACCOUNTS } from '@/lib/mileage/counter-accounts'
+import { isStorableDistanceKm } from '@/lib/mileage/stored-distance'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import {
   normalizeSwedbankId,
@@ -6308,6 +6309,12 @@ export const CreateMileageTripSchema = z
     message: 'Ange registreringsnummer för förmånsbilen',
     path: ['vehicle_registration'],
   })
+  // The column keeps one decimal and must stay above zero: 0,04 km would
+  // store as 0 and fail its CHECK.
+  .refine((t) => isStorableDistanceKm(t.distance_km), {
+    message: 'Ange en sträcka på minst 0,1 km',
+    path: ['distance_km'],
+  })
 
 export const UpdateMileageTripSchema = z
   .object({
@@ -6326,6 +6333,10 @@ export const UpdateMileageTripSchema = z
     notes: z.string().trim().max(1000).optional().nullable(),
   })
   .refine((t) => Object.keys(t).length > 0, { message: 'Inga fält att uppdatera' })
+  .refine((t) => t.distance_km === undefined || isStorableDistanceKm(t.distance_km), {
+    message: 'Ange en sträcka på minst 0,1 km',
+    path: ['distance_km'],
+  })
 
 export const BookMileagePeriodSchema = z
   .object({

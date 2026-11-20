@@ -10,7 +10,8 @@
  */
 import { z } from 'zod'
 import { CreateMileageTripSchema } from '@/lib/api/schemas'
-import { createTrip, listTrips, storedDistanceKm, summarizeTrips } from '@/lib/mileage/mileage-service'
+import { createTrip, listTrips, summarizeTrips } from '@/lib/mileage/mileage-service'
+import { storedDistanceKm } from '@/lib/mileage/stored-distance'
 import { loadPayrollConfig, PayrollConfigMissingError, type PayrollConfig } from '@/lib/salary/payroll-config'
 import { roundOre } from '@/lib/money'
 import { saneIsoDateSchema } from '@/lib/invariants/zod'
