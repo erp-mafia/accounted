@@ -55,19 +55,33 @@ describe('sortReconciliationItems', () => {
     ).toEqual(['a9', 'a10', 'b1'])
   })
 
+  // The order follows the label the table shows: no series reads as A.
+  it('sorts a voucher without a series as series A', () => {
+    const items = [
+      item({ item_id: 'a9', voucher_series: 'A', voucher_number: 9 }),
+      item({ item_id: 'bare10', voucher_series: null, voucher_number: 10 }),
+      item({ item_id: 'b1', voucher_series: 'B', voucher_number: 1 }),
+    ]
+    expect(
+      sortReconciliationItems(items, { column: 'voucher', direction: 'asc' }).map((i) => i.item_id),
+    ).toEqual(['a9', 'bare10', 'b1'])
+  })
+
   // The bank side has no voucher at all, and an unbooked ledger line has none
   // either. Those must not push real rows out of view when the order flips.
   it('keeps rows without a voucher last in both directions', () => {
     const items = [
       item({ item_id: 'none' }),
+      item({ item_id: 'zero', voucher_series: 'A', voucher_number: 0 }),
       item({ item_id: 'a1', voucher_series: 'A', voucher_number: 1 }),
     ]
+    // Number 0 shows as '-', so it counts as no voucher too.
     expect(
-      sortReconciliationItems(items, { column: 'voucher', direction: 'asc' }).map((i) => i.item_id),
-    ).toEqual(['a1', 'none'])
+      sortReconciliationItems(items, { column: 'voucher', direction: 'asc' }).map((i) => i.item_id)[0],
+    ).toBe('a1')
     expect(
-      sortReconciliationItems(items, { column: 'voucher', direction: 'desc' }).map((i) => i.item_id),
-    ).toEqual(['a1', 'none'])
+      sortReconciliationItems(items, { column: 'voucher', direction: 'desc' }).map((i) => i.item_id)[0],
+    ).toBe('a1')
   })
 
   // Matching means finding a counterpart with the opposite sign, so the sign

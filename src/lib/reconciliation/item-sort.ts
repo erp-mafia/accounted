@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { ReconciliationItem } from './schemas'
 
 /**
@@ -38,17 +39,20 @@ function emptyLast(
   column: ReconSortColumn,
 ): number | null {
   if (column !== 'voucher') return null
-  const aHas = a.voucher_number != null
-  const bHas = b.voucher_number != null
+  // Absent is what the table shows as '-': no number, or number 0.
+  const aHas = formatVoucher(a) !== '-'
+  const bHas = formatVoucher(b) !== '-'
   if (aHas === bHas) return null
   return aHas ? -1 : 1
 }
 
-/** Vouchers sort by series then number, not as text: 'A9' before 'A10'. */
+/**
+ * Vouchers sort by the label the table shows (formatVoucher, so a missing
+ * series reads as A), with numeric collation: series first, then number,
+ * 'A9' before 'A10'.
+ */
 function compareVoucher(a: ReconciliationItem, b: ReconciliationItem): number {
-  const series = collator.compare(a.voucher_series ?? '', b.voucher_series ?? '')
-  if (series !== 0) return series
-  return (a.voucher_number ?? 0) - (b.voucher_number ?? 0)
+  return collator.compare(formatVoucher(a), formatVoucher(b))
 }
 
 function compare(a: ReconciliationItem, b: ReconciliationItem, column: ReconSortColumn): number {
