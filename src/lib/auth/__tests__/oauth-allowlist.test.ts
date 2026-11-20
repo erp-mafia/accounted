@@ -461,6 +461,13 @@ describe('builtInOnwardOrigins', () => {
     expect(builtInOnwardOrigins('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual(['https://cursor.com'])
   })
 
+  it("names the regional consent servers for Copilot Studio's callback, which the global host forwards to", async () => {
+    const { builtInOnwardOrigins } = await import('../oauth-allowlist')
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/redirect/cr7d9-5fmonday-20mcp')).toEqual(['https://*.consent.azure-apim.net'])
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/redirect')).toEqual(['https://*.consent.azure-apim.net'])
+    expect(builtInOnwardOrigins('https://global.consent.azure-apim.net/other')).toEqual([])
+  })
+
   it('names nothing for other callbacks, or for a www.cursor.com path that is not allowlisted', async () => {
     const { builtInOnwardOrigins } = await import('../oauth-allowlist')
     expect(builtInOnwardOrigins('https://claude.ai/api/mcp/auth_callback')).toEqual([])

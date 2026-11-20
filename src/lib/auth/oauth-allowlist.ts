@@ -157,9 +157,16 @@ export function isBuiltInRedirectUri(uri: string): boolean {
  * answers 308 to the same path on https://cursor.com (observed 2026-11-14,
  * crm#1720). The code is still only ever sent to the exact allowlisted URI;
  * this names where that host forwards it, nothing else.
+ *
+ * Power Platform's global consent host (Copilot Studio) routes a callback on
+ * to the consent server of the connector's region: without a state it names
+ * that server, it answers 302 "No consent server information was associated
+ * with this request" (probed 2026-11-20). The regional servers are
+ * subdomains of consent.azure-apim.net, so that one wildcard is named.
  */
 const BUILT_IN_ONWARD_ORIGINS: Readonly<Record<string, readonly string[]>> = {
   'https://www.cursor.com': ['https://cursor.com'],
+  'https://global.consent.azure-apim.net': ['https://*.consent.azure-apim.net'],
 }
 
 /** Onward origins the consent page's form-action must also allow for a built-in callback. */
