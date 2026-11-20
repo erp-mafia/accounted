@@ -9774,6 +9774,7 @@
     "ext_arcim_migration_name": "Systemmigration",
     "ext_arcim_registration_links_label": "Verifikatkoppling",
     "ext_arcim_registration_links_value": "{linked} av {scanned} fakturor kopplade till bokföringsverifikat",
+    "ext_arcim_assets_type_unresolved": "{count} utan tillgångstyp: standardkonton användes",
     "ext_arcim_registration_links_detail": "{unlinked} utan koppling: {noRef} saknar verifikatnummer hos leverantören, {refNotFetched} vars detaljer inte hann hämtas från leverantören, {unresolved} utan entydigt bokföringsverifikat, {amountMismatch} med avvikande belopp",
     "ext_arcim_registration_links_already_linked": "{count, plural, one {# var redan länkad sedan tidigare} other {# var redan länkade sedan tidigare}}",
     "ext_arcim_credit_notes_label": "Kreditfakturor",
