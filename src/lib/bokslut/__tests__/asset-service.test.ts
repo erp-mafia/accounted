@@ -12,11 +12,31 @@ import {
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import type { AccountingFramework, Asset, AssetCategory } from '@/types'
 
+// The framework of the year the asset is acquired in (frameworkOnDate, the
+// per-year resolver): the mocks below set it with the company row.
+const frameworkOnDateMock = vi.hoisted(() => vi.fn(async (): Promise<'k2' | 'k3'> => 'k2'))
+vi.mock('@/lib/bokslut/framework-for-year', () => ({
+  frameworkOnDate: frameworkOnDateMock,
+  frameworkForYear: vi.fn(async () => 'k2'),
+}))
+vi.mock('@/lib/company/accounting-framework', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/company/accounting-framework')>()),
+  frameworkOnDate: frameworkOnDateMock,
+}))
+
+// crm#1452: the chart lookups are covered in assets/__tests__/asset-chart-accounts.test.ts.
+vi.mock('../assets/asset-chart-accounts', () => ({
+  chartAwareDefaultAccounts: vi.fn(async (_s: unknown, _c: unknown, _cat: unknown, defaults: unknown) => defaults),
+  ensureAssetAccountsInChart: vi.fn(async () => undefined),
+  unusableAssetAccounts: vi.fn(async () => []),
+}))
+
 describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   it('maps every AssetCategory to a BAS-aligned account triple', () => {
     const expected = {
-      immaterial: { asset: '1010', accumulated: '1019', expense: '7810' },
+      immaterial: { asset: '1090', accumulated: '1099', expense: '7810' },
       building: { asset: '1110', accumulated: '1119', expense: '7821' },
+      land: { asset: '1130', accumulated: '1118', expense: '7820' },
       land_improvement: { asset: '1150', accumulated: '1159', expense: '7824' },
       machinery: { asset: '1210', accumulated: '1219', expense: '7831' },
       equipment: { asset: '1220', accumulated: '1229', expense: '7832' },
@@ -41,8 +61,10 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
         expect(getBASReference(accumulated)?.account_group, `${framework}/${cat}`).toBe(
           getBASReference(asset)?.account_group,
         )
+        // Mark is never depreciated: its accumulated account only ever
+        // carries a write-down (ÅRL 4:5).
         expect(getBASReference(accumulated)?.account_name, `${framework}/${cat}`).toMatch(
-          /^Ackumulerade avskrivningar/,
+          cat === 'land' ? /^Ackumulerade nedskrivningar/ : /^Ackumulerade avskrivningar/,
         )
       }
     }
@@ -138,12 +160,16 @@ describe('BAS_RANGES_BY_CATEGORY', () => {
  * company's framework rather than being one pair for everyone.
  */
 describe('defaultAccountsForCategory', () => {
-  it('gives a K3 company the egenupparbetade pair for immaterial', () => {
-    expect(defaultAccountsForCategory('immaterial', 'k3')).toEqual({
+  // A purchased intangible is the acquired pair under K3 too; 1010/1019 are
+  // the company's own development, opted into under the aktiveringsmodell.
+  it('gives the egenupparbetade pair only for own development under K3', () => {
+    expect(defaultAccountsForCategory('immaterial', 'k3')).toEqual({ asset: '1090', accumulated: '1099', expense: '7810' })
+    expect(defaultAccountsForCategory('immaterial', 'k3', { internallyGenerated: true })).toEqual({
       asset: '1010',
       accumulated: '1019',
       expense: '7810',
     })
+    expect(defaultAccountsForCategory('immaterial', 'k2', { internallyGenerated: true }).asset).toBe('1090')
   })
 
   it.each([['k2' as const], [null], [undefined]])(
@@ -234,9 +260,11 @@ describe('updateAsset: acquisition-basis correction guard', () => {
       otherAssetEntryIds?: string[]
       accumulatedCredits?: { journal_entry_id: string }[]
       accountingFramework?: AccountingFramework | null
+      developmentModel?: 'expense' | 'capitalise' | null
     } = {},
   ) {
     const captured: { update: Record<string, unknown> | null } = { update: null }
+    frameworkOnDateMock.mockResolvedValue(opts.accountingFramework === 'k3' ? 'k3' : 'k2')
     let schedCall = 0
     const supabase = {
       from: vi.fn((table: string) => {
@@ -247,7 +275,10 @@ describe('updateAsset: acquisition-basis correction guard', () => {
           chain.select = vi.fn(() => chain)
           chain.eq = vi.fn(() => chain)
           chain.single = vi.fn(async () => ({
-            data: { accounting_framework: opts.accountingFramework ?? null },
+            data: {
+              accounting_framework: opts.accountingFramework ?? null,
+              development_expenditure_model: opts.developmentModel ?? null,
+            },
             error: null,
           }))
           return chain
@@ -260,6 +291,8 @@ describe('updateAsset: acquisition-basis correction guard', () => {
           chain.eq = vi.fn(() => chain)
           chain.neq = vi.fn(() => chain)
           chain.not = vi.fn(() => chain)
+          chain.order = vi.fn(() => chain)
+          chain.range = vi.fn(() => chain)
           chain.then = (resolve: (v: unknown) => void) =>
             resolve(
               isCountQuery
@@ -391,7 +424,7 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     })
   })
 
-  it('realigns a category correction to immaterial onto 1010/1019 for a K3 company', async () => {
+  it('realigns a category correction to immaterial onto 1090/1099 for a K3 company too', async () => {
     const { supabase, captured } = mockForUpdate(
       makeAssetRow({
         category: 'equipment',
@@ -404,15 +437,16 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     await updateAsset(asSupabase(supabase), 'co', 'asset-1', { category: 'immaterial' })
     expect(captured.update).toMatchObject({
       category: 'immaterial',
-      bas_asset_account: '1010',
-      bas_accumulated_account: '1019',
+      bas_asset_account: '1090',
+      bas_accumulated_account: '1099',
       bas_expense_account: '7810',
     })
   })
 
   it('keeps an explicit account override on a recategorization to immaterial', async () => {
     // Explicit accounts suppress the realign entirely (unchanged semantics):
-    // a K3 company deliberately picking 1010/1019 still gets them.
+    // a K3 company on the aktiveringsmodell deliberately picking 1010/1019
+    // still gets them.
     const { supabase, captured } = mockForUpdate(
       makeAssetRow({
         category: 'equipment',
@@ -420,7 +454,7 @@ describe('updateAsset: acquisition-basis correction guard', () => {
         bas_accumulated_account: '1229',
         bas_expense_account: '7832',
       }),
-      { postedCount: 0, accountingFramework: 'k3' },
+      { postedCount: 0, accountingFramework: 'k3', developmentModel: 'capitalise' },
     )
     await updateAsset(asSupabase(supabase), 'co', 'asset-1', {
       category: 'immaterial',
@@ -431,47 +465,102 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     expect(captured.update).toMatchObject({
       bas_asset_account: '1010',
       bas_accumulated_account: '1019',
+      // Moving onto 101x is capitalising own development: the fund follows it.
+      own_development: true,
     })
   })
 
-  it('blocks a correction when depreciation was hand-posted (no engine schedule)', async () => {
-    // No depreciation_schedules row, but a manual credit to the asset's 1259
-    // accumulated account exists in the ledger: must still block.
-    const { supabase } = mockForUpdate(makeAssetRow(), {
-      postedCount: 0,
-      otherAssetEntryIds: [],
-      accumulatedCredits: [{ journal_entry_id: 'manual-entry-1' }],
+  it('ends own development when the asset leaves 101x, and leaves it alone otherwise', async () => {
+    const off = mockForUpdate(
+      makeAssetRow({ category: 'immaterial', bas_asset_account: '1010', bas_accumulated_account: '1019', bas_expense_account: '7810', own_development: true }),
+      { postedCount: 0, accountingFramework: 'k3' },
+    )
+    await updateAsset(asSupabase(off.supabase), 'co', 'asset-1', {
+      bas_asset_account: '1090',
+      bas_accumulated_account: '1099',
     })
+    expect(off.captured.update).toMatchObject({ bas_asset_account: '1090', own_development: false })
+
+    const rename = mockForUpdate(makeAssetRow(), { postedCount: 0 })
+    await updateAsset(asSupabase(rename.supabase), 'co', 'asset-1', { name: 'reMarkable Paper Pro 2' })
+    expect(rename.captured.update).not.toHaveProperty('own_development')
+  })
+
+  it('refuses moving onto an own-development account before the aktiveringsmodell is chosen', async () => {
+    const { supabase } = mockForUpdate(
+      makeAssetRow({ category: 'equipment', bas_asset_account: '1220', bas_accumulated_account: '1229', bas_expense_account: '7832' }),
+      { postedCount: 0, accountingFramework: 'k3' },
+    )
     await expect(
-      updateAsset(asSupabase(supabase), 'co', 'asset-1', { acquisition_date: '2025-08-15' }),
-    ).rejects.toBeInstanceOf(AssetCorrectionBlockedError)
+      updateAsset(asSupabase(supabase), 'co', 'asset-1', {
+        category: 'immaterial',
+        bas_asset_account: '1010',
+        bas_accumulated_account: '1019',
+        bas_expense_account: '7810',
+      }),
+    ).rejects.toMatchObject({ code: 'OWN_DEVELOPMENT_NOT_CAPITALISED', reason: 'model' })
   })
 
-  it('allows a correction when the only 1259 credit is a sibling asset’s engine entry', async () => {
-    // Two computers share 1259. The sibling was depreciated via the engine, so
-    // its journal entry is attributable to the OTHER asset and must NOT block a
-    // correction of this still-undepreciated asset (no false positive).
-    const { supabase, captured } = mockForUpdate(makeAssetRow(), {
-      postedCount: 0,
-      otherAssetEntryIds: ['sibling-engine-entry'],
-      accumulatedCredits: [{ journal_entry_id: 'sibling-engine-entry' }],
-    })
+  it('corrects the basis when the 12x9 account carries credits the engine did not post (crm#1511)', async () => {
+    // A migrated asset: its accumulated account holds the previous system's
+    // avskrivningar and a hand-booked rättelse, no engine depreciation. The
+    // cost and the opening amount are corrected together, as the rättelse
+    // left them; the guard reads no ledger.
+    const { supabase, captured } = mockForUpdate(
+      makeAssetRow({
+        category: 'machinery',
+        acquisition_date: '2025-04-01',
+        acquisition_cost: 100000,
+        useful_life_months: 60,
+        bas_asset_account: '1210',
+        bas_accumulated_account: '1219',
+        bas_expense_account: '7831',
+        opening_accumulated_depreciation: 30000,
+        opening_depreciation_date: '2026-06-30',
+      }),
+      {
+        postedCount: 0,
+        accumulatedCredits: [{ journal_entry_id: 'imported-g1' }, { journal_entry_id: 'manual-rattelse' }],
+      },
+    )
     const result = await updateAsset(asSupabase(supabase), 'co', 'asset-1', {
-      acquisition_date: '2025-08-15',
+      acquisition_cost: 120000,
+      opening_accumulated_depreciation: 34000,
+      opening_depreciation_date: '2026-08-31',
     })
-    expect(result.acquisition_date).toBe('2025-08-15')
-    expect(captured.update).toMatchObject({ acquisition_date: '2025-08-15' })
+    expect(result.acquisition_cost).toBe(120000)
+    expect(captured.update).toMatchObject({
+      acquisition_cost: 120000,
+      opening_accumulated_depreciation: 34000,
+      opening_depreciation_date: '2026-08-31',
+    })
+    const tables = supabase.from.mock.calls.map(([table]) => table)
+    expect(tables).not.toContain('journal_entry_lines')
+    expect(tables).not.toContain('journal_entries')
+  })
+
+  it('blocks the same correction once the engine has posted a depreciation of the asset', async () => {
+    // The one predicate get_asset reports as has_posted_depreciation.
+    const { supabase } = mockForUpdate(makeAssetRow(), { postedCount: 1 })
+    await expect(
+      updateAsset(asSupabase(supabase), 'co', 'asset-1', { acquisition_cost: 9000 }),
+    ).rejects.toMatchObject({ code: 'ASSET_CORRECTION_BLOCKED', reason: 'depreciation_posted' })
   })
 })
 
 describe('createAsset: framework-aware immaterial defaults', () => {
   function mockForCreate(
-    opts: { accountingFramework?: AccountingFramework | null; companyError?: string } = {},
+    opts: {
+      accountingFramework?: AccountingFramework | null
+      developmentModel?: 'expense' | 'capitalise' | null
+      companyError?: string
+    } = {},
   ) {
     const captured: { insert: Record<string, unknown> | null; companyReads: number } = {
       insert: null,
       companyReads: 0,
     }
+    frameworkOnDateMock.mockResolvedValue(opts.accountingFramework === 'k3' ? 'k3' : 'k2')
     const supabase = {
       from: vi.fn((table: string) => {
         const chain: Record<string, unknown> = {}
@@ -482,7 +571,13 @@ describe('createAsset: framework-aware immaterial defaults', () => {
           chain.single = vi.fn(async () =>
             opts.companyError
               ? { data: null, error: { message: opts.companyError } }
-              : { data: { accounting_framework: opts.accountingFramework ?? null }, error: null },
+              : {
+                  data: {
+                    accounting_framework: opts.accountingFramework ?? null,
+                    development_expenditure_model: opts.developmentModel ?? null,
+                  },
+                  error: null,
+                },
           )
           return chain
         }
@@ -521,13 +616,58 @@ describe('createAsset: framework-aware immaterial defaults', () => {
     })
   })
 
-  it('books a K3 company immaterial asset on 1010/1019', async () => {
-    const { supabase, captured } = mockForCreate({ accountingFramework: 'k3' })
-    await createAsset(asSupabase(supabase), 'co', 'user-1', baseInput)
-    expect(captured.insert).toMatchObject({
-      bas_asset_account: '1010',
+  it('books a K3 company\'s purchased intangible on the acquired pair, its own development on 1010/1019', async () => {
+    const purchased = mockForCreate({ accountingFramework: 'k3' })
+    await createAsset(asSupabase(purchased.supabase), 'co', 'user-1', baseInput)
+    expect(purchased.captured.insert).toMatchObject({ bas_asset_account: '1090', bas_accumulated_account: '1099' })
+
+    const own = mockForCreate({ accountingFramework: 'k3', developmentModel: 'capitalise' })
+    await createAsset(asSupabase(own.supabase), 'co', 'user-1', { ...baseInput, internally_generated: true })
+    expect(own.captured.insert).toMatchObject({ bas_asset_account: '1010', bas_accumulated_account: '1019' })
+  })
+
+  // F1: the fond för utvecklingsutgifter follows own_development, not the
+  // account, so the row says which it is.
+  it('marks own development on the row, and nothing else', async () => {
+    const purchased = mockForCreate({ accountingFramework: 'k3' })
+    await createAsset(asSupabase(purchased.supabase), 'co', 'user-1', baseInput)
+    expect(purchased.captured.insert).toMatchObject({ own_development: false })
+
+    const own = mockForCreate({ accountingFramework: 'k3', developmentModel: 'capitalise' })
+    await createAsset(asSupabase(own.supabase), 'co', 'user-1', { ...baseInput, internally_generated: true })
+    expect(own.captured.insert).toMatchObject({ own_development: true })
+
+    const explicit = mockForCreate({ accountingFramework: 'k3', developmentModel: 'capitalise' })
+    await createAsset(asSupabase(explicit.supabase), 'co', 'user-1', {
+      ...baseInput,
+      bas_asset_account: '1012',
       bas_accumulated_account: '1019',
     })
+    expect(explicit.captured.insert).toMatchObject({ own_development: true })
+  })
+
+  // B1/F1: a company that elected K3 for its next year still has a K2
+  // current year. Own development acquired in it may not be capitalised.
+  it('judges own development by the year the asset is acquired in, not the company\'s latest framework', async () => {
+    const own = mockForCreate({ accountingFramework: 'k3', developmentModel: 'capitalise' })
+    frameworkOnDateMock.mockResolvedValue('k2')
+    await expect(
+      createAsset(asSupabase(own.supabase), 'co', 'user-1', { ...baseInput, internally_generated: true }),
+    ).rejects.toMatchObject({ code: 'OWN_DEVELOPMENT_NOT_CAPITALISED', reason: 'k2' })
+    expect(frameworkOnDateMock).toHaveBeenCalledWith(expect.anything(), 'co', baseInput.acquisition_date)
+    expect(own.captured.insert).toBeNull()
+  })
+
+  it('refuses own development under K2 and before the aktiveringsmodell is chosen (K3 18.7)', async () => {
+    const k2 = mockForCreate({ accountingFramework: 'k2' })
+    await expect(
+      createAsset(asSupabase(k2.supabase), 'co', 'user-1', { ...baseInput, internally_generated: true }),
+    ).rejects.toMatchObject({ code: 'OWN_DEVELOPMENT_NOT_CAPITALISED', reason: 'k2' })
+    const unchosen = mockForCreate({ accountingFramework: 'k3', developmentModel: 'expense' })
+    await expect(
+      createAsset(asSupabase(unchosen.supabase), 'co', 'user-1', { ...baseInput, internally_generated: true }),
+    ).rejects.toMatchObject({ code: 'OWN_DEVELOPMENT_NOT_CAPITALISED', reason: 'model' })
+    expect(unchosen.captured.insert).toBeNull()
   })
 
   it('still honours an explicit account override', async () => {
@@ -560,7 +700,7 @@ describe('createAsset: framework-aware immaterial defaults', () => {
   it('throws instead of guessing a framework when the company read fails', async () => {
     const { supabase, captured } = mockForCreate({ companyError: 'connection reset' })
     await expect(
-      createAsset(asSupabase(supabase), 'co', 'user-1', baseInput),
+      createAsset(asSupabase(supabase), 'co', 'user-1', { ...baseInput, internally_generated: true }),
     ).rejects.toThrow(/accounting framework/i)
     expect(captured.insert).toBeNull()
   })

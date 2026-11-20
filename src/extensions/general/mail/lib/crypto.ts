@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { openAesGcm, sealAesGcm, sha256Key } from '@/lib/crypto/aes-gcm'
 
 /**
  * AES-256-GCM for mailbox refresh tokens.
@@ -28,7 +29,6 @@ import crypto from 'crypto'
  * base64url has no '.', so no legacy ciphertext can ever start with the prefix.
  */
 
-const ALGORITHM = 'aes-256-gcm'
 const DEDICATED_PREFIX = 'v2.'
 
 /** A token that cannot be read or sealed because a key is missing or malformed. */
@@ -54,25 +54,15 @@ function dedicatedKey(): Buffer | null {
 function derivedKey(): Buffer {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!secret) throw new MailTokenKeyError('SUPABASE_SERVICE_ROLE_KEY is required for legacy mail tokens')
-  return crypto.createHash('sha256').update('mail-connections:v1:' + secret).digest()
+  return sha256Key('mail-connections:v1:' + secret)
 }
 
 function seal(key: Buffer, plaintext: string): string {
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
-  return Buffer.concat([iv, tag, encrypted]).toString('base64url')
+  return sealAesGcm(key, plaintext).toString('base64url')
 }
 
 function open(key: Buffer, sealed: string): string {
-  const combined = Buffer.from(sealed, 'base64url')
-  const iv = combined.subarray(0, 12)
-  const tag = combined.subarray(12, 28)
-  const encrypted = combined.subarray(28)
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
-  decipher.setAuthTag(tag)
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+  return openAesGcm(key, Buffer.from(sealed, 'base64url'))
 }
 
 export function encryptToken(plaintext: string): string {

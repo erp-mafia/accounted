@@ -23,6 +23,7 @@ export const REFERENCE_KINDS = [
   'ref:customers',
   'ref:suppliers',
   'ref:articles',
+  'ref:employees',
 ] as const
 
 export type ReferenceKind = (typeof REFERENCE_KINDS)[number]
@@ -49,6 +50,9 @@ export const refKeys = {
     companyId ? (['ref:booking-templates', companyId] as const) : null,
   customers: (companyId: string | null): Key<'ref:customers'> =>
     companyId ? (['ref:customers', companyId] as const) : null,
+  /** One customer the list leaves out (archived) that a form still points at. */
+  customer: (companyId: string | null, customerId: string | null): Key<'ref:customers', [string]> =>
+    companyId && customerId ? (['ref:customers', companyId, customerId] as const) : null,
   suppliers: (companyId: string | null): Key<'ref:suppliers'> =>
     companyId ? (['ref:suppliers', companyId] as const) : null,
   articles: (
@@ -56,6 +60,11 @@ export const refKeys = {
     includeInactive = false,
   ): Key<'ref:articles', [boolean]> =>
     companyId ? (['ref:articles', companyId, includeInactive] as const) : null,
+  employees: (
+    companyId: string | null,
+    includeInactive = false,
+  ): Key<'ref:employees', [boolean]> =>
+    companyId ? (['ref:employees', companyId, includeInactive] as const) : null,
 }
 
 const KIND_SET: ReadonlySet<string> = new Set(REFERENCE_KINDS)

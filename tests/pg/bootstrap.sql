@@ -53,6 +53,12 @@ $$;
 ALTER TABLE auth.users
   ADD COLUMN IF NOT EXISTS is_anonymous boolean NOT NULL DEFAULT false;
 
+-- The image's auth.users predates GoTrue's email_confirmed_at (a later GoTrue
+-- migration renamed confirmed_at to it; production has it). The allowlist
+-- join (20261103231023) fires on this column.
+ALTER TABLE auth.users
+  ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;
+
 -- auth.identities is created by GoTrue at startup, not by the Postgres
 -- image, and GoTrue does not run in CI. Triggers on auth.users that touch
 -- identities (20260903110000 unlink_old_address_identities) need the table
@@ -71,6 +77,33 @@ CREATE TABLE IF NOT EXISTS auth.identities (
   CONSTRAINT identities_provider_id_provider_unique UNIQUE (provider_id, provider)
 );
 CREATE INDEX IF NOT EXISTS identities_user_id_idx ON auth.identities (user_id);
+
+-- auth.mfa_factors is created by GoTrue at startup too. The api_keys MFA
+-- policies (20261102200822) read it through session_is_mfa_assured(), so the
+-- CI double must exist for a test to enrol a factor. Shape mirrors GoTrue's
+-- table (enum types included); the id and timestamp defaults are the
+-- double's own, for shorter fixtures. Like hosted, no grant to authenticated.
+DO $$
+BEGIN
+  IF to_regtype('auth.factor_type') IS NULL THEN
+    CREATE TYPE auth.factor_type AS ENUM ('totp', 'webauthn', 'phone');
+  END IF;
+  IF to_regtype('auth.factor_status') IS NULL THEN
+    CREATE TYPE auth.factor_status AS ENUM ('unverified', 'verified');
+  END IF;
+END
+$$;
+CREATE TABLE IF NOT EXISTS auth.mfa_factors (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  friendly_name  text,
+  factor_type    auth.factor_type NOT NULL,
+  status         auth.factor_status NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  secret         text
+);
+CREATE INDEX IF NOT EXISTS mfa_factors_user_id_idx ON auth.mfa_factors (user_id);
 
 -- auth.audit_log_entries ships in the Postgres image without the ip_address
 -- column GoTrue adds on first boot (NOT NULL DEFAULT '' on every hosted

@@ -14,6 +14,7 @@ import {
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { peppolReceivingOn } from '@/lib/invoices/peppol-access'
 import { useLocale } from 'next-intl'
 
 interface PeppolRegistrationView {
@@ -63,8 +64,7 @@ function registryText(code: string, locale: UiLocale): string | null {
 
 /**
  * E-invoicing via Peppol for one company. Access is granted per company by
- * the operators (it costs per document and receiving consumes a contracted
- * slot), so the first row is the grant itself: ask, wait, see what you got.
+ * the operators, so the first row is the grant itself: ask, wait, see what you got.
  * Receiving is a second, separate grant and its switch publishes the
  * company's 0007:orgnr through the Access Point.
  */
@@ -72,7 +72,7 @@ export function PeppolReceiveSettings() {
   const t = useTranslations('settings_peppol')
   const locale = useLocale()
   const { toast } = useToast()
-  const canWrite = useCanWrite()
+  const { canWrite } = useCanWrite()
   const [state, setState] = useState<PeppolSettingsPayload | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -99,7 +99,7 @@ export function PeppolReceiveSettings() {
   const localeKey: UiLocale = locale.startsWith('sv') ? 'sv' : 'en'
   const access = state?.access ?? null
   const registration = state?.registration ?? null
-  const isOn = registration?.status === 'registered' || registration?.status === 'pending'
+  const isOn = peppolReceivingOn(registration?.status)
   const transportAvailable = !!state?.transport.available
   const receivingAvailable = transportAvailable && !!state?.receiving_supported && !!access?.receive_enabled
   // The company cannot be a Peppol participant at all (personnummer, no org
@@ -275,7 +275,6 @@ export function PeppolReceiveSettings() {
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
                     onClick={() => void toggleReceiving(!retryRepeatsWithdrawal)}
                     disabled={isSaving || !canWrite}
                   >

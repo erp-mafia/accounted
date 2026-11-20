@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 
 vi.mock('../lib/bankid-client', () => ({
   startBankIdAuth: vi.fn(),
@@ -20,6 +20,12 @@ vi.mock('@/lib/supabase/server', () => ({
 // so the route tests can assert WHEN it is sent and to WHOM.
 vi.mock('../lib/bankid-confirmation-mail', () => ({
   sendBankIdSignupConfirmation: vi.fn(),
+}))
+
+// The signup acceptance rows have their own tests (src/lib/legal); here it is
+// a seam so the route tests can assert WHEN it is recorded and for WHOM.
+vi.mock('@/lib/legal/acceptance', () => ({
+  recordSignupAcceptances: vi.fn(),
 }))
 
 // The invite-only brand gate reads the brands table for any non-empty host;
@@ -48,6 +54,7 @@ import {
   startBankIdAuth,
 } from '../lib/bankid-client'
 import { sendBankIdSignupConfirmation } from '../lib/bankid-confirmation-mail'
+import { recordSignupAcceptances } from '@/lib/legal/acceptance'
 import { createServiceClient } from '@/lib/supabase/server'
 import { generateAuthPassword } from '@/lib/auth/generated-password'
 import { ticExtension } from '../index'
@@ -94,7 +101,7 @@ async function flowCookie(
 }
 
 function findCompleteHandler() {
-  const route = ticExtension.apiRoutes!.find(
+  const route = testRoutes(ticExtension).find(
     (r) => r.method === 'POST' && r.path === '/bankid/complete'
   )
   if (!route) throw new Error('POST /bankid/complete route not found in ticExtension.apiRoutes')
@@ -196,6 +203,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('BANKID_ENCRYPTION_KEY', TEST_KEY)
   vi.mocked(sendBankIdSignupConfirmation).mockResolvedValue({ ok: true })
+  vi.mocked(recordSignupAcceptances).mockResolvedValue(true)
 })
 
 afterEach(() => {
@@ -444,6 +452,8 @@ describe('POST /bankid/complete', () => {
       expect(body.error).toBe('internal_error')
       expect(body.message).toBe('Kunde inte skicka bekräftelsemailet. Försök igen.')
       expect(admin.deleteUser).toHaveBeenCalledWith('new-user-uuid')
+      // The rolled-back account accepted nothing.
+      expect(recordSignupAcceptances).not.toHaveBeenCalled()
     })
 
     it('deletes the created user when the app_metadata update fails', async () => {
@@ -486,6 +496,50 @@ describe('POST /bankid/complete', () => {
       const { status } = await parseJsonResponse(await findCompleteHandler()(req))
 
       expect(status).toBe(200)
+      expect(admin.deleteUser).not.toHaveBeenCalled()
+    })
+
+    it('records the acceptance of the terms for the new account once it can no longer roll back', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { client } = mockServiceClient([
+        { data: null },
+        { error: null },
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(recordSignupAcceptances).toHaveBeenCalledTimes(1)
+      expect(recordSignupAcceptances).toHaveBeenCalledWith(client, 'new-user-uuid')
+      expect(vi.mocked(recordSignupAcceptances).mock.invocationCallOrder[0]).toBeGreaterThan(
+        vi.mocked(sendBankIdSignupConfirmation).mock.invocationCallOrder[0],
+      )
+    })
+
+    it('still completes the signup when the acceptance cannot be stored', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null },
+        { error: null },
+      ])
+      vi.mocked(recordSignupAcceptances).mockResolvedValueOnce(false)
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{ data?: { status?: string } }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data?.status).toBe('confirmation_sent')
       expect(admin.deleteUser).not.toHaveBeenCalled()
     })
   })
@@ -920,6 +974,64 @@ describe('POST /bankid/complete', () => {
       expect(persistedRow).not.toHaveProperty('personalNumber')
       expect(persistedRow).not.toHaveProperty('name')
     })
+
+    it("stores a sole trader firm only when it is the BankID person's own, every company role as TIC gave it (crm#1456)", async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      vi.mocked(requestEnrichment).mockResolvedValueOnce({
+        enrichmentId: 'enr-2',
+        sessionId: 'test-session',
+        status: 'Completed',
+        requestedTypes: ['SPAR', 'CompanyRoles'],
+        completedTypes: ['SPAR', 'CompanyRoles'],
+        secureUrl: '/api/v1/enrichment/data/def',
+        secureUrlExpiresAtUtc: '2026-05-06T12:00:00Z',
+      })
+      const role = (companyId: number, companyRegistrationNumber: string, legalEntityType: string, legalName: string) => ({
+        companyId,
+        companyRegistrationNumber,
+        legalName,
+        legalEntityType,
+        positionTypes: ['IN'],
+        positionDescriptions: ['Innehavare'],
+        positionStart: '2024-05-24',
+        positionEnd: null,
+        companyStatus: '',
+      })
+      // Three sole traders under the same owner name; the session's own
+      // personnummer (makeSession) is behind the second one only.
+      vi.mocked(fetchEnrichmentData).mockResolvedValueOnce({
+        personalNumber: '199001011234',
+        name: 'Anna Andersson',
+        enrichedAtUtc: '2026-05-06T11:30:00Z',
+        companyRoles: [
+          role(1, '1982010112390001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(2, '1990010112340001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(3, '2002010112360001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(4, '5566778899', 'Aktiebolag', 'Exempel AB'),
+        ],
+      })
+      const { client } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { error: null }, // bankid_identities insert OK
+      ])
+      const upsertSpy = vi.fn().mockResolvedValue({ error: null })
+      const origFrom = client.from as unknown as ReturnType<typeof vi.fn>
+      const queuedFrom = origFrom.getMockImplementation() as (table: string) => unknown
+      origFrom.mockImplementation((table: string) =>
+        table === 'bankid_enrichment' ? { upsert: upsertSpy } : queuedFrom(table),
+      )
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      const [persistedRow] = upsertSpy.mock.calls[0] as [{ company_roles: Array<{ companyId: number }> }]
+      expect(persistedRow.company_roles.map((r) => r.companyId)).toEqual([2, 4])
+    })
   })
 
   describe('the sealed identification (#2471)', () => {
@@ -1226,7 +1338,7 @@ describe('POST /bankid/complete', () => {
 
 describe('POST /bankid/start', () => {
   function findStartHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/start'
     )
     if (!route) throw new Error('POST /bankid/start route not found')
@@ -1286,7 +1398,7 @@ describe('POST /bankid/start', () => {
 
 describe('POST /bankid/poll', () => {
   function findPollHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/poll'
     )
     if (!route) throw new Error('POST /bankid/poll route not found')
@@ -1366,6 +1478,54 @@ describe('POST /bankid/poll', () => {
       )
     )
     expect(active.body.data.user).toEqual({ givenName: 'Anna', surname: 'Andersson' })
+  })
+
+  it('answers a mount probe that finds no flow with 200 and nothing to resume', async () => {
+    // Every mount of the login and signup panels asks this. "No" is the
+    // normal answer, not a failed request.
+    const { status, body } = await parseJsonResponse<{ data: unknown; error?: string }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          body: { mode: 'login', probe: true },
+        })
+      )
+    )
+
+    expect(status).toBe(200)
+    expect(body.data).toBeNull()
+    expect(body.error).toBeUndefined()
+    expect(pollBankIdSession).not.toHaveBeenCalled()
+  })
+
+  it('answers a mount probe that finds another mode\'s flow with 200 and nothing to resume', async () => {
+    const { status, body } = await parseJsonResponse<{ data: unknown }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          headers: await flowCookie('login'),
+          body: { mode: 'signup', probe: true },
+        })
+      )
+    )
+
+    expect(status).toBe(200)
+    expect(body.data).toBeNull()
+    expect(pollBankIdSession).not.toHaveBeenCalled()
+  })
+
+  it('still answers an active poll without a flow with the terminal 404', async () => {
+    const { status, body } = await parseJsonResponse<{ error?: string }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          body: { mode: 'login' },
+        })
+      )
+    )
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('no_session')
   })
 
   it('refuses to poll a flow whose mode does not match the panel asking', async () => {
@@ -1450,6 +1610,24 @@ describe('POST /bankid/poll', () => {
     expect(cleared).toBe(false)
   })
 
+  it('answers an expired order ("No such order") as no_session, but keeps a real TIC error a 502', async () => {
+    const { TICAPIError } = await import('../lib/tic-types')
+    const poll = async () => parseJsonResponse<{ error?: string }>(await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+        body: { mode: 'login' },
+      })
+    ))
+    vi.mocked(pollBankIdSession).mockRejectedValueOnce(
+      new TICAPIError('TIC Identity API error: invalidParameters:No such order', 400)
+    )
+    expect(await poll()).toMatchObject({ status: 404, body: { error: 'no_session' } })
+
+    vi.mocked(pollBankIdSession).mockRejectedValueOnce(new TICAPIError('TIC Identity API error: bad gateway', 500))
+    expect((await poll()).status).toBe(502)
+  })
+
   it('extends the window to the verified budget once identification completes', async () => {
     // The signup e-mail step is a person typing; the order window (300s) is
     // too short for it, so completion re-issues at the longer budget.
@@ -1478,7 +1656,7 @@ describe('POST /bankid/poll', () => {
 
 describe('POST /bankid/poll: the sealed identification (#2471)', () => {
   function findPollHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/poll'
     )
     if (!route) throw new Error('POST /bankid/poll route not found')
@@ -1616,7 +1794,7 @@ describe('POST /bankid/poll: the sealed identification (#2471)', () => {
 
 describe('POST /bankid/cancel', () => {
   function findCancelHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/cancel'
     )
     if (!route) throw new Error('POST /bankid/cancel route not found')

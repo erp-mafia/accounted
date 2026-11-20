@@ -126,13 +126,11 @@ export function ResumeStep({ ctx, importId }: { ctx: BooksCtx; importId: string 
           hold={!error ? t('sie_hold_open') : null}
           progress={{ phase: error ? 'failed' : jobPhase ?? 'checking', written: tick, total, prepared }}
           onApi={setApi}
-          groupLabels={{ tillgangar: t('grp_assets'), skulder: t('grp_liabilities'), intakter: t('grp_revenue'), kostnader: t('grp_costs') }}
-          reviewLabel={t('grp_review')}
         />
       ) : null}
       {error ? (
         <div className="jny-qactions">
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags: ctx.flags })}>
+          <Button variant="ghost" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags: ctx.flags })}>
             {t('provider_change_source')}
           </Button>
         </div>

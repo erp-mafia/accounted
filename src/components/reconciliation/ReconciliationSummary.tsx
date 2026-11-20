@@ -1,7 +1,7 @@
 'use client'
 
 import { useLocale, useTranslations } from 'next-intl'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatRowAmount } from '@/lib/utils'
 import type { BridgeLine, ReconciliationAccount, ReconciliationStatus } from '@/lib/reconciliation/schemas'
 
 /**
@@ -71,7 +71,7 @@ export function ReconciliationSummary({
     <div className="max-w-[760px] overflow-x-auto stagger-enter">
       <table className="w-full border-collapse text-[13px]">
         <thead>
-          <tr className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+          <tr className="text-xs font-medium text-muted-foreground">
             <th className="w-full py-1.5 text-left font-medium" aria-hidden="true"></th>
             <th className={cn(NUM, 'font-medium')}>{externalHead}</th>
             <th className={cn(NUM, 'font-medium')}>{t('v2_col_ledger', { account: status.account_number })}</th>
@@ -79,7 +79,7 @@ export function ReconciliationSummary({
           </tr>
         </thead>
         <tbody>
-          <tr className="border-t border-border">
+          <tr className="border-t-hairline">
             <td className="py-1.5">{mainLabel}</td>
             <td className={NUM} data-ph-mask>
               {money(external)}
@@ -96,7 +96,7 @@ export function ReconciliationSummary({
               <td className="py-1 pl-4">{label(line)}</td>
               <td className={NUM} />
               <td className={NUM} data-ph-mask>
-                {formatCurrency(line.amount, currency)}
+                {formatRowAmount(line.amount, currency)}
               </td>
               <td className={NUM} />
             </tr>
@@ -106,7 +106,7 @@ export function ReconciliationSummary({
               <td className="py-1 pl-4">
                 {label(line)}
                 {line.count != null && line.count > 0 && (
-                  <span className="ml-1.5 tabular-nums text-muted-foreground/70" data-ph-mask>
+                  <span className="ml-1.5 tabular-nums text-muted-foreground" data-ph-mask>
                     ({line.count})
                   </span>
                 )}
@@ -114,11 +114,11 @@ export function ReconciliationSummary({
               <td className={NUM} />
               <td className={NUM} />
               <td className={NUM} data-ph-mask>
-                {formatCurrency(line.amount, currency)}
+                {formatRowAmount(line.amount, currency)}
               </td>
             </tr>
           ))}
-          <tr className="border-t border-border font-medium">
+          <tr className="border-t-hairline font-medium">
             <td className="py-1.5">{t('v2_row_unexplained')}</td>
             <td className={NUM} />
             <td className={NUM} />

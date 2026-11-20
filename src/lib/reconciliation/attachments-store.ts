@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { ReconciliationAttachment } from './schemas'
 
 /**
@@ -74,20 +75,29 @@ export async function listAttachmentRowsInRange(
   to: string,
   options: ListAttachmentsOptions = {},
 ): Promise<AttachmentRow[]> {
-  let query = supabase
-    .from('account_reconciliation_attachments')
-    .select('id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason')
-    .eq('company_id', companyId)
-    .gte('through_date', from)
-    .lte('through_date', to)
-    .order('account_key', { ascending: true })
-    .order('through_date', { ascending: true })
-    .order('uploaded_at', { ascending: true })
-    .limit(2000)
-  if (!options.includeRemoved) query = query.is('removed_at', null)
-  const { data, error } = await query
-  if (error) throw new Error(`Kunde inte hämta underlag: ${error.message}`)
-  return ((data ?? []) as Record<string, unknown>[]).map(mapRow)
+  // Paged: the pärm must hold every file of the year, and PostgREST cuts a
+  // single read at 1000 rows without saying so. id breaks ties for stable pages.
+  let data: Record<string, unknown>[]
+  try {
+    data = await fetchAllRows<Record<string, unknown>>((range) => {
+      let query = supabase
+        .from('account_reconciliation_attachments')
+        .select('id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason')
+        .eq('company_id', companyId)
+        .gte('through_date', from)
+        .lte('through_date', to)
+      if (!options.includeRemoved) query = query.is('removed_at', null)
+      return query
+        .order('account_key', { ascending: true })
+        .order('through_date', { ascending: true })
+        .order('uploaded_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(range.from, range.to)
+    })
+  } catch (error) {
+    throw new Error(`Kunde inte hämta underlag: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return data.map(mapRow)
 }
 
 export async function getAttachmentRow(

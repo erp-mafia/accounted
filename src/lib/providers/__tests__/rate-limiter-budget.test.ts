@@ -23,7 +23,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 it('defers when the distributed reset exceeds its budget without using fail-open or detached retries', async () => {
   const limiter = new TokenBucketRateLimiter({ maxRequests: 1, windowMs: 1000 })
   limit.mockResolvedValue({ success: false, reset: Date.now() + 1000, pending: Promise.resolve() })
-  await expect(withExecutionDeadline(Date.now() + 500, 'rate-limit', () => limiter.acquire()))
+  await expect(withExecutionDeadline(Date.now() + 500, 'rate-limit', () => limiter.acquire('connection')))
     .rejects.toBeInstanceOf(ExecutionBudgetExceeded)
   expect(limit).toHaveBeenCalledTimes(1)
   expect(limiterConfigs.at(-1)).toMatchObject({ timeout: 0, analytics: false })
@@ -37,7 +37,7 @@ it('cancels a pending distributed request at the deadline', async () => {
     requestSignal = (redisConfigs.at(-1)!.signal as () => AbortSignal)()
     requestSignal.addEventListener('abort', () => reject(requestSignal!.reason), { once: true })
   }))
-  const result = withExecutionDeadline(Date.now() + 500, 'rate-limit', () => limiter.acquire())
+  const result = withExecutionDeadline(Date.now() + 500, 'rate-limit', () => limiter.acquire('connection'))
   const rejected = expect(result).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
   await vi.advanceTimersByTimeAsync(500)
   await rejected
@@ -48,7 +48,7 @@ it('cancels a pending distributed request at the deadline', async () => {
 it('never proceeds just because a retry woke up if Redis still denies a permit', async () => {
   const limiter = new TokenBucketRateLimiter({ maxRequests: 1, windowMs: 1000 })
   limit.mockImplementation(() => Promise.resolve({ success: false, reset: Date.now() + 1000, pending: Promise.resolve() }))
-  const result = withExecutionDeadline(Date.now() + 2500, 'rate-limit', () => limiter.acquire())
+  const result = withExecutionDeadline(Date.now() + 2500, 'rate-limit', () => limiter.acquire('connection'))
   const rejected = expect(result).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
   await vi.advanceTimersByTimeAsync(2000)
   await rejected

@@ -125,7 +125,7 @@ describe('inbox.bulk-book bank amount rendering', () => {
 
     expect(out).toContain(`bank=${(500).toLocaleString('sv-SE')} SEK`)
     // No parenthesised second leg and no foreign code on the bank part. (The
-    // static MOMS instruction mentions "USD/EUR", so scan the item line only.)
+    // static MOMS instruction mentions EUR, so scan the item line only.)
     const itemLine = out.split('\n').find((l) => l.includes('item_id=')) ?? ''
     expect(itemLine).not.toContain('EUR')
     expect(itemLine).toContain('bank=500 SEK,')
@@ -174,5 +174,19 @@ describe('inbox.bulk-book bank amount rendering', () => {
     expect(captured.items[0].tx_amount).toBe(500)
     expect(captured.items[0].tx_currency).toBe('EUR')
     expect(captured.items[0].tx_amount_sek).toBeNull()
+  })
+})
+
+// #94: the seller's country and whether the seller charged VAT decide
+// omvänd skattskyldighet, never the currency (a Swedish seller can invoice in
+// EUR with 25 % moms). The old instruction told the agent to go by currency.
+describe('inbox.bulk-book VAT instruction', () => {
+  it('decides reverse charge from the seller country and charged VAT, not the currency', async () => {
+    const out = await renderPromptForTx({ amount: 500, currency: 'EUR', amount_sek: 5750, exchange_rate: 11.5 })
+    const moms = out.split('\n').find((l) => l.startsWith('- MOMS:')) ?? ''
+    expect(moms).toMatch(/säljarens land/)
+    expect(moms).toMatch(/aldrig valutan/)
+    expect(moms).toMatch(/har debiterat moms/)
+    expect(moms).not.toMatch(/utgå från valuta/)
   })
 })

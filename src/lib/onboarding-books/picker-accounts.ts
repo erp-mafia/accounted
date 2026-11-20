@@ -7,7 +7,7 @@
  * never a block: one bank account belongs to one legal entity, but the app
  * cannot know which of two companies is the right home for it, so the picker
  * shows every account the consent returned, names the company that books a
- * claimed one, and leaves the choice to the user (founder direction
+ * claimed one, and leaves the choice to the user (product direction
  * 2026-09-15, issue #2647). Hiding claimed accounts, which is what the picker
  * did before, left a user whose whole consent was claimed on a blank page.
  */

@@ -4,6 +4,7 @@ import {
   formatPeriodLabel,
 } from '@/lib/reports/vat-declaration'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-vat-facts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { VatPeriodType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -85,10 +86,17 @@ export const GET = withRouteContext(
         supabase, companyId!, periodType, year, period,
         { fiscalPeriodId },
       )
+      // Kontantmetoden year-end cut-off (#3440): read for the review surface
+      // only, never inside calculateVatDeclaration (the filing paths use it).
+      // Never throws; a failed read comes back as `unavailable`.
+      const kontantmetodCutoff = await fetchKontantmetodCutoffVatFacts(
+        supabase, companyId!, declaration.period.start, declaration.period.end,
+      )
 
       return NextResponse.json({
         data: {
           ...declaration,
+          ...(kontantmetodCutoff ? { kontantmetodCutoff } : {}),
           // For yearly the authoritative span is declaration.period.start/end
           // (the räkenskapsår). The label stays a coarse "Helår {year}".
           periodLabel: formatPeriodLabel(periodType, year, period),

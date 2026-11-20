@@ -3,6 +3,9 @@ import { eventBus } from '@/lib/events/bus'
 import { makeDocumentAttachment } from '@/tests/helpers'
 import sharp from 'sharp'
 import { receiptImage, receiptImageFormats } from '@/tests/fixtures/receipt-images'
+import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 // ============================================================
 // Mock: separate client (no .then) from query builder (thenable)
@@ -82,6 +85,7 @@ import {
   cleanupExpiredPendingDocumentUploads,
   createPendingDocumentUpload,
   completePendingDocumentUpload,
+  findPendingDocumentUploadName,
   computeSHA256,
   resolveStoredMimeType,
   PENDING_DOCUMENT_UPLOAD_RETENTION_MS,
@@ -91,7 +95,6 @@ import {
   legacyDocumentPath,
   documentStoragePathCandidates,
   downloadDocumentObject,
-  createDocumentSignedUrl,
   _resetBucketVerified,
   validateDocumentFile,
   declaredDocumentType,
@@ -882,6 +885,37 @@ describe('uploadDocument', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
     expect(serviceRemove).toHaveBeenCalledTimes(1)
   })
+
+  // enforce_period_lock_documents refuses a row on a verifikat in a locked or
+  // closed year. v1 answered that 500 (prod 2026-11-16): the thrown error must
+  // read as the refusal it is, for every door that classifies it.
+  it('throws a verifikat in a locked or closed year as DOC_UPLOAD_PERIOD_LOCKED, keeping the SQLSTATE, and keeps nothing', async () => {
+    results = [
+      { data: null, error: { code: 'P0001', message: 'Cannot attach documents to entries in a locked/closed fiscal period' } },
+    ]
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    const thrown = await uploadDocument(
+      supabase as never,
+      'user-1',
+      'company-1',
+      { name: 'kvitto.pdf', buffer: pdfBuffer('closed year receipt'), type: 'application/pdf' },
+      { journal_entry_id: 'je-closed' },
+    ).then(
+      () => null,
+      (err: unknown) => err,
+    )
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error & { code?: string }).code).toBe('P0001')
+    expect(isPeriodLockRefusal(thrown)).toBe(true)
+    expect(classifyError(thrown).code).toBe('DOC_UPLOAD_PERIOD_LOCKED')
+    expect(getErrorMessage(thrown)).toBe(getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_sv)
+    expect(serviceRemove).toHaveBeenCalledWith([upload.mock.calls[0]![0]])
+  })
 })
 
 describe('uploadDocument: document.uploaded subscribers and the response', () => {
@@ -1017,6 +1051,60 @@ describe('model-free signed document uploads', () => {
   const company = '11111111-1111-4111-8111-111111111111'
   const user = '22222222-2222-4222-8222-222222222222'
   const uploadId = '33333333-3333-4333-8333-333333333333'
+
+  // crm#1474: complete with only upload_id. The reservation already knows
+  // the name: the completed row once completed, the object key before that.
+  describe('findPendingDocumentUploadName', () => {
+    it('reads the name and stored type off the completed row', async () => {
+      results = [{ data: makeDocumentAttachment({ id: uploadId, file_name: 'invoice.pdf', mime_type: 'application/pdf' }), error: null }]
+      const list = vi.fn()
+      serviceClientOverride = makeClient({ list })
+
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toEqual({
+        fileName: 'invoice.pdf',
+        mimeType: 'application/pdf',
+      })
+      expect(list).not.toHaveBeenCalled()
+    })
+
+    it('reads the sanitized name out of the pending object key', async () => {
+      results = [{ data: null, error: null }]
+      const list = vi.fn().mockResolvedValue({
+        data: [{ id: 'obj-1', name: `${uploadId}_Leverant_r_faktura.pdf` }],
+        error: null,
+      })
+      serviceClientOverride = makeClient({ list })
+
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toEqual({
+        fileName: 'Leverant_r_faktura.pdf',
+        mimeType: null,
+      })
+      expect(list).toHaveBeenCalledWith(`documents/${company}/${user}/pending`, { search: `${uploadId}_`, limit: 10 })
+      // The name rebuilds the very key the bytes were PUT to.
+      expect(buildPendingDocumentStoragePath(company, user, uploadId, 'Leverant_r_faktura.pdf')).toBe(
+        `documents/${company}/${user}/pending/${uploadId}_Leverant_r_faktura.pdf`,
+      )
+    })
+
+    it('falls back to the permanent key, and answers null when no object carries the upload id', async () => {
+      results = [{ data: null, error: null }, { data: null, error: null }]
+      const list = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [], error: null })
+        .mockResolvedValueOnce({ data: [{ id: 'obj-2', name: `${uploadId}_kvitto.png` }], error: null })
+        .mockResolvedValue({ data: [{ id: null, name: `${uploadId}_folder` }], error: null })
+      serviceClientOverride = makeClient({ list })
+
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toEqual({
+        fileName: 'kvitto.png',
+        mimeType: null,
+      })
+      expect(list).toHaveBeenLastCalledWith(`documents/${company}/${user}`, { search: `${uploadId}_`, limit: 10 })
+
+      // A folder entry (no id) is not an upload.
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toBeNull()
+    })
+  })
 
   it('creates a company-scoped signed upload reservation with a two-hour expiry', async () => {
     const now = Date.parse('2026-08-03T10:00:00.000Z')
@@ -1308,10 +1396,12 @@ describe('model-free signed document uploads', () => {
 
     const removed = await cleanupExpiredPendingDocumentUploads(company, user, now)
 
+    // Name order: storage.search serves it from the (bucket_id, name) index;
+    // a created_at sort scans every object in the bucket.
     expect(list).toHaveBeenCalledWith(`documents/${company}/${user}/pending`, {
       limit: 100,
       offset: 0,
-      sortBy: { column: 'created_at', order: 'asc' },
+      sortBy: { column: 'name', order: 'asc' },
     })
     expect(remove).toHaveBeenCalledWith([
       `documents/${company}/${user}/pending/${uploadId}_old.pdf`,
@@ -1522,19 +1612,8 @@ describe('dual-layout read helpers', () => {
     expect(result.blob).toBeNull()
     expect(result.resolvedPath).toBeNull()
     expect(result.error?.message).toBe(`missing:${legacy}`)
-  })
-
-  it('createDocumentSignedUrl falls back to the alternate layout', async () => {
-    const createSignedUrl = vi.fn(async (path: string) =>
-      path === scoped
-        ? { data: { signedUrl: 'https://example.com/signed' }, error: null }
-        : { data: null, error: { message: 'Object not found' } },
-    )
-    const supabase = makeClient({ createSignedUrl })
-
-    const result = await createDocumentSignedUrl(supabase as never, legacy, company, 3600)
-    expect(result.signedUrl).toBe('https://example.com/signed')
-    expect(result.resolvedPath).toBe(scoped)
+    // Every key's answer, for a caller that must know all of them said "not found".
+    expect(result.errors.map((e) => e.message)).toEqual([`missing:${legacy}`, `missing:${scoped}`])
   })
 })
 
@@ -1547,8 +1626,9 @@ function pinResults(pins: {
   supplierInvoice?: boolean
   expenseClaim?: boolean
   bankTransaction?: boolean
-  inboxFile?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
-  inboxXml?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
+  inboxFile?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null; [column: string]: unknown }>
+  inboxXml?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null; [column: string]: unknown }>
+  signingRequest?: boolean
 } = {}): Array<{ data: unknown; error: null }> {
   return [
     { data: pins.supplierInvoice ? [{ id: 'si-1' }] : [], error: null },
@@ -1556,6 +1636,7 @@ function pinResults(pins: {
     { data: pins.bankTransaction ? [{ id: 'tx-1' }] : [], error: null },
     { data: pins.inboxFile ?? [], error: null },
     { data: pins.inboxXml ?? [], error: null },
+    { data: pins.signingRequest ? [{ id: 'sr-1', status: 'open' }] : [], error: null },
   ]
 }
 
@@ -1639,7 +1720,12 @@ describe('deleteDocument', () => {
     expect(serviceRemove).not.toHaveBeenCalled()
   })
 
-  it('keeps the storage objects when the DB row delete is blocked by the trigger', async () => {
+  // The two refusals block_document_deletion() raises, verbatim (prod's text
+  // spells the law without ö).
+  it.each([
+    'Cannot delete document linked to a posted journal entry (Bokforingslagen)',
+    'Cannot delete document within 7-year retention period (expires 2032-12-31)',
+  ])('keeps the storage objects when the DB row delete is blocked by the trigger: %s', async (message) => {
     results = [
       {
         data: {
@@ -1652,7 +1738,7 @@ describe('deleteDocument', () => {
         error: null,
       },
       ...pinResults(),
-      { data: null, error: { message: 'blocked by Bokföringslagen retention trigger' } },
+      { data: null, error: { message } },
     ]
 
     const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
@@ -1728,6 +1814,7 @@ describe('deleteDocument', () => {
       'transactions',
       'invoice_inbox_items',
       'invoice_inbox_items',
+      'signing_requests',
       'document_attachments',
     ])
     const eqs = (i: number) => (supabase.from.mock.results[i].value as { eq: ReturnType<typeof vi.fn> }).eq.mock.calls
@@ -1744,6 +1831,90 @@ describe('deleteDocument', () => {
     expect(result.ok).toBe(true)
   })
 
+  // crm#1565: the foreign key only nulled the item's document_id, so a
+  // "Väntar på dig" item with a reading and no underlag stayed behind.
+  describe('the inbox item the document alone stood for', () => {
+    const ITEM = {
+      id: 'item-1',
+      document_id: 'doc-1',
+      peppol_xml_document_id: null,
+      matched_transaction_id: null,
+      created_journal_entry_id: null,
+      created_supplier_invoice_id: null,
+    }
+    type Builder = { delete: ReturnType<typeof vi.fn>; eq: ReturnType<typeof vi.fn>; in: ReturnType<typeof vi.fn>; is: ReturnType<typeof vi.fn> }
+    const deletesOn = (supabase: ReturnType<typeof makeClient>, table: string) =>
+      supabase.from.mock.calls
+        .map((c, i) => ({ table: c[0] as string, b: supabase.from.mock.results[i].value as Builder }))
+        .filter((x) => x.table === table && x.b.delete.mock.calls.length > 0)
+        .map((x) => x.b)
+
+    it('goes with the document, after it, with the rule repeated as guards', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [ITEM] }), { data: null, error: null }, { data: null, error: null }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: true, discardedInboxItemIds: ['item-1'] })
+      const tables = supabase.from.mock.calls.map((c) => c[0])
+      expect(tables.slice(-2)).toEqual(['document_attachments', 'invoice_inbox_items'])
+      const [inboxDelete] = deletesOn(supabase, 'invoice_inbox_items')
+      expect(inboxDelete.eq.mock.calls).toContainEqual(['company_id', 'company-1'])
+      expect(inboxDelete.in.mock.calls).toEqual([['id', ['item-1']]])
+      expect(inboxDelete.is.mock.calls).toEqual([
+        ['document_id', null],
+        ['created_journal_entry_id', null],
+        ['created_supplier_invoice_id', null],
+        ['matched_transaction_id', null],
+      ])
+    })
+
+    it('keeps an e-invoice item that still has its received XML: only the document goes', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [{ ...ITEM, peppol_xml_document_id: 'doc-xml' }] }), { data: null, error: null }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: true, discardedInboxItemIds: [] })
+      expect(deletesOn(supabase, 'document_attachments')).toHaveLength(1)
+      expect(deletesOn(supabase, 'invoice_inbox_items')).toHaveLength(0)
+    })
+
+    it('keeps the item when the document cannot go: a verifikat holds it (BFL 7 kap 2 §)', async () => {
+      results = [{ data: { ...LOOSE_DOC.data, journal_entry_id: 'entry-1' }, error: null }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', block: 'verifikat', status: 409 })
+      expect(deletesOn(supabase, 'document_attachments')).toHaveLength(0)
+      expect(deletesOn(supabase, 'invoice_inbox_items')).toHaveLength(0)
+    })
+
+    it('keeps the item when the database trigger refuses the document delete', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [ITEM] }), { data: null, error: { message: 'Cannot delete document linked to a posted journal entry (Bokforingslagen)' } }]
+      serviceClientOverride = makeClient()
+      const supabase = makeClient()
+
+      const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry' })
+      expect(deletesOn(supabase, 'invoice_inbox_items')).toHaveLength(0)
+    })
+
+    it('still answers the document delete as done when the item cannot be removed', async () => {
+      results = [LOOSE_DOC, ...pinResults({ inboxFile: [ITEM] }), { data: null, error: null }, { data: null, error: { message: 'boom', code: '57014' } }]
+      serviceClientOverride = makeClient()
+
+      const result = await deleteDocument(makeClient() as never, 'company-1', 'doc-1')
+
+      expect(result).toMatchObject({ ok: true, discardedInboxItemIds: ['item-1'] })
+    })
+  })
+
   it('throws, deleting nothing, when a pin cannot be read: an unknown pin is never free', async () => {
     results = [LOOSE_DOC, { data: null, error: { message: 'statement timeout', code: '57014' } }, ...pinResults().slice(1)]
     const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
@@ -1751,7 +1922,7 @@ describe('deleteDocument', () => {
     const supabase = makeClient()
 
     await expect(deleteDocument(supabase as never, 'company-1', 'doc-1')).rejects.toMatchObject({ code: '57014' })
-    expect(supabase.from).toHaveBeenCalledTimes(6)
+    expect(supabase.from).toHaveBeenCalledTimes(7)
     expect(serviceRemove).not.toHaveBeenCalled()
   })
 

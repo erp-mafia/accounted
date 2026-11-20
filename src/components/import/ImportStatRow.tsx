@@ -21,7 +21,7 @@ export function ImportStatRow({ stats }: { stats: ImportStat[] }) {
     <div className="flex flex-wrap gap-x-10 gap-y-4">
       {stats.map((stat) => (
         <div key={stat.key} className="min-w-0">
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
             {stat.label}
           </div>
           <div

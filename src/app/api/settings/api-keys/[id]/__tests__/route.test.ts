@@ -38,7 +38,7 @@ vi.mock('@/lib/company/company-picker', async (importOriginal) => {
   }
 })
 
-import { PATCH } from '../route'
+import { DELETE, PATCH } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 const params = { params: Promise.resolve({ id: 'key-1' }) }
@@ -53,10 +53,15 @@ const memberships = [
   { company_id: THIRD, name: 'Tredje AB', role: 'member' },
 ]
 
+// The caller's own live key, homed in the active company.
+const OWN_KEY = { id: 'key-1', user_id: 'user-1', company_id: ACTIVE }
+
 /**
- * Chainable proxy over .update().eq().eq().is().select().maybeSingle().
- * Records the update payload and every .eq()/.is() filter, so the tests can
- * assert on tenant scoping rather than trusting it.
+ * Chainable proxy over .select().eq().is().maybeSingle() (the key lookup) and
+ * .update().eq().eq().is().select().maybeSingle(). Records the update payload
+ * and every .eq()/.is() filter, so the tests can assert on tenant scoping
+ * rather than trusting it. Every read resolves to the same result, and a
+ * chain that is awaited directly (the revoke) does too.
  */
 function setupFrom(result: { data?: unknown; error?: unknown }) {
   const updateSpy = vi.fn()
@@ -81,6 +86,10 @@ function setupFrom(result: { data?: unknown; error?: unknown }) {
         if (prop === 'maybeSingle' || prop === 'single') {
           return () =>
             Promise.resolve({ data: result.data ?? null, error: result.error ?? null })
+        }
+        if (prop === 'then') {
+          return (resolve: (value: unknown) => void) =>
+            resolve({ data: result.data ?? null, error: result.error ?? null })
         }
         return () => new Proxy(chain, handler)
       },
@@ -149,9 +158,9 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     expect(res.status).toBe(401)
   })
 
-  it('sets a ceiling and scopes the update to the active company and unrevoked keys', async () => {
+  it('sets a ceiling and scopes the update to the key\'s company and unrevoked keys', async () => {
     const { updateSpy, filters } = setupFrom({
-      data: { id: 'key-1', unattended_commit_limit: 5000 },
+      data: { id: 'key-1', user_id: 'user-2', company_id: 'company-1', unattended_commit_limit: 5000 },
     })
     const res = await PATCH(patch({ unattended_commit_limit: 5000 }), params)
     const { status, body } = await parseJsonResponse<{
@@ -173,10 +182,21 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
   })
 
   it('accepts null to clear the ceiling', async () => {
-    const { updateSpy } = setupFrom({ data: { id: 'key-1', unattended_commit_limit: null } })
+    const { updateSpy } = setupFrom({
+      data: { id: 'key-1', user_id: 'user-1', company_id: 'company-1', unattended_commit_limit: null },
+    })
     const res = await PATCH(patch({ unattended_commit_limit: null }), params)
     expect(res.status).toBe(200)
     expect(updateSpy).toHaveBeenCalledWith({ unattended_commit_limit: null })
+  })
+
+  it('returns 404 for a colleague\'s key homed in another company, before any write', async () => {
+    // Visible to an admin of that company, but not addressable from here:
+    // neither the open company's key nor the caller's own.
+    const { updateSpy } = setupFrom({ data: { id: 'key-1', user_id: 'user-2', company_id: OTHER } })
+    const res = await PATCH(patch({ unattended_commit_limit: 5000 }), params)
+    expect(res.status).toBe(404)
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 
   it('rejects zero, negatives and non-numbers with 400', async () => {
@@ -212,7 +232,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 400 for an empty list rather than widening the key to unrestricted', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const res = await PATCH(patch({ company_ids: [] }), params)
       expect(res.status).toBe(400)
       expect(serviceSupabase.from).not.toHaveBeenCalled()
@@ -220,7 +240,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 400 for a non-uuid company id', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const res = await PATCH(patch({ company_ids: ['nope'] }), params)
       expect(res.status).toBe(400)
       expect(serviceSupabase.from).not.toHaveBeenCalled()
@@ -228,7 +248,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 403 FORBIDDEN for a company the caller is not a member of', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const res = await PATCH(patch({ company_ids: [ACTIVE, FOREIGN] }), params)
       const { status, body } = await parseJsonResponse<{ error: { code: string; details: { company_ids: string[] } } }>(res)
       expect(status).toBe(403)
@@ -247,7 +267,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 400 when the subset drops the company the key is listed under', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const res = await PATCH(patch({ company_ids: [OTHER] }), params)
       const { status, body } = await parseJsonResponse<{ error: { code: string; details: { reason: string } } }>(res)
       expect(status).toBe(400)
@@ -258,15 +278,16 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('replaces the set for a strict subset through one RPC call', async () => {
-      const { filters } = setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      const { filters } = setupFrom({ data: OWN_KEY })
       const service = setupServiceFrom()
       const res = await PATCH(patch({ company_ids: [THIRD, ACTIVE] }), params)
       const { status, body } = await parseJsonResponse<{ data: { id: string; company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
       expect(body.data).toEqual({ id: 'key-1', company_ids: [ACTIVE, THIRD], read_only_company_ids: null })
 
-      // The key lookup is tenant-scoped like the limit update.
-      expect(filters).toContainEqual(['company_id', ACTIVE])
+      // The key lookup reads the one live key by id (the session client's
+      // policies apply), and the route addresses it only as the active
+      // company's or the caller's own (see the 404 cases).
       expect(filters).toContainEqual(['id', 'key-1'])
       expect(filters).toContainEqual(['revoked_at', null])
 
@@ -286,7 +307,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('clears every row for null (unrestricted)', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const service = setupServiceFrom()
       serviceSupabase.rpc.mockResolvedValue({ data: 0, error: null })
       const res = await PATCH(patch({ company_ids: null }), params)
@@ -298,7 +319,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('treats the full membership set like null: no rows kept', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       serviceSupabase.rpc.mockResolvedValue({ data: 0, error: null })
       const res = await PATCH(patch({ company_ids: [THIRD, OTHER, ACTIVE] }), params)
       const { status, body } = await parseJsonResponse<{ data: { company_ids: string[] | null } }>(res)
@@ -308,7 +329,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('answers 500 when the RPC fails (the old set is untouched by construction)', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const service = setupServiceFrom()
       serviceSupabase.rpc.mockResolvedValue({ data: null, error: { message: 'boom', code: '42501' } })
       const res = await PATCH(patch({ company_ids: [ACTIVE] }), params)
@@ -321,7 +342,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('updates both fields in one call', async () => {
-      const { updateSpy } = setupFrom({ data: { id: 'key-1', user_id: 'user-1', unattended_commit_limit: 900 } })
+      const { updateSpy } = setupFrom({ data: { ...OWN_KEY, unattended_commit_limit: 900 } })
       const res = await PATCH(patch({ unattended_commit_limit: 900, company_ids: [ACTIVE] }), params)
       const { status, body } = await parseJsonResponse<{ data: { id: string; unattended_commit_limit: number; company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
@@ -344,7 +365,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('sets the levels exactly when both fields are sent, without reading the current rows', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const service = setupServiceFrom()
       const res = await PATCH(patch({ company_ids: [OTHER, ACTIVE], read_only_company_ids: [OTHER] }), params)
       const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
@@ -359,7 +380,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('keeps every company as a list when one is read-only, even when all are selected', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       setupServiceFrom()
       const res = await PATCH(patch({ company_ids: null, read_only_company_ids: [THIRD] }), params)
       const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
@@ -369,7 +390,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('keeps the current read-only companies that stay selected when the field is omitted', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       setupServiceFrom({
         api_key_companies: {
           data: [
@@ -389,7 +410,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('never lifts a read-only level by widening to every company (company_ids null)', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       setupServiceFrom({
         api_key_companies: {
           data: [
@@ -408,7 +429,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('changes only the levels when company_ids is omitted', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       setupServiceFrom({
         api_key_companies: {
           data: [
@@ -427,7 +448,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('makes an unrestricted key read-only in one company by listing every company', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       setupServiceFrom() // no rows: unrestricted today
       const res = await PATCH(patch({ read_only_company_ids: [OTHER] }), params)
       expect(res.status).toBe(200)
@@ -439,7 +460,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 400 for a read-only company that is not selected', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       setupServiceFrom()
       const res = await PATCH(patch({ company_ids: [ACTIVE], read_only_company_ids: [OTHER] }), params)
       const { status, body } = await parseJsonResponse<{ error: { code: string; details: { reason: string } } }>(res)
@@ -450,7 +471,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 403 for a read-only company the caller is not a member of, before any service read', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const res = await PATCH(patch({ read_only_company_ids: [FOREIGN] }), params)
       const { status, body } = await parseJsonResponse<{ error: { code: string; details: { field: string } } }>(res)
       expect(status).toBe(403)
@@ -460,7 +481,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('returns 400 for a non-uuid read-only id', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       const res = await PATCH(patch({ read_only_company_ids: ['nope'] }), params)
       expect(res.status).toBe(400)
       expect(serviceSupabase.rpc).not.toHaveBeenCalled()
@@ -475,7 +496,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
 
     // A colleague's key in the same company: the session client can see it
     // (api_keys_select covers every member), but it is not the caller's.
-    const colleaguesKey = { id: 'key-1', user_id: 'user-2' }
+    const colleaguesKey = { id: 'key-1', user_id: 'user-2', company_id: ACTIVE }
 
     it('refuses to make a colleague\'s restricted key unrestricted', async () => {
       setupFrom({ data: colleaguesKey })
@@ -507,7 +528,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
 
     it('still lets the owner edit the same key', async () => {
-      setupFrom({ data: { id: 'key-1', user_id: 'user-1' } })
+      setupFrom({ data: OWN_KEY })
       setupServiceFrom()
       const res = await PATCH(patch({ company_ids: null, read_only_company_ids: [] }), params)
       expect(res.status).toBe(200)
@@ -515,4 +536,109 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
     })
   })
 
+  describe('the caller\'s own key homed in another company (byrå cockpit)', () => {
+    beforeEach(() => {
+      getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+      listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+      serviceSupabase.rpc.mockResolvedValue({ data: 2, error: null })
+    })
+
+    // The cockpit lists a person's own connections across clients, so the
+    // key the user edits may be homed in a company other than the open one.
+    const ownKeyElsewhere = { id: 'key-1', user_id: 'user-1', company_id: OTHER }
+
+    it('edits it anchored on its own company, not the active one', async () => {
+      setupFrom({ data: ownKeyElsewhere })
+      setupServiceFrom()
+      const res = await PATCH(patch({ company_ids: [OTHER, THIRD] }), params)
+      expect(res.status).toBe(200)
+      expect(replaceArgs()).toEqual({
+        p_api_key_id: 'key-1',
+        p_company_ids: [OTHER, THIRD],
+        p_read_only_company_ids: [],
+      })
+      expect(listUserCompaniesForPickerMock).toHaveBeenCalledWith(expect.anything(), 'user-1', {
+        activeCompanyId: OTHER,
+      })
+    })
+
+    it('keeps its own company in the set, whichever company is open', async () => {
+      setupFrom({ data: ownKeyElsewhere })
+      setupServiceFrom()
+      const res = await PATCH(patch({ company_ids: [ACTIVE] }), params)
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details: { reason: string; company_id: string } }
+      }>(res)
+      expect(status).toBe(400)
+      expect(body.error.details.reason).toBe('key_company_required')
+      expect(body.error.details.company_id).toBe(OTHER)
+      expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('returns 404 for a key homed in a company the caller has left', async () => {
+      setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: FOREIGN } })
+      setupServiceFrom()
+      const res = await PATCH(patch({ company_ids: null }), params)
+      expect(res.status).toBe(404)
+      expect(serviceSupabase.from).not.toHaveBeenCalled()
+      expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('sets the limit on it filtered on its own company', async () => {
+      const { updateSpy, filters } = setupFrom({ data: { ...ownKeyElsewhere, unattended_commit_limit: 750 } })
+      const res = await PATCH(patch({ unattended_commit_limit: 750 }), params)
+      expect(res.status).toBe(200)
+      expect(updateSpy).toHaveBeenCalledWith({ unattended_commit_limit: 750 })
+      expect(filters).toContainEqual(['company_id', OTHER])
+      expect(filters).not.toContainEqual(['company_id', ACTIVE])
+    })
+  })
+})
+
+describe('DELETE /api/settings/api-keys/[id]', () => {
+  const revoke = () =>
+    DELETE(createMockRequest('/api/settings/api-keys/key-1', { method: 'DELETE' }), params)
+
+  it('returns 401 when not authenticated', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const res = await revoke()
+    expect(res.status).toBe(401)
+  })
+
+  it('revokes the open company\'s key, filtered on that company and live keys', async () => {
+    const { updateSpy, filters } = setupFrom({ data: { id: 'key-1', user_id: 'user-2', company_id: 'company-1' } })
+    const res = await revoke()
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(res)
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(updateSpy).toHaveBeenCalledWith({ revoked_at: expect.any(String) })
+    expect(filters).toContainEqual(['id', 'key-1'])
+    expect(filters).toContainEqual(['company_id', 'company-1'])
+    expect(filters).toContainEqual(['revoked_at', null])
+  })
+
+  it('revokes the caller\'s own key homed in another company, filtered on that company (byrå cockpit)', async () => {
+    const { updateSpy, filters } = setupFrom({ data: { id: 'key-1', user_id: 'user-1', company_id: OTHER } })
+    const res = await revoke()
+    expect(res.status).toBe(200)
+    expect(updateSpy).toHaveBeenCalledWith({ revoked_at: expect.any(String) })
+    expect(filters).toContainEqual(['company_id', OTHER])
+  })
+
+  it('leaves a colleague\'s key homed in another company untouched', async () => {
+    const { updateSpy } = setupFrom({ data: { id: 'key-1', user_id: 'user-2', company_id: OTHER } })
+    const res = await revoke()
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(res)
+    // The answer a revoke of a missing or already revoked key always gave.
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 when the key cannot be read', async () => {
+    const { updateSpy } = setupFrom({ error: { message: 'boom' } })
+    const res = await revoke()
+    expect(res.status).toBe(500)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
 })

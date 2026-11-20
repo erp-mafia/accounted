@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { CompanyProfileView } from '@/components/settings/CompanyProfileView'
@@ -24,6 +25,13 @@ const ERROR_MESSAGES: Record<string, string> = {
   persist_failed: 'Något gick fel. Försök igen.',
 }
 
+// The org number rule's refusals (lib/company/org-number-rule.ts), translated.
+const RULE_ERROR_KEYS: Record<string, string> = {
+  org_number_locked: 'profile_error_org_number_locked',
+  org_number_personnummer_required: 'profile_error_personnummer_required',
+  org_number_legal_entity_required: 'profile_error_legal_entity_required',
+}
+
 // Företagsprofil: the cached TIC company snapshot (Bolagsuppgifter), rendered
 // as a read-only section on the Företag tab. Fetched client-side (low-traffic
 // settings) so it sits alongside the client-rendered company form. RLS scopes
@@ -32,6 +40,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 // an enskild firma whose personnummer previously resolved to the wrong entity.
 export function CompanyProfileSection() {
   const { company } = useCompany()
+  const t = useTranslations('settings_company')
   const [snapshot, setSnapshot] = useState<Snapshot>(null)
   const [fetchedAt, setFetchedAt] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -71,7 +80,12 @@ export function CompanyProfileSection() {
       setSnapshot((result.snapshot as Snapshot) ?? null)
       setFetchedAt(result.fetchedAt ?? null)
     } else {
-      setError(ERROR_MESSAGES[result.error ?? ''] ?? ERROR_MESSAGES.persist_failed)
+      const code = result.error ?? ''
+      setError(
+        RULE_ERROR_KEYS[code]
+          ? t(RULE_ERROR_KEYS[code])
+          : (ERROR_MESSAGES[code] ?? ERROR_MESSAGES.persist_failed),
+      )
     }
     setSubmitting(false)
   }
@@ -101,7 +115,7 @@ export function CompanyProfileSection() {
             autoComplete="off"
             className="max-w-xs tabular-nums"
           />
-          <Button type="submit" size="sm" disabled={!orgInput.trim()} loading={submitting}>
+          <Button type="submit" disabled={!orgInput.trim()} loading={submitting}>
             {submitting ? 'Hämtar…' : 'Hämta'}
           </Button>
           {fetchedAt && (

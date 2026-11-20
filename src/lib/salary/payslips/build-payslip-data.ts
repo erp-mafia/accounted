@@ -2,7 +2,7 @@
  * Shared PayslipData assembly.
  *
  * The per-employee PDF route and the payslip send/link surfaces must render
- * identical payslips — override coalescing, breakdown steps and masking live
+ * identical payslips - override coalescing, breakdown steps and masking live
  * here so the logic can't drift between callers.
  *
  * The one deliberate difference is the audience. The employer's own view of
@@ -16,10 +16,12 @@
  * the content it had (BFL 7 kap. 1 §). Callers say which copy they render;
  * this module never guesses it.
  */
+import { effectiveRow, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
 import type { PayslipData, PayslipLineItem } from '@/lib/salary/pdf/payslip-template'
 import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 import { VAXA_STOD_REFUND_STEP_LABEL } from '@/lib/salary/vaxa-stod'
+import { comparePayslipLines, isTextRow } from '@/lib/salary/text-rows'
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
   employee: 'Anställd',
@@ -55,9 +57,12 @@ export interface PayslipEmployeeSource {
   tax_column: number
   clearing_number: string | null
   bank_account_number: string | null
+  /** F-skatt payees form no underlag for arbetsgivaravgifter: an avgifter
+   * override on their row is ignored, as the booking and the AGI ignore it. */
+  f_skatt_status?: string | null
 }
 
-/** salary_run_employees row with joined line_items — loose shape by design
+/** salary_run_employees row with joined line_items - loose shape by design
  * (the callers select `*`), narrowed field-by-field below. */
 export type PayslipSreSource = Record<string, unknown> & {
   line_items?: Array<Record<string, unknown>> | null
@@ -93,6 +98,19 @@ export interface PayslipSections {
 export function parsePayslipAudienceParam(value: string | null): 'employer' | 'employee' | null {
   if (value === null || value === '' || value === 'employer') return 'employer'
   if (value === 'employee') return 'employee'
+  return null
+}
+
+/**
+ * The dashboard PDF route's `?preview=` query parameter: the employer looking
+ * at the employee copy before handing it out (the run row's payslip icon). A
+ * preview never issues the run, so opening it cannot fix the sections the
+ * employee will later receive. Absent means no preview; anything but the
+ * listed values is null so the route can refuse it.
+ */
+export function parsePayslipPreviewParam(value: string | null): boolean | null {
+  if (value === null || value === '' || value === '0' || value === 'false') return false
+  if (value === '1' || value === 'true') return true
   return null
 }
 
@@ -175,9 +193,11 @@ export function buildPayslipData(params: {
   const { run, sre, employee: emp, company } = params
   const sections = payslipSectionsFor(params.audience, run)
 
-  const lineItems: PayslipLineItem[] = ((sre.line_items || []) as Array<Record<string, unknown>>)
-    .sort((a, b) => ((a.sort_order as number) || 0) - ((b.sort_order as number) || 0))
-    .map(li => ({
+  // The payslip order the run-employee page uses too (text-rows.ts): base
+  // salary, its recurring text rows, manual text rows, then the rest.
+  const lineItems: PayslipLineItem[] = [...((sre.line_items || []) as Array<Record<string, unknown>>)]
+    .sort(comparePayslipLines)
+    .map(li => isTextRow(li) ? { description: li.description as string, amount: 0, text: true } : ({
       // A line taxed at a flat engångsskatt says so on the payslip: the
       // "Preliminär skatt" total then differs from the table amount and the
       // breakdown's "Engångsskatt (x %)" step explains the difference.
@@ -216,7 +236,13 @@ export function buildPayslipData(params: {
       output: Number(sre.avgifter_basis_override),
     })
   }
-  if (sre.avgifter_amount_override !== null && sre.avgifter_amount_override !== undefined) {
+  // The figures the booking, the AGI and the bank file use (effectiveRow):
+  // the employee sees what was booked and declared.
+  const effective = effectiveRow({
+    ...(sre as unknown as EffectiveFiguresInput),
+    employee: { f_skatt_status: emp.f_skatt_status ?? null },
+  })
+  if (effective.avgifter_overridden) {
     overrideSteps.push({
       label: 'Manuell justering: Arbetsgivaravgifter',
       formula: reason,
@@ -233,16 +259,7 @@ export function buildPayslipData(params: {
     bankAccount = `${emp.clearing_number}-****${lastDigits}`
   }
 
-  // Honor advanced-mode per-employee overrides so the employee sees the same
-  // effective values that are booked and AGI-reported.
-  const grossSalary = sre.gross_salary as number
-  const taxWithheld = sre.tax_withheld as number
-  const effectiveTax = (sre.tax_withheld_override as number | null) ?? taxWithheld
-  const effectiveAvgifter =
-    (sre.avgifter_amount_override as number | null) ?? (sre.avgifter_amount as number)
-  const effectiveNet = (sre.net_salary as number) + (taxWithheld - effectiveTax)
-  const vacationAccrual = sre.vacation_accrual as number
-  const vacationAccrualAvgifter = sre.vacation_accrual_avgifter as number
+  const vacationAccrualAvgifter = Number(sre.vacation_accrual_avgifter) || 0
 
   return {
     companyName: company.name,
@@ -260,17 +277,20 @@ export function buildPayslipData(params: {
       ? `${runDeviationWindow(run).start} - ${runDeviationWindow(run).end}`
       : null,
     lineItems,
-    grossSalary,
-    taxWithheld: effectiveTax,
-    netSalary: effectiveNet,
+    grossSalary: effective.gross_salary,
+    taxWithheld: effective.tax_withheld,
+    // The requested förhöjt skatteavdrag frozen on the row at calculation,
+    // printed as its own row under the statutory tax; 0 under an override.
+    extraTaxWithheld: effective.extra_tax_withheld,
+    netSalary: effective.net_salary,
     taxReference,
     employerCost: sections.employerCost
       ? {
           avgifterRate: sre.avgifter_rate as number,
-          avgifterAmount: effectiveAvgifter,
-          vacationAccrual,
+          avgifterAmount: effective.avgifter_amount,
+          vacationAccrual: effective.vacation_accrual,
           vacationAccrualAvgifter,
-          totalEmployerCost: grossSalary + effectiveAvgifter + vacationAccrual + vacationAccrualAvgifter,
+          totalEmployerCost: effective.employer_cost,
         }
       : null,
     ytdGross: sre.ytd_gross as number,

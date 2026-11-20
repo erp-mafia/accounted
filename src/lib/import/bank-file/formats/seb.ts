@@ -8,40 +8,44 @@
  *     Text/mottagare, Belopp, Saldo
  *   - Transaktioner: Bokförd, Valutadatum, Text, Typ, Insättningar, Uttag,
  *     Bokfört saldo (dot decimal separator, amount split across two columns
- *     where Uttag rows carry their own minus sign)
+ *     where Uttag rows carry their own minus sign). The same page also
+ *     exports one signed column, "Insättningar/uttag", in place of the pair
+ *     (crm#1491). Some of these exports write three decimals ("349.000").
+ * Decimal mark: read from the file's own amount and balance cells
+ * (inferDecimalMark), else the layout's documented mark. One cell alone
+ * cannot tell "349.000" (349 kr) from 349 000 kr (crm#1528).
  * Date format: YYYY-MM-DD
  * Encoding: UTF-8 (optionally with BOM) or Windows-1252
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseSwedishAmount, inferDecimalMark } from '@/lib/money'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
 
-function parseCommaDecimal(value: string): number {
-  const cleaned = value.replace(/\s/g, '').replace(',', '.')
-  return parseFloat(cleaned)
-}
 
+/** One signed amount column of the Transaktioner export: "Insättningar/uttag". */
+const COMBINED_AMOUNT_COLUMN_RE = /^ins(ä|a)ttningar?\s*\/\s*uttag$/
 const DEPOSIT_COLUMN_RE = /^ins(ä|a)ttning/
 const WITHDRAWAL_COLUMN_RE = /^uttag/
 
 /**
  * The Transaktioner web export: a "Bokförd" (or Valutadatum) date column plus
- * the amount split across Insättningar/Uttag. The split amount pair is unique
- * to this layout among the supported semicolon formats, so requiring both
- * columns cannot steal files from other bank profiles.
+ * the amount, either split across Insättningar/Uttag or in the one signed
+ * column "Insättningar/uttag". Both shapes are unique to this layout among
+ * the supported semicolon formats, so requiring one of them cannot steal
+ * files from other bank profiles. The one-column shape used to miss here and
+ * fall through to Länsförsäkringar's header-less row test, which reads Text
+ * and Typ the other way round and drops the balance (crm#1491).
  */
 function isTransaktionerHeader(headers: string[]): boolean {
   const hasDate =
     headers.some((h) => h === 'bokförd' || h === 'bokford') ||
     headers.some((h) => /valuta(dag|datum)/.test(h))
-  return (
-    hasDate &&
-    headers.some((h) => DEPOSIT_COLUMN_RE.test(h)) &&
-    headers.some((h) => WITHDRAWAL_COLUMN_RE.test(h))
-  )
+  const hasSplitAmount =
+    headers.some((h) => DEPOSIT_COLUMN_RE.test(h)) && headers.some((h) => WITHDRAWAL_COLUMN_RE.test(h))
+  return hasDate && (hasSplitAmount || headers.some((h) => COMBINED_AMOUNT_COLUMN_RE.test(h)))
 }
 
 export const sebFormat: BankFileFormat = {
@@ -60,7 +64,12 @@ export const sebFormat: BankFileFormat = {
     const hasBookingDate = /bokf(ö|o)ringsda(g|tum)/.test(firstLine)
     const hasSebSecondary =
       /valuta(dag|datum)/.test(firstLine) || firstLine.includes('verifikationsnummer')
-    if (hasBookingDate && hasSebSecondary) return true
+    // Detecting is a promise that parse() can read the file, so the amount
+    // column has to be there too: Bokföringsdag plus Valutadag is not unique
+    // to SEB. A header with those two and no Belopp is SEB's only when it
+    // passes the Transaktioner test below; any other falls through to the
+    // next detector or the manual column mapping.
+    if (hasBookingDate && hasSebSecondary && firstLine.includes('belopp')) return true
 
     const headers = firstLine.split(';').map((h) => h.trim().replace(/"/g, ''))
     return isTransaktionerHeader(headers)
@@ -100,7 +109,10 @@ export const sebFormat: BankFileFormat = {
     const descIdx = headers.findIndex(
       (h) => h.includes('text') || h.includes('mottagare') || h.includes('beskrivning')
     )
-    const amountIdx = headers.findIndex((h) => h.includes('belopp'))
+    // Belopp (Kontoutdrag), else the Transaktioner export's one signed
+    // column "Insättningar/uttag": both are a plain signed amount.
+    let amountIdx = headers.findIndex((h) => h.includes('belopp'))
+    if (amountIdx === -1) amountIdx = headers.findIndex((h) => COMBINED_AMOUNT_COLUMN_RE.test(h))
     // Transaktioner layout: no Belopp column; the amount is split across
     // Insättningar (positive) and Uttag (exported with its own minus sign).
     const depositIdx = amountIdx === -1 ? headers.findIndex((h) => DEPOSIT_COLUMN_RE.test(h)) : -1
@@ -108,6 +120,8 @@ export const sebFormat: BankFileFormat = {
       amountIdx === -1 ? headers.findIndex((h) => WITHDRAWAL_COLUMN_RE.test(h)) : -1
     const hasSplitAmount = depositIdx !== -1 && withdrawalIdx !== -1
     const balanceIdx = headers.findIndex((h) => h.includes('saldo'))
+    const isTransaktioner =
+      hasSplitAmount || (amountIdx !== -1 && COMBINED_AMOUNT_COLUMN_RE.test(headers[amountIdx]))
 
     if (dateIdx === -1 || (amountIdx === -1 && !hasSplitAmount)) {
       issues.push({
@@ -126,11 +140,24 @@ export const sebFormat: BankFileFormat = {
       }
     }
 
+    const rowFields = lines.map((line, i) =>
+      i === 0 ? [] : parseCSVLine(line.trim(), delimiter).map((f) => f.trim().replace(/^"|"$/g, '')),
+    )
+    // The file decides its decimal mark, never one cell: every amount and
+    // balance cell votes, and only when none can decide does the layout's
+    // documented mark apply (Transaktioner: dot; Kontoutdrag: the per-cell
+    // reading it always had).
+    const amountColumns = [amountIdx, depositIdx, withdrawalIdx, balanceIdx].filter((idx) => idx >= 0)
+    const decimalMark =
+      inferDecimalMark(rowFields.flatMap((f) => amountColumns.map((idx) => f[idx]))) ??
+      (isTransaktioner ? '.' : undefined)
+    const amountOf = (cell: string) => parseSwedishAmount(cell, decimalMark) ?? NaN
+
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim()
       if (!line) continue
 
-      const fields = parseCSVLine(line, delimiter).map((f) => f.trim().replace(/^"|"$/g, ''))
+      const fields = rowFields[i]
 
       const date = fields[dateIdx]
       const description = fields[descIdx >= 0 ? descIdx : dateIdx + 1] || 'Unknown'
@@ -147,14 +174,14 @@ export const sebFormat: BankFileFormat = {
 
       let amount: number
       if (hasSplitAmount) {
-        const deposit = fields[depositIdx] ? parseCommaDecimal(fields[depositIdx]) : 0
-        const rawWithdrawal = fields[withdrawalIdx] ? parseCommaDecimal(fields[withdrawalIdx]) : 0
+        const deposit = fields[depositIdx] ? amountOf(fields[depositIdx]) : 0
+        const rawWithdrawal = fields[withdrawalIdx] ? amountOf(fields[withdrawalIdx]) : 0
         // Uttag values carry their own minus sign in SEB's export; normalize
         // so a variant exporting magnitudes still lands as an expense.
         const withdrawal = rawWithdrawal > 0 ? -rawWithdrawal : rawWithdrawal
         amount = roundOre(deposit + withdrawal)
       } else {
-        amount = parseCommaDecimal(amountStr)
+        amount = amountOf(amountStr)
       }
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr}`, severity: 'warning' })
@@ -169,7 +196,7 @@ export const sebFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? parseCommaDecimal(balanceStr) : null
+      const balance = balanceStr ? amountOf(balanceStr) : null
 
       transactions.push({
         date: normalizedDate,

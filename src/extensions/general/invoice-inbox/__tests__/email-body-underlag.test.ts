@@ -4,6 +4,8 @@ import {
   SIGNATURE_IMAGE_MAX_BYTES,
   SUBSTANTIVE_BODY_MIN_CHARS,
   isSignatureImage,
+  contentIdsReferencedByHtml,
+  normaliseContentId,
   emailBodyToText,
   isSubstantiveBody,
   pdfSafeText,
@@ -51,6 +53,41 @@ describe('isSignatureImage', () => {
     expect(isSignatureImage({ ...base, content_type: 'application/pdf', size: 900 })).toBe(false)
     // No disposition and no content id: not an inline part.
     expect(isSignatureImage({ ...base, content_disposition: null, content_id: null })).toBe(false)
+  })
+
+  it('classifies an image the body embeds as inline whatever its disposition says', () => {
+    // Booking.com (MIME::Lite::HTML) marks the logos its HTML shows as
+    // attachments; the prod mail of 2026-10-28 had three such parts.
+    const booking = { content_type: 'image/png', content_disposition: 'attachment', content_id: '<dc40@MIME-Lite-HTML-1.25>', size: 2_969 }
+    expect(isSignatureImage(booking)).toBe(false)
+    expect(isSignatureImage({ ...booking, embedded: true })).toBe(true)
+    expect(isSignatureImage({ ...booking, embedded: false })).toBe(false)
+    // Embedded is not a size exemption: a receipt screenshot pasted into the
+    // body stays a document.
+    expect(isSignatureImage({ ...booking, size: SIGNATURE_IMAGE_MAX_BYTES + 1, embedded: true })).toBe(false)
+    expect(isSignatureImage({ ...booking, content_type: 'application/pdf', embedded: true })).toBe(false)
+  })
+})
+
+describe('contentIdsReferencedByHtml', () => {
+  it('reads the cid references of img tags and CSS, in the form normaliseContentId gives a Content-ID', () => {
+    const ids = contentIdsReferencedByHtml(
+      `<img src="cid:DC40@MIME-Lite-HTML-1.25"><img src='cid:pixel%40x'><td style="background:url(cid:bg@x)">`,
+    )
+    expect(ids).toEqual(new Set(['dc40@mime-lite-html-1.25', 'pixel@x', 'bg@x']))
+    expect(ids.has(normaliseContentId('<dc40@MIME-Lite-HTML-1.25>'))).toBe(true)
+    expect(ids.has(normaliseContentId('pixel@x'))).toBe(true)
+  })
+
+  it('finds nothing in HTML without cid references', () => {
+    expect(contentIdsReferencedByHtml('<img src="data:image/png;base64,iVBORw0KGgo=">').size).toBe(0)
+    expect(contentIdsReferencedByHtml(null).size).toBe(0)
+    // An empty reference never matches a part without a content id.
+    expect(contentIdsReferencedByHtml('<img src="cid:<>">').has(normaliseContentId(null))).toBe(false)
+  })
+
+  it('keeps an id with a stray percent sign as it is', () => {
+    expect(normaliseContentId('<50%off@x>')).toBe('50%off@x')
   })
 })
 

@@ -6,7 +6,7 @@ import {
   resolveSendLabel,
   type PrimaryContext,
 } from '@/lib/invoices/editor/primary-action'
-import { resolveChannelOptions } from '@/lib/invoices/editor/channel'
+import { NO_MAILBOX_READY, resolveChannelOptions } from '@/lib/invoices/editor/channel'
 
 function primary(overrides: Partial<PrimaryContext> = {}): PrimaryContext {
   return {
@@ -69,6 +69,11 @@ describe('resolveSendLabel', () => {
       'action_send_peppol',
     )
   })
+
+  it('a mailbox send names the provider, booking or not', () => {
+    expect(resolveSendLabel({ documentType: 'invoice', channel: 'kivra', booksOnIssue: true })).toBe('action_send_kivra')
+    expect(resolveSendLabel({ documentType: 'invoice', channel: 'billo', booksOnIssue: false })).toBe('action_send_billo')
+  })
 })
 
 describe('resolvePrimaryAction', () => {
@@ -105,7 +110,8 @@ describe('resolveEditorMenu', () => {
     isSandbox: false,
     customerSelected: true,
     customerEmail: 'ekonomi@example.se',
-    peppolReady: false,
+    peppol: null,
+    mailboxReady: NO_MAILBOX_READY,
   })
 
   it('lists the channels with the primary one checked, then draft and create-only', () => {
@@ -114,7 +120,11 @@ describe('resolveEditorMenu', () => {
       ['channel_email', true, true],
       ['channel_manual', false, true],
     ])
-    expect(menu?.actions.map((a) => a.label)).toEqual(['action_save_as_draft', 'action_create_without_sending'])
+    expect(menu?.actions.map((a) => a.label)).toEqual([
+      'action_issue_paid',
+      'action_save_as_draft',
+      'action_create_without_sending',
+    ])
   })
 
   it('offers no unnumbered draft for a quote (numbered at insert)', () => {
@@ -129,7 +139,31 @@ describe('resolveEditorMenu', () => {
       { kind: 'send', channel: 'email' },
       { kind: 'send', channel: 'manual' },
     ])
-    expect(menu?.actions).toEqual([])
+    // A saved faktura draft can still go out as a kontantfaktura (crm#1281).
+    expect(menu?.actions).toEqual([{ intent: { kind: 'issue_paid' }, label: 'action_issue_paid' }])
+  })
+
+  it('lists a ready mailbox as its own channel, picked like the others', () => {
+    const withMailboxes = resolveChannelOptions({
+      documentType: 'invoice',
+      canEmail: true,
+      isSandbox: false,
+      customerSelected: true,
+      customerEmail: 'ekonomi@example.se',
+      peppol: null,
+      mailboxReady: { kivra: true, billo: true },
+    })
+    const menu = resolveEditorMenu({ ...primary({ channel: 'billo' }), channelOptions: withMailboxes })
+    expect(menu?.channels.map((c) => [c.label, c.selected, c.intent])).toEqual([
+      ['channel_email', false, { kind: 'send', channel: 'email' }],
+      ['channel_manual', false, { kind: 'send', channel: 'manual' }],
+      ['channel_kivra', false, { kind: 'send', channel: 'kivra' }],
+      ['channel_billo', true, { kind: 'send', channel: 'billo' }],
+    ])
+    expect(resolvePrimaryAction(primary({ channel: 'billo' }))).toEqual({
+      intent: { kind: 'send', channel: 'billo' },
+      label: 'action_send_billo',
+    })
   })
 
   it('has no menu for a received självfaktura', () => {
@@ -143,7 +177,8 @@ describe('resolveEditorMenu', () => {
       isSandbox: false,
       customerSelected: true,
       customerEmail: 'ekonomi@example.se',
-      peppolReady: false,
+      peppol: null,
+      mailboxReady: NO_MAILBOX_READY,
     })
     const menu = resolveEditorMenu({ ...primary({ channel: 'manual' }), channelOptions: blocked })
     expect(menu?.channels[0]).toMatchObject({ channel: 'email', available: false, reason: 'no_email_plan', selected: false })

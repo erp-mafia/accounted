@@ -59,6 +59,32 @@ describe('GET /api/settings/counterparty-templates', () => {
     expect(findCounterpartyTemplateMock).not.toHaveBeenCalled()
   })
 
+  // #58 (1000-row cap): one company holds 1,527 active templates; the list
+  // ended at PostgREST's first 1,000.
+  it('lists every active template past the 1,000-row page, id breaking occurrence ties', async () => {
+    const row = (i: number) => ({ id: `t${i}`, counterparty_name: `leverantor ${i}`, occurrence_count: 1 })
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => row(i)), error: null })
+    enqueue({ data: Array.from({ length: 200 }, (_, i) => row(1000 + i)), error: null })
+
+    const request = createMockRequest('/api/settings/counterparty-templates')
+    const response = await GET(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string }> }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toHaveLength(1200)
+    expect(body.data[1199].id).toBe('t1199')
+    expect(findCall('categorization_templates', 'range')).toEqual([0, 999])
+  })
+
+  it('answers 500 when the list cannot be read', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+
+    const request = createMockRequest('/api/settings/counterparty-templates')
+    const response = await GET(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(500)
+  })
+
   it('runs the tiered matcher against a name probe in counterparty mode', async () => {
     findCounterpartyTemplateMock.mockResolvedValue({
       template: { id: 't1', counterparty_name: 'circle k', debit_account: '5611', credit_account: '1930' },

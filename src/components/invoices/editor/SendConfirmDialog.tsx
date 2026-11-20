@@ -1,9 +1,14 @@
 'use client'
 
-import { useRef, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import {
+  InvoiceAttachmentsSection,
+  type InvoiceAttachmentsTarget,
+} from '@/components/invoices/InvoiceAttachmentsSection'
+import {
   Dialog,
+  DialogConsequence,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -11,17 +16,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { formatAmount } from '@/lib/utils'
-
-export interface ConfirmVoucherLine {
-  account: string
-  name: string
-  debit: number
-  credit: number
-}
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import type { VoucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 
 export type ConfirmVoucher =
-  | { kind: 'lines'; date: string; lines: ConfirmVoucherLine[] }
+  /** `note`: what the send books besides this verifikat (periodiseringar). */
+  | { kind: 'lines'; date: string; lines: VoucherLineView[]; note?: string }
   /** No lines to show: why (kontantmetoden, deferred booking, foreign currency). */
   | { kind: 'note'; text: string }
 
@@ -34,6 +34,14 @@ interface SendConfirmDialogProps {
   voucher: ConfirmVoucher | null
   /** The EU VAT notice and its acknowledgement checkbox, when the send needs one. */
   extra?: ReactNode
+  /**
+   * Bilagor (#79): where the files picked here go, when this send emails
+   * them (offersInvoiceAttachments); null or omitted shows none. The same
+   * section as the invoice page's send dialog, so both send steps offer it.
+   */
+  attachments?: InvoiceAttachmentsTarget | null
+  /** The send that carries the files (crm#1545): Peppol takes PDFs only. */
+  attachmentsChannel?: 'email' | 'peppol'
   confirmLabel: string
   confirmDisabled: boolean
   busy: boolean
@@ -44,6 +52,11 @@ interface SendConfirmDialogProps {
  * The small confirm before a send (design convention 10): what goes where,
  * the number the document locks to, the amount, and the verifikation it
  * books, stated before anything happens. Enter confirms.
+ *
+ * Stil v3 anatomy: the question as the title, the facts as hairline rows,
+ * "the verifikat" as a flat ledger table, and when no verifikat is shown,
+ * why (kontantmetoden, deferred booking, a create without a send) as the
+ * consequence on the footer's left beside Avbryt and the one primary.
  */
 export function SendConfirmDialog({
   open,
@@ -52,6 +65,8 @@ export function SendConfirmDialog({
   rows,
   voucher,
   extra,
+  attachments = null,
+  attachmentsChannel = 'email',
   confirmLabel,
   confirmDisabled,
   busy,
@@ -60,6 +75,11 @@ export function SendConfirmDialog({
   const t = useTranslations('invoice_editor_shell')
   const tCommon = useTranslations('common')
   const confirmRef = useRef<HTMLButtonElement>(null)
+  // A file still uploading holds the send. The section reports false again
+  // when it mounts, so a busy flag left by a closed dialog never sticks.
+  const [attachmentsBusy, setAttachmentsBusy] = useState(false)
+  const holdForAttachments = attachments !== null && attachmentsBusy
+  const sendDisabled = confirmDisabled || holdForAttachments
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
@@ -80,7 +100,7 @@ export function SendConfirmDialog({
           if (event.key !== 'Enter' || target.tagName === 'BUTTON' || target.tagName === 'TEXTAREA') return
           if (target.getAttribute('role') === 'checkbox') return
           event.preventDefault()
-          if (!confirmDisabled && !busy) onConfirm()
+          if (!sendDisabled && !busy) onConfirm()
         }}
       >
         <DialogHeader>
@@ -88,61 +108,49 @@ export function SendConfirmDialog({
           <DialogDescription className="sr-only">{t('confirm_description')}</DialogDescription>
         </DialogHeader>
 
-        <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px]" data-ph-mask="">
+        <dl className="border-t-hairline text-[13px]" data-ph-mask="">
           {rows.map((row) => (
-            <div key={row.label} className="contents">
+            <div
+              key={row.label}
+              className="grid min-h-9 grid-cols-[8rem_minmax(0,1fr)] items-baseline gap-x-4 border-b-hairline py-2"
+            >
               <dt className="text-muted-foreground">{row.label}</dt>
-              <dd className="tabular-nums">{row.value}</dd>
+              <dd className="min-w-0 tabular-nums">{row.value}</dd>
             </div>
           ))}
         </dl>
 
+        {attachments && (
+          <InvoiceAttachmentsSection
+            target={attachments}
+            disabled={busy}
+            onBusyChange={setAttachmentsBusy}
+            channel={attachmentsChannel}
+          />
+        )}
+
         {voucher?.kind === 'lines' && (
-          <div>
-            <p className="pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="space-y-1.5">
+            <div className="text-[12px] font-medium leading-4 text-muted-foreground">
               {t('confirm_voucher_title', { date: voucher.date })}
-            </p>
-            {/* Fixed layout: the name column takes what the amounts leave and
-                truncates to one line (full name on hover). */}
-            <table className="w-full table-fixed border-collapse text-[13px]" data-ph-mask="">
-              <colgroup>
-                <col className="w-14" />
-                <col />
-                <col className="w-24" />
-                <col className="w-24" />
-              </colgroup>
-              <thead>
-                <tr className="border-b border-border text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  <th scope="col" className="py-2 text-left font-medium">{t('confirm_voucher_account')}</th>
-                  <th scope="col" className="py-2 pr-2 text-left font-medium">{t('confirm_voucher_name')}</th>
-                  <th scope="col" className="py-2 text-right font-medium">{t('confirm_voucher_debit')}</th>
-                  <th scope="col" className="py-2 text-right font-medium">{t('confirm_voucher_credit')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {voucher.lines.map((line, index) => (
-                  <tr key={`${line.account}-${index}`} className="border-b border-border">
-                    <td className="py-2 tabular-nums">{line.account}</td>
-                    <td className="truncate py-2 pr-2" title={line.name}>
-                      {line.name}
-                    </td>
-                    <td className="py-2 text-right tabular-nums">{line.debit ? formatAmount(line.debit) : ''}</td>
-                    <td className="py-2 text-right tabular-nums">{line.credit ? formatAmount(line.credit) : ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            </div>
+            <div data-ph-mask="">
+              {/* Flush with the dialog's content edge: the table's own list
+                  bleed is for a page gutter, not a dialog inset. */}
+              <VoucherLinesTable lines={voucher.lines} withCurrency showTotals />
+            </div>
+            {voucher.note && <p className="text-[12px] leading-4 text-muted-foreground">{voucher.note}</p>}
           </div>
         )}
-        {voucher?.kind === 'note' && <p className="text-[13px] text-muted-foreground">{voucher.text}</p>}
 
         {extra}
 
         <DialogFooter>
+          {voucher?.kind === 'note' && <DialogConsequence>{voucher.text}</DialogConsequence>}
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             {tCommon('cancel')}
           </Button>
-          <Button ref={confirmRef} onClick={onConfirm} disabled={confirmDisabled} loading={busy}>
+          <Button ref={confirmRef} onClick={onConfirm} disabled={sendDisabled} loading={busy}>
             {confirmLabel}
           </Button>
         </DialogFooter>

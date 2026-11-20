@@ -21,22 +21,18 @@ import { created } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
+import {
+  checkVoucherGapExplanation,
+  saveVoucherGapExplanation,
+  VoucherGapExplanationStrictSchema,
+} from '@/lib/core/bookkeeping/voucher-gaps'
 
-const CreateVoucherGapExplanation = z
-  .object({
-    fiscal_period_id: z.string().uuid(),
-    voucher_series: z.string().regex(/^[A-Z]$/, 'voucher_series must be a single uppercase letter'),
-    gap_start: z.number().int().positive(),
-    gap_end: z.number().int().positive(),
-    explanation: z.string().min(1).max(2000),
-  })
-  .strict()
-  .refine((d) => d.gap_end >= d.gap_start, {
-    message: 'gap_end must be >= gap_start',
-    path: ['gap_end'],
-  })
+// The rules are the service's (lib/core/bookkeeping/voucher-gaps.ts), which
+// every door shares; this body refuses unknown keys on top. It used to allow
+// 2000 characters against the table's 500, so 501-2000 failed in the database.
+const CreateVoucherGapExplanation = VoucherGapExplanationStrictSchema
 
 const VoucherGapExplanationCreated = z.object({
   id: z.string().uuid(),
@@ -62,7 +58,8 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'gap_end must be >= gap_start; a single-number gap has gap_start = gap_end.',
-    'voucher_series is a single uppercase letter (A-Z); the same series + period + numeric range must not already exist.',
+    'voucher_series is a single uppercase letter (A-Z). explanation is 1-500 characters after trimming.',
+    'An explanation is write-once: the same series + period + numeric range already explained returns 409 VOUCHER_GAP_ALREADY_EXPLAINED (dry run included). A fiscal_period_id outside the company returns 404.',
   ],
   example: {
     request: {
@@ -97,57 +94,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
-    // Ownership pre-check: the caller-supplied `fiscal_period_id` must belong
-    // to ctx.companyId. Otherwise an insert would persist a row with
-    // company_id from the URL pointing at a fiscal_period from another
-    // company: a broken-link state that confuses every downstream gap-
-    // detection query. (No cross-tenant data leak per se, but the row is
-    // garbage.)
-    const { data: periodCheck } = await ctx.supabase
-      .from('fiscal_periods')
-      .select('id')
-      .eq('id', body.fiscal_period_id)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    if (!periodCheck) {
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+    // The service checks the year is the company's (404) and that the gap
+    // has no explanation yet (409), and inserts; a dry run runs the same
+    // checks and writes nothing.
+    const result = ctx.dryRun
+      ? await checkVoucherGapExplanation(ctx.supabase, ctx.companyId!, body)
+      : await saveVoucherGapExplanation(ctx.supabase, ctx.companyId!, ctx.userId, body)
+    if (!result.ok) {
+      if (result.status === 500) ctx.log.error('voucher-gap-explanations save failed', { details: result.details })
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { resource: 'fiscal_period', field: 'fiscal_period_id' },
+        ...(result.details ? { details: result.details } : {}),
       })
     }
-
-    if (ctx.dryRun) {
-      return dryRunPreview(
-        {
-          fiscal_period_id: body.fiscal_period_id,
-          voucher_series: body.voucher_series,
-          gap_start: body.gap_start,
-          gap_end: body.gap_end,
-          explanation: body.explanation,
-        },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
-    }
-
-    const { data, error } = await ctx.supabase
-      .from('voucher_gap_explanations')
-      .insert({
-        company_id: ctx.companyId!,
-        user_id: ctx.userId,
-        fiscal_period_id: body.fiscal_period_id,
-        voucher_series: body.voucher_series,
-        gap_start: body.gap_start,
-        gap_end: body.gap_end,
-        explanation: body.explanation,
-      })
-      .select('id, fiscal_period_id, voucher_series, gap_start, gap_end, explanation, created_at')
-      .single()
-
-    if (error) {
-      ctx.log.error('voucher-gap-explanations insert failed', error)
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    return created(data, { requestId: ctx.requestId })
+    if ('preview' in result) return dryRunPreview(result.preview, { requestId: ctx.requestId, log: ctx.log })
+    return created(result.data, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )

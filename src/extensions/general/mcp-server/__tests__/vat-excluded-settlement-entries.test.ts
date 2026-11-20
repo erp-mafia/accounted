@@ -7,11 +7,14 @@
  * shape, but it never said which verifikat it had dropped, so the gap could not
  * be explained from the tool output.
  *
- * These tests cover the same case table (a to f) as the pg-real suite
- * (tests/pg/vat-skattekonto-counter-entries.pg.test.ts) on the MCP surface,
- * which holds every line in memory and applies core's detectMomsredovisning,
- * plus the two disclosures: excluded_settlement_entries on the report and the
- * informational finding on the close check.
+ * Which verifikat are a momsredovisning is decided by get_vat_declaration_totals,
+ * the aggregate the web momsdeklaration and the Skatteverket submission read
+ * too; its case table (a to f) runs against real Postgres in
+ * tests/pg/vat-skattekonto-counter-entries.pg.test.ts. Here the fixture states
+ * the RPC's verdict (`shaped`) and the tests cover what the MCP surface adds:
+ * the rutor follow the RPC, every excluded verifikat is named and labelled with
+ * the shape that matched, and the close check turns the untagged ones into an
+ * informational finding.
  */
 import { describe, it, expect, vi } from 'vitest'
 
@@ -24,21 +27,26 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck, computeVatReport } from '../server'
+import { computeVatCloseCheck, computeVatReport } from '@/lib/reports/vat-close-check'
+import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockEntry {
   id: string
   voucher_number: number
   source_type?: string
   entry_date?: string
+  /** The RPC classifies this entry as a momsredovisning by shape. */
+  shaped?: boolean
   /** [account, debit, credit] */
   lines: Array<[string, number, number]>
 }
 
 /**
  * Table-routed Supabase double, same shape as the one in
- * vat-close-check-completeness.test.ts. Filters are no-ops: whatever the
- * fixture holds is "the period".
+ * vat-close-check-completeness.test.ts. `.eq` and `.in` narrow the rows on
+ * columns the fixture rows carry (the tagged-entry read and the 2650/1650 line
+ * read depend on that); every other filter is a no-op, so whatever the fixture
+ * holds is "the period".
  */
 function mockSupabase(fixture: MockEntry[]) {
   const entries = fixture.map((e) => ({
@@ -59,16 +67,27 @@ function mockSupabase(fixture: MockEntry[]) {
       credit_amount,
     })),
   )
+  const shaped = fixture.filter((e) => e.shaped)
+  const tagged = fixture.filter((e) => e.source_type === 'vat_settlement')
 
-  const makeChain = (rows: unknown[]): Record<string, unknown> => {
+  const makeChain = (initial: Array<Record<string, unknown>>): Record<string, unknown> => {
+    let rows = initial
     const chain: Record<string, unknown> = {}
-    const settled = { data: rows, error: null, count: rows.length }
-    chain.range = () => settled
+    const settled = () => ({ data: rows, error: null, count: rows.length })
+    chain.range = () => settled()
     chain.single = async () => ({ data: rows[0] ?? null, error: null })
     chain.maybeSingle = async () => ({ data: null, error: null })
-    chain.then = (resolve: (v: unknown) => void) => resolve(settled)
+    chain.then = (resolve: (v: unknown) => void) => resolve(settled())
+    chain.eq = (column: string, value: unknown) => {
+      rows = rows.filter((r) => !(column in r) || r[column] === value)
+      return chain
+    }
+    chain.in = (column: string, values: unknown[]) => {
+      rows = rows.filter((r) => !(column in r) || values.includes(r[column]))
+      return chain
+    }
     for (const m of [
-      'order', 'lte', 'gte', 'neq', 'in', 'eq', 'is', 'select',
+      'order', 'lte', 'gte', 'neq', 'is', 'select',
       'limit', 'contains', 'filter', 'not', 'or',
     ]) {
       chain[m] = () => chain
@@ -85,10 +104,19 @@ function mockSupabase(fixture: MockEntry[]) {
       }
       return makeChain([])
     },
-    rpc: (fn: string) =>
-      fn === 'verifikat_without_documents'
-        ? Promise.resolve({ data: { ok: true, total_count: 0, verifikat: [] }, error: null })
-        : makeChain([]),
+    rpc: (fn: string, params?: { p_accounts?: string[] }) => {
+      if (fn === 'verifikat_without_documents') {
+        return Promise.resolve({ data: { ok: true, total_count: 0, verifikat: [] }, error: null })
+      }
+      if (fn === 'get_vat_declaration_totals') {
+        return Promise.resolve(vatTotalsRpcResult({
+          lines,
+          excludedEntryIds: [...shaped, ...tagged].map((e) => e.id),
+          settlementShapedEntries: entries.filter((e) => shaped.some((s) => s.id === e.id)),
+        }, params))
+      }
+      return makeChain([])
+    },
   } as never
 }
 
@@ -106,11 +134,11 @@ const PURCHASE: MockEntry = {
 // (a) Skatteverket's omprövning credited to the skattekonto, counter-entry
 //     parked on the output VAT account.
 const X: MockEntry = {
-  id: 'x', voucher_number: 10, lines: [['1630', 86217, 0], ['2610', 0, 86217]],
+  id: 'x', voucher_number: 10, shaped: true, lines: [['1630', 86217, 0], ['2610', 0, 86217]],
 }
 // (b) The same day, the counter-entry is reclassified to the VAT receivable.
 const Y: MockEntry = {
-  id: 'y', voucher_number: 11, lines: [['2610', 86217, 0], ['1650', 0, 86217]],
+  id: 'y', voucher_number: 11, shaped: true, lines: [['2610', 86217, 0], ['1650', 0, 86217]],
 }
 
 describe('gnubok_get_vat_report: momsredovisning entries are excluded AND named', () => {
@@ -144,34 +172,16 @@ describe('gnubok_get_vat_report: momsredovisning entries are excluded AND named'
     expect(result.excluded_settlement_entries.entries.map((e) => e.journal_entry_id)).toEqual(['x'])
   })
 
-  it('(d) keeps a bidrag received on the skattekonto: 1630 D / 3980 K', async () => {
-    const result = await computeVatReport(PERIOD, 'company-1', mockSupabase([
-      SALE,
-      { id: 'bidrag', voucher_number: 20, lines: [['1630', 25136, 0], ['3980', 0, 25136]] },
-    ]))
-    expect(result.excluded_settlement_entries.count).toBe(0)
-    expect(result.excluded_settlement_entries.entries).toEqual([])
-  })
-
-  it('(e) keeps a business verifikat paid from the skattekonto: 5410 D / 2641 D / 1630 K', async () => {
-    const result = await computeVatReport(PERIOD, 'company-1', mockSupabase([
-      SALE,
-      { id: 'biz', voucher_number: 21, lines: [['5410', 400, 0], ['2641', 100, 0], ['1630', 0, 500]] },
-    ]))
-    expect(result.rutor.ruta48).toBe(100)
-    expect(result.excluded_settlement_entries.count).toBe(0)
-  })
-
   it('(f) still excludes a classic settlement and one that carries a small cost line', async () => {
     const result = await computeVatReport(PERIOD, 'company-1', mockSupabase([
       SALE,
       PURCHASE,
       {
-        id: 'classic', voucher_number: 30, source_type: 'import',
+        id: 'classic', voucher_number: 30, source_type: 'import', shaped: true,
         lines: [['2611', 250, 0], ['2641', 0, 100], ['2650', 0, 150]],
       },
       {
-        id: 'with-cost', voucher_number: 31, source_type: 'import',
+        id: 'with-cost', voucher_number: 31, source_type: 'import', shaped: true,
         lines: [['2611', 250, 0], ['2641', 0, 100], ['2650', 0, 190], ['6050', 40, 0]],
       },
     ]))
@@ -203,6 +213,7 @@ describe('gnubok_get_vat_report: momsredovisning entries are excluded AND named'
       id: `s${i}`,
       voucher_number: 100 - i,
       entry_date: i === 0 ? '2026-01-02' : '2026-01-20',
+      shaped: true,
       lines: [['2611', 10, 0], ['1630', 0, 10]] as Array<[string, number, number]>,
     }))
     const result = await computeVatReport(PERIOD, 'company-1', mockSupabase(many))

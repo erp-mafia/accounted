@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getErrorMessage,
@@ -19,6 +21,7 @@ import {
   type ErrorLocale,
 } from '@/lib/errors/get-error-message'
 import type { RotRutPayoutVoucherCandidate } from '@/lib/invoices/rot-rut-link-voucher'
+import { roundOre } from '@/lib/money'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 
 interface RotRutLinkVoucherDialogProps {
@@ -43,6 +46,10 @@ export default function RotRutLinkVoucherDialog({
   const [candidates, setCandidates] = useState<RotRutPayoutVoucherCandidate[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [linking, setLinking] = useState(false)
+  // Why the candidates could not be read: said in place of the list, with
+  // "Försök igen" (bumps reloadKey).
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -52,29 +59,31 @@ export default function RotRutLinkVoucherDialog({
         if (!response.ok) {
           const description = await getResponseErrorMessage(response, 'invoice', locale)
           if (cancelled) return
-          toast({ title: t('link_voucher_load_failed'), description, variant: 'destructive' })
+          setLoadError(description)
           setCandidates([])
           return
         }
         const body = (await response.json()) as { data: RotRutPayoutVoucherCandidate[] }
-        if (!cancelled) setCandidates(body.data)
+        if (cancelled) return
+        setCandidates(body.data)
+        setLoadError(null)
       } catch (error) {
         if (cancelled) return
-        toast({
-          title: t('link_voucher_load_failed'),
-          description: getErrorMessage(error, { context: 'invoice', locale }),
-          variant: 'destructive',
-        })
+        setLoadError(getErrorMessage(error, { context: 'invoice', locale }))
         setCandidates([])
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [locale, request.id, t, toast])
+  }, [locale, request.id, reloadKey])
 
   const selected = candidates?.find((c) => c.journal_entry_id === selectedId) ?? null
-  const rounding = selected ? Math.round((selected.receivable_credit - request.expected) * 100) / 100 : 0
+  // What the voucher books as Skatteverket's share: 1513, and under
+  // kontantmetodens two steps the share's revenue and moms (share_credit).
+  const covered = (candidate: RotRutPayoutVoucherCandidate) =>
+    roundOre((candidate.receivable_credit ?? 0) + (candidate.share_credit ?? 0))
+  const rounding = selected ? roundOre(covered(selected) - request.expected) : 0
 
   async function link() {
     if (!selected || linking) return
@@ -108,7 +117,7 @@ export default function RotRutLinkVoucherDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="form">
         <DialogHeader>
           <DialogTitle>{t('link_voucher_title')}</DialogTitle>
           <DialogDescription>
@@ -117,10 +126,19 @@ export default function RotRutLinkVoucherDialog({
         </DialogHeader>
 
         {candidates === null ? (
-          <div className="space-y-2" role="status" aria-label={t('loading')}>
+          <LateReveal className="space-y-2" role="status" aria-label={t('loading')}>
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
-          </div>
+          </LateReveal>
+        ) : loadError !== null ? (
+          <LoadError
+            title={t('link_voucher_load_failed')}
+            description={loadError}
+            onRetry={() => {
+              setCandidates(null)
+              setReloadKey((key) => key + 1)
+            }}
+          />
         ) : candidates.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('link_voucher_empty')}</p>
         ) : (
@@ -135,8 +153,8 @@ export default function RotRutLinkVoucherDialog({
                   aria-checked={isSelected}
                   onClick={() => setSelectedId(candidate.journal_entry_id)}
                   className={cn(
-                    'flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors duration-150 hover:bg-secondary/60',
-                    isSelected && 'border-foreground',
+                    'flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150 hover:bg-secondary/60 bg-control shadow-raised',
+                    isSelected && 'ring-[1.5px] ring-strong',
                   )}
                 >
                   <span className="min-w-0">
@@ -148,7 +166,7 @@ export default function RotRutLinkVoucherDialog({
                       {candidate.description ?? '-'}
                     </span>
                   </span>
-                  <span className="shrink-0 tabular-nums">{formatCurrency(candidate.receivable_credit)}</span>
+                  <span className="shrink-0 tabular-nums">{formatCurrency(covered(candidate))}</span>
                 </button>
               )
             })}
@@ -156,16 +174,22 @@ export default function RotRutLinkVoucherDialog({
         )}
 
         {selected && (
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border p-3 text-sm">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg p-3 text-sm bg-control shadow-raised">
             <dt className="text-muted-foreground">{t('link_voucher_bank')}</dt>
             <dd className="text-right tabular-nums">{formatCurrency(selected.bank_amount)}</dd>
             <dt className="text-muted-foreground">{t('link_voucher_receivable')}</dt>
             <dd className="text-right tabular-nums">{formatCurrency(selected.receivable_credit)}</dd>
+            {selected.share_credit > 0 && (
+              <>
+                <dt className="text-muted-foreground">{t('link_voucher_share')}</dt>
+                <dd className="text-right tabular-nums">{formatCurrency(selected.share_credit)}</dd>
+              </>
+            )}
             <dt className="text-muted-foreground">{t('link_voucher_rounding')}</dt>
             <dd className="text-right tabular-nums">{formatCurrency(rounding)}</dd>
             <dd className="col-span-2 mt-2 text-xs text-muted-foreground">
               {t('link_voucher_no_new_entry', {
-                voucher: `${selected.voucher_series}${selected.voucher_number}`,
+                voucher: formatVoucher(selected),
               })}
             </dd>
           </dl>

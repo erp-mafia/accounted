@@ -117,6 +117,17 @@ describe('PUT /api/supplier-invoices/[id]', () => {
     expect(response.status).toBe(404)
   })
 
+  it('answers the 404 in the canonical envelope (crm#1848: the rule is shared with v1 and MCP)', async () => {
+    singleResults.push({ data: null, error: null })
+
+    const response = await putRequest({ notes: 'x' })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('SI_NOT_FOUND')
+    expect(updatePayloads).toHaveLength(0)
+  })
+
   it('returns 400 for a settled invoice', async () => {
     singleResults.push(existingRow({ status: 'paid' }))
 
@@ -125,6 +136,18 @@ describe('PUT /api/supplier-invoices/[id]', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_EDIT_INVALID_STATUS')
+    expect(updatePayloads).toHaveLength(0)
+  })
+
+  it('refuses a new number or date on an issued self-billing invoice (crm#1367)', async () => {
+    singleResults.push(existingRow({ is_self_billed: true, supplier_invoice_number: 'SF-007' }))
+
+    const response = await putRequest({ supplier_invoice_number: 'SF-099' })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { fields: string[] } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_SELF_BILL_IMMUTABLE')
+    expect(body.error.details.fields).toEqual(['supplier_invoice_number'])
     expect(updatePayloads).toHaveLength(0)
   })
 

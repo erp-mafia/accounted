@@ -286,6 +286,41 @@ describe('fetchDynamicVatAccounts (unconfigured revenue accounts, #3387)', () =>
   })
 })
 
+describe('fetchDynamicVatAccounts (moms accounts without a momsruta)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('lists the 2610-2649 accounts without an override, and nothing outside that range', async () => {
+    fetchAllRowsMock.mockResolvedValue([
+      // Numbers from charts before BAS 2026 that no fixed ruta reads.
+      row('2617', 'Utgående moms omvänd skattskyldighet varor och tjänster i Sverige, 25 %'),
+      row('2644', 'Ingående moms omvänd skattskyldighet'),
+      // A BAS 2026 account is listed too; vatAccountsWithoutRuta drops it.
+      row('2611', 'Utgående moms på försäljning inom Sverige, 25 %'),
+      // An override routes it to a ruta: not listed.
+      row('2637', 'Utgående moms omvänd skattskyldighet, 6 %', { vat_box: '32' }),
+      // Redovisningskonto, punktskatt and OSS: no ruta reads them by law.
+      row('2650', 'Redovisningskonto för moms'),
+      row('2651', 'Redovisningskonto för moms (OSS)'),
+      row('2660', 'Särskilda punktskatter'),
+      row('2670', 'Utgående moms på försäljning inom EU, OSS'),
+      // Not a moms account.
+      row('2440', 'Leverantörsskulder'),
+    ])
+
+    const result = await fetchDynamicVatAccounts(supabase, 'company-1')
+
+    expect([...result.unconfiguredVatAccounts]).toEqual([
+      ['2617', 'Utgående moms omvänd skattskyldighet varor och tjänster i Sverige, 25 %'],
+      ['2644', 'Ingående moms omvänd skattskyldighet'],
+      ['2611', 'Utgående moms på försäljning inom Sverige, 25 %'],
+    ])
+    expect(result.mappingByAccount.get('2637')).toEqual({ box: 'ruta32', side: 'credit' })
+    expect(result.accounts).toEqual(['2637'])
+  })
+})
+
 describe('fetchDynamicVatAccounts (26xx momsruta override)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

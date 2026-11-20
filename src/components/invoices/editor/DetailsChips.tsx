@@ -1,12 +1,12 @@
 'use client'
 
 import { useLocale, useTranslations } from 'next-intl'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { formatChipDate, type DetailsChip } from '@/lib/invoices/editor/details'
 
 const CHIP_CLASS =
-  'inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-background px-3 text-[12.5px] tabular-nums transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 pointer-coarse:min-h-10'
+  'inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-background px-3 text-xs tabular-nums transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 pointer-coarse:min-h-10'
 
 const ADD_CHIP_CLASS = cn(CHIP_CLASS, 'border-dashed bg-transparent text-muted-foreground')
 
@@ -69,7 +69,7 @@ export function DetailsChips({ chips, isQuote, today, onSelect }: DetailsChipsPr
             className={add ? ADD_CHIP_CLASS : CHIP_CLASS}
             onClick={() => onSelect(chip.kind)}
           >
-            {add && <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
+            {add && <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />}
             {label}
           </button>
         )

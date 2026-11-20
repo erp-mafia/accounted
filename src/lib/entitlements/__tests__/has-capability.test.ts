@@ -6,8 +6,24 @@ import {
   capabilityBlockedResponse,
   getCompanyIdsWithCapability,
   getCompanyEntitlements,
+  readCapabilityAxes,
 } from '../has-capability'
 import { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES } from '../keys'
+import { createRowsMockSupabase } from '@/tests/helpers'
+
+// A grants read failure must reach error tracking (accounted#115): only
+// `error` is swapped, every other level stays the real logger.
+const { logError } = vi.hoisted(() => ({ logError: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      error: logError,
+    }),
+  }
+})
 
 /**
  * Per-table mock: each table resolves to its own configured result, so a
@@ -149,6 +165,48 @@ describe('hasCapability', () => {
     expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.bank_sync)).toBe(true)
   })
 
+  it('excludeTrial: the seeded trial alone does not entitle, a paid grant beside it does', async () => {
+    const company = '11111111-1111-4111-8111-111111111111'
+    const trialOnly = makeSupabase({
+      capability_grants: { data: [{ capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial', team_id: null }] },
+      company_capability_config: { data: null },
+    })
+    expect(await hasCapability(trialOnly, company, CAPABILITY.bank_sync)).toBe(true)
+    expect(await hasCapability(trialOnly, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(false)
+
+    // A card entered during the trial: Stripe keeps the subscription
+    // 'trialing' and writes a stripe grant next to the trial row.
+    const carded = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial', team_id: null },
+          { capability_key: 'bank_sync', expires_at: null, source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: { data: null },
+    })
+    expect(await hasCapability(carded, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(true)
+
+    for (const source of ['manual', 'comp']) {
+      const agreement = makeSupabase({
+        capability_grants: { data: [{ capability_key: 'bank_sync', expires_at: null, source, team_id: null }] },
+        company_capability_config: { data: null },
+      })
+      expect(await hasCapability(agreement, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(true)
+    }
+
+    const expiredPaid = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial', team_id: null },
+          { capability_key: 'bank_sync', expires_at: iso(-60_000), source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: { data: null },
+    })
+    expect(await hasCapability(expiredPaid, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(false)
+  })
+
   it('fails closed when there is no grant', async () => {
     const supabase = makeSupabase({
       companies: { data: { team_id: null } },
@@ -188,7 +246,13 @@ describe('hasCapability', () => {
       companies: { data: { team_id: null } },
       capability_grants: { data: null, error: { message: 'boom' } },
     })
+    logError.mockClear()
     expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
+    expect(logError).toHaveBeenCalledWith('capability grants read failed; failing closed', expect.objectContaining({
+      companyId: '11111111-1111-4111-8111-111111111111',
+      capability: CAPABILITY.ai,
+      reason: 'boom',
+    }))
   })
 
   // A byrå client's user is a member of the company but not of the team, so
@@ -286,13 +350,42 @@ describe('getCompanyIdsWithCapability', () => {
     expect([...result].sort()).toEqual([directCompanyId, firmCompanyId].sort())
   })
 
+  it('excludeTrial leaves out companies covered by the seeded trial alone', async () => {
+    const supabase = makeSupabase({
+      companies: {
+        data: [
+          { id: directCompanyId, team_id: null },
+          { id: firmCompanyId, team_id: teamId },
+          { id: expiredCompanyId, team_id: null },
+        ],
+      },
+      capability_grants: {
+        data: [
+          { company_id: directCompanyId, team_id: null, expires_at: iso(60_000), source: 'trial' },
+          { company_id: directCompanyId, team_id: null, expires_at: null, source: 'stripe' },
+          { company_id: null, team_id: teamId, expires_at: null, source: 'manual' },
+          { company_id: expiredCompanyId, team_id: null, expires_at: iso(60_000), source: 'trial' },
+        ],
+      },
+      company_capability_config: { data: [] },
+    })
+    const ids = [directCompanyId, firmCompanyId, expiredCompanyId]
+
+    const all = await getCompanyIdsWithCapability(supabase, ids, CAPABILITY.bank_sync)
+    expect([...all].sort()).toEqual(ids.slice().sort())
+    const paid = await getCompanyIdsWithCapability(supabase, ids, CAPABILITY.bank_sync, { excludeTrial: true })
+    expect([...paid].sort()).toEqual([directCompanyId, firmCompanyId].sort())
+  })
+
   it('returns every valid requested company when the paywall is bypassed (self-hosted, local capability)', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
-    const supabase = makeSupabase({})
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase({ companies: { data: [{ id: directCompanyId, team_id: null }] } }, calls)
 
-    // A local capability: self-hosted is all-on without touching the DB. The
-    // connector capabilities (e.g. skatteverket) are covered in the
-    // self-hosted connector block below: they need a grant even here.
+    // A local capability: self-hosted is all-on, so only the live companies
+    // are read, never a grant or a config row. The connector capabilities
+    // (e.g. skatteverket) are covered in the self-hosted connector block
+    // below: they need a grant even here.
     const result = await getCompanyIdsWithCapability(
       supabase,
       [directCompanyId, directCompanyId, 'not-a-uuid'],
@@ -300,6 +393,7 @@ describe('getCompanyIdsWithCapability', () => {
     )
 
     expect([...result]).toEqual([directCompanyId])
+    expect([...new Set(calls.map((c) => c.table))]).toEqual(['companies'])
   })
 
   it('throws on a database error so a cron run cannot silently skip every payer', async () => {
@@ -311,6 +405,54 @@ describe('getCompanyIdsWithCapability', () => {
     await expect(
       getCompanyIdsWithCapability(supabase, [directCompanyId], CAPABILITY.bank_sync),
     ).rejects.toThrow('Failed to resolve capability company scopes: connection reset')
+  })
+
+  // accounted#198: the bank-sync, Open Payments and skattekonto crons take
+  // this list as their work list, so a deleted company still covered by a
+  // grant kept being synced. Answered from rows, so the filters decide.
+  describe('a deleted company (archived_at set)', () => {
+    const liveId = '66666666-6666-4666-8666-666666666666'
+    const liveClientId = '77777777-7777-4777-8777-777777777777'
+    const deletedOwnGrantId = '88888888-8888-4888-8888-888888888888'
+    const deletedTrialId = '99999999-9999-4999-8999-999999999999'
+    const deletedClientId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const byraTeamId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const archivedAt = iso(-86_400_000)
+    const allIds = [liveId, liveClientId, deletedOwnGrantId, deletedTrialId, deletedClientId]
+
+    function rows(): SupabaseClient {
+      return createRowsMockSupabase({
+        companies: [
+          { id: liveId, team_id: null, archived_at: null },
+          { id: liveClientId, team_id: byraTeamId, archived_at: null },
+          { id: deletedOwnGrantId, team_id: null, archived_at: archivedAt },
+          { id: deletedTrialId, team_id: null, archived_at: archivedAt },
+          { id: deletedClientId, team_id: byraTeamId, archived_at: archivedAt },
+        ],
+        capability_grants: [
+          { company_id: liveId, team_id: null, capability_key: 'bank_sync', expires_at: null, source: 'manual' },
+          { company_id: deletedOwnGrantId, team_id: null, capability_key: 'bank_sync', expires_at: null, source: 'manual' },
+          { company_id: deletedTrialId, team_id: null, capability_key: 'bank_sync', expires_at: iso(86_400_000), source: 'trial' },
+          // A byrå agreement never expires and covers every client on the team.
+          { company_id: null, team_id: byraTeamId, capability_key: 'bank_sync', expires_at: null, source: 'manual' },
+        ],
+        company_capability_config: [],
+      }).supabase as unknown as SupabaseClient
+    }
+
+    it('is entitled to nothing, whether its own grant, the trial or a byrå team grant covers it', async () => {
+      const result = await getCompanyIdsWithCapability(rows(), allIds, CAPABILITY.bank_sync)
+
+      expect([...result].sort()).toEqual([liveId, liveClientId].sort())
+    })
+
+    it('is entitled to nothing when the paywall is bypassed, too', async () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+
+      const result = await getCompanyIdsWithCapability(rows(), allIds, CAPABILITY.ai)
+
+      expect([...result].sort()).toEqual([liveId, liveClientId].sort())
+    })
   })
 })
 
@@ -338,8 +480,173 @@ describe('requireCapability', () => {
   })
 })
 
+describe('readCapabilityAxes', () => {
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+  const KEYS = [CAPABILITY.ai, CAPABILITY.bank_sync, CAPABILITY.skatteverket, CAPABILITY.collections]
+
+  it('keeps entitlement and enablement apart: an expired grant is not entitled, a disabled key is reported even when entitled', async () => {
+    const supabase = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'stripe', team_id: null },
+          { capability_key: 'ai', expires_at: null, source: 'comp', team_id: null },
+          { capability_key: 'skatteverket', expires_at: iso(-60_000), source: 'trial', team_id: null },
+        ],
+      },
+      company_capability_config: { data: [{ capability_key: 'ai' }] },
+    })
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS)
+    expect([...axes.entitled].sort()).toEqual(['ai', 'bank_sync'])
+    expect([...axes.disabled]).toEqual(['ai'])
+  })
+
+  it('reads every key in one grant RPC and one config query of those keys, on and off', async () => {
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase({ capability_grants: { data: [] }, company_capability_config: { data: [] } }, calls)
+    await readCapabilityAxes(supabase, COMPANY, [...KEYS, CAPABILITY.ai])
+    expect(grantRpcParams(calls)).toEqual([
+      { p_company_id: COMPANY, p_capability_keys: KEYS, p_connector_only: false },
+    ])
+    const config = calls.filter((c) => c.table === 'company_capability_config')
+    expect(config).toContainEqual({ table: 'company_capability_config', method: 'eq', args: ['company_id', COMPANY] })
+    expect(config).toContainEqual({ table: 'company_capability_config', method: 'select', args: ['capability_key, enabled'] })
+    expect(config).toContainEqual({ table: 'company_capability_config', method: 'in', args: ['capability_key', KEYS] })
+    expect(config.filter((c) => c.method === 'eq' && c.args[0] === 'enabled')).toEqual([])
+  })
+
+  it('counts a row as turned off unless it says enabled = true, and reports a config-only key turned on apart', async () => {
+    const supabase = makeSupabase({
+      capability_grants: { data: [] },
+      company_capability_config: {
+        data: [
+          { capability_key: 'ai', enabled: true },
+          { capability_key: 'bank_sync', enabled: false },
+          { capability_key: 'package:payroll', enabled: true },
+          { capability_key: 'package:bank', enabled: false },
+        ],
+      },
+    })
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS, { configKeys: ['package:payroll', 'package:bank'] })
+    expect([...axes.disabled]).toEqual(['bank_sync'])
+    expect([...axes.disabledConfigKeys]).toEqual(['package:bank'])
+    expect([...axes.enabledConfigKeys]).toEqual(['package:payroll'])
+  })
+
+  it('on a self-host holds local keys outright and asks only for connector grants of connector keys', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase({ capability_grants: { data: [] }, company_capability_config: { data: [] } }, calls)
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS)
+    expect([...axes.entitled]).toEqual(['ai'])
+    expect(grantRpcParams(calls)).toEqual([
+      { p_company_id: COMPANY, p_capability_keys: ['bank_sync', 'skatteverket', 'collections'], p_connector_only: true },
+    ])
+  })
+
+  it('throws on a failed grant or config read instead of reporting the key as not entitled', async () => {
+    await expect(
+      readCapabilityAxes(makeSupabase({ capability_grants: { data: null, error: { message: 'boom' } } }), COMPANY, KEYS),
+    ).rejects.toThrow(/capability grants: boom/)
+    await expect(
+      readCapabilityAxes(
+        makeSupabase({ capability_grants: { data: [] }, company_capability_config: { data: null, error: { message: 'down' } } }),
+        COMPANY,
+        KEYS,
+      ),
+    ).rejects.toThrow(/capability config: down/)
+  })
+
+  it('reads extra config-only keys in the same config query, never as grants, and reports them apart', async () => {
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        capability_grants: { data: [{ capability_key: 'ai', expires_at: null, source: 'stripe', team_id: null }] },
+        company_capability_config: { data: [{ capability_key: 'package:payroll' }, { capability_key: 'bank_sync' }] },
+      },
+      calls,
+    )
+    const axes = await readCapabilityAxes(supabase, COMPANY, KEYS, { configKeys: ['package:payroll', 'package:bank'] })
+    expect(grantRpcParams(calls)).toEqual([{ p_company_id: COMPANY, p_capability_keys: KEYS, p_connector_only: false }])
+    expect(calls).toContainEqual({
+      table: 'company_capability_config',
+      method: 'in',
+      args: ['capability_key', [...KEYS, 'package:payroll', 'package:bank']],
+    })
+    expect([...axes.disabled]).toEqual(['bank_sync'])
+    expect([...axes.disabledConfigKeys]).toEqual(['package:payroll'])
+  })
+
+  it('refuses a company id that is not a uuid and answers an empty key list without a query', async () => {
+    await expect(readCapabilityAxes(makeSupabase({}), 'not-a-uuid', KEYS)).rejects.toThrow(/uuid/)
+    const calls: RecordedCall[] = []
+    const axes = await readCapabilityAxes(makeRecordingSupabase({}, calls), COMPANY, [])
+    expect(axes.entitled.size + axes.disabled.size).toBe(0)
+    expect(calls).toEqual([])
+  })
+})
+
 describe('getCompanyEntitlements', () => {
   const companyId = '11111111-1111-4111-8111-111111111111'
+
+  it('keeps entitlement before enablement and every turned-off config key, for the capabilities resolver', async () => {
+    const supabase = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: null, source: 'stripe', team_id: null },
+          { capability_key: CAPABILITY.bank_sync, expires_at: null, source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: {
+        data: [
+          { capability_key: 'bank_sync', enabled: false },
+          { capability_key: 'package:assets', enabled: false },
+        ],
+      },
+      company_subscriptions: { data: { status: 'active' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.capabilities).toEqual([CAPABILITY.ai])
+    expect(result.entitledCapabilities).toEqual([CAPABILITY.ai, CAPABILITY.bank_sync])
+    expect(result.disabledConfigKeys).toEqual(['bank_sync', 'package:assets'])
+    expect(result.enabledConfigKeys).toEqual([])
+  })
+
+  it('reads every config row, subtracts only the ones turned off, and reports the ones turned on apart', async () => {
+    const supabase = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: null, source: 'stripe', team_id: null },
+          { capability_key: CAPABILITY.bank_sync, expires_at: null, source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: {
+        data: [
+          { capability_key: 'ai', enabled: true },
+          { capability_key: 'bank_sync', enabled: false },
+          { capability_key: 'package:payroll', enabled: true },
+        ],
+      },
+      company_subscriptions: { data: { status: 'active' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.capabilities).toEqual([CAPABILITY.ai])
+    expect(result.disabledConfigKeys).toEqual(['bank_sync'])
+    expect(result.enabledConfigKeys).toEqual(['ai', 'package:payroll'])
+  })
+
+  it('reports no turned-off config keys when nothing is entitled, and every paid key under the paywall bypass', async () => {
+    const none = await getCompanyEntitlements(
+      makeSupabase({ capability_grants: { data: [] }, company_capability_config: { data: [{ capability_key: 'package:payroll', enabled: false }] } }),
+      companyId,
+    )
+    expect(none.entitledCapabilities).toEqual([])
+    expect(none.disabledConfigKeys).toEqual(['package:payroll'])
+
+    vi.stubEnv('DISABLE_PAYWALL', 'true')
+    const bypassed = await getCompanyEntitlements(makeSupabase({}), companyId)
+    expect(bypassed.entitledCapabilities).toEqual([...PAID_CAPABILITIES])
+    expect(bypassed.disabledConfigKeys).toEqual([])
+  })
 
   it('reports the trial expiry while the trial is the only source of access', async () => {
     const expiry = iso(10 * 24 * 3600 * 1000)
@@ -997,10 +1304,11 @@ describe('self-hosted own-credentials seam', () => {
     expect(result.capabilities).toContain(CAPABILITY.bank_sync)
     expect(result.capabilities).not.toContain(CAPABILITY.skatteverket)
     expect(result.entitlementState).toBe('none') // no connector grant; touchpoint renders nothing
-    expect(grantRpcParams(calls).map((p) => p.p_capability_keys)).toEqual([[CAPABILITY.skatteverket]])
+    // collections has no own-credentials form: it always needs a connector grant.
+    expect(grantRpcParams(calls).map((p) => p.p_capability_keys)).toEqual([[CAPABILITY.skatteverket, CAPABILITY.collections]])
   })
 
-  it('getCompanyEntitlements skips the grants read entirely when every connector upstream has own credentials', async () => {
+  it('getCompanyEntitlements reads grants only for collections when every other connector upstream has own credentials', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
     stubNoOwnCredentials()
     vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
@@ -1018,8 +1326,10 @@ describe('self-hosted own-credentials seam', () => {
       COMPANY,
       { teamId: null },
     )
-    expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
-    expect(calls.filter((c) => c.table === 'capability_grants')).toHaveLength(0)
+    // Collections runs only behind Connect, so even an instance with every
+    // own credential needs the connector grant for it.
+    expect(result.capabilities).toEqual(PAID_CAPABILITIES.filter((k) => k !== CAPABILITY.collections))
+    expect(grantRpcParams(calls).map((p) => p.p_capability_keys)).toEqual([[CAPABILITY.collections]])
   })
 
   it('self-host block copy names the connector key, hosted copy keeps the subscription upsell', async () => {

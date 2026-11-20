@@ -4,14 +4,25 @@
  * Every route under `app/api/v1/` is wrapped with `withApiV1('operation.name', handler)`.
  * The wrapper provides a single audit-friendly shape for the entire v1 surface:
  *
- *   1. Generates `requestId` (`req_<uuid>`) and a child logger bound to it.
+ *   1. Generates `requestId` (`req_<uuid>`) and a child logger bound to it,
+ *      and opens the request's trace scope (lib/observability/trace-context.ts):
+ *      the trace of a valid `traceparent` header, else a new one, bound to the
+ *      logger and named on the response in `X-Trace-Id`.
  *   2. Extracts and validates the `Authorization: Bearer gnubok_sk_...` header
  *      via the existing `validateApiKey()` (atomic RPC, rate-limited).
  *   3. Resolves the required scope for the route from the v1 endpoint catalogue
  *      and returns INSUFFICIENT_SCOPE if the key lacks it. Public endpoints
  *      (`/health`, `/openapi.json`) skip the scope check but still validate
- *      the token when one is supplied.
- *   4. When the URL contains `companyId`, verifies the API key's user has
+ *      the token when one is supplied. Authenticated endpoints (`/api-key`)
+ *      require a valid token and skip the scope check.
+ *   4. Reads typed handles (`je_...`, `cmp_...`, ./handles.ts) in the path,
+ *      query and body as their UUIDs, refusing a wrong-type one with
+ *      HANDLE_TYPE_MISMATCH, and stamps `handle` on the responses of the
+ *      endpoints that declare their resource type. A typed path id that is
+ *      not a UUID once handles are read is refused with VALIDATION_ERROR,
+ *      never sent to Postgres (a malformed companyId before the company
+ *      gate, any other after it).
+ *   4b. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
  *      supported transparently: the URL is the source of truth. A key with a
  *      company allowlist (api_key_companies) is additionally refused outside
@@ -28,11 +39,18 @@
  *      `/webhook-deliveries/:id/retry`) runs the SAME gate through
  *      `ctx.checkCompanyAccess(companyId)` before it reads or writes anything
  *      of that company.
- *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
- *   6. Resolves `Idempotency-Key` (header) and replays cached responses. The
- *      dry-run flag is part of the cache identity and dry-run responses are
- *      never cached, so a simulation can never be replayed in place of the
- *      real write that follows it.
+ *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header)
+ *      and the stage flag (`?stage=true`), refusing stage on an endpoint that
+ *      does not stage (STAGE_NOT_SUPPORTED) and any value but true/false,
+ *      and the `Preview-Token` header, refusing it (VALIDATION_ERROR) where
+ *      the endpoint does not pin previews and when it is malformed.
+ *   6. Resolves `Idempotency-Key` (header) and claims it before the write
+ *      runs: a finished first call is replayed, the same key with another
+ *      body is 409 IDEMPOTENCY_KEY_REUSE, and a repeat while the first call
+ *      still runs is 409 IDEMPOTENCY_KEY_IN_PROGRESS with Retry-After. The
+ *      dry-run flag is part of the cache identity and a dry run is never
+ *      claimed or cached, so a simulation can never be replayed in place of
+ *      the real write that follows it. Neither is a 409 PREVIEW_STALE.
  *   7. Invokes the handler with a typed RouteContext.
  *   8. Stamps `X-Request-Id` and `Gnubok-Version` on the response, plus
  *      `Retry-After` on a 429.
@@ -48,14 +66,16 @@
  *   })
  */
 
+import '@/lib/server-baseline'
 import { type SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { truncateIp } from '@/lib/api/ip'
 import {
   type ApiKeyMode,
   type ApiKeyScope,
+  type ApiKeyServiceAccount,
+  credentialActor,
   createServiceClientNoCookies,
   extractBearerToken,
   hasScope,
@@ -63,19 +83,17 @@ import {
   scopeKind,
   validateApiKey,
 } from '@/lib/auth/api-keys'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { traceIdFromRequest } from '@/lib/observability/trace-context'
+import { runRequestInTrace } from '@/lib/observability/trace-context-node'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
-
-// Per CLAUDE.md: any route that emits events via eventBus must call
-// ensureInitialized() at module level to wire extension event handlers
-// (email, cloud-backup, push-notifications, etc.). Calling it here in the
-// wrapper guarantees every v1 route gets the init at import time: a single
-// source of truth so future routes can't forget. The function itself is
-// idempotent (guarded by a module-level boolean).
-ensureInitialized()
-import { resolveRequiredScope } from '@/lib/auth/scopes'
+import type { V1RequiredScope } from '@/lib/auth/scopes'
+import { INVOICER_API_SCOPES, INVOICER_ROLE, roleAllowsScope } from '@/lib/auth/invoicer-role'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
-import { getEndpointByConcretePath } from './registry'
+import { readLiveMembership, type LiveMembership } from '@/lib/company/company-access'
+import { readOnlyRefusal, type ReadOnlyReason } from '@/lib/auth/require-write'
+import { getEndpointByConcretePath, getEndpointForOperation } from './registry'
 import {
   assertReportQuery,
   IGNORED_QUERY_PARAMS_HEADER,
@@ -85,14 +103,24 @@ import {
 } from './report-period'
 import {
   checkIdempotencyKey,
+  claimIdempotencyKey,
   hashRequest,
+  type IdempotencyClaim,
+  type IdempotencyClaimTarget,
+  type IdempotencyHit,
+  IdempotencyKeyInProgressError,
   IdempotencyKeyReuseError,
-  storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
+import { startPackageForV1Endpoint } from '@/lib/modules/package-doors'
+import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { createLogger, type Logger } from '@/lib/logger'
+import { isPreviewToken, MALFORMED_PREVIEW_TOKEN_MESSAGE, PREVIEW_TOKEN_HEADER } from '@/lib/operations/preview-token'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
+import { handleDeclarationFor, malformedPathIds, normalizeV1Handles, withResponseHandles } from './handles'
 import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
+import { v1EndpointDoor, type OperationLike } from '@/lib/permissions/doors'
+import { agentShadow, type AgentShadowTarget, type TodayOutcome } from '@/lib/permissions/shadow'
 
 const IDEMPOTENCY_HEADER = 'Idempotency-Key'
 const DRY_RUN_HEADER = 'X-Dry-Run'
@@ -118,8 +146,19 @@ export interface ApiV1Context {
   userId: string
   /** API key id of the caller. Used for actor attribution on pending_operations / audit_log. */
   apiKeyId: string | undefined
-  /** API key human name. */
-  apiKeyName: string | undefined
+  /**
+   * The service account the calling key belongs to (lib/service-accounts), or
+   * null for a person's key. For a service account `userId` is its sponsor:
+   * RLS-shaped reads and the company gate run as the sponsor, and the key
+   * reaches only the account's company (`allowedCompanyIds`).
+   */
+  serviceAccount: ApiKeyServiceAccount | null
+  /**
+   * WHO this request acts as in every record it writes: the commit-actor
+   * scope the handler runs in (journal_entries.committed_actor_*, audit_log),
+   * and what a staged operation or a rejection records (credentialActor).
+   */
+  actor: CommitActor
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
   /**
@@ -131,6 +170,14 @@ export interface ApiV1Context {
    * company from a resource row goes through `checkCompanyAccess`.
    */
   allowedCompanyIds: string[] | null
+  /**
+   * Companies in the allowlist where the key may only read
+   * (api_key_companies.access = 'read'), or null when there are none. The
+   * wrapper already refuses a write there; exposed for the route that echoes
+   * the key's grant (`GET /api-key`), which reads it through
+   * `companyWriteRefusal`.
+   */
+  readOnlyCompanyIds: string[] | null
   /**
    * The company gate the wrapper runs for a URL `:companyId`, for a company
    * the handler resolved itself (from an operation or webhook delivery row):
@@ -148,8 +195,11 @@ export interface ApiV1Context {
   /**
    * Largest amount in SEK this key may commit with no human approving it, or
    * null for no ceiling (the default, and what every key predating the column
-   * has). Enforced at the two places an API key can post money: this surface's
-   * journal-entries.commit, and commitPendingOperation for the MCP path.
+   * has). It also rides on `actor`, which the handler runs under, so it binds
+   * every door without the door reading it: the engine refuses any verifikat
+   * above it, the attest service any attest above it
+   * (lib/bookkeeping/unattended-ceiling.ts), and an operation write is priced
+   * on its preview as its staged twin would be (lib/operations/v1.ts).
    */
   unattendedCommitLimit: number | null
   /**
@@ -179,6 +229,23 @@ export interface ApiV1Context {
   companyWritable: boolean
   /** Resolved dry-run flag. Routes that mutate state must honor this. */
   dryRun: boolean
+  /**
+   * `?stage=true`: stage the write for approval instead of committing it.
+   * Only ever true on an endpoint registered with `stageSupported` (an
+   * operation write with a staging binding, served by v1OperationHandler):
+   * the wrapper refuses the flag everywhere else, so a hand-written route
+   * can never commit a request its caller sent to be staged.
+   */
+  stage: boolean
+  /**
+   * The `Preview-Token` header (lib/operations/preview-token.ts), or null.
+   * Only ever set on an endpoint registered with `previewTokenSupported`
+   * (an operation write, served by v1OperationHandler) and only in the
+   * shape a dry run issues: the wrapper refuses it everywhere else, so a
+   * hand-written write can never commit while ignoring the pin its caller
+   * sent.
+   */
+  previewToken: string | null
   /** Resolved idempotency key, if supplied. */
   idempotencyKey: string | null
 }
@@ -190,8 +257,37 @@ interface ApiV1Options {
    * When true, idempotency is enforced: POST/PATCH/DELETE without an
    * `Idempotency-Key` header return 400. Default false; can be flipped on
    * per-route once the integrator audience is sophisticated enough.
+   * Every v1 write sets it or is listed, with a reason, in
+   * `__tests__/v1-write-idempotency.test.ts`.
    */
   requireIdempotencyKey?: boolean
+  /**
+   * The handler replays `Idempotency-Key` itself. The wrapper's cache is keyed
+   * by the URL `:companyId`, so a route without one (`POST /companies`) gets
+   * no replay from it; declaring this records that the handler covers it.
+   */
+  handlerIdempotency?: boolean
+  /**
+   * The handler writes nothing: a read that takes its input as a POST body
+   * (an operation of kind 'read'). Recorded for the idempotency contract
+   * test, which has nothing to ask of a read; changes no request handling.
+   */
+  readOnly?: boolean
+  /**
+   * The response carries a credential shown exactly once (a minted
+   * service-account key). Idempotency-Key is then neither claimed nor
+   * replayed, even when sent: a replay would need the plaintext stored in
+   * idempotency_keys for a day, while an API key is otherwise stored only as
+   * its SHA-256. A repeat mints a second key, visible and revocable. Such a
+   * write is listed in KEY_OPTIONAL_WRITES (v1-write-idempotency.test.ts).
+   */
+  secretResponse?: boolean
+  /**
+   * The operation behind the endpoint (v1OperationHandler passes it), whose
+   * door the permission shadow reads; a hand-written endpoint is classified
+   * by its own registration.
+   */
+  doorOperation?: OperationLike
 }
 
 // Next.js 16 always passes `{ params: Promise<...> }` as the second arg.
@@ -273,6 +369,21 @@ function isDryRun(request: Request, url: URL): boolean {
 }
 
 /**
+ * `?stage=true` (any case): stage instead of commit. Strict, unlike
+ * dry_run's "anything else commits": a misspelt staging flag must never
+ * commit what its caller meant to stage, so only true and false are read and
+ * anything else is refused (null). Absent is false.
+ */
+function parseStageFlag(url: URL): boolean | null {
+  const raw = url.searchParams.get('stage')
+  if (raw === null) return false
+  const value = raw.toLowerCase()
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return null
+}
+
+/**
  * Canonical idempotency hash for a v1 request.
  *
  * `dryRun` is part of the identity of the request. The documented commit flow
@@ -298,13 +409,111 @@ function buildRequestHash(input: {
   path: string
   body: unknown
   dryRun: boolean
+  /** ?stage=true: a staged write and a commit of the same body are different requests. */
+  stage?: boolean
 }): string {
   return hashRequest({
     method: input.method,
     path: input.path,
     body: input.body,
     ...(input.dryRun ? { dry_run: true } : {}),
+    ...(input.stage ? { stage: true } : {}),
   })
+}
+
+/**
+ * The wrapper's idempotency hash, for a handler that replays the key itself
+ * (handlerIdempotency: a route with no `:companyId`). `body` is the parsed
+ * JSON body, as the wrapper hashes it.
+ */
+export function v1RequestHash(request: Request, body: unknown, dryRun: boolean): string {
+  return buildRequestHash({ method: request.method, path: new URL(request.url).pathname, body, dryRun })
+}
+
+/**
+ * The answer to a replayed key, one shape for the wrapper and for the
+ * handlers that replay themselves: the cached body, 200 for a cached success
+ * (400 for a cached error) and `Idempotent-Replayed: true`.
+ */
+export function v1IdempotentReplay(hit: IdempotencyHit, requestId: string): Response {
+  const replay = NextResponse.json(hit.body, { status: hit.status === 'success' ? 200 : 400 })
+  replay.headers.set('Idempotent-Replayed', 'true')
+  return stampHeaders(replay, requestId)
+}
+
+/**
+ * The 409 for a key the request cannot run under, or null for any other
+ * error: IDEMPOTENCY_KEY_REUSE (the key belongs to another body) or
+ * IDEMPOTENCY_KEY_IN_PROGRESS (the same request is still running; retry it
+ * after Retry-After, when it replays the first answer).
+ */
+async function v1IdempotencyRefusal(
+  err: unknown,
+  key: string,
+  ctx: { requestId: string; log: Logger },
+): Promise<Response | null> {
+  if (err instanceof IdempotencyKeyReuseError) {
+    ctx.log.warn('idempotency key reused with different body')
+    return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', ctx.log, { requestId: ctx.requestId, details: { key } })
+  }
+  if (err instanceof IdempotencyKeyInProgressError) {
+    ctx.log.warn('idempotency key in progress')
+    return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_IN_PROGRESS', ctx.log, {
+      requestId: ctx.requestId,
+      details: { key },
+      retryAfterSeconds: err.retryAfterSeconds,
+    })
+  }
+  return null
+}
+
+/**
+ * Claim `Idempotency-Key` before a v1 write runs, one shape for the wrapper
+ * and the handlers that replay the key themselves (handlerIdempotency).
+ * Answers the claim to settle once the write has run (complete() with the
+ * response, or release() on a failure), or the response that ends the
+ * request: the replay of a finished first call, or a 409 (see
+ * v1IdempotencyRefusal).
+ */
+export async function claimV1IdempotencyKey(
+  supabase: SupabaseClient,
+  target: IdempotencyClaimTarget,
+  ctx: { requestId: string; log: Logger },
+): Promise<{ claim: IdempotencyClaim } | { response: Response }> {
+  try {
+    const outcome = await claimIdempotencyKey(supabase, target)
+    if ('claim' in outcome) return outcome
+    ctx.log.info('idempotent replay', { idempotencyKey: target.key })
+    return { response: v1IdempotentReplay(outcome.replay, ctx.requestId) }
+  } catch (err) {
+    const refusal = await v1IdempotencyRefusal(err, target.key, ctx)
+    if (refusal) return { response: refusal }
+    throw err
+  }
+}
+
+/**
+ * A multipart body as the hash sees it: each part by name, a text part by its
+ * value, a file part by its name, type, size and SHA-256. Never the raw text:
+ * a client picks a fresh random boundary for every request it encodes, so a
+ * resent upload never matched the first one byte for byte and the documented
+ * retry (same key, same request) answered IDEMPOTENCY_KEY_REUSE instead of
+ * replaying. Parts are ordered by name (a stable sort, so repeated names keep
+ * their order).
+ */
+async function multipartForHash(form: FormData): Promise<{ multipart: Array<[string, unknown]> }> {
+  const parts: Array<[string, unknown]> = []
+  for (const [name, value] of form.entries()) {
+    if (typeof value === 'string') {
+      parts.push([name, value])
+      continue
+    }
+    const digest = await crypto.subtle.digest('SHA-256', await value.arrayBuffer())
+    const sha256 = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+    parts.push([name, { file_name: value.name, type: value.type, size: value.size, sha256 }])
+  }
+  parts.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  return { multipart: parts }
 }
 
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
@@ -312,6 +521,14 @@ async function readBodyForHash(request: Request): Promise<{ body: unknown; clone
   // CLONE for the hash and pass the original through to the handler: that
   // way the handler's `await request.json()` still works regardless of how
   // the runtime implements stream teeing.
+  if (/^multipart\/form-data/i.test(request.headers.get('content-type') ?? '')) {
+    try {
+      return { body: await multipartForHash(await request.clone().formData()), cloned: request }
+    } catch {
+      // Not parseable as multipart: hash the raw text as before; the handler
+      // refuses the body itself.
+    }
+  }
   const reader = request.clone()
   const text = await reader.text()
   if (!text) return { body: null, cloned: request }
@@ -322,13 +539,34 @@ async function readBodyForHash(request: Request): Promise<{ body: unknown; clone
   }
 }
 
+/** Why the company gate refuses a write in a company the key reaches. */
+export type CompanyWriteRefusal = ReadOnlyReason
+
+/**
+ * The two read-only gates of the company gate, as one verdict: the role gate
+ * (a viewer membership) first, then the key's read-only access to the
+ * company. Null when neither applies and a write may proceed. The gate below
+ * and `GET /api-key` both read it, so the grant a key is shown and the one it
+ * is held to cannot drift apart.
+ */
+export function companyWriteRefusal(
+  membershipRole: string | undefined,
+  companyId: string,
+  readOnlyCompanyIds: string[] | null,
+): CompanyWriteRefusal | null {
+  if (membershipRole === READ_ONLY_ROLE) return 'ROLE_READ_ONLY'
+  const target = companyId.toLowerCase()
+  if (readOnlyCompanyIds?.some((id) => id.toLowerCase() === target)) return 'CONNECTION_READ_ONLY'
+  return null
+}
+
 interface CompanyGateInput {
   supabase: SupabaseClient
   userId: string
   allowedCompanyIds: string[] | null
   readOnlyCompanyIds: string[] | null
   method: string
-  requiredScope: ApiKeyScope
+  requiredScope: V1RequiredScope
   requestId: string
   log: Logger
   forensic: { ip: string | undefined; userAgent: string | undefined }
@@ -342,11 +580,15 @@ interface CompanyGateInput {
  * false on a refusal.
  */
 type CompanyGateResult =
-  | { denied: Response; writable: false }
-  | { denied: null; writable: boolean }
+  | { denied: Response; writable: false; role?: string; permissionRefusal?: string }
+  | { denied: null; writable: boolean; role?: string }
 
-function refuse(denied: Response): CompanyGateResult {
-  return { denied, writable: false }
+/**
+ * `facts` names a refusal of the role or the key's access (what the
+ * permission shadow compares decide() with) and the role it read.
+ */
+function refuse(denied: Response, facts?: { role?: string; permissionRefusal?: string }): CompanyGateResult {
+  return { denied, writable: false, ...facts }
 }
 
 /**
@@ -368,20 +610,16 @@ async function checkCompanyAccessGate(
 ): Promise<CompanyGateResult> {
   const { supabase, log, requestId, forensic, method, requiredScope } = input
 
-  const { data: membership, error: membershipErr } = await supabase
-    .from('company_members')
-    .select('company_id, role')
-    .eq('user_id', input.userId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-
-  if (membershipErr) {
+  let membership: LiveMembership | null
+  try {
+    membership = await readLiveMembership(supabase, input.userId, companyId)
+  } catch (membershipErr) {
     log.error('failed to resolve company membership', membershipErr as Error)
     return refuse(await v1ErrorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
   }
 
   if (!membership) {
-    log.warn('user is not a member of the requested company', { companyId, ...forensic })
+    log.warn('user has no live membership in the requested company', { companyId, ...forensic })
     // 404 (not 403) so we don't leak company existence to unauthorized callers.
     return refuse(await v1ErrorResponseFromCode('NOT_FOUND', log, {
       requestId,
@@ -405,13 +643,43 @@ async function checkCompanyAccessGate(
     }))
   }
 
-  const membershipRole = (membership as { role?: string }).role
-  const isWrite = !SAFE_METHODS.has(method) || scopeKind(requiredScope) === 'write'
-  const roleReadOnly = membershipRole === READ_ONLY_ROLE
-  const connectionReadOnly = Boolean(
-    input.readOnlyCompanyIds &&
-      input.readOnlyCompanyIds.some((id) => id.toLowerCase() === companyId.toLowerCase()),
-  )
+  const membershipRole = membership.role
+
+  // The invoicing-only role (lib/auth/invoicer-role.ts) reaches customers,
+  // invoices and articles, whatever scopes the key holds: this surface runs
+  // as the service role, so this is the only gate between an invoicer's key
+  // and the rest of the books. Read or write, a door outside those scopes is
+  // refused. After the membership and allowlist answers, so a non-member
+  // sees exactly what it saw before.
+  if (!roleAllowsScope(membershipRole, requiredScope)) {
+    log.warn('invoicer membership refused outside its scopes', {
+      companyId,
+      method,
+      requiredScope,
+      ...forensic,
+    })
+    return refuse(await v1ErrorResponseFromCode('FORBIDDEN', log, {
+      requestId,
+      status: 403,
+      reason: 'role_scope_limited',
+      details: {
+        code: 'ROLE_SCOPE_LIMITED',
+        companyId,
+        role: INVOICER_ROLE,
+        required_scope: requiredScope,
+        allowed_scopes: INVOICER_API_SCOPES,
+        message:
+          'This company membership has the Invoicing role: only customers, invoices (quotes and orders included) and articles are reachable. Ask a company owner or admin to change the role.',
+      },
+    }), { role: membershipRole, permissionRefusal: 'ROLE_SCOPE_LIMITED' })
+  }
+
+  const isWrite =
+    !SAFE_METHODS.has(method) ||
+    (requiredScope !== 'authenticated' && scopeKind(requiredScope) === 'write')
+  const writeRefusal = companyWriteRefusal(membershipRole, companyId, input.readOnlyCompanyIds)
+  const roleReadOnly = writeRefusal === 'ROLE_READ_ONLY'
+  const connectionReadOnly = writeRefusal === 'CONNECTION_READ_ONLY'
 
   // Read-only role gate. Cookie routes enforce the viewer role through
   // withRouteContext({ requireWrite }) and the DB enforces it through
@@ -433,19 +701,21 @@ async function checkCompanyAccessGate(
       requiredScope,
       ...forensic,
     })
+    const { details, ...messages } = readOnlyRefusal('ROLE_READ_ONLY')
     return refuse(await v1ErrorResponseFromCode('FORBIDDEN', log, {
       requestId,
       status: 403,
       reason: 'role_read_only',
+      ...messages,
       details: {
-        code: 'ROLE_READ_ONLY',
+        ...details,
         companyId,
         role: READ_ONLY_ROLE,
         required_scope: requiredScope,
         message:
           'This company membership is read-only (viewer): write requests are refused. Ask a company owner or admin to change the role.',
       },
-    }))
+    }), { role: membershipRole, permissionRefusal: 'ROLE_READ_ONLY' })
   }
 
   // Read-only connection gate: the key reaches this company but was
@@ -459,18 +729,20 @@ async function checkCompanyAccessGate(
       requiredScope,
       ...forensic,
     })
+    const { details, ...messages } = readOnlyRefusal('CONNECTION_READ_ONLY')
     return refuse(await v1ErrorResponseFromCode('FORBIDDEN', log, {
       requestId,
       status: 403,
       reason: 'connection_read_only',
+      ...messages,
       details: {
-        code: 'CONNECTION_READ_ONLY',
+        ...details,
         companyId,
         required_scope: requiredScope,
         message:
-          'This API key has read-only access to this company: write requests are refused. Give the key write access to the company under Settings > API & MCP.',
+          'This API key has read-only access to this company: write requests are refused. Give the key write access to the company under Agents > Connect an agent.',
       },
-    }))
+    }), { role: membershipRole, permissionRefusal: 'CONNECTION_READ_ONLY' })
   }
 
   // Multi-user seat gate: the API-key surface is a chokepoint like the
@@ -495,7 +767,7 @@ async function checkCompanyAccessGate(
     }
   }
 
-  return { denied: null, writable: !roleReadOnly && !connectionReadOnly }
+  return { denied: null, writable: !roleReadOnly && !connectionReadOnly, role: membershipRole }
 }
 
 /**
@@ -509,19 +781,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
   handler: V1Handler<P>,
   options: ApiV1Options = {},
 ): (request: Request, params: P) => Promise<Response> {
-  return async function wrapped(request: Request, params: P): Promise<Response> {
+  const handle = async function handle(request: Request, params: P, traceId: string): Promise<Response> {
     const requestId = generateRequestId()
     const start = Date.now()
-    const log = createLogger(`api/v1/${operation}`, { requestId, operation })
+    const log = createLogger(`api/v1/${operation}`, { requestId, traceId, operation })
 
     const url = new URL(request.url)
     const path = url.pathname
     const forensic = extractForensicContext(request, log)
+    // The Idempotency-Key claim this request holds until it is settled.
+    let heldClaim: IdempotencyClaim | null = null
+    // The permission shadow's report of the handler's outcome (lib/permissions/
+    // shadow.ts), armed right before the handler runs, fired once.
+    let settleShadow: ((status: number) => void) | null = null
 
     try {
-      // 1. Determine required scope before auth. Public endpoints can skip
-      //    authentication entirely.
-      const requiredScope = options.requireScope ?? resolveRequiredScope(request.method, path)
+      // 1. Determine required scope before auth, from the route's own
+      //    endpoint definition. Public endpoints skip authentication. A
+      //    handler whose route never registered fails closed: NOT_FOUND
+      //    for every caller, never an unscoped run.
+      const endpoint = getEndpointForOperation(operation, request.method)
+      const requiredScope =
+        options.requireScope ?? (endpoint === undefined ? null : endpoint.scope === null ? 'public' : endpoint.scope)
 
       if (requiredScope === null) {
         log.warn('endpoint not registered', { path, method: request.method, ...forensic })
@@ -545,9 +826,11 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           log,
           userId: 'anonymous',
           apiKeyId: undefined,
-          apiKeyName: undefined,
+          serviceAccount: null,
+          actor: { type: 'api_key', label: 'Anonymous' },
           scopes: [],
           allowedCompanyIds: null,
+          readOnlyCompanyIds: null,
           // A public endpoint has no company to open: fail closed.
           checkCompanyAccess: (_companyId, options) =>
             v1ErrorResponseFromCode('NOT_FOUND', log, {
@@ -559,6 +842,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           supabase: createAnonClient(),
           companyWritable: false,
           dryRun: false,
+          stage: false,
+          previewToken: null,
           idempotencyKey: null,
         }
         if (token) {
@@ -569,9 +854,11 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               log: log.child({ userId: auth.userId, apiKeyId: auth.apiKeyId, mode: auth.mode }),
               userId: auth.userId,
               apiKeyId: auth.apiKeyId,
-              apiKeyName: auth.apiKeyName,
+              serviceAccount: auth.serviceAccount,
+              actor: credentialActor(auth),
               scopes: auth.scopes,
               allowedCompanyIds: auth.allowedCompanyIds,
+              readOnlyCompanyIds: auth.readOnlyCompanyIds,
               unattendedCommitLimit: auth.unattendedCommitLimit,
               mode: auth.mode,
               supabase: createServiceClientNoCookies(),
@@ -595,11 +882,16 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       if ('error' in auth) {
         log.warn('api key validation failed', { status: auth.status, reason: auth.error, ...forensic })
         const rateLimited = auth.status === 429
-        const code = rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED'
+        // A coded refusal (a paused agent, a suspended service account)
+        // answers its own structured error; everything else is the bare 401
+        // or 429.
+        const code = auth.code ?? (rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED')
         return await v1ErrorResponseFromCode(code, log, {
           requestId,
           reason: auth.error,
-          ...(rateLimited ? { retryAfterSeconds: RATE_LIMIT_RETRY_AFTER_SECONDS } : {}),
+          ...(rateLimited
+            ? { retryAfterSeconds: auth.rateLimit?.retryAfterSeconds ?? RATE_LIMIT_RETRY_AFTER_SECONDS }
+            : {}),
         })
       }
 
@@ -607,10 +899,33 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         userId: auth.userId,
         apiKeyId: auth.apiKeyId,
         mode: auth.mode,
+        ...(auth.serviceAccount ? { serviceAccountId: auth.serviceAccount.id } : {}),
       })
 
-      // 4. Scope check.
-      if (!hasScope(auth.scopes, requiredScope)) {
+      const actor = credentialActor(auth)
+
+      // The permission shadow: decide() beside the role and access gates
+      // below, told what they did. It reads nothing and changes nothing. A
+      // missing scope is not compared: scope checks stay at the wire and
+      // decide() runs behind them.
+      const recordShadow = agentShadow({
+        door: `v1:${operation}`,
+        method: request.method,
+        userId: auth.userId,
+        key: {
+          kind: actor.type === 'service_account' ? 'service_account' : actor.type === 'mcp_oauth' ? 'oauth' : 'manual',
+          scopes: auth.scopes,
+          apiKeyId: auth.apiKeyId ?? null,
+          agentIdentityId: auth.agentIdentityId ?? null,
+        },
+        doorRule: () => (endpoint ? v1EndpointDoor(endpoint, options.doorOperation) : null),
+      })
+      const shadowAccess = (companyId: string): AgentShadowTarget['companyAccess'] =>
+        auth.readOnlyCompanyIds?.some((id) => id.toLowerCase() === companyId.toLowerCase()) ? 'read' : 'write'
+
+      // 4. Scope check. An 'authenticated' route needs the valid key above
+      //    and no particular scope.
+      if (requiredScope !== 'authenticated' && !hasScope(auth.scopes, requiredScope)) {
         userLog.warn('insufficient scope', {
           required: requiredScope,
           granted: auth.scopes,
@@ -632,12 +947,53 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // no `.companyId`) and the catch below turns it into a 500 for every
       // valid key. Dynamic routes still pass a real `Promise<{ companyId }>`.
       // Guard the await and default to an empty param set.
-      const resolvedParams = ((await params?.params) ?? {}) as Record<
+      const rawParams = ((await params?.params) ?? {}) as Record<
         string,
         string | string[] | undefined
       >
+
+      // 5a. Typed handles (./handles.ts): a je_/inv_/cmp_... handle in the
+      //     path, the query string or the body becomes its plain UUID
+      //     here, so the company gate, the idempotency hash and every
+      //     handler see the id they always saw. A handle of the wrong type
+      //     is refused before anything is read. A request without handles
+      //     passes on as the same Request with the same params.
+      const handles = await normalizeV1Handles(request, rawParams)
+      if (!handles.ok) {
+        userLog.warn('handle type mismatch', { fields: handles.mismatches.map((m) => m.field) })
+        return await v1ErrorResponseFromCode('HANDLE_TYPE_MISMATCH', userLog, {
+          requestId,
+          details: { issues: handles.mismatches },
+        })
+      }
+      const resolvedParams = handles.params
+      const handlerRequest = handles.request
+      const handlerParams = handles.changed
+        ? ({ ...params, params: Promise.resolve(resolvedParams) } as unknown as P)
+        : params
       const rawCompanyId = resolvedParams.companyId
       const companyId = typeof rawCompanyId === 'string' ? rawCompanyId : undefined
+
+      // 5a'. Typed path ids. A typed path parameter (companies/:companyId,
+      //      invoices/:id, ...) names a uuid column, so a value that is not a
+      //      UUID once handles are read (an OpenAPI placeholder such as
+      //      "string", a truncated id) names nothing. It used to reach
+      //      Postgres, which refused it with 22P02, and the company gate
+      //      answered that as a logged 500. It is the 400 VALIDATION_ERROR a
+      //      malformed id gets across this surface (and on MCP). A malformed
+      //      companyId is refused before the gate: there is no company to look
+      //      up. Any other after it, so a company the key cannot see still
+      //      answers 404, never 400. The details carry the flat { field,
+      //      message } the routes' own id checks answer and the issues list.
+      const malformedIds = malformedPathIds(endpoint?.path, resolvedParams)
+      const refuseMalformedIds = async () => {
+        userLog.warn('malformed path id', { fields: malformedIds.map((issue) => issue.field) })
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+          requestId,
+          details: { ...malformedIds[0], issues: malformedIds },
+        })
+      }
+      if (malformedIds.some((issue) => issue.field === 'companyId')) return await refuseMalformedIds()
 
       const supabase = createServiceClientNoCookies()
       let companyWritable = false
@@ -654,11 +1010,22 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         forensic,
       }
 
+      let shadowRole: string | undefined
       if (companyId !== undefined) {
         const gate = await checkCompanyAccessGate(companyGate, companyId, { companyId })
-        if (gate.denied) return gate.denied
+        if (gate.denied) {
+          if (gate.permissionRefusal) {
+            recordShadow(
+              { outcome: 'deny', code: gate.permissionRefusal, by: 'gate' },
+              { companyId, role: gate.role ?? null, companyAccess: shadowAccess(companyId) },
+            )
+          }
+          return gate.denied
+        }
         companyWritable = gate.writable
+        shadowRole = gate.role
       }
+      if (malformedIds.length > 0) return await refuseMalformedIds()
 
       // 5b. Report query gate. A report dropped any parameter it did not
       //     read, so ?dim_no=6&dim_code=P001 on the trial balance answered
@@ -689,6 +1056,49 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         }
       }
 
+      // 5c. Stage flag. `?stage=true` turns an operation write into a pending
+      //     operation for approval (v1OperationHandler). Refused on every
+      //     endpoint that does not stage, reads included: a hand-written
+      //     write would otherwise ignore the flag and commit what its caller
+      //     sent to be staged. After the access gates, so a company the key
+      //     cannot see still answers 404, never 400.
+      const stage = parseStageFlag(url)
+      if (stage === null) {
+        return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+          requestId,
+          details: { issues: [{ field: 'stage', message: 'stage must be true or false.' }] },
+        })
+      }
+      if (stage && !endpoint?.stageSupported) {
+        userLog.warn('stage requested on an endpoint that does not stage', { path, method: request.method })
+        return await v1ErrorResponseFromCode('STAGE_NOT_SUPPORTED', userLog, {
+          requestId,
+          details: { path, method: request.method },
+        })
+      }
+
+      // 5d. Preview-Token. A pin the endpoint cannot check is refused, never
+      //     ignored: a hand-written write would otherwise commit whatever the
+      //     current state produces while its caller believes the preview it
+      //     showed is pinned. An empty or malformed value is refused too, so
+      //     a templated header that lost its value never commits unpinned.
+      const previewTokenHeader = request.headers.get(PREVIEW_TOKEN_HEADER)
+      if (previewTokenHeader !== null) {
+        const refusal = !endpoint?.previewTokenSupported
+          ? 'This endpoint does not accept a preview token: only writes marked x-preview-token-supported in the OpenAPI spec do. Send the request without the header.'
+          : !isPreviewToken(previewTokenHeader.trim())
+            ? MALFORMED_PREVIEW_TOKEN_MESSAGE
+            : null
+        if (refusal) {
+          userLog.warn('preview token refused', { path, method: request.method })
+          return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+            requestId,
+            details: { issues: [{ field: PREVIEW_TOKEN_HEADER, message: refusal }] },
+          })
+        }
+      }
+      const previewToken = previewTokenHeader === null ? null : previewTokenHeader.trim()
+
       // 6. Idempotency. Mandatory for state-changing methods when the route
       //    opts in (or when an Idempotency-Key header is supplied).
       const idempotencyKey = request.headers.get(IDEMPOTENCY_HEADER)
@@ -716,6 +1126,25 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         forceDryRun = true
       }
 
+      // A live key that asks for a dry run on a write that cannot simulate is
+      // refused, never ignored, like stage=true and Preview-Token above: the
+      // handler never reads the flag, so the write ran for real while its
+      // caller believed it previewed (a year-end, a period lock, an approval).
+      // Three handlers refused it themselves (documents, inbox items, bank
+      // sync); the rule lives here so a new write cannot be left out. Same
+      // answer as theirs. An unregistered route keeps its own behaviour.
+      if (isMutation && endpoint && !endpoint.dryRunSupported && isDryRun(request, url)) {
+        userLog.warn('dry run requested on an endpoint that cannot simulate', { path, method: request.method })
+        return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+          requestId,
+          details: {
+            field: 'dry_run',
+            message:
+              'dry_run is not supported on this endpoint: nothing was run. Only writes marked x-dry-run-supported in the OpenAPI spec preview; send the request without dry_run to run it.',
+          },
+        })
+      }
+
       if (options.requireIdempotencyKey && isMutation && !idempotencyKey) {
         userLog.warn('missing idempotency key on mutating request')
         return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
@@ -726,37 +1155,63 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         })
       }
 
+      // 6b. Package start gate. A write that starts new work in a package
+      //     (lib/modules/package-doors.ts: a new invoice, salary run, expense
+      //     claim, till connection, ...) refuses while the company has that
+      //     package switched off or winding down; settling what is open never
+      //     does. Before the idempotency claim, so a refusal holds no key.
+      if (isMutation && companyId && endpoint) {
+        const startPackage = startPackageForV1Endpoint(endpoint)
+        if (startPackage) {
+          const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+          if (refusal) {
+            userLog.info('package start refused', { packageId: refusal.packageId })
+            return await v1ErrorResponseFromCode(refusal.code, userLog, {
+              requestId,
+              details: refusal.details,
+              messageSv: refusal.messageSv,
+              messageEn: refusal.messageEn,
+            })
+          }
+        }
+      }
+
       // 7. Dry-run resolution. Test keys force it on regardless of the flag.
       //    Resolved BEFORE the idempotency lookup because it feeds the request
       //    hash: a preview and its follow-up commit must never share a cache
       //    entry.
       const dryRun = isDryRun(request, url) || forceDryRun
 
-      // 8. If idempotency-key supplied, check for cached response.
-      let bodyForHash: unknown = null
-      let workingRequest = request
-      if (idempotencyKey && isMutation && companyId) {
-        const { body, cloned } = await readBodyForHash(request)
-        bodyForHash = body
+      // 8. If idempotency-key supplied, claim it before the write runs. A
+      //    dry run writes nothing, so it claims nothing: it only looks the
+      //    key up (a finished call with another body is still key reuse).
+      let workingRequest = handlerRequest
+      if (idempotencyKey && isMutation && companyId && !options.secretResponse) {
+        const { body, cloned } = await readBodyForHash(handlerRequest)
         workingRequest = cloned
-        const reqHash = buildRequestHash({ method: request.method, path, body, dryRun })
-        try {
-          const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
-          if (hit) {
-            userLog.info('idempotent replay', { idempotencyKey })
-            const replay = NextResponse.json(hit.body, { status: hit.status === 'success' ? 200 : 400 })
-            replay.headers.set('Idempotent-Replayed', 'true')
-            return stampHeaders(replay, requestId)
+        // The handle-free path and body: a retry that spells an id as a
+        // handle is the same request as one that sends the UUID.
+        const reqHash = buildRequestHash({ method: request.method, path: handles.path, body, dryRun, stage })
+        if (dryRun) {
+          try {
+            const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
+            if (hit) {
+              userLog.info('idempotent replay', { idempotencyKey })
+              return v1IdempotentReplay(hit, requestId)
+            }
+          } catch (err) {
+            const refusal = await v1IdempotencyRefusal(err, idempotencyKey, { requestId, log: userLog })
+            if (refusal) return refusal
+            throw err
           }
-        } catch (err) {
-          if (err instanceof IdempotencyKeyReuseError) {
-            userLog.warn('idempotency key reused with different body')
-            return await v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', userLog, {
-              requestId,
-              details: { key: idempotencyKey },
-            })
-          }
-          throw err
+        } else {
+          const claimed = await claimV1IdempotencyKey(
+            supabase,
+            { userId: auth.userId, companyId, scope: 'api_route', key: idempotencyKey, requestHash: reqHash },
+            { requestId, log: userLog },
+          )
+          if ('response' in claimed) return claimed.response
+          heldClaim = claimed.claim
         }
       }
 
@@ -765,9 +1220,11 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         log: userLog.child({ companyId }),
         userId: auth.userId,
         apiKeyId: auth.apiKeyId,
-        apiKeyName: auth.apiKeyName,
+        serviceAccount: auth.serviceAccount,
+        actor,
         scopes: auth.scopes,
         allowedCompanyIds: auth.allowedCompanyIds,
+        readOnlyCompanyIds: auth.readOnlyCompanyIds,
         // A resource door gets the refusal only: ctx.companyWritable stays
         // the URL `:companyId` verdict (false on a company-less route).
         checkCompanyAccess: async (resolvedCompanyId, options) =>
@@ -779,6 +1236,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         companyId,
         companyWritable,
         dryRun,
+        stage,
+        previewToken,
         idempotencyKey,
       }
 
@@ -799,11 +1258,41 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // "who did this, and when" is a legal question rather than a nicety.
       //
       // `api_key` is the honest label for this surface: a gnubok_sk_ bearer
-      // token. The OAuth/MCP surfaces set their own actor and are unaffected.
-      const response = await runWithActor(
-        { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' },
-        () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,params)),
+      // token. A service account's key acts as `service_account`, labelled
+      // with the account's name (its sponsor is the user the rows carry). The
+      // OAuth/MCP surfaces set their own actor and are unaffected.
+      //
+      // The same scope carries the key's unattended ceiling, for the same
+      // reason: every door that posts (categorize, batch-categorize, mark-paid,
+      // a storno, ...) is bound by it in the engine, including a door added
+      // later that never heard of it (#125).
+      if (companyId !== undefined) {
+        const shadowCompanyId = companyId
+        settleShadow = (status) => {
+          const today: TodayOutcome =
+            status === 403
+              ? { outcome: 'deny', code: 'HANDLER_FORBIDDEN', by: 'handler' }
+              : { outcome: stage ? 'stage' : 'allow', dryRun }
+          recordShadow(today, {
+            companyId: shadowCompanyId,
+            role: shadowRole ?? null,
+            companyAccess: shadowAccess(shadowCompanyId),
+          })
+        }
+      }
+      let response: Response = await runWithActor(
+        ctx.actor,
+        () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,handlerParams)),
       )
+
+      // 9b. Typed handles on the way out: the endpoints in V1_HANDLE_COVERAGE
+      //     gain `handle` next to their resource's id (./handles.ts). Before
+      //     the claim settles, so a replay answers the same body. A dry run
+      //     or a staging answers a preview, not the resource: left alone.
+      const handleDecl = handleDeclarationFor(operation)
+      if (handleDecl && !dryRun && !stage) {
+        response = await withResponseHandles(response, handleDecl)
+      }
 
       // Signal test mode on every test-key response so integrators can see the
       // request was simulation-only without inspecting the body.
@@ -818,48 +1307,37 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         response.headers.set(IGNORED_QUERY_PARAMS_HEADER, ignoredQueryParams.join(', '))
       }
 
-      // 10. Persist idempotency cache (best-effort).
+      // 10. Settle the claim: store the response (best-effort), or give the
+      //     key back so a retry runs again.
       //
-      //     Never cache a dry-run: the response describes a write that did not
-      //     happen, and caching it under a real Idempotency-Key is exactly how
-      //     the documented "preview, then commit with the same key" flow used
-      //     to lose the commit. A simulation has nothing worth replaying.
+      //     A dry run never holds a claim: its response describes a write that
+      //     did not happen, and caching it under a real Idempotency-Key is
+      //     exactly how the documented "preview, then commit with the same
+      //     key" flow used to lose the commit.
       //
-      //     Never cache a 429 either: a throttle says "not now", and replaying
-      //     it under the same key would turn a 15-minute cooldown into the
-      //     cache's 24-hour TTL (the documented retry is "same request after
-      //     Retry-After", which is exactly a same-key retry).
-      if (
-        idempotencyKey &&
-        isMutation &&
-        companyId &&
-        !dryRun &&
-        response.status < 500 &&
-        response.status !== 429
-      ) {
-        try {
+      //     A 5xx is released: a failure is never cached. So is a 429: a
+      //     throttle says "not now", and replaying it under the same key would
+      //     turn a 15-minute cooldown into the cache's 24-hour TTL (the
+      //     documented retry is "same request after Retry-After", which is
+      //     exactly a same-key retry).
+      //
+      //     So is a 409 PREVIEW_STALE: it says "not in this state", wrote
+      //     nothing, and its documented retry is the same request and key
+      //     with the fresh preview token, which a cached refusal would
+      //     answer forever (the token is a header, not part of the hash).
+      if (heldClaim) {
+        const claim = heldClaim
+        heldClaim = null
+        if (response.status < 500 && response.status !== 429 && !(await isPreviewStaleResponse(response))) {
           const body = await response.clone().json().catch(() => ({}))
-          const reqHash = buildRequestHash({
-            method: request.method,
-            path,
-            body: bodyForHash,
-            dryRun,
-          })
-          const status: 'success' | 'error' = response.status >= 400 ? 'error' : 'success'
-          await storeIdempotencyResponse(
-            supabase,
-            auth.userId,
-            companyId,
-            idempotencyKey,
-            reqHash,
-            status,
-            body as Record<string, unknown>,
-            'api_route',
-          )
-        } catch (err) {
-          userLog.warn('failed to persist idempotency response', err as Error)
+          await claim.complete(response.status >= 400 ? 'error' : 'success', body as Record<string, unknown>)
+        } else {
+          await claim.release()
         }
       }
+
+      settleShadow?.(response.status)
+      settleShadow = null
 
       ctx.log.info('op completed', {
         durationMs: Date.now() - start,
@@ -869,17 +1347,61 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
       return stampHeaders(response, requestId)
     } catch (err) {
+      // A thrown failure wrote nothing to replay: give the key back.
+      if (heldClaim) await heldClaim.release()
       // Resolve the envelope first so the log level can follow the mapped
-      // status — thrown 4xx domain errors are expected outcomes (warn), only
+      // status - thrown 4xx domain errors are expected outcomes (warn), only
       // 5xx are runtime errors. v1ErrorResponse logs the error itself at the
       // same threshold.
       const response = await v1ErrorResponse(err, log, { requestId })
+      settleShadow?.(response.status)
       const meta = { durationMs: Date.now() - start, status: response.status }
       if (response.status < 500) log.warn('op failed', err as Error, meta)
       else log.error('op failed', err as Error, meta)
       return response
     }
   }
+  const wrapped = async function wrapped(request: Request, params: P): Promise<Response> {
+    const traceId = traceIdFromRequest(request)
+    return runRequestInTrace(traceId, () => handle(request, params, traceId))
+  }
+  return Object.assign(wrapped, {
+    [V1_HANDLER_CONTRACT]: {
+      operation,
+      requireIdempotencyKey: options.requireIdempotencyKey === true,
+      handlerIdempotency: options.handlerIdempotency === true,
+      readOnly: options.readOnly === true,
+    } satisfies V1HandlerContract,
+  })
+}
+
+const V1_HANDLER_CONTRACT = Symbol.for('accounted.api.v1.handler-contract')
+
+/**
+ * What a withApiV1 handler was declared with, as far as retries go. Read by
+ * the idempotency contract test (`__tests__/v1-write-idempotency.test.ts`),
+ * which fails a v1 write that neither requires `Idempotency-Key` nor is
+ * listed there with a reason. Undefined for anything withApiV1 did not wrap.
+ */
+export interface V1HandlerContract {
+  operation: string
+  requireIdempotencyKey: boolean
+  /** The handler replays the key itself (a route with no `:companyId`). */
+  handlerIdempotency: boolean
+  /** The handler writes nothing (a read taking a POST body). */
+  readOnly: boolean
+}
+
+export function v1HandlerContract(handler: unknown): V1HandlerContract | undefined {
+  if (typeof handler !== 'function') return undefined
+  return (handler as unknown as Record<symbol, V1HandlerContract | undefined>)[V1_HANDLER_CONTRACT]
+}
+
+/** A 409 PREVIEW_STALE (lib/operations/preview-token.ts): it wrote nothing and is never cached. */
+async function isPreviewStaleResponse(response: Response): Promise<boolean> {
+  if (response.status !== 409) return false
+  const body = (await response.clone().json().catch(() => null)) as { error?: { code?: unknown } } | null
+  return body?.error?.code === 'PREVIEW_STALE'
 }
 
 function stampHeaders(response: Response, requestId: string): Response {

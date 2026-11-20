@@ -11,8 +11,8 @@
  * mirrors the employee convention, where the list masks and the master GET
  * returns all 12 digits (app/api/v1/companies/[companyId]/employees/[id]).
  *
- * Gated on the write role even though it only reads. .compliance/ropa.yaml
- * listed `no_full_value_read_endpoint` among the safeguards for
+ * Gated on the write role even though it only reads. The record of processing
+ * activities listed `no_full_value_read_endpoint` among the safeguards for
  * customers.personal_number; this endpoint retires that measure, so it keeps
  * the exposure as narrow as the purpose allows. The person who needs to verify
  * a stored personnummer is the one who typed it and can correct it, which is

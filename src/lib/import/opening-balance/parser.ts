@@ -1,38 +1,26 @@
-import * as XLSX from 'xlsx'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { formatCurrency } from '@/lib/utils'
 import { detectColumns } from './column-detector'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { detectFileFormat } from '../bank-file/parser'
 import { decodeFileContent } from '../shared/encoding'
-import { readWorkbookFromBuffer } from '../shared/workbook-reader'
+import { readBestSheet } from '../shared/workbook-reader'
 import type {
   DetectedColumns,
   ParsedOpeningBalanceRow,
   OpeningBalanceParseResult,
 } from './types'
+import { parseSwedishAmount } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 
 /**
- * Parse a numeric value from a cell, handling Swedish decimal commas,
- * thousand separators, and various string formats.
+ * A cell's amount, through the importers' one parser (parseSwedishAmount in
+ * lib/money.ts). An empty or unreadable cell reads as 0, as this sheet parser
+ * always has: an opening balance row without an amount is a zero row.
  */
 export function parseAmount(value: unknown): number {
-  if (value === null || value === undefined || value === '') return 0
-  if (typeof value === 'number') return Math.round(value * 100) / 100
-
-  const str = String(value).trim()
-  if (str === '' || str === '-') return 0
-
-  // Remove thousand separators (spaces and dots before comma)
-  // Then replace comma with dot for parsing
-  const cleaned = str
-    .replace(/\s/g, '')       // Remove spaces (thousand separator)
-    .replace(/\.(?=\d{3})/g, '') // Remove dots used as thousand separators
-    .replace(',', '.')        // Swedish decimal comma → dot
-
-  const num = parseFloat(cleaned)
-  if (isNaN(num)) return 0
-  return Math.round(num * 100) / 100
+  if (typeof value !== 'string' && typeof value !== 'number') return 0
+  return parseSwedishAmount(value) ?? 0
 }
 
 /**
@@ -62,32 +50,13 @@ function detectBankStatementFormat(buffer: ArrayBuffer, filename: string): strin
  * @param filename - Original filename (used for format detection)
  * @param columnOverrides - Optional manual column mapping (from column mapping step)
  */
-export function parseOpeningBalanceFile(
+export async function parseOpeningBalanceFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedColumns,
-): OpeningBalanceParseResult {
-  const workbook = readWorkbookFromBuffer(buffer, filename)
-
-  // Pick the sheet with the most rows (heuristic for multi-sheet workbooks)
-  let bestSheet = workbook.SheetNames[0]
-  let bestRowCount = 0
-  for (const name of workbook.SheetNames) {
-    const sheet = workbook.Sheets[name]
-    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
-    const rowCount = range.e.r - range.s.r + 1
-    if (rowCount > bestRowCount) {
-      bestRowCount = rowCount
-      bestSheet = name
-    }
-  }
-
-  const sheet = workbook.Sheets[bestSheet]
-  const rawData: string[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: false,
-  })
+): Promise<OpeningBalanceParseResult> {
+  // The sheet with the most rows (heuristic for multi-sheet workbooks), as rows.
+  const { sheetName: bestSheet, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     return {
@@ -243,15 +212,8 @@ export function parseOpeningBalanceFile(
   const mergedRows = Array.from(mergedMap.values())
 
   // Compute totals
-  let totalDebit = 0
-  let totalCredit = 0
-  for (const row of mergedRows) {
-    totalDebit = Math.round((totalDebit + row.debit_amount) * 100) / 100
-    totalCredit = Math.round((totalCredit + row.credit_amount) * 100) / 100
-  }
-
-  const diff = Math.round((totalDebit - totalCredit) * 100) / 100
-  const isBalanced = Math.abs(diff) < 0.01
+  const { totalDebit, totalCredit, difference: diff } = lineBalance(mergedRows)
+  const isBalanced = diff === 0
 
   if (!isBalanced) {
     warnings.push(`Debet (${totalDebit.toFixed(2)}) och kredit (${totalCredit.toFixed(2)}) balanserar inte: differens: ${diff.toFixed(2)} SEK`)

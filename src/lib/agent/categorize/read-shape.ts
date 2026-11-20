@@ -1,4 +1,6 @@
 import type { AccountCandidate } from './select-account'
+import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import { underlagKeyFor } from '@/lib/transactions/underlag-key'
 import type { Transaction, TransactionCategory, VatTreatment } from '@/types'
 
 /**
@@ -13,6 +15,13 @@ export interface AssistantRead {
   category: TransactionCategory | null
   vat_treatment: VatTreatment | null
   reverse_charge: boolean
+  /**
+   * Which reverse-charge purchase the read says it is (the basis box, ruta
+   * 21 or 22). Null on any other treatment, on a reverse charge taken from
+   * a candidate's history, and on reads stored before it was kept: those
+   * book as an EU service, the engine's default.
+   */
+  reverse_charge_kind?: ReverseChargeKind | null
   confidence: number
   model_confidence: string | null
   agreement: number | null
@@ -20,11 +29,9 @@ export interface AssistantRead {
   reasoning: string
   candidates: AccountCandidate[]
   model: string | null
+  /** Which prompt produced the read (select-account's promptSha256); null on reads stored before it was kept. */
+  prompt_sha256?: string | null
   updated_at?: string
-}
-
-export function underlagKeyFor(tx: Pick<Transaction, 'document_id'>): string | null {
-  return tx.document_id ?? null
 }
 
 /** A read is fresh while the transaction still has the document it was read with. */

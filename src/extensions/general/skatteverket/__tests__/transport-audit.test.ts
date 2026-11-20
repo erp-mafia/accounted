@@ -1,6 +1,6 @@
 /**
  * The Skatteverket transport writes exactly one skatteverket_api_audit_log row
- * per outbound call (founder decision D4: every call, reads included), and no
+ * per outbound call (product decision D4: every call, reads included), and no
  * route writes one on top. The routes run here against the REAL transport and
  * AGI client; only fetch, the token store and the audit insert are stubbed,
  * so "one row per call" is counted, not assumed.
@@ -20,6 +20,10 @@ vi.mock('@/lib/logger', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/logger')>()
   return { ...actual, createLogger: (module: string) => actual.createTestLogger(module, records) }
 })
+
+// The completeness verdict runs over the declaration above; its per-verifikat
+// ledger scan is stubbed.
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
 
 vi.mock('../lib/audit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/audit')>()
@@ -51,9 +55,13 @@ const PERIOD = '202606'
 
 vi.mock('../lib/declaration-prep', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/declaration-prep')>()
+  const { COMPLETE_VAT_DECLARATION } = await import('./vat-declaration-fixture')
   return {
     ...actual,
+    // The company's own redovisare, which the query-string routes now read.
+    resolveRedovisare: vi.fn(async () => REDOVISARE),
     buildMomsuppgift: vi.fn(async () => ({
+      declaration: COMPLETE_VAT_DECLARATION,
       redovisare: REDOVISARE,
       redovisningsperiod: PERIOD,
       momsuppgift: { momsUtgHog: 2500 },
@@ -71,9 +79,11 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
 
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { skatteverketExtension } from '../index'
-import { skvRequestWithAuth, SkatteverketAuthError } from '../lib/api-client'
+import { skvRequestWithAuth, SkatteverketAuthError, SkatteverketUnavailableError, skvUnreachable } from '../lib/api-client'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { getSaldo, getTransaktioner } from '../lib/skattekonto-client'
 import { listOmbudGrants } from '../lib/ombud-client'
+import { runValidateAgiUppgift } from '../lib/core-actions'
 
 /** Upstream answers, consumed in call order. */
 let answers: Array<Response | Error> = []
@@ -177,6 +187,7 @@ describe('transport: one audit row per outbound call', () => {
       expect.objectContaining({
         actor: { companyId: 'company-1', userId: 'user-1' },
         endpoint: 'probe',
+        authMode: 'user',
         agRegistreradId: REDOVISARE,
         redovisningsperiod: PERIOD,
         outcome: 'ok',
@@ -236,6 +247,48 @@ describe('transport: one audit row per outbound call', () => {
     ])
   })
 
+  it('names a fetch fault waiting does not cure: in the thrown error, the row and an error log line', async () => {
+    const platform = Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') })
+    answers = [platform]
+    const thrown = await skvRequestWithAuth(USER, 'GET', '/x', TARGET).catch((e: unknown) => e)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).not.toBeInstanceOf(TypeError)
+    expect((thrown as Error).message).toContain('(unexpected redirect)')
+    expect((thrown as Error).cause).toBe(platform)
+    expect(skvUnreachable(thrown)).toBe(false)
+    // The agent reads a fault, not a retryable "fetch failed".
+    expect(getStructuredError(thrown).retryable).toBe(false)
+    expect(rows()).toEqual([
+      expect.objectContaining({ outcome: 'internal_error', errorMessage: expect.stringContaining('(unexpected redirect)') }),
+    ])
+    expect(records).toContainEqual(
+      expect.objectContaining({ level: 'error', endpoint: 'probe', cause: 'unexpected redirect' }),
+    )
+  })
+
+  it.each<[string, () => Error]>([
+    ['the time limit ran out', () => new DOMException('The operation was aborted due to timeout', 'TimeoutError')],
+    [
+      'the connection was refused',
+      () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }),
+    ],
+  ])('no answer (%s): one SkatteverketUnavailableError, the row keeps the platform words, no error log line', async (_label, make) => {
+    const platform = make()
+    answers = [platform]
+    const thrown = await skvRequestWithAuth(USER, 'GET', '/x', TARGET).catch((e: unknown) => e)
+
+    expect(thrown).toBeInstanceOf(SkatteverketUnavailableError)
+    expect((thrown as Error).cause).toBe(platform)
+    expect(skvUnreachable(thrown)).toBe(true)
+    // A door with no branch of its own answers the registry entry.
+    expect(getStructuredError(thrown)).toMatchObject({ code: 'SKATTEVERKET_UNAVAILABLE', retryable: true })
+    expect(rows()).toEqual([
+      expect.objectContaining({ outcome: 'internal_error', responseStatus: null, errorMessage: platform.message }),
+    ])
+    expect(records.filter((r) => r.level === 'error')).toEqual([])
+  })
+
   it('writes no row when nothing left: no token, or the kill switch', async () => {
     getTokensMock.mockResolvedValueOnce(null)
     await expect(skvRequestWithAuth(USER, 'GET', '/x', TARGET)).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
@@ -249,7 +302,20 @@ describe('transport: one audit row per outbound call', () => {
     answers = [json(200, {})]
     await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', { endpoint: 'kvittenser', companyId: 'company-1', userId: null })
     expect(rows()).toEqual([
-      expect.objectContaining({ actor: { companyId: 'company-1', userId: null }, endpoint: 'kvittenser', outcome: 'ok' }),
+      expect.objectContaining({ actor: { companyId: 'company-1', userId: null }, endpoint: 'kvittenser', authMode: 'system', outcome: 'ok' }),
+    ])
+  })
+
+  it("names the system credentials even when a person asked: the row's user is no proof of whose session ran it", async () => {
+    answers = [json(200, {})]
+    await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x', {
+      endpoint: 'skattekonto/saldo',
+      companyId: 'company-1',
+      userId: 'user-1',
+      agRegistreradId: REDOVISARE,
+    })
+    expect(rows()).toEqual([
+      expect.objectContaining({ actor: { companyId: 'company-1', userId: 'user-1' }, authMode: 'system', outcome: 'ok' }),
     ])
   })
 
@@ -330,46 +396,9 @@ describe('routes: exactly one row per outbound call, with its label', () => {
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
     },
     {
-      name: 'AGI submit',
-      method: 'POST', path: '/agi/submit', url: '/agi/submit',
-      body: { salaryRunId: 'run-1' },
-      answer: () => json(200, { inlamningId: 7 }),
-      endpoint: 'agi/submit',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
-      name: 'AGI kontrollresultat',
-      method: 'GET', path: '/agi/kontrollresultat', url: '/agi/kontrollresultat?inlamningId=7',
-      answer: () => json(200, { status: 'DONE_SUCCESS' }),
-      endpoint: 'agi/kontrollresultat',
-      scope: { agRegistreradId: null, redovisningsperiod: null },
-      skvStatus: 'DONE_SUCCESS',
-    },
-    {
-      name: 'AGI spara',
-      method: 'POST', path: '/agi/spara', url: '/agi/spara',
-      body: { inlamningId: 7, salaryRunId: 'run-1' },
-      answer: () => json(200, {}),
-      endpoint: 'agi/spara',
-      scope: { agRegistreradId: null, redovisningsperiod: null },
-    },
-    {
-      name: 'AGI avbryt',
-      method: 'DELETE', path: '/agi/underlag', url: `/agi/underlag?inlamningId=7&period=${PERIOD}`,
-      answer: () => new Response(null, { status: 204 }),
-      endpoint: 'agi/avbryt',
-      scope: { agRegistreradId: null, redovisningsperiod: PERIOD },
-    },
-    {
-      name: 'AGI ta bort sparad',
-      method: 'DELETE', path: '/agi/sparad', url: `/agi/sparad?${agiPeriod}&inlamningId=7`,
-      answer: () => new Response(null, { status: 204 }),
-      endpoint: 'agi/sparad/ta-bort',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
       name: 'AGI granskningsunderlag',
-      method: 'POST', path: '/agi/granskningsunderlag', url: `/agi/granskningsunderlag?${agiPeriod}`,
+      method: 'POST', path: '/agi/granskningsunderlag', url: '/agi/granskningsunderlag',
+      body: { salaryRunId: 'run-1' },
       answer: () => json(200, { link: 'https://skv.test/agi', tillstand: 'LOCKED_FOR_SIGNING' }),
       endpoint: 'agi/granskningsunderlag',
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
@@ -383,27 +412,11 @@ describe('routes: exactly one row per outbound call, with its label', () => {
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
     },
     {
-      name: 'AGI las',
-      method: 'POST', path: '/agi/las', url: `/agi/las?${agiPeriod}`,
-      answer: () => json(200, {}),
-      endpoint: 'agi/las',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
       name: 'AGI lasUpp',
       method: 'POST', path: '/agi/lasUpp', url: `/agi/lasUpp?${agiPeriod}`,
       answer: () => json(200, {}),
       endpoint: 'agi/lasUpp',
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
-      name: 'AGI kontrollera HU',
-      method: 'POST', path: '/agi/kontrollera/hu', url: '/agi/kontrollera/hu',
-      body: { agRegistreradId: REDOVISARE, redovisningsPeriod: PERIOD, summaSkatteavdr: 8200 },
-      answer: () => json(200, { status: 'OK', fel: [] }),
-      endpoint: 'agi.kontrollera.hu',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-      skvStatus: 'OK',
     },
   ]
 
@@ -420,6 +433,27 @@ describe('routes: exactly one row per outbound call, with its label', () => {
         ...c.scope,
         outcome: 'ok',
         skvStatus: c.skvStatus ?? null,
+      }),
+    ])
+  })
+
+  it('AGI kontrollera HU (the v1 and MCP validate path): one row labelled agi.kontrollera.hu', async () => {
+    answers = [json(200, { status: 'OK', fel: [] })]
+    const result = await runValidateAgiUppgift(makeContext(), {
+      uppgift: 'huvuduppgift',
+      payload: { agRegistreradId: REDOVISARE, redovisningsPeriod: PERIOD, summaSkatteavdr: 8200 },
+    })
+
+    expect(result).toMatchObject({ ok: true })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(rows()).toEqual([
+      expect.objectContaining({
+        actor: { companyId: 'company-1', userId: 'user-1' },
+        endpoint: 'agi.kontrollera.hu',
+        agRegistreradId: REDOVISARE,
+        redovisningsperiod: PERIOD,
+        outcome: 'ok',
+        skvStatus: 'OK',
       }),
     ])
   })
@@ -456,6 +490,28 @@ describe('routes: exactly one row per outbound call, with its label', () => {
     expect(res.status).toBe(409)
     expect(rows()).toEqual([
       expect.objectContaining({ endpoint: 'declaration/lock', outcome: 'skv_error', responseStatus: 409 }),
+    ])
+  })
+
+  it('AGI submit step: the underlag and its kontroll read, two rows, both naming the period', async () => {
+    answers = [json(200, { inlamningId: 7 }), json(200, { status: 'DONE_SUCCESS' })]
+
+    const res = await route('POST', '/agi/submit').handler(
+      request('POST', '/agi/submit', { salaryRunId: 'run-1' }),
+      makeContext(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // The kontroll read used to come from its own route, addressed by
+    // inlamningId alone, so its row named no arbetsgivare or period.
+    expect(rows()).toEqual([
+      expect.objectContaining({
+        endpoint: 'agi/submit', agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD, outcome: 'ok', skvStatus: null,
+      }),
+      expect.objectContaining({
+        endpoint: 'agi/kontrollresultat', agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD, outcome: 'ok', skvStatus: 'DONE_SUCCESS',
+      }),
     ])
   })
 

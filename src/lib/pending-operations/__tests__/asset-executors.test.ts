@@ -26,6 +26,7 @@ vi.mock('@/lib/bokslut/assets/asset-service', async () => {
     updateAsset: vi.fn(),
     getAsset: vi.fn(),
     disposeAsset: vi.fn(),
+    deleteNeverPostedAsset: vi.fn(),
     hasPostedDepreciation: vi.fn(),
   }
 })
@@ -42,8 +43,11 @@ import {
   updateAsset,
   getAsset,
   disposeAsset,
+  deleteNeverPostedAsset,
   hasPostedDepreciation,
   AssetCorrectionBlockedError,
+  AssetDeleteBlockedError,
+  AssetNotFoundError,
   AssetAlreadyDisposedError,
   AssetJamkningDataRequiredError,
 } from '@/lib/bokslut/assets/asset-service'
@@ -181,6 +185,46 @@ describe('commitPendingOperation: create_asset', () => {
   })
 })
 
+describe('commitPendingOperation: delete_asset (crm#1452)', () => {
+  it('removes a never-posted row and reports it', async () => {
+    vi.mocked(deleteNeverPostedAsset).mockResolvedValue(ASSET as never)
+    const result = await commitPendingOperation(
+      makeDispatcherSupabase() as never,
+      'user-1',
+      COMPANY_ID,
+      makePendingOp({ operation_type: 'delete_asset', params: { asset_id: ASSET_ID } }),
+    )
+    expect(result.status).toBe('committed')
+    expect(vi.mocked(deleteNeverPostedAsset)).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, ASSET_ID)
+    expect(result.data).toMatchObject({ asset_id: ASSET_ID, deleted: true })
+  })
+
+  it('maps a depreciation posted after staging to 409 ASSET_DELETE_BLOCKED', async () => {
+    vi.mocked(deleteNeverPostedAsset).mockRejectedValue(new AssetDeleteBlockedError('depreciation_posted'))
+    const result = await commitPendingOperation(
+      makeDispatcherSupabase() as never,
+      'user-1',
+      COMPANY_ID,
+      makePendingOp({ operation_type: 'delete_asset', params: { asset_id: ASSET_ID } }),
+    )
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('ASSET_DELETE_BLOCKED')
+  })
+
+  it('maps a vanished row to 404 ASSET_NOT_FOUND', async () => {
+    vi.mocked(deleteNeverPostedAsset).mockRejectedValue(new AssetNotFoundError())
+    const result = await commitPendingOperation(
+      makeDispatcherSupabase() as never,
+      'user-1',
+      COMPANY_ID,
+      makePendingOp({ operation_type: 'delete_asset', params: { asset_id: ASSET_ID } }),
+    )
+    expect(result.http_status).toBe(404)
+    expect(result.code).toBe('ASSET_NOT_FOUND')
+  })
+})
+
 describe('commitPendingOperation: update_asset', () => {
   it('updates and returns the row with the posted-depreciation flag', async () => {
     vi.mocked(getAsset).mockResolvedValue(ASSET as never)
@@ -193,7 +237,8 @@ describe('commitPendingOperation: update_asset', () => {
       makePendingOp({ operation_type: 'update_asset', params: { asset_id: ASSET_ID, changes: { name: 'Renamed' } } }),
     )
     expect(result.status).toBe('committed')
-    expect(vi.mocked(updateAsset)).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, ASSET_ID, { name: 'Renamed' })
+    // The approver is the user an own-development mark's audit row names.
+    expect(vi.mocked(updateAsset)).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, ASSET_ID, { name: 'Renamed' }, { userId: 'user-1' })
     expect(result.data).toMatchObject({ asset_id: ASSET_ID, name: 'Renamed', has_posted_depreciation: true })
   })
 

@@ -45,7 +45,7 @@ function report(): BokslutsbilagorReport {
     ],
   })
   return {
-    company: { name: 'Väla Redovisning AB', org_number: '5592383508' },
+    company: { name: 'Exempel Redovisning AB', org_number: '5577889909' },
     period: { id: 'fy-2026', name: 'Räkenskapsår 2026', start: '2026-01-01', end: '2026-12-31' },
     generated_at: '2027-01-15T10:00:00Z',
     app_version: '1.2.3',

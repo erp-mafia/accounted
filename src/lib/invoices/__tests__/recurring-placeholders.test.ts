@@ -7,6 +7,7 @@ import {
   mentionsPeriodPlaceholder,
   periodEndInclusive,
   periodPlaceholderProblem,
+  previousPeriodStart,
 } from '@/lib/invoices/recurring-placeholders'
 
 describe('recurring placeholders', () => {
@@ -64,5 +65,30 @@ describe('recurring placeholders', () => {
   it('exposes every key the dialog legend prints', () => {
     const values = buildRecurringPlaceholderValues({ runDate: '2026-03-01', periodStart: '2026-03-01', intervalMonths: 1, lang: 'sv' })
     for (const key of RECURRING_PLACEHOLDER_KEYS) expect(values[key]).toBeDefined()
+  })
+})
+
+describe('previousPeriodStart (crm#1285)', () => {
+  it('steps one interval back, across a year boundary and per interval', () => {
+    expect(previousPeriodStart('2026-12-01', 1)).toBe('2026-11-01')
+    expect(previousPeriodStart('2026-01-01', 1)).toBe('2025-12-01')
+    expect(previousPeriodStart('2026-10-01', 3)).toBe('2026-07-01')
+    expect(previousPeriodStart('2027-03-17', 12)).toBe('2026-03-17')
+  })
+
+  it('is the exact inverse of advancePeriodStart for days 1-28', () => {
+    for (const interval of [1, 2, 3, 6, 12]) {
+      for (let month = 1; month <= 12; month++) {
+        for (const day of [1, 15, 28]) {
+          const start = `2026-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+          expect(previousPeriodStart(advancePeriodStart(start, interval), interval)).toBe(start)
+        }
+      }
+    }
+  })
+
+  it('a day clamped on the way forward stays clamped on the way back', () => {
+    // Jan 31 + 1 month = Feb 28; the 31 was already lost there.
+    expect(previousPeriodStart('2026-02-28', 1)).toBe('2026-01-28')
   })
 })

@@ -27,6 +27,7 @@ import { createLogger } from '@/lib/logger'
 import type { WhatsAppConversation, WhatsAppMessage } from '@/types'
 import { decryptPhone } from './phone-crypto'
 import { TEMPLATE } from './messages'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('whatsapp-inbox/conversation')
 
@@ -296,20 +297,10 @@ export async function claimAck(
   return Array.isArray(data) && data.length > 0
 }
 
-/** Day key for the daily question budget, in the sender's civil day. */
-export function stockholmDayKey(date: Date = new Date()): string {
-  return new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Stockholm',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(date)
-}
-
 /** Content questions already asked today (rolls over at Stockholm midnight). */
 export function questionsAskedToday(context: ConversationContext, now: Date = new Date()): number {
   const budget = context.budget
-  if (!budget || budget.day_key !== stockholmDayKey(now)) return 0
+  if (!budget || budget.day_key !== todayIsoStockholm(now)) return 0
   return budget.count
 }
 
@@ -318,7 +309,7 @@ export function bumpBudget(
   asked: number,
   now: Date = new Date(),
 ): ConversationContext['budget'] {
-  const dayKey = stockholmDayKey(now)
+  const dayKey = todayIsoStockholm(now)
   const current = context.budget?.day_key === dayKey ? context.budget.count : 0
   // Negative `asked` refunds a question whose send failed; never below zero.
   return { day_key: dayKey, count: Math.max(0, current + asked) }

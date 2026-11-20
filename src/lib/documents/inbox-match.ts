@@ -1,8 +1,8 @@
 /**
  * Pair an invoice-inbox item with a supplier or a bank transaction. One
- * implementation behind the invoice-inbox extension routes
- * (/api/extensions/ext/invoice-inbox/items/:id/match-supplier and
- * /match-transaction) and the v1 operations (lib/operations/inbox-items.ts):
+ * implementation behind the invoice-inbox extension route
+ * (/api/extensions/ext/invoice-inbox/items/:id/match-transaction) and the v1
+ * operations (lib/operations/inbox-items.ts):
  *
  *   - both the item and the supplier / transaction must belong to the
  *     company (service-role doors skip RLS, so this is the tenant check);
@@ -12,7 +12,13 @@
  *     the item's document onto the transaction only when the transaction has
  *     no document yet (an existing pin is never overwritten);
  *   - when the transaction is already booked, the item is completed against
- *     the anchoring verifikat (underlag link + consumed stamp), best-effort.
+ *     the anchoring verifikat (underlag link + consumed stamp), best-effort;
+ *   - with fitCheck, an item whose document plainly belongs to another
+ *     purchase is refused before anything is written (crm#1479: a file
+ *     dropped on the wrong purchase became underlag on its verifikat). The
+ *     check is passed in (documentFitGate, lib/documents/bank-match/fit.ts):
+ *     the comparison lives in the inbox block, which this kernel file may
+ *     not import.
  *
  * Releasing a transaction match is unmatchInboxItemTransaction in
  * ./inbox-item-actions.ts. A dry run reads and checks; it writes nothing.
@@ -91,13 +97,23 @@ export async function matchInboxItemTransaction(
   ctx: OperationContext,
   inboxItemId: string,
   transactionId: string,
-  options: { dryRun?: boolean } = {},
+  options: {
+    dryRun?: boolean
+    /**
+     * Compares the item's document with the row: a refusal to answer with,
+     * or null to go ahead (documentFitGate).
+     */
+    fitCheck?: (
+      documentId: string,
+      row: Record<string, unknown> & { amount: number },
+    ) => Promise<{ code: string; details?: Record<string, unknown>; messageSv?: string } | null>
+  } = {},
 ): Promise<OperationOutcome<MatchTransactionResult>> {
   const { supabase, companyId, log } = ctx
 
   const { data: tx } = await supabase
     .from('transactions')
-    .select('id, document_id')
+    .select('id, document_id, description, original_description, merchant_name, amount, currency, amount_sek, exchange_rate, instructed_amount, instructed_currency, date')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -105,7 +121,7 @@ export async function matchInboxItemTransaction(
 
   const { data: inboxItem, error: itemError } = await supabase
     .from('invoice_inbox_items')
-    .select('id, document_id')
+    .select('id, document_id, matched_transaction_id')
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -113,6 +129,14 @@ export async function matchInboxItemTransaction(
 
   const itemDocumentId = (inboxItem.document_id as string | null) ?? null
   const mirrorsDocument = itemDocumentId != null && !tx.document_id
+
+  // The two sides are compared before anything is written: once the row is
+  // booked the item's document is underlag for good. Matching the item to
+  // the row it already has changes nothing and is not judged again.
+  if (options.fitCheck && itemDocumentId && inboxItem.matched_transaction_id !== transactionId) {
+    const refusal = await options.fitCheck(itemDocumentId, tx)
+    if (refusal) return { ok: false, ...refusal }
+  }
 
   if (options.dryRun) {
     return {

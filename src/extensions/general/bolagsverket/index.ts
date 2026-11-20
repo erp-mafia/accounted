@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { validateSwedishPersonalNumber } from '@/lib/extensions/validation'
+import { validatePersonnummer } from '@/lib/salary/personnummer-format'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -15,10 +15,13 @@ import {
   applyHandelse,
   BolagsverketSubmissionError,
   handleWebhook,
-  normalizeOrgnr,
+  MAX_HANDLING_BYTES,
+  getOrgnr,
   submitArsredovisning,
+  submitRevisionsberattelse,
 } from './lib/submission-service'
 import type { BolagsverketEnvironment, HandelseMeddelande } from './types'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Bolagsverket integration: digital inlämning av årsredovisning.
@@ -71,11 +74,10 @@ function filingReleaseEnabled(): boolean {
 /**
  * Resolve the effective Bolagsverket environment for a company.
  *
- * The generic extension settings endpoint
- * (app/api/extensions/[sector]/[slug]/settings) PATCHes ONE JSON blob into
- * extension_data under extension_id 'general/bolagsverket', key 'settings':
- * not per-key rows under this extension's dispatcher id: so read that row
- * directly rather than via ctx.settings.
+ * The setting lives as ONE JSON blob in extension_data under extension_id
+ * 'general/bolagsverket', key 'settings' (written by the generic extension
+ * settings endpoint, since removed): not per-key rows under this extension's
+ * dispatcher id: so read that row directly rather than via ctx.settings.
  *
  * Validation: the value must be one of test|accept|prod and must not exceed
  * the BOLAGSVERKET_ENV ceiling (a member with settings access must not be
@@ -127,23 +129,11 @@ async function clientFor(ctx: ExtensionContext): Promise<BolagsverketClient> {
   return new BolagsverketClient(configFromEnv({ environment }))
 }
 
-async function companyOrgnr(ctx: ExtensionContext): Promise<string> {
-  const { data, error } = await ctx.supabase
-    .from('company_settings')
-    .select('org_number')
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  if (error) throw new Error(`Kunde inte läsa organisationsnummer: ${error.message}`)
-  const orgNumber = (data as { org_number?: string } | null)?.org_number
-  if (!orgNumber) throw new Error('Organisationsnummer saknas i företagsinställningarna.')
-  return normalizeOrgnr(orgNumber)
-}
-
 /**
  * Defense-in-depth RBAC for write endpoints. The extension dispatcher only
  * authenticates and resolves a company; it does NOT check the member's role.
  * Filing an årsredovisning is a write operation: viewer members are blocked.
- * Mirrors requireAgiWriteRole in the skatteverket extension.
+ * Mirrors requireSkvWriteRole in the skatteverket extension.
  *
  * Returns null on success, a 403/500 NextResponse on failure.
  */
@@ -192,13 +182,16 @@ function apiErrorResponse(err: unknown, ctx: ExtensionContext): NextResponse {
   })
 }
 
-const noContextResponse = () =>
-  NextResponse.json({ error: { code: 'NO_CONTEXT', message: 'Saknar kontext' } }, { status: 500 })
-
 const PersonnummerSchema = z
   .string()
   .regex(/^\d{12}$/, 'Personnummer ska normaliseras till 12 siffror')
-  .refine((value) => validateSwedishPersonalNumber(value) === null, 'Ogiltigt personnummer')
+  // validatePersonnummer allows birth years up to 2100; a signatory is born
+  // no later than this year.
+  .refine(
+    (value) =>
+      validatePersonnummer(value).valid && Number(value.slice(0, 4)) <= stockholmYearMonth().year,
+    'Ogiltigt personnummer',
+  )
   .refine((value) => {
     const year = Number(value.slice(0, 4))
     const month = Number(value.slice(4, 6))
@@ -223,9 +216,53 @@ const SubmitSchema = z.object({
     epost: z.string().email(),
   }),
   kvittens_epost: z.array(z.string().email()).max(5).optional(),
+  // notifieringEpostadresser (API 2.1): the revisor, told that a
+  // revisionsberättelse is expected when the årsredovisning is kompletteras.
+  notifiering_epost: z.array(z.string().email().min(6).max(250)).max(5).optional(),
   accepted_avtalstext_andrad: z.string().optional(),
   ignore_warnings: z.boolean().optional(),
 })
+
+/**
+ * The revisionsberättelse as its own handling (API 2.1). `fil` is the
+ * revisor's iXBRL file, base64 (the API's Handling.fil format); the revisor
+ * is the undertecknare who signs it at Bolagsverket.
+ */
+const RevisionsberattelseSchema = z.object({
+  fiscal_period_id: z.string().uuid(),
+  avsandare_pnr: PersonnummerSchema,
+  undertecknare: z.object({
+    pnr: PersonnummerSchema,
+    fornamn: z.string().min(1).max(100),
+    efternamn: z.string().min(1).max(100),
+    epost: z.string().email(),
+  }),
+  // base64 of at most MAX_HANDLING_BYTES bytes.
+  fil: z
+    .string()
+    .min(1)
+    .max(Math.ceil(MAX_HANDLING_BYTES / 3) * 4)
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Filen ska vara base64-kodad'),
+  kvittens_epost: z.array(z.string().email()).max(5).optional(),
+  notifiering_epost: z.array(z.string().email().min(6).max(250)).max(5).optional(),
+  accepted_avtalstext_andrad: z.string().optional(),
+  ignore_warnings: z.boolean().optional(),
+})
+
+function validationResponse(err: unknown, ctx: ExtensionContext): NextResponse {
+  const message =
+    err instanceof z.ZodError ? err.issues.map((issue) => issue.message).join('; ') : 'Ogiltig begäran'
+  return errorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+    requestId: ctx.requestId,
+    reason: message,
+    details: { message },
+  })
+}
+
+function appUrlOrNull(): string | null {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  return /^https?:\/\//.test(appUrl) ? appUrl : null
+}
 
 const PollSchema = z.object({
   fromtidpunkt: z.string().optional(),
@@ -235,13 +272,11 @@ export const bolagsverketExtension: Extension = {
   id: 'bolagsverket',
   name: 'Bolagsverket: digital årsredovisning',
   version: '1.0.0',
-  settingsPanel: { label: 'Bolagsverket', path: '/settings/extensions' },
   apiRoutes: [
     {
       method: 'GET',
       path: '/status',
       handler: async (_request, ctx) => {
-        if (!ctx) return noContextResponse()
         try {
           const environment = await resolveEnvironment(ctx)
           const config = configFromEnv()
@@ -263,10 +298,9 @@ export const bolagsverketExtension: Extension = {
       method: 'GET',
       path: '/grunduppgifter',
       handler: async (_request, ctx) => {
-        if (!ctx) return noContextResponse()
         try {
           const client = await clientFor(ctx)
-          const orgnr = await companyOrgnr(ctx)
+          const orgnr = await getOrgnr(ctx.supabase, ctx.companyId)
           const data = await client.getGrunduppgifter(orgnr)
           return NextResponse.json({ data })
         } catch (err) {
@@ -278,10 +312,9 @@ export const bolagsverketExtension: Extension = {
       method: 'GET',
       path: '/arendestatus',
       handler: async (_request, ctx) => {
-        if (!ctx) return noContextResponse()
         try {
           const client = await clientFor(ctx)
-          const orgnr = await companyOrgnr(ctx)
+          const orgnr = await getOrgnr(ctx.supabase, ctx.companyId)
           const data = await client.getArendestatus(orgnr)
           return NextResponse.json({ data })
         } catch (err) {
@@ -293,7 +326,6 @@ export const bolagsverketExtension: Extension = {
       method: 'GET',
       path: '/submissions',
       handler: async (request, ctx) => {
-        if (!ctx) return noContextResponse()
         const url = new URL(request.url)
         const fiscalPeriodId = url.searchParams.get('fiscal_period_id')
         let query = ctx.supabase
@@ -319,7 +351,6 @@ export const bolagsverketExtension: Extension = {
       method: 'POST',
       path: '/submissions',
       handler: async (request, ctx) => {
-        if (!ctx) return noContextResponse()
         if (!filingReleaseEnabled()) {
           return errorResponseFromCode('BOLAGSVERKET_NOT_RELEASED', ctx.log, {
             requestId: ctx.requestId,
@@ -361,6 +392,7 @@ export const bolagsverketExtension: Extension = {
               avsandarePnr: parsed.avsandare_pnr,
               undertecknare: parsed.undertecknare,
               kvittensEpost: parsed.kvittens_epost,
+              notifieringEpost: parsed.notifiering_epost,
               acceptedAvtalstextAndrad: parsed.accepted_avtalstext_andrad,
               ignoreWarnings: parsed.ignore_warnings,
             },
@@ -375,6 +407,61 @@ export const bolagsverketExtension: Extension = {
           return NextResponse.json({ data: result })
         } catch (err) {
           ctx.log.error('bolagsverket submission failed', err)
+          return apiErrorResponse(err, ctx)
+        }
+      },
+    },
+    {
+      // The revisionsberättelse after an årsredovisning filed kompletteras.
+      method: 'POST',
+      path: '/revisionsberattelse',
+      handler: async (request, ctx) => {
+        if (!filingReleaseEnabled()) {
+          return errorResponseFromCode('BOLAGSVERKET_NOT_RELEASED', ctx.log, {
+            requestId: ctx.requestId,
+          })
+        }
+        const forbidden = await requireWriteRole(ctx)
+        if (forbidden) return forbidden
+        let parsed: z.infer<typeof RevisionsberattelseSchema>
+        try {
+          parsed = RevisionsberattelseSchema.parse(await request.json())
+        } catch (err) {
+          return validationResponse(err, ctx)
+        }
+        const appUrl = appUrlOrNull()
+        if (!appUrl) {
+          return errorResponseFromCode('BOLAGSVERKET_CONFIG_MISSING', ctx.log, {
+            requestId: ctx.requestId,
+            reason: 'NEXT_PUBLIC_APP_URL is missing or not an absolute URL',
+            details: { missing: 'NEXT_PUBLIC_APP_URL' },
+          })
+        }
+        try {
+          const client = await clientFor(ctx)
+          const result = await submitRevisionsberattelse(
+            { supabase: ctx.supabase, client, appUrl, log: ctx.log },
+            {
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              fiscalPeriodId: parsed.fiscal_period_id,
+              avsandarePnr: parsed.avsandare_pnr,
+              undertecknare: parsed.undertecknare,
+              xhtml: Buffer.from(parsed.fil, 'base64').toString('utf8'),
+              kvittensEpost: parsed.kvittens_epost,
+              notifieringEpost: parsed.notifiering_epost,
+              acceptedAvtalstextAndrad: parsed.accepted_avtalstext_andrad,
+              ignoreWarnings: parsed.ignore_warnings,
+            },
+          )
+          // idnummer is a technical correlation value: never shown to users.
+          if (result.outcome === 'uploaded' || result.outcome === 'state_unknown') {
+            const { idnummer: _idnummer, ...publicResult } = result
+            return NextResponse.json({ data: publicResult })
+          }
+          return NextResponse.json({ data: result })
+        } catch (err) {
+          ctx.log.error('bolagsverket revisionsberattelse submission failed', err)
           return apiErrorResponse(err, ctx)
         }
       },
@@ -409,7 +496,6 @@ export const bolagsverketExtension: Extension = {
       method: 'POST',
       path: '/poll-events',
       handler: async (request, ctx) => {
-        if (!ctx) return noContextResponse()
         const forbidden = await requireWriteRole(ctx)
         if (forbidden) return forbidden
         let parsed: z.infer<typeof PollSchema>
@@ -420,7 +506,7 @@ export const bolagsverketExtension: Extension = {
         }
         try {
           const client = await clientFor(ctx)
-          const orgnr = await companyOrgnr(ctx)
+          const orgnr = await getOrgnr(ctx.supabase, ctx.companyId)
           const { data: sub } = await ctx.supabase
             .from('bolagsverket_subscriptions')
             .select('url')

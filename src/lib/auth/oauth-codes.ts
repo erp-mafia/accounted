@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { openAesGcm, sealAesGcm, sha256Key } from '@/lib/crypto/aes-gcm'
 
 /**
  * Stateless OAuth auth codes.
@@ -9,13 +10,12 @@ import crypto from 'crypto'
  * after PKCE verification, preventing orphaned keys.
  */
 
-const ALGORITHM = 'aes-256-gcm'
 const CODE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 function getEncryptionKey(): Buffer {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!secret) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required')
-  return crypto.createHash('sha256').update(secret).digest()
+  return sha256Key(secret)
 }
 
 export interface AuthCodePayload {
@@ -59,32 +59,12 @@ export function createAuthCode(payload: Omit<AuthCodePayload, 'exp'>): string {
     exp: Date.now() + CODE_TTL_MS,
   }
 
-  const key = getEncryptionKey()
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv)
-
-  const json = JSON.stringify(data)
-  const encrypted = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
-
-  const combined = Buffer.concat([iv, tag, encrypted])
-  return combined.toString('base64url')
+  return sealAesGcm(getEncryptionKey(), JSON.stringify(data)).toString('base64url')
 }
 
 export function decryptAuthCode(code: string): AuthCodePayload | null {
   try {
-    const key = getEncryptionKey()
-    const combined = Buffer.from(code, 'base64url')
-
-    const iv = combined.subarray(0, 12)
-    const tag = combined.subarray(12, 28)
-    const encrypted = combined.subarray(28)
-
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv)
-    decipher.setAuthTag(tag)
-
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
-    const payload: AuthCodePayload = JSON.parse(decrypted.toString('utf8'))
+    const payload: AuthCodePayload = JSON.parse(openAesGcm(getEncryptionKey(), Buffer.from(code, 'base64url')))
 
     if (Date.now() > payload.exp) return null
 

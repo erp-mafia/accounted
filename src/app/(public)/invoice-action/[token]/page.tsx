@@ -1,354 +1,176 @@
-'use client'
-
-import { useState, useEffect, use } from 'react'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { createTranslator } from 'next-intl'
+import { getTranslations } from 'next-intl/server'
 import {
-  CheckCircle,
-  AlertCircle,
-  FileText,
-  MessageSquare,
-} from 'lucide-react'
+  StandaloneFacts,
+  StandaloneFrom,
+  StandaloneHeading,
+  StandaloneMessage,
+  StandalonePage,
+  StandaloneSmall,
+} from '@/components/standalone/StandalonePage'
+import { getBranding } from '@/lib/branding/service'
+import { firstSentence } from '@/lib/settings/first-sentence'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { resolveBrandForCompany } from '@/lib/branding/resolve'
+import { formatCurrencyForCustomer } from '@/lib/email/invoice-templates'
+import { createLogger } from '@/lib/logger'
+import { loadReminderAnswer, REMINDER_ANSWER_NOTE_MAX } from '@/lib/reminders/answer'
+import { formatDate } from '@/lib/utils'
+import { AnsweredCard, InvoiceActionForm, type InvoiceActionTexts } from './InvoiceActionForm'
 
-interface InvoiceData {
-  invoiceNumber: string
-  invoiceDate: string
-  dueDate: string
-  total: number
-  currency: string
-  customerName: string
-  reminderLevel: number
-  alreadyResponded: boolean
-  previousResponse: 'marked_paid' | 'disputed' | null
-  // Dröjsmålsränta + lagstadgad påminnelseavgift (Räntelagen §6, Lag 1981:739).
-  // Default to 0 for older reminders sent before the surcharge feature shipped.
-  //
-  // interestAmount is a share of the invoice total, so it is in `currency`.
-  // The påminnelseavgift is a fixed krona amount fixed by statute and booked
-  // 1510/3990 in SEK, so it is quoted in `reminderFeeCurrency` (always 'SEK')
-  // and is only inside `totalDue` when the invoice itself is in SEK. Otherwise
-  // it arrives as `feeDueSeparately` and is shown as its own amount.
-  interestAmount: number
-  interestRate: number
-  interestFromDate: string | null
-  interestDays: number | null
-  reminderFee: number
-  reminderFeeCurrency?: string
-  totalDue: number
-  feeDueSeparately?: number
-  // White-label brand of the invoice's COMPANY (WL-13), resolved server-side
-  // by the action API regardless of host. Null/absent = today's page.
-  brand?: {
-    appName: string
-    logoUrl: string | null
-    brandColor: string
-  } | null
+/**
+ * The customer's answer to a reminder: the link in every reminder mail. It
+ * shows what is left to pay today and lets the customer say "Jag har
+ * betalat" or "Något stämmer inte", with a short note if they like. Either
+ * answer stops further reminders of the invoice, and the company sees it on
+ * the invoice.
+ *
+ * Worded in the customer's language (customers.language), like the mail,
+ * not in the visitor's app locale: the texts come from messages/<lang>.json,
+ * namespace invoice_action, through a translator for that language. A link
+ * that leads nowhere is answered in the visitor's own locale.
+ */
+
+export const dynamic = 'force-dynamic'
+
+const log = createLogger('invoice-action/page')
+
+type Brand = { appName: string; logoUrl: string | null }
+
+async function messagesFor(lang: 'sv' | 'en') {
+  return lang === 'en' ? (await import('@/messages/en.json')).default : (await import('@/messages/sv.json')).default
 }
 
-// Discreet brand mark shown when the invoice's company has a white-label
-// brand: logo when one exists, else the brand name in the brand color.
-function BrandMark({ brand }: { brand: NonNullable<InvoiceData['brand']> }) {
-  return (
-    <div className="flex justify-center mb-6">
-      {brand.logoUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={brand.logoUrl} alt={brand.appName} className="h-8 w-auto" />
-      ) : (
-        <span
-          className="text-sm font-semibold tracking-wide"
-          style={{ color: brand.brandColor }}
-        >
-          {brand.appName}
-        </span>
-      )}
-    </div>
+export default async function InvoiceActionPage({ params }: { params: Promise<{ token: string }> }) {
+  const { token } = await params
+
+  let answer: Awaited<ReturnType<typeof loadReminderAnswer>> = null
+  let failed = false
+  try {
+    answer = await loadReminderAnswer(createServiceClientNoCookies(), token)
+  } catch (error) {
+    log.error('reminder answer page failed', error as Error)
+    failed = true
+  }
+
+  if (!answer) {
+    const t = await getTranslations('invoice_action')
+    const { first, rest } = firstSentence(failed ? t('error_default') : t('error_link_invalid'))
+    // A heading carries no full stop; the rest of the sentence pair is the line under it.
+    return <StandaloneMessage title={first.replace(/\.$/, '')} body={rest ?? undefined} />
+  }
+
+  const { view } = answer
+  const lang = view.language
+  const messages = await messagesFor(lang)
+  const t = createTranslator({ locale: lang, messages, namespace: 'invoice_action' })
+  const tSigning = createTranslator({ locale: lang, messages, namespace: 'signing_page' })
+  const resolved = await resolveBrandForCompany(answer.companyId)
+  const brand: Brand | null = resolved ? { appName: resolved.appName, logoUrl: resolved.logoUrl } : null
+  const company = view.companyName || t('sender_fallback')
+  const money = (amount: number, currency: string) => formatCurrencyForCustomer(amount, currency, lang)
+
+  const texts: InvoiceActionTexts = {
+    question: t('question'),
+    questionHelp: t('question_help', { company }),
+    paidOption: t('paid_option'),
+    paidHelp: t('paid_help'),
+    disputedOption: t('disputed_option'),
+    disputedHelp: t('disputed_help'),
+    notePaid: t('note_paid'),
+    noteDisputed: t('note_disputed'),
+    send: t('send'),
+    thanks: t('thanks'),
+    thanksBody: t('thanks_body', { company }),
+    answeredPaid: t('answered_paid'),
+    answeredDisputed: t('answered_disputed'),
+    invoiceLabel: t('invoice_label'),
+    errors: {
+      LINK_INVALID: t('error_link_invalid'),
+      NOTE_TOO_LONG: t('error_note_too_long', { max: REMINDER_ANSWER_NOTE_MAX }),
+      default: t('error_default'),
+    },
+  }
+
+  const hasLegacyCharges = view.interestAmount > 0 || view.reminderFee > 0
+  // A credited, cancelled or written-off invoice is settled without being
+  // paid: no amounts, no answer form, and a sentence that does not say paid.
+  const settled = view.closedAs !== null || (view.remaining <= 0 && !hasLegacyCharges)
+  const settledText =
+    view.closedAs === 'credited'
+      ? t('settled_credited', { company })
+      : view.closedAs
+        ? t('settled_closed', { company })
+        : t('settled', { company })
+  const toPay = hasLegacyCharges ? view.totalDue : view.remaining
+  const toPayText =
+    money(toPay, view.currency) +
+    (view.feeDueSeparately > 0 ? ` + ${money(view.feeDueSeparately, view.reminderFeeCurrency)}` : '')
+  const interestLabel =
+    view.interestRate > 0 && view.interestDays != null
+      ? t('interest_detail', {
+          rate: (view.interestRate * 100).toLocaleString(lang === 'en' ? 'en-GB' : 'sv-SE', { maximumFractionDigits: 2 }),
+          days: view.interestDays,
+        })
+      : t('interest')
+
+  const via = brand?.logoUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={brand.logoUrl} alt={brand.appName} className="h-5 w-auto" />
+  ) : (
+    tSigning('via', { platform: brand?.appName ?? getBranding().appName })
   )
-}
 
-export default function InvoiceActionPage({ params }: { params: Promise<{ token: string }> }) {
-  const { token } = use(params)
-
-  const [invoice, setInvoice] = useState<InvoiceData | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
-
-  useEffect(() => {
-    fetchInvoiceData()
-  }, [token])
-
-  async function fetchInvoiceData() {
-    try {
-      const response = await fetch(`/api/invoices/reminders/action?token=${token}`)
-      const data = await response.json()
-
-      if (!response.ok) {
-        setError(data.error || 'Kunde inte hämta fakturainformation')
-        return
-      }
-
-      setInvoice(data)
-    } catch {
-      setError('Ett fel uppstod. Försök igen senare.')
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  async function handleAction(action: 'marked_paid' | 'disputed') {
-    setIsSubmitting(true)
-    setError(null)
-
-    try {
-      const response = await fetch('/api/invoices/reminders/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, action })
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        setError(data.error || 'Kunde inte spara ditt svar')
-        return
-      }
-
-      setSuccessMessage(data.message)
-      if (invoice) {
-        setInvoice({ ...invoice, alreadyResponded: true, previousResponse: action })
-      }
-    } catch {
-      setError('Ett fel uppstod. Försök igen senare.')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  if (isLoading) {
-    return (
-      <div className="min-h-dvh bg-frame py-12 px-4" aria-busy="true">
-        <span className="sr-only">Laddar...</span>
-        <div className="max-w-lg mx-auto space-y-6">
-          <div className="flex flex-col items-center gap-2">
-            <Skeleton className="h-7 w-56" />
-            <Skeleton className="h-4 w-32" />
-          </div>
-          <Skeleton className="h-72 w-full rounded-xl" />
-          <Skeleton className="h-44 w-full rounded-xl" />
-        </div>
-      </div>
-    )
-  }
-
-  if (error && !invoice) {
-    return (
-      <div className="min-h-dvh bg-frame flex items-center justify-center p-4">
-        <Card className="max-w-md w-full">
-          <CardContent className="pt-6 text-center">
-            <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
-            <h2 className="text-lg mb-2">Ogiltig länk</h2>
-            <p className="text-muted-foreground">{error}</p>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
-
-  if (!invoice) {
-    return null
-  }
-
-  // Already responded view
-  if (invoice.alreadyResponded || successMessage) {
-    return (
-      <div className="min-h-dvh bg-frame flex items-center justify-center p-4">
-        <div className="max-w-md w-full">
-          {invoice.brand && <BrandMark brand={invoice.brand} />}
-          <Card className="w-full">
-          <CardContent className="pt-6 text-center">
-            <CheckCircle className="h-12 w-12 text-success mx-auto mb-4" />
-            <h2 className="text-lg mb-2">Tack för ditt svar!</h2>
-            <p className="text-muted-foreground mb-4">
-              {successMessage || (
-                invoice.previousResponse === 'marked_paid'
-                  ? 'Vi har noterat att du har betalat fakturan.'
-                  : 'Vi har noterat din invändning och kommer att kontakta dig.'
-              )}
-            </p>
-            <div className="bg-muted rounded-lg p-4 text-left">
-              <p className="text-sm text-muted-foreground">Faktura</p>
-              <p className="font-medium">{invoice.invoiceNumber}</p>
-            </div>
-          </CardContent>
-          </Card>
-        </div>
-      </div>
-    )
-  }
-
-  // Calculate days overdue
-  const dueDate = new Date(invoice.dueDate)
-  const now = new Date()
-  const daysOverdue = Math.floor((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-
-  // The statutory påminnelseavgift is a krona amount (Lag 1981:739). On a
-  // foreign-currency invoice it is never converted or relabelled: it is shown
-  // as its own SEK amount next to the invoice-currency total.
-  const feeCurrency = invoice.reminderFeeCurrency || 'SEK'
-  const feeDueSeparately = invoice.feeDueSeparately ?? 0
+  const facts = (
+    <>
+      <StandaloneFacts
+        className="mt-5"
+        rows={[
+          view.customerName ? { label: t('to').replace(/:$/, ''), value: view.customerName } : null,
+          { label: t('invoice_date'), value: formatDate(view.invoiceDate) },
+          { label: t('due_date'), value: formatDate(view.dueDate) },
+          !settled && view.paid > 0 ? { label: t('amount'), value: money(view.amount, view.currency) } : null,
+          !settled && view.paid > 0 ? { label: t('paid'), value: money(view.paid, view.currency) } : null,
+          !settled && view.interestAmount > 0 ? { label: interestLabel, value: money(view.interestAmount, view.currency) } : null,
+          !settled && view.reminderFee > 0 ? { label: t('fee'), value: money(view.reminderFee, view.reminderFeeCurrency) } : null,
+          !settled && (view.paid > 0 || hasLegacyCharges)
+            ? { label: <span className="font-medium text-strong">{t('to_pay')}</span>, value: <span className="font-medium text-strong">{toPayText}</span> }
+            : null,
+        ]}
+      />
+      {settled && <p className="mt-4 text-sm text-foreground">{settledText}</p>}
+      {!settled && view.feeDueSeparately > 0 && <p className="mt-2 text-xs text-muted-foreground">{t('fee_separately')}</p>}
+    </>
+  )
 
   return (
-    <div className="min-h-dvh bg-frame py-12 px-4">
-      <div className="max-w-lg mx-auto">
-        {/* Brand chrome (WL-13): only when the invoice's company has a brand */}
-        {invoice.brand && <BrandMark brand={invoice.brand} />}
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-2xl text-foreground mb-2">
-            Betalningspåminnelse
-          </h1>
-          <p className="text-muted-foreground">
-            Faktura {invoice.invoiceNumber}
+    <StandalonePage width="link" brand={false}>
+      <StandaloneFrom name={company} via={via} />
+      <StandaloneHeading
+        className="mt-5"
+        eyebrow={t('heading_company', { company })}
+        title={t('invoice', { number: view.invoiceNumber ?? '' })}
+      />
+      {!settled && (
+        <>
+          <p className="mt-2 font-display text-2xl tabular-nums text-strong" data-ph-mask="">
+            {toPayText}
           </p>
-        </div>
+          <p className="text-xs text-muted-foreground">{t('to_pay')}</p>
+        </>
+      )}
 
-        {/* Invoice Summary Card */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Fakturainformation
-            </CardTitle>
-            <CardDescription>
-              {/* data-ph-mask: the customer name is user data */}
-              Till: <span data-ph-mask="">{invoice.customerName}</span>
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm text-muted-foreground">Fakturadatum</p>
-                <p className="font-medium">{formatDate(invoice.invoiceDate)}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Förfallodatum</p>
-                <p className="font-medium text-destructive">{formatDate(invoice.dueDate)}</p>
-              </div>
-            </div>
+      {view.alreadyResponded ? (
+        <AnsweredCard texts={texts} response={view.previousResponse} invoiceNumber={view.invoiceNumber} />
+      ) : settled ? (
+        facts
+      ) : (
+        <InvoiceActionForm token={token} texts={texts} invoiceNumber={view.invoiceNumber}>
+          {facts}
+        </InvoiceActionForm>
+      )}
 
-            <div className="bg-destructive/5 border border-destructive/15 rounded-lg p-4 space-y-3">
-              <p className="text-sm text-destructive">
-                Förfallen med {daysOverdue} dagar
-              </p>
-
-              {(invoice.interestAmount > 0 || invoice.reminderFee > 0) && (
-                <div className="space-y-1 text-sm tabular-nums">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Ursprungligt belopp</span>
-                    <span>{formatCurrency(invoice.total, invoice.currency)}</span>
-                  </div>
-                  {invoice.interestAmount > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">
-                        Dröjsmålsränta
-                        {invoice.interestRate > 0 && invoice.interestDays != null
-                          ? ` (${(invoice.interestRate * 100).toLocaleString('sv-SE', { maximumFractionDigits: 2 })}% per år, ${invoice.interestDays} dagar)`
-                          : ''}
-                      </span>
-                      <span>{formatCurrency(invoice.interestAmount, invoice.currency)}</span>
-                    </div>
-                  )}
-                  {invoice.reminderFee > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Påminnelseavgift</span>
-                      <span>{formatCurrency(invoice.reminderFee, feeCurrency)}</span>
-                    </div>
-                  )}
-                  <div className="border-t border-destructive/20 pt-2 mt-2" />
-                </div>
-              )}
-
-              <p className="text-2xl font-bold text-destructive tabular-nums">
-                {formatCurrency(invoice.totalDue || invoice.total, invoice.currency)}
-                {feeDueSeparately > 0 && (
-                  <>
-                    {' + '}
-                    {formatCurrency(feeDueSeparately, feeCurrency)}
-                  </>
-                )}
-              </p>
-              {(invoice.interestAmount > 0 || invoice.reminderFee > 0) && (
-                <p className="text-xs text-muted-foreground">
-                  {feeDueSeparately > 0
-                    ? 'Att betala (inkl. dröjsmålsränta) plus påminnelseavgift i SEK'
-                    : 'Att betala (inkl. dröjsmålsränta och påminnelseavgift)'}
-                </p>
-              )}
-              {feeDueSeparately > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Påminnelseavgiften är lagstadgad (Lag 1981:739) och anges i svenska kronor.
-                  Den räknas inte om till fakturans valuta utan betalas som ett separat belopp i SEK.
-                </p>
-              )}
-            </div>
-
-            {error && (
-              <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-lg">
-                {error}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Action Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Vad vill du göra?</CardTitle>
-            <CardDescription>
-              Välj ett alternativ nedan
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Button
-              className="w-full justify-start h-auto px-4"
-              variant="outline"
-              onClick={() => handleAction('marked_paid')}
-              loading={isSubmitting}
-            >
-              {!isSubmitting && <CheckCircle className="h-5 w-5 mr-3 text-success" />}
-              <div className="text-left py-4">
-                <p className="font-medium">Jag har betalat</p>
-                <p className="text-sm text-muted-foreground font-normal">
-                  Betalningen är redan genomförd
-                </p>
-              </div>
-            </Button>
-
-            <Button
-              className="w-full justify-start h-auto px-4"
-              variant="outline"
-              onClick={() => handleAction('disputed')}
-              loading={isSubmitting}
-            >
-              {!isSubmitting && <MessageSquare className="h-5 w-5 mr-3 text-muted-foreground" />}
-              <div className="text-left py-4">
-                <p className="font-medium">Kontakta avsändaren</p>
-                <p className="text-sm text-muted-foreground font-normal">
-                  Jag har frågor eller invändningar
-                </p>
-              </div>
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* Footer note */}
-        <p className="text-center text-sm text-muted-foreground mt-6">
-          Om du redan har betalat kan det ta några dagar innan betalningen registreras.
-        </p>
-      </div>
-    </div>
+      {!view.closedAs && <StandaloneSmall>{t('payment_delay', { company })}</StandaloneSmall>}
+    </StandalonePage>
   )
 }

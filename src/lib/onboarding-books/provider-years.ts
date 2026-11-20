@@ -15,25 +15,31 @@
  * closed until they are.
  */
 
-/** One fetched file's status as /sie-data answers it, index-aligned with rawContent. */
+/**
+ * One fetched file as /sie-data answers it. The file itself stays on the
+ * server: /sie-data archived it at storagePath and the import reads it from
+ * there, so no request or response body carries its content.
+ */
 export interface ProviderFileStatus {
   fiscalYear: number
+  storagePath: string
+  filename: string
+  /** #VER records in the file. */
+  voucherCount: number
   /** A completed import already covers this fiscal year. */
   previousImport?: { id: string } | null
 }
 
 export interface ProviderYearsInput {
-  /** One SIE 4 file per fetched year, oldest first. */
-  rawContent: string[]
-  /** Absent from an older server: then every file is imported, as before. */
-  fileStatuses?: ProviderFileStatus[]
+  /** One per fetched year, oldest first. */
+  fileStatuses: ProviderFileStatus[]
   /** Selected years the provider did not hand over. */
   failedYears?: { year: number }[]
 }
 
 export interface ProviderYearPlan {
-  /** Files still to import, by index into rawContent, in the server's order. */
-  pending: { index: number; fiscalYear: number | null }[]
+  /** Files still to import, by index into fileStatuses, in the server's order. */
+  pending: { index: number; fiscalYear: number }[]
   /** Years a completed import already holds: not sent again. */
   alreadyImported: number[]
 }
@@ -60,17 +66,11 @@ export interface ProviderYearResult {
 export function planProviderYears(input: ProviderYearsInput): ProviderYearPlan {
   const pending: ProviderYearPlan['pending'] = []
   const alreadyImported: number[] = []
-  input.rawContent.forEach((_, index) => {
-    const status = input.fileStatuses?.[index]
-    if (status?.previousImport) alreadyImported.push(status.fiscalYear)
-    else pending.push({ index, fiscalYear: status?.fiscalYear ?? null })
+  input.fileStatuses.forEach((status, index) => {
+    if (status.previousImport) alreadyImported.push(status.fiscalYear)
+    else pending.push({ index, fiscalYear: status.fiscalYear })
   })
   return { pending, alreadyImported }
-}
-
-/** #VER records in one SIE file, counted the way the parser's diagnostic counts them. */
-export function countSieVouchers(rawContent: string): number {
-  return rawContent.match(/^[ \t]*#VER\b/gm)?.length ?? 0
 }
 
 /**
@@ -83,7 +83,7 @@ export function countSieVouchers(rawContent: string): number {
  */
 export async function importProviderYears(
   input: ProviderYearsInput,
-  importOne: (rawContent: string) => Promise<ProviderYearResult>,
+  importOne: (file: ProviderFileStatus) => Promise<ProviderYearResult>,
   reasonOf: (err: unknown) => string,
   shouldStop: () => boolean = () => false,
 ): Promise<ProviderYearsOutcome> {
@@ -100,7 +100,7 @@ export async function importProviderYears(
     const { index, fiscalYear } = plan.pending[i]
     let reason: string | null
     try {
-      const result = await importOne(input.rawContent[index])
+      const result = await importOne(input.fileStatuses[index])
       reason = result.success ? null : result.errors.join(' ')
     } catch (err) {
       reason = reasonOf(err)
@@ -110,11 +110,9 @@ export async function importProviderYears(
       notReachedFrom = i + 1
       break
     }
-    if (fiscalYear !== null) imported.push(fiscalYear)
+    imported.push(fiscalYear)
   }
-  const notReached = plan.pending
-    .slice(notReachedFrom)
-    .flatMap((f) => (f.fiscalYear !== null ? [f.fiscalYear] : []))
+  const notReached = plan.pending.slice(notReachedFrom).map((f) => f.fiscalYear)
   const notFetched = (input.failedYears ?? []).map((f) => f.year)
   return { imported, alreadyImported: plan.alreadyImported, failed, notReached, notFetched }
 }

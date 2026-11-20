@@ -76,4 +76,4 @@ For enskild firma: periodiseringsfond, expansionsfond, räntefördelning, egenav
 | Neg. räntefördelning threshold | -500,000 SEK | -500,000 SEK |
 | Revisor opt-out thresholds | >3 emp, >1.5M BS, >3M rev (2/3) | Same |
 
-The K2 accrual threshold is separate from the 7.9 recurring-cost rule (not personnel costs, at most 20% variation, no amount limit); see `k2-vs-k3.md`. PBB 2027: 59,600 SEK calculated by SCB, not yet formally set. ÅRL size thresholds and revisionsplikt limits are unchanged; the ÅRL company-categories inquiry (Ju 2025:11) reports by 2026-09-29.
+The K2 accrual threshold is separate from the 7.9 recurring-cost rule (not personnel costs, at most 20% variation, no amount limit); see `k2-vs-k3.md`. PBB 2027: 59,600 SEK calculated by SCB, not yet formally set. ÅRL size thresholds and revisionsplikt limits are unchanged; the ÅRL company-categories inquiry (Ju 2025:11) reported in SOU 2026:59, proposing a mikroföretag category from the FY beginning after 2027-12-31 (not law yet).

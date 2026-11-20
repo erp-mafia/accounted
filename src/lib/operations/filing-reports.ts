@@ -1,6 +1,6 @@
 /**
  * Filing and year-end report reads that neither v1 nor MCP served before:
- * INK2, NE-bilaga, periodisk sammanställning, kassaflödesanalys,
+ * INK2, NE-bilaga, the INK3 underlag, periodisk sammanställning, kassaflödesanalys,
  * behandlingshistorik, bokslutsbilagor, the KPI report, resultat per
  * dimension and the audit trail. Rules live in
  * lib/reports/filing-report-service.ts, lib/reports/kpi-report.ts and
@@ -24,7 +24,8 @@
  *     personal data than an agent transcript should hold by default.
  */
 import { z } from 'zod'
-import { isoDateSchema } from '@/lib/invariants/zod'
+import { accountNumberSchema, isoDateSchema } from '@/lib/invariants/zod'
+import { BUDGET_EXAMPLE_ACCOUNTS, RESULTATKONTO_FIRST, RESULTATKONTO_LAST } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { AuditTrailQuerySchema } from '@/lib/api/schemas'
 import { BEHANDLINGSHISTORIK_CATEGORIES } from '@/lib/reports/behandlingshistorik-types'
 import { maskOwnerPersonnummer, redactPersonnummer } from '@/lib/reports/owner-identity-mask'
@@ -104,6 +105,7 @@ const FiscalYear = z.object({
 const CompanyInfo = z.object({
   companyName: z.string(),
   orgNumber: z.string().nullable(),
+  entityType: z.string().describe('The legal form: what decides the 12-digit identity on the SRU files.'),
   addressLine1: z.string().nullable(),
   postalCode: z.string().nullable(),
   city: z.string().nullable(),
@@ -158,6 +160,7 @@ export const reportsInk2 = defineOperation({
       'Only for aktiebolag: another legal form answers 400 TAX_DECL_INK2_WRONG_LEGAL_FORM.',
       'Amounts are whole kronor as Skatteverket takes them; codes with no amount are 0.',
       'Run it after the year-end closing: before bokslut the tax (8910) and bokslutsdispositioner are missing, and warnings say so.',
+      'ink2s is not the whole INK2S. Computed: 7650/7750 (4.1/4.2), 7651 (4.3a), 7653 (4.3c) and 7754 (4.5c) from the year-end adjustments, 7654 (4.6a, schablonintäkt on the opening periodiseringsfonder: statslåneräntan of 30 November the year before the calendar year the räkenskapsår ends in, at least 0.5 %, times whole months / 12, so brutet, short and long years are covered; a year that starts or ends mid-month, or whose rate is not published yet, gets 0 with a warning naming the opening fonder), 7666/7765 (4.9), 7763 (4.14a) and 7670/7770 (4.15/4.16). 7763 is the deficit saved in the year-end flow or the underskottsregister, never read from last year\'s return: 0 means none was entered, not that none exists. Every other INK2S row and the upplysningar about the årsredovisning (8040/8041 uppdragstagare, 8044/8045 revision) are neither computed nor in the SRU file; they are entered in Skatteverket\'s e-tjänst.',
       'A period id from another company answers 404 FISCAL_PERIOD_NOT_FOUND.',
     ],
     example: {
@@ -242,7 +245,7 @@ export const reportsNeBilaga = defineOperation({
         data: {
           fiscalYear: { fiscal_period_id: '7c2b…', name: '2025', start: '2025-01-01', end: '2025-12-31', isClosed: true },
           rutor: { R1: 480000, R2: 0, R3: 0, R4: 0, R5: 120000, R6: 95000, R7: 0, R8: 0, R9: 0, R10: 12000, R11: 253000 },
-          companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: '19800101-XXXX', addressLine1: null, postalCode: null, city: null, email: null },
+          companyInfo: { companyName: 'Anna Svensson Konsult', orgNumber: '19800101-XXXX', entityType: 'enskild_firma', addressLine1: null, postalCode: null, city: null, email: null },
           warnings: [],
           sru_file: { download: '/api/v1/companies/…/reports/ne-bilaga/sru?period_id=7c2b…', content_type: 'application/zip', files: ['INFO.SRU', 'BLANKETTER.SRU'] },
         },
@@ -288,6 +291,129 @@ export const reportsNeBilaga = defineOperation({
 })
 
 // ─────────────────────────────────────────────────────────────────
+// INK3 underlag (ideell förening)
+// ─────────────────────────────────────────────────────────────────
+
+const Ink3AccountLineSchema = z.object({
+  accountNumber: z.string(),
+  accountName: z.string(),
+  amount: z.number(),
+  treatment: z.enum(['exempt', 'taxable', 'shared']).nullable(),
+})
+
+const Ink3FieldSchema = z.object({
+  code: z.string().describe('SRU field code, e.g. 8651.'),
+  blankett: z.enum(['INK3R', 'INK3S', 'INK3SUF']),
+  ruta: z.string().nullable().describe('The printed row, e.g. 6.2; null for an unnumbered box.'),
+  label: z.string().describe("Skatteverket's label, in Swedish."),
+  column: z
+    .enum(['bokforing', 'skattepliktig'])
+    .nullable()
+    .describe('INK3R income statement: bokforing = enligt redovisningen, skattepliktig = som ska tas upp/dras av.'),
+  sign: z.enum(['+', '-', '*']).nullable(),
+  datatyp: z.string(),
+  value: z
+    .union([z.number(), z.boolean(), z.string()])
+    .nullable()
+    .describe('What to type in: whole kronor, a ticked box, or text. The override when there is one.'),
+  computed: z.number().nullable().describe('What the books or the arithmetic give before any override.'),
+  source: z.enum(['books', 'computed', 'input', 'override']),
+  overridable: z.boolean(),
+  needsInput: z.boolean().describe("True when the ruta waits for the user's figure (a shared or unclassified account)."),
+  needsInputReason: z.enum(['shared_account', 'unclassified_account', 'not_computable']).nullable(),
+  accounts: z.array(Ink3AccountLineSchema),
+})
+
+export const reportsInk3 = defineOperation({
+  id: 'reports.ink3',
+  kind: 'read',
+  scope: 'reports:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'INK3 underlag (ideell förening): INK3R, INK3S and INK3SUF values per ruta for a räkenskapsår.',
+    description:
+      "The figures an ideell förening types into Skatteverket's e-tjänst Inkomstdeklaration 2, 3 och 4, by field code: INK3R (balance sheet from the closed books; income statement in two columns, enligt redovisningen from the books before the resultatavslut and som ska tas upp/dras av from the company's per-account treatment), INK3S (7.1/7.2, 7.5a and 7.9/7.10 computed, the rest entered) and INK3SUF (entered; part of filing only when the company states the förening is allmännyttig). Overrides the company saved replace the computed figure. filing holds every field with a value. Only beskattningsperiod 2026P4 is pinned. Read-only: nothing is filed and no SRU file exists; the user signs the first page in the e-tjänst.",
+    useWhen: "Preparing or checking an ideell förening's INK3 after bokslut, or answering what goes in a ruta.",
+    doNotUseFor:
+      'Aktiebolag or ekonomisk förening (GET /reports/ink2), enskild firma (GET /reports/ne-bilaga), deciding whether the förening is allmännyttig (the company states it), or submitting anything to Skatteverket.',
+    pitfalls: [
+      'Only for ideell förening: another legal form answers 400 TAX_DECL_INK3_WRONG_LEGAL_FORM.',
+      'Only räkenskapsår in a pinned beskattningsperiod (2026P4: ending 2026-09-01 to 2026-12-31); others answer 422 TAX_DECL_INK3_PERIOD_NOT_SUPPORTED.',
+      'A field with needsInput true has no final figure yet: a shared or unclassified account feeds it. The treatments and overrides are set in the app, not over v1 or MCP.',
+      'allmannyttig null means the company has not stated it; INK3SUF is left out of filing until it says yes.',
+      'Amounts are whole kronor with öre dropped.',
+    ],
+    example: {
+      request: { period_id: '7c2b…' },
+      response: {
+        data: {
+          fiscalYear: { fiscal_period_id: '7c2b…', name: '2026', start: '2026-01-01', end: '2026-12-31', isClosed: true },
+          beskattningsperiod: '2026P4',
+          allmannyttig: true,
+          sufApplicable: true,
+          filing: { '8650': 42000, '8653': 120000, '8673': 120000, '8663': 18000, '8685': 9000, '8686': 9000, '8695': 9000, '8822': 'X' },
+          totals: { totalAssets: 310000, totalEquityLiabilities: 310000, bookkeepingResult: 18000, taxableResult: 9000, taxableSurplus: 9000 },
+          complete: true,
+          warnings: [],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({ period_id: PERIOD_ID }),
+  output: z
+    .object({
+      fiscalYear: FiscalYear,
+      beskattningsperiod: z.string(),
+      fieldTable: z.object({ beskattningsperiod: z.string(), files: z.array(z.string()) }),
+      companyInfo: z.object({ companyName: z.string(), orgNumber: z.string().nullable() }),
+      allmannyttig: z.boolean().nullable(),
+      sufApplicable: z.boolean(),
+      fields: z.array(Ink3FieldSchema),
+      filing: z.record(z.string(), z.union([z.number(), z.string()])),
+      accounts: z.array(
+        z.object({
+          accountNumber: z.string(),
+          accountName: z.string(),
+          ruta: z.string(),
+          amount: z.number(),
+          treatment: z.enum(['exempt', 'taxable', 'shared']).nullable(),
+        }),
+      ),
+      totals: z.object({
+        totalAssets: z.number(),
+        totalEquityLiabilities: z.number(),
+        bookkeepingResult: z.number(),
+        taxableResult: z.number(),
+        taxableSurplus: z.number(),
+      }),
+      complete: z.boolean(),
+      warnings: z.array(z.string()),
+    })
+    .loose(),
+  errorCodes: [
+    'FISCAL_PERIOD_NOT_FOUND',
+    'TAX_DECL_INK3_WRONG_LEGAL_FORM',
+    'TAX_DECL_INK3_PERIOD_NOT_SUPPORTED',
+    'TAX_DECL_GENERATION_FAILED',
+  ],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/ink3' },
+  mcp: {
+    name: 'gnubok_get_ink3_underlag',
+    title: 'INK3 Underlag (Inkomstdeklaration 3, ideell förening)',
+    description:
+      "Ideell förening INK3 underlag for a räkenskapsår: INK3R (both columns), INK3S and INK3SUF by field code, to type into Skatteverket's e-tjänst. Read-only; nothing is filed. Rutor with needsInput wait for the user's figure.",
+    keywords: ['ink3', 'inkomstdeklaration 3', 'ideell förening', 'förening deklaration', 'ink3r', 'ink3s', 'ink3suf', 'särskild uppgift'],
+  },
+  run: async (ctx, { period_id }) => {
+    const outcome = await (await reports()).getInk3Underlag(ctx, period_id)
+    if (!outcome.ok || outcome.dryRun) return asDocumented(outcome)
+    return asDocumented({ ok: true, data: qualifyFiscalYear(outcome.data) })
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────
 // Periodisk sammanställning
 // ─────────────────────────────────────────────────────────────────
 
@@ -312,7 +438,7 @@ export const reportsPeriodiskSammanstallning = defineOperation({
   docs: {
     summary: 'Periodisk sammanställning (EU sales list): per-customer EU sales of goods, services and triangulation.',
     description:
-      'Builds the periodisk sammanställning for a month or quarter: one row per EU customer VAT number with varor, tjänster and trepartshandel amounts, plus warnings (missing or invalid VAT numbers, Swedish customers, credit notes), reconciled against the momsdeklaration (rutor 35, 38, 39) when the periods coincide. The SKV 574008 CSV for upload is served by GET /reports/periodisk-sammanstallning/csv. Read-only.',
+      'Builds the periodisk sammanställning for a month or quarter: one row per EU customer VAT number with varor, tjänster and trepartshandel amounts, plus warnings (missing or invalid VAT numbers, Swedish customers, credit notes), reconciled against the momsdeklaration (rutor 35, 38, 39) for the same dates. The SKV 574008 CSV for upload is served by GET /reports/periodisk-sammanstallning/csv. Read-only.',
     useWhen: 'Before filing the periodisk sammanställning, or checking EU sales per customer against the momsdeklaration.',
     doNotUseFor: 'The momsdeklaration itself (GET /reports/vat-declaration) or domestic sales.',
     pitfalls: [
@@ -368,12 +494,13 @@ export const reportsKassaflodesanalys = defineOperation({
   docs: {
     summary: 'Kassaflödesanalys (cash flow statement, indirect method) for a räkenskapsår.',
     description:
-      'Derives the cash flow statement from the trial balance, with every account in exactly one line: löpande verksamhet (result after financial items, avskrivningar and other non-cash items, changes in receivables, inventory and short-term liabilities, tax paid, koncernbidrag), investeringsverksamhet (acquisitions, disposals at their proceeds, kortfristiga placeringar) and finansieringsverksamhet, reconciled against the actual change in cash (19xx). Read-only.',
+      'Derives the cash flow statement from the trial balance, with every account in exactly one line: löpande verksamhet (result after financial items, avskrivningar and other non-cash items, changes in receivables, inventory and short-term liabilities, tax paid, koncernbidrag), investeringsverksamhet (acquisitions, disposals at their proceeds, kortfristiga placeringar) and finansieringsverksamhet, reconciled against the actual change in cash (19xx). `statement` holds the same year laid out to K3 chapter 7 (from rörelseresultat; interest and dividends received and paid as separate cash lines; investments per kind and loans gross; the exchange difference on likvida medel apart) with the previous year as `statement.previous`. Bokslut entries are included, only the resultatavslut is left out. Read-only.',
     useWhen: 'Preparing the årsredovisning for a K3 company (or a larger K2 one that includes it), or analysing where the year\'s cash went.',
     doNotUseFor: 'Liquidity forecasts or bank balances (GET /reports/trial-balance for 19xx).',
     pitfalls: [
       'lopande.ovriga_poster is the change on accounts outside every BAS range the analysis classifies, named in unclassified_accounts. reconciliation.is_reconciled false means the period\'s postings do not balance.',
       'A year whose income tax cannot be separated from other taxes answers 422 CASH_FLOW_TAX_ALLOCATION_REQUIRED.',
+      'statement.current.amounts is keyed by line (rorelseresultat, erlagd_ranta, upptagna_lan, ...); statement.previous is null when there is no earlier year with activity, and statement.previous_status says why.',
     ],
     example: {
       request: { period_id: '7c2b…' },
@@ -434,7 +561,7 @@ export const reportsBehandlingshistorik = defineOperation({
   docs: {
     summary: 'Behandlingshistorik (BFL 5 kap. 11 §): who changed what in the books, and when, for a räkenskapsår.',
     description:
-      'The processing history the system documentation must include (BFNAR 2013:2 p. 9.16): verifikationer posted, corrected and reversed, chart of accounts and settings changes, period locks and closings, imports, access changes and program versions, each with time, actor (user, API key, MCP connection, cron) and detail lines. Filter by from_date / to_date inside the period and by one category, as the dashboard report. For an enskild firma the owner\'s personnummer is masked. Read-only.',
+      'The processing history the system documentation must include (BFNAR 2013:2 p. 9.16): verifikationer posted, corrected and reversed, chart of accounts and settings changes, period locks and closings, imports, access changes and program versions, and decisions on bank lines and underlag (category beslut: the suggestions on offer, the one booked, who decided and which agent proposed it), each with time, actor (user, API key, MCP connection, cron) and detail lines. Filter by from_date / to_date inside the period and by one category, as the dashboard report. For an enskild firma the owner\'s personnummer is masked. Read-only.',
     useWhen: 'An auditor or Skatteverket asks how the books were processed, or you need to know who posted or changed something.',
     doNotUseFor: 'The raw row-level audit log (GET /audit-trail) or the verifikationslista (GET /reports/journal-register).',
     pitfalls: [
@@ -581,7 +708,8 @@ export const reportsBokslutsbilagor = defineOperation({
 })
 
 // ─────────────────────────────────────────────────────────────────
-// KPI and resultat per dimension (v1 only; MCP tools exist)
+// KPI and resultat per dimension (v1 only; MCP tools exist), and resultat
+// across two dimensions (v1 and search-only MCP tools)
 // ─────────────────────────────────────────────────────────────────
 
 export const reportsKpi = defineOperation({
@@ -706,6 +834,166 @@ export const reportsDimensionPnl = defineOperation({
   errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VALIDATION_ERROR', 'REPORT_GENERATION_FAILED'],
   http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/dimension-pnl' },
   run: async (ctx, input) => asDocumented(await (await reports()).getDimensionPnl(ctx, input)),
+})
+
+// Resultat across two dimensions (accounted#133). Search-only MCP tools: an
+// agent reaches them through gnubok_search_tools at no cost to tools/list.
+const DIM_NO = z.string().regex(/^[1-9]\d{0,3}$/)
+const RESULT_ACCOUNT = accountNumberSchema
+
+const dimensionCrossAxes = {
+  period_id: PERIOD_ID,
+  dim_a: DIM_NO.describe('The row dimension, an SIE dimension number: "1" kostnadsställe, "6" projekt, or a custom one.'),
+  dim_b: DIM_NO.describe('The column dimension, a different SIE dimension number.'),
+  account_from: RESULT_ACCOUNT.optional().describe('First account of the measure, 3000-8999, sent with account_to. Default: the whole result.'),
+  account_to: RESULT_ACCOUNT.optional().describe('Last account of the measure (inclusive), 3000-8999.'),
+  from_date: isoDateSchema.optional().describe('YYYY-MM-DD inside the period. Default: the period start.'),
+  to_date: isoDateSchema.optional().describe('YYYY-MM-DD inside the period, not before from_date. Default: the period end.'),
+}
+
+type AxesInput = { dim_a: string; dim_b: string; account_from?: string; account_to?: string }
+const twoDimensions = (b: AxesInput) => b.dim_a !== b.dim_b
+const rangeTogether = (b: AxesInput) => (b.account_from === undefined) === (b.account_to === undefined)
+
+const DIMENSION_CROSS_PITFALLS = [
+  'dim_a and dim_b must be two different dimensions; both are tags on the same line. A property of a dimension value (a home\'s region kept on the home) is not a tag and is not read.',
+  'Amounts are credit minus debit, as in the resultatrapport: revenue positive, costs negative.',
+  'Lines without a tag on a dimension land in its "(Utan dimension)" row or column (code null); the untagged x untagged cell is the remainder of the resultatrapport, so the cells sum to total.',
+  'What the bokslut run posts (source year_end) and the IB verifikat are left out, as in the resultatrapport.',
+]
+
+export const reportsDimensionCross = defineOperation({
+  id: 'reports.dimension-cross',
+  kind: 'read',
+  scope: 'reports:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Result across two dimensions: one dimension\'s values as rows, another\'s as columns, one amount per cell.',
+    description:
+      'A matrix over two SIE dimensions tagged on the same journal lines: rows are dim_a\'s values, columns dim_b\'s, each cell the result (or the accounts account_from to account_to) of the lines carrying both tags, with row and column totals. "(Utan dimension)" rows and columns (code null) hold the lines without that tag, and total equals the resultatrapport for the same window and accounts. Read the lines behind a cell with GET /reports/dimension-cross/lines. Read-only.',
+    useWhen: 'Following up result per region and channel, per project and cost centre, or any two dimensions the books tag, for the year or one quarter or month.',
+    doNotUseFor: 'One dimension (GET /reports/dimension-pnl, accounts as rows) or one value only (GET /reports/income-statement with dim_no and dim_code).',
+    pitfalls: DIMENSION_CROSS_PITFALLS,
+    example: {
+      request: { period_id: '7c2b…', dim_a: '1', dim_b: '6' },
+      response: {
+        data: {
+          dim_a: { sie_dim_no: '1', name: 'Kostnadsställe' },
+          dim_b: { sie_dim_no: '6', name: 'Projekt' },
+          accounts: { from: RESULTATKONTO_FIRST, to: RESULTATKONTO_LAST },
+          rows: [{ code: 'NORR', name: 'Region Norr' }, { code: null, name: null }],
+          columns: [{ code: 'WEB', name: 'Webb' }, { code: null, name: null }],
+          cells: [[120000, 15000], [0, -40000]],
+          row_totals: [135000, -40000],
+          column_totals: [120000, -25000],
+          total: 95000,
+          period: { start: '2026-01-01', end: '2026-12-31' },
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object(dimensionCrossAxes)
+    .refine(twoDimensions, { message: 'dim_a and dim_b must be two different dimensions.', path: ['dim_b'] })
+    .refine(rangeTogether, { message: 'account_from and account_to must be sent together.', path: ['account_to'] }),
+  output: z
+    .object({
+      dim_a: z.object({ sie_dim_no: z.string(), name: z.string() }),
+      dim_b: z.object({ sie_dim_no: z.string(), name: z.string() }),
+      accounts: z.object({ from: z.string(), to: z.string() }),
+      rows: z.array(z.object({ code: z.string().nullable(), name: z.string().nullable() })),
+      columns: z.array(z.object({ code: z.string().nullable(), name: z.string().nullable() })),
+      cells: z.array(z.array(z.number())),
+      row_totals: z.array(z.number()),
+      column_totals: z.array(z.number()),
+      total: z.number(),
+      period: z.object({ start: z.string(), end: z.string() }),
+    })
+    .loose(),
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VALIDATION_ERROR', 'REPORT_NOT_READY', 'REPORT_GENERATION_FAILED'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/dimension-cross' },
+  mcp: {
+    name: 'gnubok_get_dimension_cross',
+    title: 'Result Across Two Dimensions',
+    description:
+      'Result per value of one dimension (rows) and another (columns) tagged on the same lines, e.g. region x channel or project x cost centre, with totals equal to the resultatrapport. Optional account range and date window.',
+    keywords: ['två dimensioner', 'korstabell', 'pivot', 'resultat per region och kanal', 'projekt och kostnadsställe', 'dimensioner', 'cross tab', 'matrix'],
+  },
+  run: async (ctx, input) => asDocumented(await (await reports()).getDimensionCross(ctx, input)),
+})
+
+export const reportsDimensionCrossLines = defineOperation({
+  id: 'reports.dimension-cross-lines',
+  kind: 'read',
+  scope: 'reports:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'The journal lines behind one cell of the two-dimension result, a page at a time.',
+    description:
+      'The lines one cell of GET /reports/dimension-cross sums: same period, window, accounts and entry set, the lines whose dim_a tag is code_a and dim_b tag is code_b (codes compared trimmed; leave a code out for the "(Utan dimension)" row or column). In date and voucher order, at most limit (default 200, at most 1000); pass next.after_date, next.after_voucher and next.after_line back for the next page. Each line names its verifikat (journal_entry_id, voucher_series, voucher_number). Read-only.',
+    useWhen: 'Checking what makes up one cell of the two-dimension report.',
+    doNotUseFor: 'All lines of an account (GET /reports/general-ledger).',
+    pitfalls: [
+      'Send the same dim_a, dim_b, account range and window as the report, or the lines will not add up to the cell.',
+      'A code left out means "no tag on that dimension", not "any value".',
+    ],
+    example: {
+      request: { period_id: '7c2b…', dim_a: '1', code_a: 'NORR', dim_b: '6', code_b: 'WEB', limit: 1 },
+      response: {
+        data: {
+          lines: [
+            {
+              line_id: '5d1e…',
+              journal_entry_id: '9a0b…',
+              entry_date: '2026-03-02',
+              voucher_series: 'A',
+              voucher_number: 12,
+              description: 'Bokning 1042',
+              line_description: null,
+              account_number: BUDGET_EXAMPLE_ACCOUNTS.sales,
+              debit_amount: 0,
+              credit_amount: 4800,
+              dimensions: { '1': 'NORR', '6': 'WEB' },
+            },
+          ],
+          has_more: true,
+          next: { after_date: '2026-03-02', after_voucher: 12, after_line: '5d1e…' },
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z
+    .object({
+      ...dimensionCrossAxes,
+      code_a: z.string().min(1).optional().describe('The value of dim_a; leave out for the "(Utan dimension)" row.'),
+      code_b: z.string().min(1).optional().describe('The value of dim_b; leave out for the "(Utan dimension)" column.'),
+      after_date: isoDateSchema.optional().describe('next.after_date from the previous page.'),
+      after_voucher: z.coerce.number().int().min(0).optional().describe('next.after_voucher from the previous page.'),
+      after_line: z.string().uuid().optional().describe('next.after_line from the previous page.'),
+      limit: z.coerce.number().int().min(1).max(1000).optional().describe('Page size, 1-1000 (default 200).'),
+    })
+    .refine(twoDimensions, { message: 'dim_a and dim_b must be two different dimensions.', path: ['dim_b'] })
+    .refine(rangeTogether, { message: 'account_from and account_to must be sent together.', path: ['account_to'] }),
+  output: z
+    .object({
+      lines: z.array(z.record(z.string(), z.unknown())),
+      has_more: z.boolean(),
+      next: z.object({ after_date: z.string(), after_voucher: z.number(), after_line: z.string() }).nullable(),
+    })
+    .loose(),
+  errorCodes: ['FISCAL_PERIOD_NOT_FOUND', 'VALIDATION_ERROR', 'REPORT_NOT_READY', 'REPORT_GENERATION_FAILED'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/reports/dimension-cross/lines' },
+  mcp: {
+    name: 'gnubok_get_dimension_cross_lines',
+    title: 'Two-Dimension Result Lines',
+    description:
+      'The journal lines behind one cell of gnubok_get_dimension_cross (code_a, code_b; leave one out for its untagged row or column), paged, each with its verifikat.',
+    keywords: ['två dimensioner', 'verifikat bakom', 'rader', 'drill-down', 'korstabell'],
+  },
+  run: async (ctx, input) => asDocumented(await (await reports()).getDimensionCrossLines(ctx, input)),
 })
 
 // ─────────────────────────────────────────────────────────────────

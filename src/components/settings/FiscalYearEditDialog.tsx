@@ -1,8 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,7 +14,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { fiscalYearName, isDerivedFiscalYearName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import type { FiscalPeriod } from '@/types'
 
@@ -25,40 +24,49 @@ interface FiscalYearEditDialogProps {
   onOpenChange: (open: boolean) => void
   /** Called after a successful save so the parent can refetch. */
   onSaved: () => void
+  /**
+   * 'start': correct only the start of the company's first year within the
+   * month it starts in, also after its bokslut (crm#1140). Name and end
+   * stay; the server decides, like any re-date.
+   */
+  mode?: 'edit' | 'start'
 }
 
-/** Read a user-facing message from the canonical `{ error: { message } }`
- *  envelope (what the fiscal-periods PATCH route returns) or a legacy
- *  `{ error: string }` body. */
-function readApiError(body: unknown, fallback: string): string {
-  if (!body || typeof body !== 'object') return fallback
-  const error = (body as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
+/** The first and last day of the month `iso` falls in. */
+function monthBounds(iso: string): { from: string; to: string } {
+  const [y, m] = iso.split('-').map(Number)
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  const month = iso.slice(0, 7)
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, '0')}` }
 }
 
 /**
  * Edit the name and dates of one OPEN fiscal year (issue #2287). A thin
- * surface over PATCH /api/bookkeeping/fiscal-periods/[id], which already
- * allows a rename at any time on an open year and a re-date only while the
- * year has no posted vouchers. The dialog mirrors those two rules with the
- * route's own reasons: the posted count comes from the entry-count endpoint
- * on open (dates read-only above zero), and every refusal from the route is
- * shown verbatim so the user can correct and retry without leaving the
- * dialog. Only changed fields are sent, so a pure rename never trips the
- * voucher check. Every guard is re-enforced server-side.
+ * surface over PATCH /api/bookkeeping/fiscal-periods/[id], which allows a
+ * rename at any time on an open year and a re-date as long as nothing the
+ * year holds is affected (crm#1010: a first year recorded one day late is
+ * corrected here even with vouchers posted). The posted count from the
+ * entry-count endpoint is shown as information, not a gate: whether the new
+ * dates are allowed is decided server-side, by the guarded
+ * redate_fiscal_period RPC, and every refusal (which names what blocks, for
+ * example the vouchers that would end up outside) is shown verbatim so the
+ * user can correct and retry without leaving the dialog. Only changed fields
+ * are sent, so a pure rename never runs the date checks.
+ *
+ * In 'start' mode only the start date is editable, bounded to its month:
+ * the one change a closed or locked first year allows.
  */
 export function FiscalYearEditDialog({
   period,
   open,
   onOpenChange,
   onSaved,
+  mode = 'edit',
 }: FiscalYearEditDialogProps) {
+  const startOnly = mode === 'start'
+  const startMonth = monthBounds(period.period_start)
   const t = useTranslations('settings_bookkeeping')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
   const [name, setName] = useState(period.name)
@@ -66,14 +74,12 @@ export function FiscalYearEditDialog({
   // ("Räkenskapsår 2027"), the same rule as CreatePeriodDialog: a seed name
   // that never matched its dates is corrected together with them, and the
   // user watches it change. A hand-written name is never overwritten.
-  const [nameFollowsDates, setNameFollowsDates] = useState(() =>
-    isDerivedFiscalYearName(period.name),
+  const [nameFollowsDates, setNameFollowsDates] = useState(
+    () => !startOnly && isDerivedFiscalYearName(period.name),
   )
   const [periodStart, setPeriodStart] = useState(period.period_start)
   const [periodEnd, setPeriodEnd] = useState(period.period_end)
   const [postedCount, setPostedCount] = useState<number | null>(null)
-  const [countFailed, setCountFailed] = useState(false)
-  const [isChecking, setIsChecking] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
@@ -82,20 +88,16 @@ export function FiscalYearEditDialog({
 
     let cancelled = false
     async function loadPostedCount() {
-      setIsChecking(true)
-      setCountFailed(false)
       try {
         const response = await fetch(
           `/api/bookkeeping/fiscal-periods/${period.id}/entry-count`,
           { cache: 'no-store' },
         )
-        if (!response.ok) throw new Error('entry-count failed')
+        if (!response.ok) return
         const body = (await response.json()) as { data?: { posted_count?: number } }
         if (!cancelled) setPostedCount(body.data?.posted_count ?? 0)
       } catch {
-        if (!cancelled) setCountFailed(true)
-      } finally {
-        if (!cancelled) setIsChecking(false)
+        // Information only: the dates are checked server-side on save.
       }
     }
 
@@ -104,11 +106,6 @@ export function FiscalYearEditDialog({
       cancelled = true
     }
   }, [open, period.id])
-
-  // Dates open up only once the check has come back with zero posted
-  // vouchers; while checking, or if the check failed, they stay read-only
-  // and the sentence below the fields says why. The name is always editable.
-  const datesEditable = !isChecking && !countFailed && postedCount === 0
 
   // A date input yields '' while incomplete and a full YYYY-MM-DD otherwise:
   // only derive a name once both ends are known.
@@ -125,15 +122,20 @@ export function FiscalYearEditDialog({
   // is what gets sent once the user has actually edited it.
   const nameChanged = name !== period.name
   if (nameChanged && trimmedName) payload.name = trimmedName
-  if (datesEditable) {
-    if (periodStart && periodStart !== period.period_start) payload.period_start = periodStart
-    if (periodEnd && periodEnd !== period.period_end) payload.period_end = periodEnd
-  }
-  const endBeforeStart = datesEditable && !!periodStart && !!periodEnd && periodEnd <= periodStart
-  const datesIncomplete = datesEditable && (!periodStart || !periodEnd)
+  if (periodStart && periodStart !== period.period_start) payload.period_start = periodStart
+  if (periodEnd && periodEnd !== period.period_end) payload.period_end = periodEnd
+  const endBeforeStart = !!periodStart && !!periodEnd && periodEnd <= periodStart
+  const datesIncomplete = !periodStart || !periodEnd
+  const startOutsideMonth =
+    startOnly && !!periodStart && (periodStart < startMonth.from || periodStart > startMonth.to)
   const isDirty = Object.keys(payload).length > 0
   const canSave =
-    isDirty && trimmedName.length > 0 && !endBeforeStart && !datesIncomplete && !isSaving
+    isDirty &&
+    trimmedName.length > 0 &&
+    !endBeforeStart &&
+    !datesIncomplete &&
+    !startOutsideMonth &&
+    !isSaving
 
   function handleOpenChange(nextOpen: boolean) {
     if (isSaving) return
@@ -152,18 +154,17 @@ export function FiscalYearEditDialog({
       })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) {
-        // The route's refusals (BFL 3 kap. shapes, overlap, posted vouchers)
-        // are Swedish domain copy and stay verbatim in both locales.
-        setSubmitError(readApiError(body, t('fy_edit_failed_default')))
+        // Read in the UI locale: the fiscal-year codes' English is written for
+        // a person, and a refused re-date keeps its named blockers (Swedish
+        // domain copy) after the English lead.
+        setSubmitError(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fy_edit_failed_default') }))
         return
       }
       toast({ title: t('fy_edit_success') })
       onOpenChange(false)
       onSaved()
     } catch (error) {
-      setSubmitError(
-        error instanceof Error ? getUserErrorMessage(error) : t('fy_edit_failed_default'),
-      )
+      setSubmitError(getUserErrorMessage(error, { locale: errorLocale, fallback: t('fy_edit_failed_default') }))
     } finally {
       setIsSaving(false)
     }
@@ -173,8 +174,10 @@ export function FiscalYearEditDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('fy_edit_dialog_title')}</DialogTitle>
-          <DialogDescription>{t('fy_edit_dialog_description')}</DialogDescription>
+          <DialogTitle>{startOnly ? t('fy_correct_start_title') : t('fy_edit_dialog_title')}</DialogTitle>
+          <DialogDescription>
+            {startOnly ? t('fy_correct_start_description') : t('fy_edit_dialog_description')}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -183,6 +186,7 @@ export function FiscalYearEditDialog({
             <Input
               id="fy-edit-name"
               value={name}
+              disabled={startOnly}
               onChange={(event) => {
                 setName(event.target.value)
                 setNameFollowsDates(false)
@@ -198,7 +202,8 @@ export function FiscalYearEditDialog({
                 id="fy-edit-start"
                 type="date"
                 value={periodStart}
-                disabled={!datesEditable}
+                min={startOnly ? startMonth.from : undefined}
+                max={startOnly ? startMonth.to : undefined}
                 aria-describedby="fy-edit-dates-note"
                 onChange={(event) => updateDates(event.target.value, periodEnd)}
                 className="tabular-nums"
@@ -210,7 +215,7 @@ export function FiscalYearEditDialog({
                 id="fy-edit-end"
                 type="date"
                 value={periodEnd}
-                disabled={!datesEditable}
+                disabled={startOnly}
                 aria-describedby="fy-edit-dates-note"
                 onChange={(event) => updateDates(periodStart, event.target.value)}
                 className="tabular-nums"
@@ -218,19 +223,12 @@ export function FiscalYearEditDialog({
             </div>
           </div>
 
-          {/* One quiet sentence on why the dates are read-only, in the
-              route's own terms (posted vouchers). */}
+          {/* One quiet sentence on what posted vouchers mean for the dates. */}
           <p id="fy-edit-dates-note" className="text-xs text-muted-foreground">
-            {isChecking ? (
-              <span className="inline-flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {t('fy_edit_dates_checking')}
-              </span>
-            ) : countFailed ? (
-              t('fy_edit_dates_check_failed')
-            ) : postedCount !== null && postedCount > 0 ? (
-              t('fy_edit_dates_blocked_posted', { count: postedCount })
-            ) : null}
+            {startOnly ? `${t('fy_correct_start_range', startMonth)} ` : null}
+            {postedCount !== null && postedCount > 0
+              ? t('fy_edit_dates_posted_note', { count: postedCount })
+              : null}
           </p>
 
           {endBeforeStart ? (

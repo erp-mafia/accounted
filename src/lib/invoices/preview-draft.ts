@@ -17,21 +17,23 @@ import {
   companyWithInvoicePaymentAccount,
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-} from '@/lib/invoices/payment-accounts'
+} from '@/lib/cash-accounts/invoice-payment-accounts'
 import { buildInvoicePaymentRows, printsPayableRow } from '@/lib/invoices/payment-rows'
-import { computeDeduction, computeInvoiceDeductionTotal } from '@/lib/invoices/rot-rut-rules'
-import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { computeLineDeductions } from '@/lib/bookkeeping/rot-rut-rules'
+import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import {
   buildCreditNoteFields,
   creditNoteNumber,
   creditNoteOriginalReference,
 } from '@/lib/invoices/build-credit-note'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { isKronorCurrency, sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { expandPersonnummerTo12, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { createLogger } from '@/lib/logger'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * The invoice editor's draft as the customer would receive it, built from
@@ -43,9 +45,9 @@ import { createLogger } from '@/lib/logger'
  * Parity with the write path (lib/invoices/build-invoice-write.ts): the same
  * VAT decision (resolveInvoiceVatRules with the invoice's own treatment,
  * deriveInvoiceVatHeader), the same line, deduction and SEK arithmetic, the
- * same payee choice, and the per-invoice delivery date, öresavrundning and
- * QR choice. A credit preview is the kreditfaktura POST /api/invoices
- * creates for that invoice (lib/invoices/build-credit-note.ts).
+ * same payee choice, and the per-invoice delivery date, delivery address,
+ * öresavrundning and QR choice. A credit preview is the kreditfaktura POST
+ * /api/invoices creates for that invoice (lib/invoices/build-credit-note.ts).
  *
  * A live preview renders a half-filled form instead of refusing it. Each
  * gap renders with a placeholder and is reported in `missing`, so the
@@ -118,6 +120,8 @@ export function previewPlaceholderCustomer(nowIso: string = new Date().toISOStri
     invoice_email_bcc_addresses: null,
     language: 'sv',
     default_payment_terms: 30,
+    invoice_reference: null,
+    invoice_marking: null,
     notes: null,
     created_at: nowIso,
     updated_at: nowIso,
@@ -210,6 +214,39 @@ function printsPayableMethod(
   }))
 }
 
+/**
+ * The numbers the write path would copy onto the draft's article lines
+ * (build-invoice-write.ts): from the company's own articles, and only when
+ * the company prints them. A failed read previews without the numbers
+ * rather than refusing the preview.
+ */
+async function previewArticleNumbers(
+  supabase: SupabaseClient,
+  companyId: string,
+  company: CompanySettings,
+  rows: PreviewItemInput[],
+): Promise<Map<string, string | null>> {
+  const numbers = new Map<string, string | null>()
+  if (company.invoice_show_article_number !== true) return numbers
+  const ids = Array.from(
+    new Set(rows.filter((row) => row.line_type !== 'text').map((row) => row.article_id).filter((id): id is string => !!id)),
+  )
+  if (ids.length === 0) return numbers
+  const { data, error } = await supabase
+    .from('articles')
+    .select('id, article_number')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  if (error) {
+    log.warn('preview article numbers could not be read; previewing without them', { error: error.message })
+    return numbers
+  }
+  for (const row of (data ?? []) as Array<{ id: string; article_number: string | null }>) {
+    numbers.set(row.id, row.article_number?.trim() || null)
+  }
+  return numbers
+}
+
 export async function buildInvoicePreviewDraft(params: {
   supabase: SupabaseClient
   companyId: string
@@ -219,7 +256,7 @@ export async function buildInvoicePreviewDraft(params: {
   today?: string
 }): Promise<BuildInvoicePreviewResult> {
   const { supabase, companyId } = params
-  const today = params.today ?? new Date().toISOString().split('T')[0]
+  const today = params.today ?? todayIsoStockholm()
 
   const { data: companyRow, error: companyError } = await supabase
     .from('company_settings')
@@ -368,7 +405,32 @@ async function buildDraftPreview(params: {
 
   const rows: PreviewItemInput[] = input.items.length > 0
     ? input.items
-    : [{ line_type: 'text', description: PREVIEW_PLACEHOLDER_ROW_TEXT[language], quantity: 0, unit: '', unit_price: 0 }]
+    : [{ line_type: 'text', description: PREVIEW_PLACEHOLDER_ROW_TEXT[language], quantity: 0, unit: '', unit_price: 0, article_id: null }]
+
+  // The deduction each row stores, as the write path computes it
+  // (computeLineDeductions): whole kronor per claim on a SEK invoice.
+  const lineDeductions = deductionsApply
+    ? computeLineDeductions(
+        rows.map((item) =>
+          item.line_type === 'text'
+            ? { unit_price: 0, quantity: 0, deduction_type: null }
+            : {
+                unit_price: item.unit_price,
+                quantity: item.quantity,
+                discount_percent: item.discount_percent ?? 0,
+                deduction_type: item.deduction_type ?? null,
+                work_type: item.deduction_type ? (item.work_type?.trim() || null) : null,
+                // The base is the NET line total inkl. moms at the line's rate (HUSFL 6-9 §§).
+                vat_rate: zeroVat ? 0 : (item.vat_rate ?? vatRules.rate),
+              },
+        ),
+        { currency },
+      )
+    : []
+
+  // The article number each row would carry (crm#1084), read only when the
+  // invoice prints it.
+  const articleNumbers = await previewArticleNumbers(supabase, companyId, company, rows)
 
   const nowIso = new Date().toISOString()
   const items = rows.map((item, index): InvoiceItem => {
@@ -400,17 +462,7 @@ async function buildDraftPreview(params: {
     const rate = zeroVat ? 0 : (item.vat_rate ?? vatRules.rate)
     const deductionType = deductionsApply ? (item.deduction_type ?? null) : null
     const workType = deductionType ? (item.work_type?.trim() || null) : null
-    // The base is the NET line total inkl. moms at the line's rate (HUSFL 6-9 §§).
-    const deductionAmount = deductionType
-      ? computeDeduction({
-          unit_price: item.unit_price,
-          quantity: item.quantity,
-          discount_percent: discountPercent,
-          deduction_type: deductionType,
-          work_type: workType,
-          vat_rate: rate,
-        })
-      : 0
+    const deductionAmount = deductionType ? (lineDeductions[index] ?? 0) : 0
     return {
       ...base,
       line_type: 'product',
@@ -419,10 +471,12 @@ async function buildDraftPreview(params: {
       unit: item.unit,
       unit_price: item.unit_price,
       discount_percent: discountPercent,
+      article_id: item.article_id ?? null,
+      article_number: item.article_id ? (articleNumbers.get(item.article_id) ?? null) : null,
       line_total: roundOre(lineNet),
       vat_rate: rate,
       // The write path's per-line VAT, from the unrounded net.
-      vat_amount: isDeliveryNote ? 0 : Math.round(lineNet * rate / 100 * 100) / 100,
+      vat_amount: isDeliveryNote ? 0 : computeLineVat(lineNet, rate),
       deduction_type: deductionType,
       deduction_amount: deductionAmount,
       labor_hours: deductionType ? (item.labor_hours ?? null) : null,
@@ -440,17 +494,9 @@ async function buildDraftPreview(params: {
   const vatAmount = isDeliveryNote ? 0 : roundOre(billable.reduce((sum, item) => sum + item.vat_amount, 0))
   const total = isDeliveryNote ? 0 : roundOre(subtotal + vatAmount)
 
+  // The header is the sum of its rows, as on the write path.
   const deductionTotal = deductionsApply
-    ? computeInvoiceDeductionTotal(
-        billable.map((item) => ({
-          unit_price: item.unit_price,
-          quantity: item.quantity,
-          discount_percent: item.discount_percent ?? 0,
-          deduction_type: item.deduction_type ?? null,
-          work_type: item.work_type ?? null,
-          vat_rate: item.vat_rate,
-        })),
-      )
+    ? roundOre(billable.reduce((sum, item) => sum + (item.deduction_amount ?? 0), 0))
     : 0
 
   // Header treatment, ruta and statutory notice from the rates the lines
@@ -483,7 +529,7 @@ async function buildDraftPreview(params: {
   const toSek = (amount: number): number | null => {
     if (isDeliveryNote) return null
     if (currency === 'SEK') return amount
-    return exchangeRate ? roundOre(convertToSEK(amount, exchangeRate.rate)) : null
+    return exchangeRate ? sekOfForeign(amount, exchangeRate.rate) : null
   }
 
   const invoice = {
@@ -514,6 +560,7 @@ async function buildDraftPreview(params: {
     your_reference: optionalTrimmed(input.your_reference),
     our_reference: optionalTrimmed(input.our_reference),
     invoice_marking: optionalTrimmed(input.invoice_marking),
+    delivery_address: input.delivery_address ?? null,
     notes: input.notes || null,
     payment_link_url: previewPaymentLink(input.payment_link_url),
     payment_cash_account_id: payeeChoice.fields.payment_cash_account_id,
@@ -534,6 +581,22 @@ async function buildDraftPreview(params: {
     created_at: nowIso,
     updated_at: nowIso,
   } as InvoicePdfInvoice
+
+  // What the issued invoice will say about Autogiro: a SEK faktura to a
+  // customer with an active mandate is debited, as the draft trigger decides
+  // for the stored draft (migration 20261025084700_autogiro.sql).
+  // Bankgirot debits kronor only.
+  if (docType === 'invoice' && isKronorCurrency(currency) && !isPreviewPlaceholderCustomer(customer)) {
+    const { data: mandate, error: mandateError } = await supabase
+      .from('autogiro_mandates')
+      .select('payer_number')
+      .eq('company_id', companyId)
+      .eq('customer_id', customer.id)
+      .eq('status', 'active')
+      .maybeSingle()
+    if (mandateError) throw mandateError
+    invoice.autogiro_payer_number = (mandate as { payer_number: string } | null)?.payer_number ?? null
+  }
 
   const missing: InvoicePreviewMissing[] = []
   if (isPreviewPlaceholderCustomer(customer)) missing.push('customer')

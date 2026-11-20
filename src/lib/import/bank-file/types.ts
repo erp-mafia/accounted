@@ -5,6 +5,8 @@
  * and ISO 20022 camt.053 XML.
  */
 
+import type { UnrecognizedColumns } from './columns'
+
 /** Parsed and normalized bank transaction from any file format */
 export interface ParsedBankTransaction {
   date: string // YYYY-MM-DD
@@ -15,6 +17,28 @@ export interface ParsedBankTransaction {
   reference?: string | null // OCR number, Bankgiro reference
   counterparty?: string | null
   raw_line?: string // Original CSV line for debugging
+  // What the file says beyond the booking date; camt.053 carries these.
+  value_date?: string | null // YYYY-MM-DD
+  end_to_end_id?: string | null
+  provider_transaction_id?: string | null // The bank's own id for the entry
+  counterparty_iban?: string | null
+  bank_transaction_code?: string | null // ISO 20022 domain-family-subfamily, e.g. PMNT-RCDT-ESCT
+}
+
+/**
+ * The bank account the statement itself is for, as the file states it:
+ * camt.053 by IBAN in <Stmt><Acct>, Swedbank by its clearing and account
+ * columns, Handelsbanken, ICA Banken and Northmill in a "Kontonummer" line
+ * above the rows. Matched to a cash account by matchFileAccount
+ * (lib/cash-accounts/file-account.ts).
+ */
+export interface BankFileAccountIdentity {
+  /** Normalized IBAN (no spaces, upper case). */
+  iban: string | null
+  /** Clearing number as printed, when the file gives it in its own column. */
+  clearing: string | null
+  /** Account number as printed; may lead with the clearing number. */
+  account_number: string | null
 }
 
 /** Result from parsing a bank file */
@@ -22,9 +46,20 @@ export interface BankFileParseResult {
   format: BankFileFormatId
   format_name: string
   transactions: ParsedBankTransaction[]
+  /**
+   * The statement's own account. Absent or null when the format does not
+   * say, or the file holds rows of more than one account.
+   */
+  account?: BankFileAccountIdentity | null
   date_from: string | null
   date_to: string | null
   issues: BankFileParseIssue[]
+  /**
+   * Set when the format found no column it could read: the columns the file
+   * does have and the ones the format expects. The parse routes answer it
+   * with BANK_FILE_COLUMNS_UNRECOGNIZED instead of an empty preview.
+   */
+  unrecognized_columns?: UnrecognizedColumns
   stats: {
     total_rows: number
     parsed_rows: number
@@ -88,7 +123,8 @@ export interface GenericCSVColumnMapping {
   counterparty?: number
   balance?: number
   delimiter: string
-  decimal_separator: ',' | '.'
+  /** The mark a person chose. Null: nobody did, and the file itself must settle it. */
+  decimal_separator: ',' | '.' | null
   skip_rows: number
   date_format: string // e.g. 'YYYY-MM-DD'
 }

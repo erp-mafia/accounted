@@ -28,6 +28,14 @@ import { getPool } from './setup'
  * record of an exchange with a party outside Accounted, or a link between two
  * companies that only an operator should unwind.
  */
+const BOLAGET_REGISTERS =
+  'the aktiebok and the roles (ABL 5:3, never deleted) keep the party or class they name; both go in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
+const CAPITAL_REGISTERS =
+  'a dividend\'s split per holder and a shareholder contribution (never deleted; the KU31 and the books rest on them) keep the party they name; both go in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
+
+const OWNER_LOANS =
+  'the owner loan register (never deleted; the ABL 21:10 special list is kept ten years) keeps the party it names; it goes in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
+
 const REFUSED_ON_PURPOSE: Record<string, string> = {
   'arsredovisning_submissions.annual_report_version_id':
     'a filing sent to Bolagsverket; its WORM trail outranks a demo teardown',
@@ -37,6 +45,18 @@ const REFUSED_ON_PURPOSE: Record<string, string> = {
     'links a reset source to its replacement company; unwinding that is an operator decision',
   'company_migration_resets.source_company_id':
     'links a reset source to its replacement company; unwinding that is an operator decision',
+  'payment_orders.batch_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.cash_account_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.employee_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/salary/payment/pay-via-bank.ts, and create_salary_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.salary_run_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/salary/payment/pay-via-bank.ts, and create_salary_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.supplier_invoice_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.supplier_invoice_payment_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
   'peppol_deliveries.company_id':
     'Peppol send is refused for sandbox companies (isSandboxCompany in peppol-send-service); a row means the network saw it',
   'peppol_deliveries.invoice_id':
@@ -47,6 +67,16 @@ const REFUSED_ON_PURPOSE: Record<string, string> = {
   'peppol_delivery_evidence.company_id': 'append-only Peppol delivery trail, see peppol_deliveries',
   'peppol_inbound_documents.company_id':
     'an e-invoice received from the Peppol network; the registration it needs is refused for sandbox companies',
+  'company_roles.party_id': BOLAGET_REGISTERS,
+  'dividend_distributions.party_id': CAPITAL_REGISTERS,
+  'shareholder_contributions.party_id': CAPITAL_REGISTERS,
+  'owner_loans.party_id': OWNER_LOANS,
+  'owner_loans.related_to_party_id': OWNER_LOANS,
+  'share_register_events.counterparty_party_id': BOLAGET_REGISTERS,
+  'share_register_events.from_party_id': BOLAGET_REGISTERS,
+  'share_register_events.share_class_id': BOLAGET_REGISTERS,
+  'share_register_events.to_party_id': BOLAGET_REGISTERS,
+  'share_register_events.to_share_class_id': BOLAGET_REGISTERS,
   'skatteverket_api_audit_log.company_id':
     'WORM log of calls made to Skatteverket on the company\'s behalf',
 }
@@ -72,13 +102,25 @@ const CONDITIONAL_DELETE_GUARDS: Record<string, string> = {
   lock_cash_history_for_journal_line: 'takes a lock; raises only on lock contention',
   guard_bank_configuration_writer: 'takes the company cash-account lock; raises only on contention',
   guard_bank_provider_session_claim: 'takes the bank session lock; raises only on a started revocation for INSERT/UPDATE',
+  unsettle_payment_order_on_supplier_payment_delete:
+    'never refuses: it clears the settlement of the order the deleted row settled and returns OLD; a sandbox company holds no payment order',
   block_document_deletion:
     'only for a document on a posted voucher; the teardown unlinks documents before deleting them',
   block_sent_invoice_document_deletion:
     'only while a sent invoice_deliveries row points at the PDF; the teardown deletes deliveries first',
-  enforce_dimension_value_retention:
-    'only while a posted line uses the value; journal entries are gone before dimensions',
   remove_team_member_from_companies: 'never raises',
+  arrivals_append_only:
+    'refuses only while the company row exists; the teardown reaches arrivals through the companies cascade, after that row is gone',
+  arrival_outputs_append_only:
+    'refuses only while the arrival exists; outputs go through the arrivals cascade, after the arrival is gone',
+  ledger_days_on_entry_delete:
+    'never refuses: it subtracts the deleted verifikat\'s lines from ledger_account_days and returns OLD; its shared lock waits only for a summary build',
+  company_grants_immutable:
+    'refuses a DELETE only while the company row exists; the teardown removes grants through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
+  booking_review_rules_immutable:
+    'refuses a DELETE only while the company row exists; the teardown removes the rules through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
+  guard_voucher_sequence_writer:
+    'refuses only a direct write by anon, authenticated or service_role (current_user); cleanup_sandbox_user is SECURITY DEFINER and foreign key cascades run as the table owner, so a teardown never trips it (#199)',
 }
 
 type Statement = { kind: 'delete' | 'update'; table: string; cols: string[]; pos: number }

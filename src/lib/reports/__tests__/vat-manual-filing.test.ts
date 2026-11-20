@@ -50,8 +50,8 @@ describe('buildManualFilingRows', () => {
   })
 
   it('truncates each ruta to whole kronor (öretal faller bort) and recomputes ruta 49 from the truncated values', () => {
-    // 252,50 kr output VAT -> 252 kr filed (öre dropped, SFL 22:1, not rounded
-    // up to 253); net follows the truncated values.
+    // 252,50 kr output VAT -> 252 kr filed (öre dropped, SFF 22 kap. 1 §, not
+    // rounded up to 253); net follows the truncated values.
     const rows = buildManualFilingRows(makeRutor({ ruta05: 1010, ruta10: 252.5, ruta48: 0 }))
     expect(rows.find((r) => r.ruta === '10')?.amount).toBe(252)
     expect(rows.at(-1)).toMatchObject({ ruta: '49', amount: 252 })

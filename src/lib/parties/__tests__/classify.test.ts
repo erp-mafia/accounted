@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyKey } from '../classify'
 
-// Founder-labelled examples from the 2026-09-02 golden set, one per rule.
+// Hand-labelled examples from the 2026-09-02 golden set, one per rule.
 describe('classifyKey', () => {
   it.each([
     ['levfakt beijer byggmaterial 097', '4000', 'party'],

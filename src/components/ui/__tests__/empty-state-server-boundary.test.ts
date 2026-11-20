@@ -23,8 +23,9 @@ function isClientComponent(source: string): boolean {
 
 /**
  * EmptyState is a Client Component and its `icon` prop is a COMPONENT
- * reference (`icon?: LucideIcon`), not an element. lucide builds every icon
- * with forwardRef, so a Server Component that passes `icon={SomeIcon}` hands
+ * reference (`icon?: Icon` from @/components/icons), not an element. Every
+ * icon there is a plain function component (lucide's were forwardRef objects,
+ * same problem), so a Server Component that passes `icon={SomeIcon}` hands
  * Flight a raw function and the render throws before the page ever reaches the
  * browser: /byra/kpi 500'd into the dashboard error boundary for exactly this
  * reason (digest 1621801304), and only for byråer with zero client companies,
@@ -58,13 +59,13 @@ describe('byrå KPI empty state', () => {
     const source = fs.readFileSync(pagePath, 'utf8')
     expect(isClientComponent(source)).toBe(false)
     expect(source).toMatch(/<EmptyByraClients\s*\/>/)
-    expect(source).not.toMatch(/from 'lucide-react'/)
+    expect(source).not.toMatch(/from '@\/components\/icons'/)
   })
 
   it('keeps the icon and the copy in the preset', () => {
     const source = fs.readFileSync(path.join(repoRoot, 'components', 'ui', 'empty-state.tsx'), 'utf8')
     expect(source).toMatch(/export function EmptyByraClients\(\)/)
-    expect(source).toMatch(/icon=\{TrendingUp\}/)
+    expect(source).toMatch(/icon=\{ArrowTrendingUpIcon\}/)
     // Variable-agnostic: the preset reads from the `byra` namespace under its
     // own translator name, so assert the keys, not the caller's identifier.
     expect(source).toMatch(/\w+\('kpi_empty_title'\)/)

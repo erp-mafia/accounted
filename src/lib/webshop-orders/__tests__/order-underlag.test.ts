@@ -14,6 +14,8 @@ import {
   orderUnderlagFilename,
   archiveWebshopOrderUnderlag,
   formatAmount,
+  renderWebshopOrderUnderlagPdf,
+  ORDER_UNDERLAG_FILENAME_PREFIX,
 } from '../order-underlag'
 
 function makeOrder(overrides: Partial<WebshopOrder> = {}): WebshopOrder {
@@ -49,6 +51,7 @@ function makeOrder(overrides: Partial<WebshopOrder> = {}): WebshopOrder {
     customer_email: 'anna@example.se',
     customer_orgnr: null,
     customer_country: 'SE',
+    ships_nothing: false,
     payment_method: 'swish',
     payment_method_title: 'Swish',
     gateway_reference: 'SW-123',
@@ -235,6 +238,37 @@ describe('orderUnderlagFilename', () => {
     expect(
       orderUnderlagFilename({ isRefund: true, orderNumber: '1001', orderDate: '2026-08-05' }),
     ).toBe('Orderunderlag_aterbetalning_1001_2026-08-05.pdf')
+  })
+})
+
+describe('renderWebshopOrderUnderlagPdf', () => {
+  const { supabase: supabaseMock, mockResult } = createMockSupabase()
+  const supabase = supabaseMock as unknown as SupabaseClient
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResult({ data: { company_name: 'Testbolag AB', org_number: '556677-8899' } })
+  })
+
+  it('renders the PDF and its file name without archiving anything', async () => {
+    const { bytes, filename } = await renderWebshopOrderUnderlagPdf({
+      supabase,
+      companyId: 'company-1',
+      order: makeOrder(),
+    })
+    expect(Buffer.from(bytes).subarray(0, 5).toString('utf8')).toBe('%PDF-')
+    expect(filename).toBe('Orderunderlag_1001_2026-08-01.pdf')
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+  })
+
+  it('names refunds with the same prefix the retry looks for', async () => {
+    const { filename } = await renderWebshopOrderUnderlagPdf({
+      supabase,
+      companyId: 'company-1',
+      order: makeOrder({ row_type: 'refund', total: -500, total_tax: -100 }),
+    })
+    expect(filename.startsWith(ORDER_UNDERLAG_FILENAME_PREFIX)).toBe(true)
+    expect(filename).toBe('Orderunderlag_aterbetalning_1001_2026-08-01.pdf')
   })
 })
 

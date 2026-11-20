@@ -15,8 +15,8 @@ describe('generateK2IxbrlDocument', () => {
   it('declares the container per TA §3/§4: UTF-8, title, programvara meta, no scripts', () => {
     expect(xhtml.startsWith('<?xml version="1.0" encoding="utf-8"?>')).toBe(true)
     expect(xhtml).toContain('<title>')
-    expect(xhtml).toContain('<meta name="programvara" content="Accounted - Accounted"/>')
-    expect(xhtml).toContain('<meta name="programversion" content="2026.1"/>')
+    expect(xhtml).toContain('<meta name="programvara" content="Arcim Technology AB - Accounted"/>')
+    expect(xhtml).toContain('<meta name="programversion" content="1.0"/>')
     expect(xhtml).not.toContain('<script')
     expect(xhtml).not.toContain('&nbsp;')
     expect(xhtml).toContain('xmlns="http://www.w3.org/1999/xhtml"')

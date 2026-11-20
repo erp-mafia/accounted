@@ -5,24 +5,33 @@ import {
   OAUTH_MCP_KEY_NAME,
   generateRefreshToken,
   hashRefreshToken,
+  deriveRotatedCredentials,
   createServiceClientNoCookies,
   validateScopes,
   findStageApproveConflict,
   DEFAULT_OAUTH_SCOPES,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
-import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole } from '@/lib/auth/oauth-allowlist'
+import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole, resolveRedirectUri } from '@/lib/auth/oauth-allowlist'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { isUuid } from '@/lib/invariants/uuid'
+import { createLogger } from '@/lib/logger'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
 
-// Grace window (seconds) during which a just-superseded access token and refresh
-// token stay valid after a rotation. Lets a client that cannot reliably persist
-// the rotated refresh token, or that fires concurrent refreshes: recover via
-// idempotent replay instead of being forced into a re-auth loop (issue #710).
-// Reuse of a previous refresh token AFTER this window revokes the grant.
-const REFRESH_GRACE_SECONDS = 120
+// How long the access key a refresh supersedes keeps working, so requests
+// already in flight with it finish (issue #710). Only the access key: whether
+// a replayed refresh token is honoured depends on the grant's state, not on
+// time (crm#1043, see handleRefreshTokenGrant).
+const ACCESS_KEY_GRACE_SECONDS = 120
+
+const log = createLogger('mcp-oauth/token')
+
+// RFC 6749 5.2 limits error_description to printable ASCII, so this is the
+// English sentence; the structured AGENT_PAUSED message every door answers a
+// paused agent's key with carries the Swedish one.
+const AGENT_PAUSED_DESCRIPTION =
+  'AGENT_PAUSED: this agent is paused in Accounted. The person responsible for it can resume it under Settings.'
 
 /**
  * OAuth 2.0 Token Endpoint.
@@ -30,9 +39,9 @@ const REFRESH_GRACE_SECONDS = 120
  * Supports two grant types:
  *   - authorization_code: exchange a PKCE-protected auth code for a fresh
  *     api_key (access_token) plus a refresh_token.
- *   - refresh_token: rotate the refresh_token and return the same api_key
- *     with a fresh expires_in. The api_key itself does not expire
- *     server-side; expires_in is a hint so clients refresh on a cadence.
+ *   - refresh_token: rotate both the refresh_token and the api_key. The
+ *     api_key does not expire server-side until a refresh supersedes it;
+ *     expires_in is a hint so clients refresh on a cadence.
  */
 export async function POST(request: Request) {
   let params: URLSearchParams
@@ -225,15 +234,29 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   // script hides it), so the consent click is the self-attestation
   // (ASVS V16.1.1 / SOC 2 CC6.1). Only the scopes
   // actually granted count, after the role cap: approve is never pre-ticked
-  // (founder decision 2026-10-03, issue #3408), so a default one-click
+  // (product decision 2026-10-03, issue #3408), so a default one-click
   // consent records nothing here.
   const conflictingScope = findStageApproveConflict(grantedScopes)
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
   let storedClient: string | null = builtInRedirectProvider(payload.redirectUri)
   if (!storedClient) {
-    const { data: registration } = await supabase.from('oauth_client_registrations')
-      .select('id').eq('redirect_uri', payload.redirectUri).is('revoked_at', null).maybeSingle()
-    if (registration) storedClient = `registered:${registration.id}`
+    // The registration /authorize resolved for this user: several users may
+    // each have registered the same URI (crm#1654).
+    const resolution = await resolveRedirectUri(payload.redirectUri, supabase, { consentingUserId: payload.userId })
+    if (resolution.allowed && resolution.kind === 'registered') storedClient = `registered:${resolution.registrationId}`
+  }
+
+  // A reconnect lands on the same connector identity as the connection it
+  // replaces (one per user and client, migration 20261029100000), so a
+  // paused agent cannot sign in again around its pause. Refused before a key
+  // exists. The key would be refused at every call anyway, so a failed
+  // lookup (a database without the table) lets the exchange through.
+  if (await connectorIsPaused(supabase, payload.userId, storedClient)) {
+    log.info('authorization refused: agent paused', { userId: payload.userId, client: storedClient })
+    return NextResponse.json(
+      { error: 'invalid_grant', error_description: AGENT_PAUSED_DESCRIPTION },
+      { status: 400 }
+    )
   }
 
   // The key row and its company allowlist rows (for a restricted consent)
@@ -305,6 +328,39 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
 }
 
 /**
+ * Whether the live connector identity of (user, client) is paused. Mirrors
+ * the identity the api_keys trigger attaches a new OAuth key to: kind
+ * connector, not revoked, same sponsor and client (a missing client is one
+ * connector too). Any lookup error answers false: validation refuses a paused
+ * identity's keys regardless, so this check only saves minting a dead key.
+ */
+async function connectorIsPaused(
+  supabase: ReturnType<typeof createServiceClientNoCookies>,
+  userId: string,
+  client: string | null,
+): Promise<boolean> {
+  try {
+    let query = supabase
+      .from('agent_identities')
+      .select('id')
+      .eq('sponsor_user_id', userId)
+      .eq('kind', 'connector')
+      .is('revoked_at', null)
+      .not('paused_at', 'is', null)
+    query = client === null ? query.is('client', null) : query.eq('client', client)
+    const { data, error } = await query.limit(1)
+    if (error) {
+      log.warn('agent identity pause lookup failed', { code: error.code })
+      return false
+    }
+    return Array.isArray(data) && data.length > 0
+  } catch (err) {
+    log.warn('agent identity pause lookup threw', { message: err instanceof Error ? err.message : String(err) })
+    return false
+  }
+}
+
+/**
  * The company allowlist carried in the auth code.
  *
  * Absent (undefined or null) means the consent was unrestricted: `ok` with
@@ -353,23 +409,25 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   const supabase = createServiceClientNoCookies()
   const presentedHash = hashRefreshToken(refreshToken)
 
-  // Pre-generate the candidate credentials; the RPC decides whether to use them
-  // (rotate / idempotent replay) or ignore them (reuse / revoked / invalid).
-  // Doing lookup + rotate + demote in ONE SECURITY DEFINER RPC closes the
-  // TOCTOU gap the old SELECT-then-CAS had, and lets a just-superseded refresh
-  // token stay valid for a grace window so a client that cannot persist the
-  // rotated token, or fires concurrent refreshes: recovers instead of being
-  // forced into a re-auth loop (issue #710). Reuse AFTER the grace window
-  // revokes the grant (RFC 9700 §4.14.2 reuse detection).
-  const rotated = generateRefreshToken()
-  const { key: newKey, hash: newKeyHash, prefix: newKeyPrefix } = generateApiKey()
+  // Lookup, rotation and reuse detection happen in ONE SECURITY DEFINER RPC
+  // (no TOCTOU between them). The successor pair is derived from the
+  // presented token, so presenting the same token again yields the same pair:
+  // the RPC answers the immediate predecessor of the current token with that
+  // pair again ('replayed'), however late, because its successor has not been
+  // used yet. A retry after a lost response, two concurrent refreshes and a
+  // client that failed to persist the rotated token all end up holding a
+  // working pair. Only a token presented after its successor was used (two or
+  // more generations old) is reuse, and revokes the grant (RFC 9700 4.14.2).
+  // Before crm#1043 a 120 s clock decided instead, and a late retry revoked a
+  // legitimate connection without a trace.
+  const successor = deriveRotatedCredentials(refreshToken)
 
   const { data, error } = await supabase.rpc('rotate_mcp_refresh_token', {
     p_presented_hash: presentedHash,
-    p_new_refresh_hash: rotated.hash,
-    p_new_key_hash: newKeyHash,
-    p_new_key_prefix: newKeyPrefix,
-    p_grace_seconds: REFRESH_GRACE_SECONDS,
+    p_new_refresh_hash: successor.refresh.hash,
+    p_new_key_hash: successor.key.hash,
+    p_new_key_prefix: successor.key.prefix,
+    p_grace_seconds: ACCESS_KEY_GRACE_SECONDS,
   })
 
   if (error) {
@@ -381,19 +439,35 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   }
 
   const result = (Array.isArray(data) ? data[0] : data) as
-    | { outcome: string; scopes: string[] | null }
+    | { outcome: string; scopes: string[] | null; api_key_id?: string | null }
     | undefined
   const outcome = result?.outcome
+  const apiKeyId = result?.api_key_id ?? null
 
-  // 'rotated' (normal) and 'replayed' (idempotent in-grace retry/concurrent)
-  // both succeed and return the freshly minted pair. Everything else maps to
-  // invalid_grant; for 'reuse_revoked' the grant was already revoked in the RPC.
+  if (outcome === 'reuse_revoked') {
+    // A connection just died: the user has to reconnect. Logged with the key
+    // id only, never a token, so support can find the grant and see why.
+    log.warn('refresh token reuse: grant revoked', { apiKeyId, outcome })
+  } else if (outcome === 'replayed') {
+    log.info('refresh token replayed: same successor returned', { apiKeyId, outcome })
+  } else if (outcome === 'paused') {
+    log.info('refresh refused: agent paused', { apiKeyId, outcome })
+  }
+
+  // 'rotated' and 'replayed' both succeed with the successor pair. Everything
+  // else is invalid_grant; for 'reuse_revoked' the RPC already revoked it.
+  // 'paused' wrote nothing: the same refresh token rotates once the agent is
+  // resumed.
   if (outcome !== 'rotated' && outcome !== 'replayed') {
     return NextResponse.json(
       {
         error: 'invalid_grant',
         error_description:
-          outcome === 'revoked' ? 'Refresh token revoked' : 'Invalid or expired refresh token',
+          outcome === 'paused'
+            ? AGENT_PAUSED_DESCRIPTION
+            : outcome === 'revoked' || outcome === 'reuse_revoked'
+              ? 'Refresh token revoked'
+              : 'Invalid or expired refresh token',
       },
       { status: 400 }
     )
@@ -404,10 +478,10 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   const persistedScopes = validateScopes(result?.scopes ?? null) ?? DEFAULT_OAUTH_SCOPES
 
   return NextResponse.json({
-    access_token: newKey,
+    access_token: successor.key.key,
     token_type: 'Bearer',
     expires_in: ACCESS_TOKEN_TTL_SECONDS,
-    refresh_token: rotated.token,
+    refresh_token: successor.refresh.token,
     scope: persistedScopes.join(' '),
   })
 }

@@ -28,31 +28,10 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const BASE = `http://localhost/api/v1/companies/${COMPANY_ID}/bank-connections`
@@ -60,6 +39,7 @@ const BASE = `http://localhost/api/v1/companies/${COMPANY_ID}/bank-connections`
 const CONNECTION_ROW = {
   id: '11111111-1111-4111-8111-111111111111',
   bank_name: 'Swedbank',
+  aggregator: 'open_payments',
   status: 'active',
   created_at: '2026-08-01T00:00:00Z',
   last_synced_at: '2026-08-31T05:04:12Z',
@@ -91,10 +71,10 @@ describe('v1 bank-connections list', () => {
     vi.clearAllMocks()
     requireCapabilityMock.mockResolvedValue(null)
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         bank_connections: { data: [CONNECTION_ROW] },
-      }),
+      }).supabase,
     )
   })
 
@@ -123,9 +103,9 @@ describe('v1 bank-connections list', () => {
   it('404 when the key user is not a member of the company', async () => {
     authOk(['companies:read'])
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: null },
-      }),
+      }).supabase,
     )
     const res = await GET(req(), params)
     expect(res.status).toBe(404)
@@ -143,6 +123,7 @@ describe('v1 bank-connections list', () => {
       {
         connection_id: '11111111-1111-4111-8111-111111111111',
         bank: 'Swedbank',
+        aggregator: 'open_payments',
         status: 'active',
         since: '2026-08-01T00:00:00Z',
         last_synced_at: '2026-08-31T05:04:12Z',
@@ -153,13 +134,47 @@ describe('v1 bank-connections list', () => {
     expect(body.meta.request_id).toMatch(/^req_/)
   })
 
+  it('flags enable_banking rows with sunset once that feed has ended, and only them', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    try {
+      authOk(['companies:read'])
+      const legacy = { ...CONNECTION_ROW, id: '22222222-2222-4222-8222-222222222222', aggregator: 'enable_banking' }
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { role: 'owner' } },
+          bank_connections: { data: [CONNECTION_ROW, legacy] },
+        }).supabase,
+      )
+      const res = await GET(req(), params)
+      const body = (await res.json()) as { data: { bank_connections: Array<Record<string, unknown>> } }
+      expect(body.data.bank_connections[0]).not.toHaveProperty('sunset')
+      expect(body.data.bank_connections[1]).toMatchObject({ aggregator: 'enable_banking', sunset: true })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('answers enable_banking for a row that predates the aggregator column', async () => {
+    authOk(['companies:read'])
+    const { aggregator: _aggregator, ...legacy } = CONNECTION_ROW
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { role: 'owner' } },
+        bank_connections: { data: [legacy] },
+      }).supabase,
+    )
+    const res = await GET(req(), params)
+    const body = (await res.json()) as { data: { bank_connections: Array<{ aggregator: string }> } }
+    expect(body.data.bank_connections[0].aggregator).toBe('enable_banking')
+  })
+
   it('returns an empty list when the company has no connections', async () => {
     authOk(['companies:read'])
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         bank_connections: { data: [] },
-      }),
+      }).supabase,
     )
     const res = await GET(req(), params)
     expect(res.status).toBe(200)
@@ -170,10 +185,10 @@ describe('v1 bank-connections list', () => {
   it('maps a database error into the v1 error envelope', async () => {
     authOk(['companies:read'])
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         bank_connections: { data: null, error: { message: 'boom' } },
-      }),
+      }).supabase,
     )
     const res = await GET(req(), params)
     expect(res.status).toBeGreaterThanOrEqual(500)

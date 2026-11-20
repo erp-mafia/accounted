@@ -9,6 +9,7 @@ import {
   buildPayslipData,
   issuedPayslipSections,
   parsePayslipAudienceParam,
+  parsePayslipPreviewParam,
   payslipFileName,
   payslipSectionsFor,
   type PayslipAudience,
@@ -115,6 +116,23 @@ describe('buildPayslipData', () => {
     expect(overrideRow?.formula).toBe('jämkning')
   })
 
+  it('ignores an avgifter override on an F-skatt payee, as the booking and the AGI do', () => {
+    // An F-skatt payee forms no underlag for arbetsgivaravgifter, so the
+    // override never reaches the verifikat or the AGI; the payslip used to
+    // print it anyway.
+    const data = buildPayslipData({
+      run,
+      sre: sre({ avgifter_amount: 0, avgifter_amount_override: 5000, override_reason: 'fel' }),
+      employee: { ...employee, f_skatt_status: 'f_skatt' },
+      company: { name: 'Bolaget AB', org_number: '5560000000' },
+      audience: EMPLOYER,
+    })
+
+    expect(data.employerCost?.avgifterAmount).toBe(0)
+    expect(data.employerCost?.totalEmployerCost).toBe(40519.74)
+    expect(data.breakdownSteps?.some((step) => step.label === 'Manuell justering: Arbetsgivaravgifter')).toBe(false)
+  })
+
   it('falls back to schablon tax reference and omits bank account when data missing', () => {
     const data = buildPayslipData({
       run,
@@ -213,6 +231,35 @@ describe('buildPayslipData: tax table the run used (#3400)', () => {
     })
 
     expect(data.taxReference).toBe('Tabell 33, kol 1')
+  })
+})
+
+describe('buildPayslipData: förhöjt skatteavdrag', () => {
+  const company = { name: 'Bolaget AB', org_number: null }
+
+  it('carries the frozen extra next to the total tax', () => {
+    const data = buildPayslipData({ run, sre: sre({ tax_withheld: 11000, extra_tax_withheld: 3000, net_salary: 24000 }), employee, company, audience: EMPLOYER })
+    expect(data.taxWithheld).toBe(11000)
+    expect(data.extraTaxWithheld).toBe(3000)
+    expect(data.netSalary).toBe(24000)
+  })
+
+  it('drops the split under a per-run tax override: the override is one figure', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({ tax_withheld: 11000, extra_tax_withheld: 3000, net_salary: 24000, tax_withheld_override: 9000 }),
+      employee,
+      company,
+      audience: EMPLOYER,
+    })
+    expect(data.taxWithheld).toBe(9000)
+    expect(data.extraTaxWithheld).toBe(0)
+    expect(data.netSalary).toBe(26000)
+  })
+
+  it('reads a row calculated before the column existed as no extra', () => {
+    const data = buildPayslipData({ run, sre: sre(), employee, company, audience: EMPLOYER })
+    expect(data.extraTaxWithheld).toBe(0)
   })
 })
 
@@ -425,5 +472,105 @@ describe('parsePayslipAudienceParam', () => {
     expect(parsePayslipAudienceParam('employee')).toBe('employee')
     expect(parsePayslipAudienceParam('Employee')).toBeNull()
     expect(parsePayslipAudienceParam('auditor')).toBeNull()
+  })
+})
+
+describe('parsePayslipPreviewParam', () => {
+  it('reads an absent, empty or off value as no preview', () => {
+    expect(parsePayslipPreviewParam(null)).toBe(false)
+    expect(parsePayslipPreviewParam('')).toBe(false)
+    expect(parsePayslipPreviewParam('0')).toBe(false)
+    expect(parsePayslipPreviewParam('false')).toBe(false)
+  })
+
+  it('reads 1 or true as a preview and refuses anything else', () => {
+    expect(parsePayslipPreviewParam('1')).toBe(true)
+    expect(parsePayslipPreviewParam('true')).toBe(true)
+    expect(parsePayslipPreviewParam('yes')).toBeNull()
+    expect(parsePayslipPreviewParam('TRUE')).toBeNull()
+  })
+})
+
+describe('buildPayslipData: text rows (lib/salary/text-rows.ts)', () => {
+  const company = { name: 'Bolaget AB', org_number: null }
+
+  it('orders base salary, recurring text, manual text, then the rest by sort_order', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({
+        line_items: [
+          { item_type: 'bonus', description: 'Bonus', amount: 5000, sort_order: 1 },
+          { item_type: 'text', description: 'Manuell text sist', amount: 0, sort_order: 300, source_recurring_line_id: null },
+          { item_type: 'net_deduction_union', description: 'Fackavgift', amount: -450, sort_order: 250, source_recurring_line_id: 'rec-union' },
+          { item_type: 'text', description: 'Återkommande text två', amount: 0, sort_order: 11, source_recurring_line_id: 'rec-2' },
+          { item_type: 'monthly_salary', description: 'Grundlön', amount: 35000, sort_order: 0 },
+          { item_type: 'text', description: 'Manuell text först', amount: 0, sort_order: 5 },
+          { item_type: 'text', description: 'Återkommande text ett', amount: 0, sort_order: 10, source_recurring_line_id: 'rec-1' },
+          { item_type: 'vacation', description: 'Semester', amount: 336, quantity: 2, sort_order: 20 },
+        ],
+      }),
+      employee,
+      company,
+      audience: EMPLOYER,
+    })
+
+    expect(data.lineItems.map((li) => li.description)).toEqual([
+      'Grundlön',
+      'Återkommande text ett',
+      'Återkommande text två',
+      'Manuell text först',
+      'Manuell text sist',
+      'Bonus',
+      'Semester',
+      'Fackavgift',
+    ])
+  })
+
+  it('maps a text row to its words, amount 0 and text: true, and leaves money rows unmarked', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({
+        line_items: [
+          { item_type: 'monthly_salary', description: 'Grundlön', amount: 35000, quantity: 1, unit_price: 35000, sort_order: 0 },
+          // A text row carries nothing else; even a stray percentage is not printed.
+          { item_type: 'text', description: 'Lön enligt kollektivavtal', amount: 0, quantity: null, unit_price: null, one_off_tax_percent: null, sort_order: 5 },
+        ],
+      }),
+      employee,
+      company,
+      audience: EMPLOYER,
+    })
+
+    expect(data.lineItems[1]).toEqual({ description: 'Lön enligt kollektivavtal', amount: 0, text: true })
+    expect(data.lineItems[0].text).toBeUndefined()
+    expect(data.lineItems[0]).toMatchObject({ description: 'Grundlön', amount: 35000, quantity: 1, unitPrice: 35000 })
+  })
+
+  it('never changes the pay: gross, tax, net and employer cost are the same with and without text rows', () => {
+    const lines = [{ item_type: 'monthly_salary', description: 'Grundlön', amount: 35000, sort_order: 0 }]
+    const plain = buildPayslipData({ run, sre: sre({ line_items: lines }), employee, company, audience: EMPLOYER })
+    const withText = buildPayslipData({
+      run,
+      sre: sre({
+        line_items: [...lines, { item_type: 'text', description: 'Textrad', amount: 0, sort_order: 10, source_recurring_line_id: 'rec-1' }],
+      }),
+      employee,
+      company,
+      audience: EMPLOYER,
+    })
+
+    const { lineItems: _plainLines, ...plainRest } = plain
+    const { lineItems: textLines, ...textRest } = withText
+    expect(textRest).toEqual(plainRest)
+    expect(textLines).toHaveLength(2)
+  })
+
+  it('does not reorder the stored line array it was given', () => {
+    const lineItems = [
+      { item_type: 'text', description: 'Text', amount: 0, sort_order: 5 },
+      { item_type: 'monthly_salary', description: 'Grundlön', amount: 35000, sort_order: 0 },
+    ]
+    buildPayslipData({ run, sre: sre({ line_items: lineItems }), employee, company, audience: EMPLOYER })
+    expect(lineItems.map((li) => li.description)).toEqual(['Text', 'Grundlön'])
   })
 })

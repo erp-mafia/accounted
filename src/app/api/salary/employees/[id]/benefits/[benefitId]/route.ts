@@ -1,41 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeBenefitSchema } from '@/lib/api/schemas'
 import { deleteEmployeeBenefit, updateEmployeeBenefit } from '@/lib/salary/employee-benefits'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
-
-/**
- * Render a shared-module failure as this route's legacy `{ error }` envelope.
- *
- * `details.field` marks a message the module authored for the user (the
- * merged validity period, a check_violation on the update, annual_market_value
- * on a non-bike row) and is shown as is. Every other failure carries the raw
- * Postgres message and SQLSTATE; rebuilt as an Error with a `code`, the shape
- * PostgrestError has, it sends getUserErrorMessage down the same path the
- * inline queries used to take, so the text is unchanged.
- */
-function failureResponse(failure: { code: string; details?: Record<string, unknown> }) {
-  if (failure.code === 'EMPLOYEE_NOT_FOUND') {
-    return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
-  }
-  if (failure.code === 'NOT_FOUND') {
-    return NextResponse.json({ error: 'Förmån hittades inte' }, { status: 404 })
-  }
-  const details = failure.details ?? {}
-  if (failure.code === 'VALIDATION_ERROR' && typeof details.field === 'string') {
-    return NextResponse.json({ error: String(details.message) }, { status: 400 })
-  }
-  const pgError = Object.assign(
-    new Error(typeof details.message === 'string' ? details.message : ''),
-    { code: typeof details.pg_code === 'string' ? details.pg_code : undefined },
-  )
-  const status = failure.code === 'VALIDATION_ERROR' ? 400 : 500
-  return NextResponse.json({ error: getUserErrorMessage(pgError) }, { status })
-}
+import { failureResponse } from '../failure-response'
 
 export const PATCH = withRouteContext<{ params: Promise<{ id: string; benefitId: string }> }>(
   'salary.employees.benefits.update',

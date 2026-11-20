@@ -24,7 +24,7 @@ describe('computeDedupKey', () => {
   })
 
   // GOLDEN KEY: this literal pins the hash-material contract
-  // `${datum}|${belopp}|${text}`. Every hash-keyed row in prod was written
+  // `${datum}|${belopp}|${text}`. Every hash-keyed row in production was written
   // with it (originally from skattekonto-sync.ts, moved here). If this test
   // fails, the change would duplicate every company's rows on next sync:
   // fix the code, never the expected value.

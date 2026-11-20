@@ -60,8 +60,10 @@ describe('MCP company routing', () => {
     expect(projected).not.toBe(inputSchema)
     expect(projected.properties).toEqual({
       invoice_id: { type: 'string' },
-      company_id: expect.objectContaining({ type: 'string', format: 'uuid' }),
+      company_id: expect.objectContaining({ type: 'string' }),
     })
+    // A cmp_ handle is a company id too (handle-args.ts): no uuid format.
+    expect((projected.properties as Record<string, object>).company_id).not.toHaveProperty('format')
     expect(inputSchema.properties).not.toHaveProperty('company_id')
     expect(projected.additionalProperties).toBe(false)
   })
@@ -327,6 +329,23 @@ describe('MCP company routing', () => {
       expect(() => assertMcpCompanyWriteAccess(context, undefined)).not.toThrow()
     }
   )
+
+  it('limits an invoicer to the customer, invoice and article scopes, read or write', () => {
+    const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role: 'invoicer' as const, isDefault: false, keyAccess: 'write' as const }
+    const allowed = ['customers:read', 'customers:write', 'invoices:read', 'invoices:draft', 'invoices:write', 'articles:read', 'articles:write']
+    for (const scope of ALL_SCOPES) {
+      if (allowed.includes(scope)) {
+        expect(() => assertMcpCompanyWriteAccess(context, scope), scope).not.toThrow()
+      } else {
+        expect(() => assertMcpCompanyWriteAccess(context, scope), scope).toThrow(
+          expect.objectContaining({ code: 'FORBIDDEN', message: expect.stringMatching(/Invoicing role/) })
+        )
+      }
+    }
+    expect(() => assertMcpCompanyWriteAccess(context, undefined)).toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN', message: expect.stringMatching(/Invoicing role/) })
+    )
+  })
 
   it('keeps the viewer refusal first when the role and the connection both say read', () => {
     const context = {

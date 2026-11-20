@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
-import { seedCompany, insertDraftJournalEntry } from './fixtures'
+import { seedCompany, insertDraftJournalEntry, insertAuthUser, insertCompanyMember } from './fixtures'
 
 // PR1 dimensions substrate (20260702084500_dimensions_substrate.sql):
 // registry tables + RLS, ensure_company_dimensions RPC, registry guard
@@ -104,6 +104,83 @@ describe('ensure_company_dimensions', () => {
         [companyId],
       )
       expect(rows.map((r) => r.sie_dim_no)).toEqual([1, 6])
+    })
+  })
+
+  // 20261026209000: the registry read (GET /api/dimensions) calls the seed
+  // first. A viewer used to get 42501 there even when both rows existed,
+  // because the writer-role BEFORE INSERT trigger runs before ON CONFLICT.
+  // txid_current_if_assigned() stays NULL in a transaction that wrote
+  // nothing: the proof that the call was a pure read.
+  it('lets a viewer (and the owner) read a seeded registry without writing', async () => {
+    const { userId: owner, companyId } = await seedWithDimensions()
+    const viewer = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewer, role: 'viewer' })
+
+    for (const caller of [viewer, owner]) {
+      await withUserContext(caller, async (client) => {
+        await client.query(`SELECT public.ensure_company_dimensions($1)`, [companyId])
+        const { rows: tx } = await client.query(`SELECT txid_current_if_assigned() AS txid`)
+        expect(tx[0].txid).toBeNull()
+        const { rows } = await client.query(
+          `SELECT sie_dim_no FROM public.dimensions WHERE company_id = $1 ORDER BY sie_dim_no`,
+          [companyId],
+        )
+        expect(rows.map((r) => r.sie_dim_no)).toEqual([1, 6])
+      })
+    }
+  })
+
+  it('lets a viewer call it on an unseeded company: no error, nothing seeded', async () => {
+    const { companyId } = await seedCompany()
+    const viewer = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewer, role: 'viewer' })
+
+    await withUserContext(viewer, async (client) => {
+      await client.query(`SELECT public.ensure_company_dimensions($1)`, [companyId])
+      const { rows: tx } = await client.query(`SELECT txid_current_if_assigned() AS txid`)
+      expect(tx[0].txid).toBeNull()
+      const { rows } = await client.query(
+        `SELECT count(*)::int AS n FROM public.dimensions WHERE company_id = $1`,
+        [companyId],
+      )
+      expect(rows[0].n).toBe(0)
+    })
+
+    // The viewer's own writes stay refused, at the write itself.
+    await expect(
+      withUserContext(viewer, (client) =>
+        client.query(
+          `INSERT INTO public.dimensions (company_id, sie_dim_no, name, resets_annually, is_system, sort_order)
+           VALUES ($1, 20, 'Region', false, false, 30)`,
+          [companyId],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '42501' })
+  })
+
+  it('seeds only the missing system dimension for a writer and keeps the existing row', async () => {
+    const { companyId } = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.dimensions (company_id, sie_dim_no, name, resets_annually, is_system, sort_order)
+       VALUES ($1, 1, 'Kostnadsställe', true, true, 10)`,
+      [companyId],
+    )
+    const existing = await getDimensionId(companyId, 1)
+    const member = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: member, role: 'member' })
+
+    await withUserContext(member, async (client) => {
+      await client.query(`SELECT public.ensure_company_dimensions($1)`, [companyId])
+      const { rows } = await client.query(
+        `SELECT id, sie_dim_no, name, is_system FROM public.dimensions WHERE company_id = $1 ORDER BY sie_dim_no`,
+        [companyId],
+      )
+      expect(rows.map((r) => [r.sie_dim_no, r.name, r.is_system])).toEqual([
+        [1, 'Kostnadsställe', true],
+        [6, 'Projekt', true],
+      ])
+      expect(rows[0].id).toBe(existing)
     })
   })
 })

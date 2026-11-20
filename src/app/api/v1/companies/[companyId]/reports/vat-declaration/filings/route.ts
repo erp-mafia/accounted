@@ -34,12 +34,12 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { MarkVatFilingSchema, VatFilingPeriodSchema } from '@/lib/api/schemas'
 import {
-  listVatFilings,
   markVatPeriodFiled,
   previewMarkVatPeriodFiled,
   previewUnmarkVatPeriodFiled,
   unmarkVatPeriodFiled,
 } from '@/lib/vat/filing-record-store'
+import { listVatFilingsWithChanges, VatFilingChangeSchema } from '@/lib/vat/filed-period-changes'
 
 const VatFilingRecordSchema = z.object({
   deadline_id: z.string().uuid(),
@@ -85,7 +85,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/vat-declaration/filings',
   summary: 'List the VAT periods the company has recorded as filed.',
   description:
-    'Returns every monthly, quarterly or yearly momsdeklaration period the company has on record as filed, newest first, with the dates each period covers (`period_start`, `period_end`). `source` is `skatteverket` when the filing was confirmed by a Skatteverket kvittens through the connection, `manual` when a person or an API caller recorded it (POST on this path, or completing the period\'s moms deadline). `reference` is the Skatteverket reference typed at manual marking, if any. Local state: not a Skatteverket read.',
+    'Returns every monthly, quarterly or yearly momsdeklaration period the company has on record as filed, newest first, with the dates each period covers (`period_start`, `period_end`). `source` is `skatteverket` when the filing was confirmed by a Skatteverket kvittens through the connection, `manual` when a person or an API caller recorded it (POST on this path, or completing the period\'s moms deadline). `reference` is the Skatteverket reference typed at manual marking, if any. `changed_after_filing` says what verifikat posted, corrected or re-dated after the filing moved in the declared period (per ruta, signed as filed, with the verifikat), or null when the books still read as filed. Local state: not a Skatteverket read.',
   useWhen:
     'Deciding which VAT period is next to prepare, checking whether a period was already filed before recomputing it, or reconciling a filing calendar against the books.',
   doNotUseFor:
@@ -93,6 +93,7 @@ registerEndpoint({
   pitfalls: [
     'An empty list means nothing is recorded, not that nothing was filed: companies that file on skatteverket.se by hand only get records when they mark the period (POST here or in the app).',
     YEARLY_PITFALL,
+    'A non-null `changed_after_filing` does not reach Skatteverket by itself: the filed declaration and the books now differ by `rutor_change`.',
   ],
   example: {
     response: {
@@ -108,6 +109,7 @@ registerEndpoint({
           filed_on: '2026-08-10',
           source: 'manual',
           reference: null,
+          changed_after_filing: null,
         },
       ],
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -118,7 +120,9 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: dataEnvelope(z.array(VatFilingRecordSchema)) },
+  response: {
+    success: dataEnvelope(z.array(VatFilingRecordSchema.extend({ changed_after_filing: VatFilingChangeSchema.nullable() }))),
+  },
 })
 
 registerEndpoint({
@@ -205,7 +209,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'vat_filings.list',
   async (_request, ctx) => {
     try {
-      const records = await listVatFilings(ctx.supabase, ctx.companyId!)
+      const records = await listVatFilingsWithChanges(ctx.supabase, ctx.companyId!)
       return ok(records, { requestId: ctx.requestId })
     } catch (err) {
       ctx.log.error('vat_filings.list failed', err as Error)

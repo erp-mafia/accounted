@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { RegisterSalesOrderDeliverySchema } from '@/lib/api/schemas'
 import { registerSalesOrderDelivery } from '@/lib/sales-orders/register-delivery'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
-
-ensureInitialized()
 
 /** POST /api/sales-orders/[id]/deliver: register cumulative delivered quantities. */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(

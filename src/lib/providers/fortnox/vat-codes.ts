@@ -12,8 +12,8 @@ import type { VatDeclarationRutor } from '@/types'
  * "I (48)"), so the translation is ruta to ruta: a code translates only when
  * Accounted's treatment lands THIS account on the same ruta Fortnox does.
  * That check is done per account number, not per code, because Accounted
- * derives the ruta from treatment + account (class, and 4425-4427 for the
- * 23/24 split), so the same code can translate on one account and not on
+ * derives the ruta from treatment + account (class, and 4420/4425-4427 for
+ * the 23/24 split), so the same code can translate on one account and not on
  * its neighbour: IT (24) on 4425 translates, IT on 4010 does not, since
  * Accounted would file 4010 on ruta 23. A mismatch answers null and the
  * account falls back to the label suggestion; the translation never asserts
@@ -57,7 +57,7 @@ export const FORTNOX_VAT_CODES: Readonly<Record<
  * Translate one Fortnox VATCode for the given account. Null when the code is
  * unknown or blank, or when Accounted would file the account on a different
  * ruta than the code names (a revenue code on a purchase account, IT on a
- * class 4 account outside 4425-4427, and so on).
+ * class 4 account outside 4420/4425-4427, and so on).
  */
 export function fortnoxVatCodeToTreatment(
   code: string | null | undefined,

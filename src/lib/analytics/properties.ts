@@ -48,7 +48,7 @@ function compact(input: Record<string, unknown>): Record<string, unknown> {
  *
  * Matches what the privacy policy discloses is transferred: user id, email
  * address and company name. Do not widen this without updating
- * app/(public)/privacy/page.tsx and .compliance/ropa.yaml.
+ * app/(public)/privacy/page.tsx and the record of processing activities.
  */
 export function buildPersonProperties(user: AnalyticsUserInput): Record<string, unknown> {
   return compact({

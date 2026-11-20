@@ -5,14 +5,14 @@ import { useTranslations } from 'next-intl'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import { validateBankgiroNumber, formatBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface BankDetailsSetupFormProps {
   onComplete: () => void
@@ -27,6 +27,7 @@ interface BankDetailsSetupFormProps {
  */
 export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupFormProps) {
   const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const t = useTranslations('invoice_bank_setup')
   const [isSaving, setIsSaving] = useState(false)
   const [showInternational, setShowInternational] = useState(false)
@@ -133,32 +134,14 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
       }
     }
 
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || t('save_failed_fallback'))
-      }
-
-      toast({
-        title: t('saved_title'),
-        description: t('saved_description'),
-      })
-      onComplete()
-    } catch (error) {
-      toast({
-        title: t('save_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('save_failed_fallback'),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsSaving(false)
-    }
+    const saved = await saveSettings(payload, { failedTitle: t('save_failed_title') })
+    setIsSaving(false)
+    if (!saved) return
+    toast({
+      title: t('saved_title'),
+      description: t('saved_description'),
+    })
+    onComplete()
   }
 
   // Flatten refine errors so they appear on the right fields
@@ -167,8 +150,8 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
   const bankgiroError = errors.bankgiro?.message
 
   return (
-    <div className="space-y-4 rounded-lg border border-border p-4">
-      <p className="text-[12.5px] text-muted-foreground">
+    <div className="space-y-4 rounded-lg p-4 bg-control shadow-raised">
+      <p className="text-xs text-muted-foreground">
         {t('description_prefix')}
         <a href="/settings/invoicing" className="underline underline-offset-2 hover:text-foreground">{t('settings_link')}</a>
         {t('description_suffix')}
@@ -247,9 +230,9 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
             aria-expanded={showInternational}
           >
             {showInternational ? (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDownIcon className="h-3.5 w-3.5" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRightIcon className="h-3.5 w-3.5" />
             )}
             {t('international_toggle')}
           </button>
@@ -285,9 +268,9 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
             aria-expanded={showNumbering}
           >
             {showNumbering ? (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDownIcon className="h-3.5 w-3.5" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRightIcon className="h-3.5 w-3.5" />
             )}
             {t('numbering_toggle')}
           </button>

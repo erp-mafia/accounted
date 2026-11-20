@@ -8,6 +8,7 @@ import {
   findStageApproveConflict,
 } from '@/lib/auth/api-keys'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateQuery } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ApiKeyMode, ApiKeyScope } from '@/lib/auth/api-keys'
@@ -27,9 +28,17 @@ const companyIdsSchema = z.array(z.string().uuid()).min(1).max(200)
 // company when company_ids is omitted). An empty list means none.
 const readOnlyCompanyIdsSchema = z.array(z.string().uuid()).max(200)
 
+// `scope=mine`: the caller's own keys in every company they belong to, the
+// list the byrå cockpit shows. Omitted: the active company's keys.
+const listQuerySchema = z.object({ scope: z.enum(['mine']).optional() })
+
 /**
  * GET /api/settings/api-keys: list the company's API keys (key value never
- * returned).
+ * returned). With `scope=mine`, the caller's own keys in every company they
+ * still belong to instead: a connection belongs to its owner and reaches the
+ * companies picked when it was made, so the byrå cockpit, which sits above
+ * the clients, lists a person's connections rather than the keys that
+ * happen to be homed in the company left open.
  *
  * Each row carries `source`: 'signin' for a key the MCP OAuth token route
  * minted (an AI client that signed in: claude.ai, ChatGPT, Cursor, ...),
@@ -41,29 +50,60 @@ const readOnlyCompanyIdsSchema = z.array(z.string().uuid()).max(200)
  * `meta.companies`, the caller's companies for the picker, so the panel
  * needs no second endpoint. `is_own` marks the caller's own keys: only the
  * owner may change a key's companies (PATCH), so only they get the editor.
- * The owner's user id itself is not returned.
+ * The owner's user id itself is not returned; a colleague's key carries
+ * `owner_name` (full name, else e-mail; null for the caller's own keys and
+ * service-account keys) so the row says whose sign-in it is. `service_account` names the
+ * service account a key belongs to ({ id, name }, null for a person's key),
+ * so the list can mark it.
  */
 export const GET = withRouteContext(
   'api_key.list',
-  async (_request, ctx) => {
+  async (request, ctx) => {
     const { user, supabase, companyId, log, requestId } = ctx
+
+    const query = validateQuery(request, listQuerySchema)
+    if (!query.success) return query.response
+    const mine = query.data.scope === 'mine'
 
     // Both live and test keys for the active company. (Test keys are bound to the
     // active company too: they're simulation-only, so they never write real data.)
-    const { data, error } = await supabase
-      .from('api_keys')
-      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id')
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
+    // With scope=mine, the caller's own keys wherever they are homed: the
+    // api_keys select policy already lets an owner read their own rows. Two
+    // literal queries rather than one built at runtime, so the schema guard
+    // (tests/schema/no-phantom-columns) still checks every column.
+    const { data, error } = mine
+      ? await supabase
+          .from('api_keys')
+          .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id, service_account_id, company_id')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+      : await supabase
+          .from('api_keys')
+          .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id, service_account_id, company_id')
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false })
 
     if (error) {
       log.error('api_keys list failed', error)
       return errorResponse(error, log, { requestId })
     }
 
+    let companies
+    try {
+      companies = await listUserCompaniesForPicker(supabase, user.id, { activeCompanyId: companyId })
+    } catch (err) {
+      log.error('company picker list failed', err)
+      return errorResponse(err, log, { requestId })
+    }
+
+    // A key homed in a company the caller has since left is not theirs to
+    // manage any more (revoking it needs a role there), so the own list
+    // keeps only keys homed in a live membership.
+    const memberIds = new Set(companies.map((company) => company.company_id))
+    const keys = (data ?? []).filter((key) => !mine || memberIds.has(key.company_id))
+
     // api_key_companies is service-role only: the session client would read
     // zero rows and every key would look unrestricted.
-    const keys = data ?? []
     const allowlists = new Map<string, string[]>()
     const readOnlyLists = new Map<string, string[]>()
     if (keys.length > 0) {
@@ -87,18 +127,59 @@ export const GET = withRouteContext(
       }
     }
 
-    let companies
-    try {
-      companies = await listUserCompaniesForPicker(supabase, user.id, { activeCompanyId: companyId })
-    } catch (err) {
-      log.error('company picker list failed', err)
-      return errorResponse(err, log, { requestId })
+    // The account names of service-account keys (lib/service-accounts),
+    // through the service client like the allowlist: a sponsor or admin can
+    // read service_accounts, but every member who sees the key sees its label.
+    const accountIds = [...new Set(keys.map((key) => key.service_account_id).filter((id): id is string => Boolean(id)))]
+    const accountNames = new Map<string, string>()
+    if (accountIds.length > 0) {
+      // Scoped to the companies the listed keys are homed in: the active one,
+      // or for the own list each listed key's own.
+      const { data: accounts, error: accountsError } = await createServiceClient()
+        .from('service_accounts')
+        .select('id, name')
+        .in('company_id', mine ? [...new Set(keys.map((key) => key.company_id))] : [companyId])
+        .in('id', accountIds)
+      if (accountsError) {
+        log.error('service_accounts list failed', accountsError)
+        return errorResponse(accountsError, log, { requestId })
+      }
+      for (const account of accounts ?? []) accountNames.set(account.id, account.name)
+    }
+
+    // A colleague's key carries its owner's name, so a row an admin sees
+    // (api_keys_select lets them read every member's key) says whose sign-in
+    // it is. Service client like the members list: other members' profiles
+    // are not readable through the session. The name only decorates the row,
+    // so a failed read leaves it unnamed instead of failing the list.
+    const colleagueIds = [
+      ...new Set(keys.filter((key) => key.user_id !== user.id && !key.service_account_id).map((key) => key.user_id)),
+    ]
+    const ownerNames = new Map<string, string>()
+    if (colleagueIds.length > 0) {
+      const { data: owners, error: ownersError } = await createServiceClient()
+        .from('profiles')
+        .select('id, full_name, email')
+        .in('id', colleagueIds)
+      if (ownersError) {
+        log.warn('key owner names read failed', ownersError)
+      } else {
+        for (const owner of owners ?? []) {
+          const name = owner.full_name?.trim() || owner.email
+          if (name) ownerNames.set(owner.id, name)
+        }
+      }
     }
 
     return NextResponse.json({
-      data: keys.map(({ user_id: ownerId, ...key }) => ({
+      data: keys.map(({ user_id: ownerId, service_account_id: serviceAccountId, company_id: _keyCompanyId, ...key }) => ({
         ...key,
         is_own: ownerId === user.id,
+        owner_name: ownerId === user.id ? null : ownerNames.get(ownerId) ?? null,
+        service_account:
+          serviceAccountId && accountNames.has(serviceAccountId)
+            ? { id: serviceAccountId, name: accountNames.get(serviceAccountId)! }
+            : null,
         source: key.name === OAUTH_MCP_KEY_NAME ? ('signin' as const) : ('manual' as const),
         company_ids: allowlists.get(key.id) ?? null,
         read_only_company_ids: readOnlyLists.get(key.id) ?? null,

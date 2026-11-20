@@ -1,12 +1,10 @@
 import { NextResponse } from 'next/server'
 import { redateJournalEntry } from '@/lib/core/bookkeeping/journal-entry-corrections'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { RecordateJournalEntrySchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { linkBasisColumns } from '@/lib/links/stamp'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 /**
  * POST /api/bookkeeping/journal-entries/[id]/recordate
@@ -21,7 +19,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
     const validation = await validateBody(request, RecordateJournalEntrySchema)
     if (!validation.success) return validation.response
-    const outcome = await redateJournalEntry({ supabase, companyId, userId: user.id, log }, id, validation.data)
+    // The posting port's events, while POSTING_EVENTS is on: the person moved the verifikat.
+    const outcome = await redateJournalEntry({ supabase, companyId, userId: user.id, log }, id, validation.data, {
+      posting: () => ({ linkBasis: linkBasisColumns('user_created') }),
+    })
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
     return NextResponse.json({ data: outcome.data })

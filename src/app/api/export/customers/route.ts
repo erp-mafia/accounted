@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -6,8 +5,9 @@ import { textColumn, integerColumn } from '@/lib/reports/xlsx-export'
 import { buildRegisterExport, parseExportFormat, todayIso } from '@/lib/export/register-export'
 import { maskStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
-import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
+import { orgNumberIsPersonalIdentifier } from '@/lib/invariants/personal-number-shape'
 import type { Customer } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/export/customers[?format=csv]
@@ -36,10 +36,13 @@ export const GET = withRouteContext(
           .select('*')
           .eq('company_id', companyId)
           .order('name', { ascending: true })
+          // Names repeat, so id makes the order total: fetchAllRows pages
+          // with .range() and a tie on a page boundary could repeat or drop a row.
+          .order('id', { ascending: true })
           .range(from, to),
       )) as unknown as Customer[]
 
-      const { buffer, contentType, filename } = buildRegisterExport(
+      const { buffer, contentType, filename } = await buildRegisterExport(
         [
           {
             name: 'Kunder',
@@ -77,7 +80,7 @@ export const GET = withRouteContext(
               // an enskild firma has no org number of its own, and a legacy
               // individual row can still carry one there (#2367). The column
               // is the identifier either way, so it is masked, not dropped.
-              orgNumberIsPersonalIdentifier(c.customer_type, c.org_number)
+              orgNumberIsPersonalIdentifier(c.org_number)
                 ? maskCustomerPersonalNumber(c.org_number)
                 : c.org_number ?? maskStoredCustomerPersonalNumber(c.personal_number),
               c.customer_type,
@@ -100,13 +103,7 @@ export const GET = withRouteContext(
 
       log.info('register exported', { entity: 'customers', format, rowCount: customers.length })
 
-      return new NextResponse(new Uint8Array(buffer), {
-        headers: {
-          'Content-Type': contentType,
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Cache-Control': 'no-store',
-        },
-      })
+      return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: contentType, cacheControl: 'no-store' })
     } catch (err) {
       log.error('customer export failed', err as Error)
       return errorResponse(err, log, { requestId })

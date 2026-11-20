@@ -6,7 +6,7 @@ This is the operational companion to the [Webhooks concept page](/docs/api/webho
 
 ## What you'll need
 
-- A test API key with \`webhooks:manage\` scope (and \`payroll:read\` if you intend to subscribe to payroll events).
+- A **live** API key with \`webhooks:manage\` scope (and \`payroll:read\` if you intend to subscribe to payroll events, \`invoices:write\` for the mark-paid call in step 6). A test key (\`gnubok_sk_test_*\`) only previews: every write that supports a dry run is forced into one, and a write without dry-run support answers \`403 TEST_KEY_WRITE_BLOCKED\`, so it cannot run this flow.
 - A receiver URL that Accounted can POST to. For local development use [smee.io](https://smee.io) or \`ngrok\`: Accounted refuses webhook URLs that resolve to private IPs (SSRF protection), so localhost won't work directly.
 - HTTPS only: \`http://\` URLs are rejected at registration.
 
@@ -15,13 +15,13 @@ This is the operational companion to the [Webhooks concept page](/docs/api/webho
 The response includes the HMAC signing secret **exactly once**. Capture it immediately and store it on the receiver side as an environment variable.
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{
     "event_type": "invoice.paid",
-    "webhook_url": "https://my-receiver.example.com/gnubok",
+    "webhook_url": "https://my-receiver.example.com/accounted",
     "name": "CRM sync: invoice paid"
   }'
 \`\`\`
@@ -34,7 +34,7 @@ Response:
     "id": "a8f1e4c2-3b5d-4e6f-8a90-1b2c3d4e5f60",
     "name": "CRM sync: invoice paid",
     "event_type": "invoice.paid",
-    "webhook_url": "https://my-receiver.example.com/gnubok",
+    "webhook_url": "https://my-receiver.example.com/accounted",
     "active": true,
     "api_version_pinned": "2026-05-12",
     "secret": "whsec_b3a7c9e2...",
@@ -46,13 +46,13 @@ Response:
 }
 \`\`\`
 
-> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, mint a fresh one with \`POST /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret\`: it re-issues the signing secret in place (returned exactly once, like creation) without deleting the webhook or its delivery history. Rotation invalidates the old secret immediately — there is no grace period — so stage the new value on the receiver first (or \`PATCH active=false\` to pause delivery while you swap), then re-deploy the receiver with the new value.
+> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, mint a fresh one with \`POST /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret\`: it re-issues the signing secret in place (returned exactly once, like creation) without deleting the webhook or its delivery history. Rotation invalidates the old secret immediately - there is no grace period - so stage the new value on the receiver first (or \`PATCH active=false\` to pause delivery while you swap), then re-deploy the receiver with the new value.
 
 **Store the secret in a secrets manager** (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, Doppler, 1Password Connect, ...) rather than a plaintext \`.env\` file or a config commit. The secret is signing material: anyone who reads it can forge events that will pass your signature check. Treat it with the same care as a database password.
 
 ## 2. Implement signature verification
 
-Use the [Node](https://app.gnubok.se/docs/api/webhooks#nodejs) or [Python](https://app.gnubok.se/docs/api/webhooks#python) sample on the concept page. The critical detail: capture the **raw request body** before any framework JSON-parses it. Re-serialising the body produces different bytes and the signature won't match.
+Use the [Node](/docs/api/webhooks#nodejs) or [Python](/docs/api/webhooks#python) sample on the concept page. The critical detail: capture the **raw request body** before any framework JSON-parses it. Re-serialising the body produces different bytes and the signature won't match.
 
 For an Express handler, that means \`express.raw({ type: 'application/json' })\`: NOT the default \`express.json()\` middleware. For FastAPI / Flask use \`request.get_data()\`. For Cloudflare Workers use \`await request.text()\` BEFORE \`request.json()\`.
 
@@ -69,7 +69,7 @@ if (event.type === 'webhook.verification') {
 Deploy that, then run the handshake:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/verify" \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/verify" \\
   -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
@@ -77,11 +77,11 @@ A pass answers \`200\` with \`"verification_status": "verified"\`. A failure ans
 
 ## 4. Send a test event
 
-The \`:test\` verb enqueues a synthetic \`webhook.test\` delivery without driving real state. The dispatcher sends it on the next per-minute cron tick.
+The \`:test\` verb enqueues a synthetic \`webhook.test\` delivery without driving real state. The dispatcher sends it immediately; the per-minute cron is the retry path.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/test" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/test" \\
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 Response:
@@ -93,10 +93,10 @@ Response:
 }
 \`\`\`
 
-Wait up to 60s, then check the receiver logs. The delivery should arrive with:
+It normally arrives within a second or two; check the receiver logs. The delivery should arrive with:
 
 \`\`\`
-POST /gnubok HTTP/1.1
+POST /accounted HTTP/1.1
 Content-Type: application/json
 X-Gnubok-Signature: t=1778846400,v1=2f5c...
 X-Gnubok-Event: webhook.test
@@ -111,8 +111,8 @@ If your receiver returns 2xx, the delivery moves to \`delivered\`. If it returns
 ## 5. Inspect the delivery
 
 \`\`\`bash
-curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/deliveries?delivery_id=$DELIVERY_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+curl "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID/deliveries?delivery_id=$DELIVERY_ID" \\
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 Response carries the captured response status and body (truncated to 4 KB), which is invaluable when debugging a 4xx from the receiver:
@@ -140,14 +140,14 @@ Response carries the captured response status and body (truncated to 4 KB), whic
 Now mark a real invoice paid (or use any of the [event-emitting endpoints](/docs/api/webhooks#event-types)). The webhook handler picks up the emission and enqueues a delivery within the same request cycle.
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl -X POST "https://app.accounted.se/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_ID/mark-paid" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{ "payment_date": "2026-05-22" }'
 \`\`\`
 
-The next dispatcher tick (within 60s) delivers an \`invoice.paid\` event to your receiver carrying the full invoice payload + payment details.
+The dispatcher delivers an \`invoice.paid\` event right away (a failed attempt is retried on the per-minute cron) to your receiver carrying the full invoice payload + payment details.
 
 ## Idempotency on the receiver side
 
@@ -176,8 +176,8 @@ This pattern: a unique constraint on \`delivery_id\`, an INSERT-on-conflict-do-n
 When a delivery exhausts its retries it's marked \`dead\`. After fixing the receiver, replay individual deliveries with:
 
 \`\`\`bash
-curl -X POST "https://app.gnubok.se/api/v1/webhook-deliveries/$DELIVERY_ID/retry" \\
-  -H "Authorization: Bearer gnubok_sk_test_..."
+curl -X POST "https://app.accounted.se/api/v1/webhook-deliveries/$DELIVERY_ID/retry" \\
+  -H "Authorization: Bearer gnubok_sk_..."
 \`\`\`
 
 The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers see a new \`X-Gnubok-Delivery\` (the new row's id, not the original's), so the idempotency table needs no special handling.
@@ -192,8 +192,8 @@ After:
 …the webhook is automatically disabled (\`active=false\`, \`disabled_reason\` set). Re-enable with:
 
 \`\`\`bash
-curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID" \\
-  -H "Authorization: Bearer gnubok_sk_test_..." \\
+curl -X PATCH "https://app.accounted.se/api/v1/companies/$COMPANY_ID/webhooks/$WEBHOOK_ID" \\
+  -H "Authorization: Bearer gnubok_sk_..." \\
   -H "Content-Type: application/json" \\
   -d '{ "active": true }'
 \`\`\`

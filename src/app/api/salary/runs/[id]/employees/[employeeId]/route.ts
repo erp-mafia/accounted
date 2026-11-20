@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SalaryEmployeeOverrideSchema } from '@/lib/api/schemas'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
+import { refreshRunTotals, type OverrideAffectedTotals } from '@/lib/salary/refresh-run-totals'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /** Fetch one employee's pay spec within a salary run, with employee + line items. */
 export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: string }> }>(
@@ -57,6 +55,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
  *    only in `draft`. 0 is valid (an intentional nollkörning). The engine reads
  *    this per-run value (not the employee master) when the run is calculated, so
  *    each month's gross can differ without touching the employee's standard pay.
+ *    hours_worked is the hourly counterpart (accounted#1): the period's worked
+ *    hours as one total, for a period kept without calendar days. Same draft
+ *    gate and the same service (setRunEmployeeSalary) as the MCP tool.
  *
  *  • tax_withheld_override / avgifter_*_override: manual tax/avgifter
  *    adjustment (advanced mode). Allowed only in `review`: the engine has run
@@ -74,10 +75,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
     if (!parsed.success) return parsed.response
 
     // Two distinct operations share this endpoint, gated to different statuses:
-    //   • monthly_salary  → edit this month's base salary (draft only)
-    //   • *_override       → manual tax/avgifter adjustment (review only)
+    //   • monthly_salary / hours_worked → this month's base pay (draft only)
+    //   • *_override                    → manual tax/avgifter adjustment (review only)
     // They must not be mixed in one request.
-    const wantsSalaryEdit = parsed.data.monthly_salary !== undefined
+    const wantsHours = parsed.data.hours_worked !== undefined
+    const wantsSalaryEdit = parsed.data.monthly_salary !== undefined || wantsHours
     const wantsOverride =
       parsed.data.tax_withheld_override !== undefined ||
       parsed.data.avgifter_amount_override !== undefined ||
@@ -94,11 +96,13 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
     // ── Draft-stage edit of this month's base salary ──
     // The shared service owns the run lookup + draft gate for this branch.
     if (wantsSalaryEdit) {
+      // Both fields go through: the service refuses a request carrying both.
       const result = await setRunEmployeeSalary(supabase, {
         companyId,
         salaryRunId: id,
         employeeId,
-        monthlySalary: parsed.data.monthly_salary as number,
+        monthlySalary: parsed.data.monthly_salary,
+        hoursWorked: parsed.data.hours_worked,
       })
 
       if (!result.ok) {
@@ -114,10 +118,24 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
         if (result.code === 'SALARY_RUN_EMPLOYEE_NOT_FOUND') {
           return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
         }
-        if (result.code === 'SALARY_RUN_SALARY_FIELD_MISMATCH') {
+        if (result.code === 'SALARY_RUN_SALARY_FIELD_MISMATCH' && !wantsHours) {
           return NextResponse.json(
             { error: 'Månadslön kan bara sättas för månadsavlönade. Timavlönade får sin lön från arbetade timmar.' },
             { status: 400 },
+          )
+        }
+        // The hours refusals carry their own Swedish reason and status: days
+        // already in the calendar (409), no timlön on the employee, a pay
+        // type that is not hourly.
+        if (
+          result.code === 'SALARY_RUN_HOURS_FROM_CALENDAR' ||
+          result.code === 'SALARY_RUN_HOURLY_RATE_MISSING' ||
+          result.code === 'SALARY_RUN_SALARY_FIELD_MISMATCH'
+        ) {
+          const entry = getErrorEntry(result.code)
+          return NextResponse.json(
+            { error: entry?.message_sv ?? 'Något gick fel', code: result.code },
+            { status: entry?.httpStatus ?? 400 },
           )
         }
         return NextResponse.json({ error: getUserErrorMessage(result.details) }, { status: 400 })
@@ -130,6 +148,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
           employment_degree: result.data.employment_degree,
           salary_type: result.data.salary_type,
           monthly_salary: result.data.monthly_salary,
+          hours_worked: result.data.hours_worked,
         },
       })
     }
@@ -183,7 +202,24 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
       return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
     }
 
-    return NextResponse.json({ data })
+    // The stored run totals were written at calculation time; an override
+    // moves tax, net, avgifter and employer cost, so re-derive them now or
+    // every reader of salary_runs.total_* disagrees with the booking.
+    // The override above is already saved, so a failed refresh must not
+    // turn the request into a 500: it is logged and run_totals comes back
+    // null. Every surface that shows figures (run page, MCP reads, booking
+    // preview, the booking itself) recomputes them from the rows anyway.
+    let runTotals: OverrideAffectedTotals | null = null
+    try {
+      runTotals = await refreshRunTotals(supabase, companyId, id)
+      if (!runTotals) {
+        ctx.log.warn('run totals not refreshed: run left review before the write', { salaryRunId: id })
+      }
+    } catch (err) {
+      ctx.log.error('run totals refresh failed after an override was saved', err, { salaryRunId: id })
+    }
+
+    return NextResponse.json({ data: { ...data, run_totals: runTotals } })
   },
   { requireWrite: true },
 )

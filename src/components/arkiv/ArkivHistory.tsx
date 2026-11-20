@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { HistoryEvent } from '@/lib/arkiv/history'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
+import { useAttribution } from '@/lib/attribution/use-attribution'
 
 /** /arkiv/historik: one line per thing that happened to a document, newest first. */
 export function ArkivHistory() {
@@ -14,6 +16,9 @@ export function ArkivHistory() {
   const locale = useLocale()
   const [events, setEvents] = useState<HistoryEvent[] | null>(null)
   const [failed, setFailed] = useState(false)
+  // Bumped by "Försök igen" to run the fetch again.
+  const [attempt, setAttempt] = useState(0)
+  const { format: attribute } = useAttribution()
 
   useEffect(() => {
     let cancelled = false
@@ -29,14 +34,33 @@ export function ArkivHistory() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [attempt])
 
-  if (failed) return <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
-  if (!events) return <Skeleton className="h-40 w-full" />
-  if (events.length === 0) return <p className="text-[13px] text-muted-foreground">{t('history_empty')}</p>
+  if (failed) {
+    return (
+      <LoadError
+        onRetry={() => {
+          setFailed(false)
+          setAttempt((n) => n + 1)
+        }}
+      />
+    )
+  }
+  if (!events) {
+    return (
+      <LateReveal>
+        <Skeleton className="h-40 w-full" />
+      </LateReveal>
+    )
+  }
+  if (events.length === 0) return <EmptyState title={t('history_empty')} />
 
   const when = (iso: string) => new Date(iso).toLocaleString(locale === 'sv' ? 'sv-SE' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' })
-  const actorLabel = (e: HistoryEvent) => e.actor.label ?? t(`history_actor_${e.actor.kind}` as never)
+  // A key or a service account is named with the person it acted for (lib/attribution).
+  const actorLabel = (e: HistoryEvent) =>
+    e.actor.kind === 'api_key' || e.actor.kind === 'service_account'
+      ? attribute({ actorType: e.actor.kind, actorLabel: e.actor.label, userId: e.actor.user_id })
+      : e.actor.label ?? t(`history_actor_${e.actor.kind}` as never)
   const detailLabel = (e: HistoryEvent) => (e.detail && (e.kind === 'typed' || e.kind === 'retyped') && (DOC_TYPES as readonly string[]).includes(e.detail) ? t(`types.${e.detail}` as never) : e.detail)
 
   return (

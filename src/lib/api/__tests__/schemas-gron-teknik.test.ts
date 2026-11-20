@@ -6,7 +6,7 @@ import {
   RotRutPayoutFileSchema,
   UpdateInvoiceSchema,
 } from '../schemas'
-import { DEDUCTION_LINE_ERRORS } from '@/lib/invoices/rot-rut-rules'
+import { DEDUCTION_LINE_ERRORS } from '@/lib/bookkeeping/rot-rut-rules'
 
 /**
  * The wire schemas every invoice write door shares (dashboard create/edit,

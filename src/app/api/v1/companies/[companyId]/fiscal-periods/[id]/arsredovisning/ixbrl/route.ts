@@ -7,6 +7,7 @@
 import { z } from 'zod'
 import { v1ReportFileHandler } from '@/lib/api/v1/report-file-route'
 import { arsredovisningFileBuild } from '@/lib/api/v1/arsredovisning-file'
+import { k3IxbrlEnabled } from '@/lib/bokslut/ixbrl/k3-release'
 
 export const GET = v1ReportFileHandler({
   operation: 'arsredovisning.ixbrl',
@@ -17,7 +18,10 @@ export const GET = v1ReportFileHandler({
   useWhen: 'Archiving the digital document, or validating it with external tools.',
   doNotUseFor: 'The pre-flight result as JSON (GET .../arsredovisning/ixbrl/validate) or a printable copy (GET .../arsredovisning/pdf).',
   pitfalls: [
-    'K2 aktiebolag only.',
+    // K3 documents exist only behind NEXT_PUBLIC_K3_IXBRL_ENABLED (default off).
+    k3IxbrlEnabled()
+      ? 'K2 and K3 aktiebolag (K3 AB risbs 2021-10-31 for a K3 year); no other legal form.'
+      : 'K2 aktiebolag only.',
     'The live draft is refused while an SIE import is unfinished (409); a frozen version stays readable.',
     'proposed_dividend (whole SEK) applies to the live draft only.',
   ],

@@ -1,10 +1,10 @@
-import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { textColumn, integerColumn } from '@/lib/reports/xlsx-export'
 import { buildRegisterExport, parseExportFormat, todayIso } from '@/lib/export/register-export'
 import type { Supplier } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/export/suppliers[?format=csv]
@@ -33,10 +33,13 @@ export const GET = withRouteContext(
           .select('*')
           .eq('company_id', companyId)
           .order('name', { ascending: true })
+          // Names repeat, so id makes the order total: fetchAllRows pages
+          // with .range() and a tie on a page boundary could repeat or drop a row.
+          .order('id', { ascending: true })
           .range(from, to),
       )) as unknown as Supplier[]
 
-      const { buffer, contentType, filename } = buildRegisterExport(
+      const { buffer, contentType, filename } = await buildRegisterExport(
         [
           {
             name: 'Leverantörer',
@@ -90,13 +93,7 @@ export const GET = withRouteContext(
 
       log.info('register exported', { entity: 'suppliers', format, rowCount: suppliers.length })
 
-      return new NextResponse(new Uint8Array(buffer), {
-        headers: {
-          'Content-Type': contentType,
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Cache-Control': 'no-store',
-        },
-      })
+      return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: contentType, cacheControl: 'no-store' })
     } catch (err) {
       log.error('supplier export failed', err as Error)
       return errorResponse(err, log, { requestId })

@@ -33,18 +33,12 @@ vi.mock('@/lib/cash-accounts/service', () => ({
     iban ? iban.replace(/\s+/g, '').toUpperCase() || null : null,
 }))
 
-// Mock the reconciliation modules so the renewal-guard sweep is deterministic
-// and observable. The mocks must export every symbol index.ts imports.
-const { mockRunReconciliation, mockResolveCashAccountScope } = vi.hoisted(() => ({
-  mockRunReconciliation: vi.fn(),
-  mockResolveCashAccountScope: vi.fn(),
-}))
-vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
-  runReconciliation: (...args: unknown[]) => mockRunReconciliation(...args),
-  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD: 0.9,
-}))
-vi.mock('@/lib/reconciliation/cash-account-scope', () => ({
-  resolveCashAccountScope: (...args: unknown[]) => mockResolveCashAccountScope(...args),
+// The post-sync sweep is the shared unattended sweep (its own tests cover the
+// per-account scoping); here only how the backfill calls it matters.
+const { mockSweep } = vi.hoisted(() => ({ mockSweep: vi.fn() }))
+vi.mock('@/lib/reconciliation/unattended-sweep', () => ({
+  runUnattendedReconciliationSweep: (...args: unknown[]) => mockSweep(...args),
+  toSweepSummary: () => ({ auto_linked: 0 }),
 }))
 
 import { enableBankingExtension } from '../index'
@@ -90,6 +84,9 @@ interface SupabaseStub {
     currency?: string
     /** Mirrors the picker's checkbox in that row's connection; absent = live claim. */
     enabled?: boolean
+    name?: string | null
+    /** Embedded bank_connections(bank_name): names the holder in a conflict. */
+    bank_connection?: { bank_name: string | null } | null
   }>
   /** Completed SIE import overlapping the backfill window (renewal-flood guard). */
   sieImportRow?: { id: string } | null
@@ -162,6 +159,7 @@ function buildSupabase(stub: SupabaseStub) {
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
+          or: vi.fn().mockReturnThis(),
           gte: vi.fn().mockReturnThis(),
           limit: vi.fn().mockReturnThis(),
           maybeSingle: vi.fn().mockResolvedValue({ data: stub.sieImportRow ?? null, error: null }),
@@ -182,7 +180,14 @@ function buildSupabase(stub: SupabaseStub) {
           data: stub.connectionRow,
           error: stub.connectionError ?? null,
         }),
-        update: vi.fn(() => { throw new Error('Selection must not write connections outside its RPC') }),
+        // The post-sync sweep stamps its summary; nothing else may be written
+        // outside the selection RPC.
+        update: vi.fn((patch: Record<string, unknown>) => {
+          if (Object.keys(patch).join() !== 'last_sie_sweep') {
+            throw new Error('Selection must not write connections outside its RPC')
+          }
+          return { eq: vi.fn().mockResolvedValue({ data: null, error: null }) }
+        }),
       }
     }),
   }
@@ -198,7 +203,6 @@ function makeContext(supabase: ReturnType<typeof buildSupabase>): ExtensionConte
     supabase: supabase as any,
     emit: vi.fn().mockResolvedValue(undefined),
     settings: { get: vi.fn(), set: vi.fn(), getAll: vi.fn() } as never,
-    storage: {} as never,
     log: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -230,28 +234,12 @@ describe('PATCH /accounts (enable-banking)', () => {
     eventBus.clear()
     // Default: the initial backfill wins the shared sync lease.
     mockClaimSyncLease.mockResolvedValue(true)
-    mockRunReconciliation.mockResolvedValue({
-      matches: [],
-      applied: 0,
-      errors: 0,
-      skippedBelowThreshold: 0,
-    })
-    // Scope stand-in: echo the requested account (or the '1930' default) so
-    // tests can assert the sweep runs once per ledger account, correctly scoped.
-    mockResolveCashAccountScope.mockImplementation(
-      async (_supabase: unknown, _companyId: unknown, accountNumber?: string) => ({
-        accountNumber: accountNumber ?? '1930',
-        currency: 'SEK',
-        cashAccountId: `ca-${accountNumber ?? '1930'}`,
-        includeUnassigned: accountNumber === undefined,
-        found: true,
-      }),
-    )
+    mockSweep.mockResolvedValue({ accounts: [], applied: 0, errors: 0, skippedBelowThreshold: 0, suggested: 0, unmatched: 0 })
     // Default: no revoked connections; individual tests override to exercise
     // the self-heal path.
     mockGetRevokedConnectionIds.mockResolvedValue(new Set<string>())
     // Allocator stand-in mirroring the real behavior: currency default first,
-    // then the next free 1931–1959 slot (skipping other currency defaults).
+    // then the next free 1931-1959 slot (skipping other currency defaults).
     mockAllocate.mockImplementation(
       async (
         _supabase: unknown,
@@ -270,17 +258,6 @@ describe('PATCH /accounts (enable-banking)', () => {
         return null
       },
     )
-  })
-
-  it('returns 401 when unauthenticated', async () => {
-    const supabase = buildSupabase({ authUser: null, connectionRow: null })
-    const ctx = makeContext(supabase)
-
-    const res = await accountsRoute.handler(
-      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
-      ctx
-    )
-    expect(res.status).toBe(401)
   })
 
   it('returns 400 when connection_id missing', async () => {
@@ -397,6 +374,21 @@ describe('PATCH /accounts (enable-banking)', () => {
     const res = await accountsRoute.handler(makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }), makeContext(buildSupabase(stub)))
     expect(res.status).toBe(200)
     expect(mockedSync.mock.calls[0]).toContainEqual(expect.objectContaining({ balance: 987, dedup_scope: 'fresh-scope' }))
+  })
+
+  it('hands the person who picked the accounts to the first import', async () => {
+    mockedSync.mockResolvedValue({ requestedFromDate: '2026-01-01', historyNarrowed: false, imported: 0, duplicates: 0, errors: 0 })
+    const fresh = { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' }
+    const stub: SupabaseStub = { authUser: { id: 'user-1' }, returnedAccounts: [fresh],
+      connectionRow: { id: 'conn-1', status: 'pending_selection', accounts_data: [fresh] } }
+    const request = new Request('http://localhost/api/extensions/ext/enable-banking/accounts', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.7', 'user-agent': 'Mozilla/5.0 test' },
+      body: JSON.stringify({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
+    })
+    const res = await accountsRoute.handler(request, makeContext(buildSupabase(stub)))
+    expect(res.status).toBe(200)
+    expect(mockedSync.mock.calls[0][8]?.signer).toMatchObject({ ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0 test' })
   })
 
   it('does not reuse another currency cash row sharing an IBAN', async () => {
@@ -618,21 +610,6 @@ describe('PATCH /accounts (enable-banking)', () => {
     expect(stub.selectionCalls?.[0]).not.toHaveProperty('status')
   })
 
-  it('returns 400 when ctx.companyId is absent (no user.id fallback)', async () => {
-    const supabase = buildSupabase({ authUser: { id: 'user-1' }, connectionRow: null })
-    const ctx = makeContext(supabase)
-    // Simulate a missing company context: should not fall back to user.id.
-    const ctxWithoutCompany = { ...ctx, companyId: undefined as unknown as string }
-
-    const res = await accountsRoute.handler(
-      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
-      ctxWithoutCompany
-    )
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error).toMatch(/Company context required/i)
-  })
-
   it('returns 400 when enabled_uids exceeds the per-connection cap', async () => {
     const supabase = buildSupabase({
       authUser: { id: 'user-1' },
@@ -762,6 +739,44 @@ describe('PATCH /accounts (enable-banking)', () => {
       })
     })
 
+    // PH 195: Enable Banking handed out 100 empty pages, each with a
+    // continuation key, and the first import was stamped complete with
+    // nothing in it while the panel said "connected".
+    it('answers a first import the bank had not finished as incomplete and leaves it owed', async () => {
+      mockedSync.mockResolvedValue({
+        requestedFromDate: '2025-10-20',
+        historyNarrowed: false,
+        imported: 0,
+        duplicates: 0,
+        errors: 0,
+        truncated: true,
+      })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 365 }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.success).toBe(true)
+      expect(body.initial_sync).toBeUndefined()
+      expect(body.initial_sync_error).toBe('initial_sync_incomplete')
+      // What came is stored, but the first import is not completed: the cron owes it.
+      expect(stub.capturedSync).toMatchObject({ p_connection_id: 'conn-1', p_initial_sync: null })
+    })
+
     it('suppresses auto-categorization and reconciles per ledger account when the window overlaps an SIE import (renewal-flood guard)', async () => {
       mockedSync.mockResolvedValue({
         requestedFromDate: '2026-01-01',
@@ -772,9 +787,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         returnedMinBookingDate: '2026-01-05',
         returnedMaxBookingDate: '2026-05-06',
       })
-      mockRunReconciliation
-        .mockResolvedValueOnce({ matches: [{}, {}, {}, {}], applied: 3, errors: 0, skippedBelowThreshold: 1 })
-        .mockResolvedValueOnce({ matches: [{}, {}], applied: 2, errors: 0, skippedBelowThreshold: 0 })
+      mockSweep.mockResolvedValueOnce({ accounts: [], applied: 5, errors: 0, skippedBelowThreshold: 1, suggested: 0, unmatched: 0 })
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
@@ -816,34 +829,21 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { strategy: 'longest', skipAutoCategorization: true }
+        { skipAutoCategorization: true, strategy: 'longest' }
       )
 
-      // One scoped sweep per distinct ledger account: pooled unscoped runs can
-      // cross-link accounts (#1290/#1298). The EUR account had no stored
-      // ledger_account, but the PATCH allocator assigns one ('1932') before the
-      // backfill, so both sweeps run with a concrete account.
-      expect(mockResolveCashAccountScope).toHaveBeenCalledTimes(2)
-      expect(mockResolveCashAccountScope).toHaveBeenCalledWith(expect.anything(), 'company-1', '1930')
-      expect(mockResolveCashAccountScope).toHaveBeenCalledWith(expect.anything(), 'company-1', '1932')
-      expect(mockRunReconciliation).toHaveBeenCalledTimes(2)
-      expect(mockRunReconciliation).toHaveBeenCalledWith(
-        expect.anything(),
-        'company-1',
-        'user-1',
-        expect.objectContaining({
-          accountNumber: '1930',
-          currency: 'SEK',
-          cashAccountId: 'ca-1930',
-          includeUnassigned: false,
-          confidenceThreshold: 0.9,
-          // The bank over-returned history: the sweep window opens at the
-          // oldest returned booking date, not the requested 90-day fromDate,
-          // so over-returned rows are swept too.
-          dateFrom: '2026-01-05',
-          dateTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-        })
-      )
+      // One sweep over the synced ledger accounts only, each in its own
+      // cash-account scope, never the pooled form (#1290/#1298). The EUR
+      // account had no stored ledger_account, but the PATCH allocator assigns
+      // one ('1932') before the backfill. The bank over-returned history: the
+      // window opens at the oldest returned booking date, not the requested
+      // 90-day fromDate, so over-returned rows are swept too.
+      expect(mockSweep).toHaveBeenCalledTimes(1)
+      expect(mockSweep).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', {
+        dateFrom: '2026-01-05',
+        dateTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        ledgerAccounts: ['1930', '1932'],
+      })
 
       // Applied links surface to the UI so the user sees the period was
       // recognized, not re-imported as work.
@@ -890,7 +890,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         undefined,
         { strategy: 'longest' }
       )
-      expect(mockRunReconciliation).not.toHaveBeenCalled()
+      expect(mockSweep).not.toHaveBeenCalled()
       expect(body.initial_sync.auto_matched).toBe(0)
     })
 
@@ -933,54 +933,9 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { strategy: 'longest', skipAutoCategorization: true, rawInsertOnly: true }
+        { skipAutoCategorization: true, rawInsertOnly: true, strategy: 'longest' }
       )
-      expect(mockRunReconciliation).not.toHaveBeenCalled()
-    })
-
-    it('skips the sweep for an account whose cash_accounts row did not resolve instead of widening to the pooled form', async () => {
-      mockedSync.mockResolvedValue({
-        requestedFromDate: '2026-01-01',
-        historyNarrowed: false,
-        imported: 6,
-        duplicates: 0,
-        errors: 0,
-        returnedMinBookingDate: '2026-05-01',
-        returnedMaxBookingDate: '2026-05-13',
-      })
-      // found: false = no cash_accounts row (e.g. the mirror upsert failed
-      // earlier in the request). Running anyway would sweep currency-only
-      // across every same-currency account (#1290 write shape).
-      mockResolveCashAccountScope.mockResolvedValue({
-        accountNumber: '1930',
-        currency: 'SEK',
-        cashAccountId: undefined,
-        includeUnassigned: true,
-        found: false,
-      })
-
-      const stub: SupabaseStub = {
-        authUser: { id: 'user-1' },
-        connectionRow: {
-          id: 'conn-1',
-          status: 'pending_selection',
-          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' }] as StoredAccount[],
-        },
-        sieImportRow: { id: 'sie-1' },
-      }
-      const supabase = buildSupabase(stub)
-      const ctx = makeContext(supabase)
-
-      const res = await accountsRoute.handler(
-        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 90 }),
-        ctx
-      )
-
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(mockResolveCashAccountScope).toHaveBeenCalled()
-      expect(mockRunReconciliation).not.toHaveBeenCalled()
-      expect(body.initial_sync.auto_matched).toBe(0)
+      expect(mockSweep).not.toHaveBeenCalled()
     })
 
     it('keeps the backfill successful when the reconciliation sweep throws (non-critical)', async () => {
@@ -993,7 +948,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         returnedMinBookingDate: '2026-05-01',
         returnedMaxBookingDate: '2026-05-13',
       })
-      mockRunReconciliation.mockRejectedValue(new Error('recon exploded'))
+      mockSweep.mockRejectedValue(new Error('recon exploded'))
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
@@ -1178,6 +1133,36 @@ describe('PATCH /accounts (enable-banking)', () => {
       // Status flip happened; no metadata follow-up because sync threw.
       expect(stub.selectionReceipts).toHaveLength(1)
       expect(stub.selectionReceipts?.[0]?.status).toBe('active')
+    })
+
+    it('saves the picked window with the activation, before the inline import runs or fails', async () => {
+      mockedSync.mockRejectedValue(new Error('ASPSP_DOWN'))
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: { id: 'conn-1', status: 'pending_selection', accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }] },
+      }
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 180 }),
+        makeContext(buildSupabase(stub)),
+      )
+      expect(res.status).toBe(200)
+      const expectedFrom = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      // The cron's first sync reads this date when the inline import did not finish.
+      expect(stub.selectionCalls?.[0]?.p_initial_sync).toEqual({ requested_from: expectedFrom, lookback_days: 180 })
+      expect(stub.capturedSync).toBeUndefined()
+    })
+
+    it('saves no window when an active connection only changes its selection', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: { id: 'conn-1', status: 'active', accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }] },
+      }
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 180 }),
+        makeContext(buildSupabase(stub)),
+      )
+      expect(res.status).toBe(200)
+      expect(stub.selectionCalls?.[0]).not.toHaveProperty('p_initial_sync')
     })
 
     it('clamps initial_lookback_days to [30, 365]', async () => {
@@ -1417,6 +1402,54 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1932')
     })
 
+    // The request a ledger-account suggestion sends (crm#1066,
+    // lib/cash-accounts/ledger-suggestions.ts): every account that syncs stays
+    // in enabled_uids, and only the moved account carries a mapping. The
+    // others must come out of the save exactly as they went in.
+    it('keeps an enabled account without a mapping on its ledger account when another account of the save is moved', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1920'],
+        cashAccountRows: [
+          { id: 'row-1940', external_uid: 'acc-1', bank_connection_id: 'conn-1', ledger_account: '1940' },
+          { id: 'row-1930', external_uid: 'acc-2', bank_connection_id: 'conn-1', ledger_account: '1930' },
+        ],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'active',
+          accounts_data: [
+            { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1940' },
+            { uid: 'acc-2', currency: 'SEK', enabled: true, ledger_account: '1930' },
+            { uid: 'acc-3', currency: 'SEK', enabled: false, ledger_account: '1931' },
+          ],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1', 'acc-2'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: '1920' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      // What the database is asked to save: only acc-1 changed.
+      const submitted = (stub.selectionCalls?.[0]?.p_selections as StoredAccount[]).map(a => [a.uid, a.enabled, a.ledger_account])
+      expect(submitted).toEqual([
+        ['acc-1', true, '1920'],
+        ['acc-2', true, '1930'],
+        ['acc-3', false, '1931'],
+      ])
+      const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
+      expect(written.map(a => [a.uid, a.enabled, a.ledger_account])).toEqual(submitted)
+      // An active connection: the save starts no sync.
+      expect(mockedSync).not.toHaveBeenCalled()
+    })
+
     it('re-allocates ledger_account when account_mappings entry sets it to null', async () => {
       // Explicit null means "reset to auto". accounts_data must always mirror
       // the effective cash_accounts assignment, so the cleared account gets a
@@ -1485,17 +1518,18 @@ describe('PATCH /accounts (enable-banking)', () => {
       const body = await res.json()
       expect(body.error).toMatch(/samma konto/i)
       expect(body.duplicate_accounts).toEqual(['1930'])
-      // Nothing written — the collision is rejected before any update.
+      // Nothing written - the collision is rejected before any update.
       expect(stub.selectionReceipts).toBeUndefined()
       expect(stub.selectionCalls).toBeUndefined()
     })
 
-    it('returns 400 when a mapping targets a ledger held by another connection', async () => {
+    it('returns 400 naming the bank account when a mapping targets a ledger another connection syncs onto', async () => {
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
         chartAccountNumbers: ['1935'],
         cashAccountRows: [
-          { external_uid: 'other-acc', bank_connection_id: 'conn-OTHER', ledger_account: '1935' },
+          { external_uid: 'other-acc', bank_connection_id: 'conn-OTHER', ledger_account: '1935',
+            iban: 'SE00 0000 0000 0000 0000 1234', name: 'Sparkonto', bank_connection: { bank_name: 'Swedbank' } },
         ],
         connectionRow: {
           id: 'conn-1',
@@ -1517,8 +1551,11 @@ describe('PATCH /accounts (enable-banking)', () => {
 
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/annan bankanslutning/i)
+      expect(body.error).toBe('Bokföringskonto 1935 används redan av bankkontot Sparkonto (Swedbank ••1234), ett annat bankkonto '
+        + 'som hämtas via en annan bankkoppling. Inget sparades. Välj ett annat bokföringskonto, eller ge först det kontot ett annat '
+        + 'bokföringskonto: Inställningar > Kopplingar > Bank, tre punkter vid den banken, Välj konton.')
       expect(body.conflicting_accounts).toEqual(['1935'])
+      expect(stub.selectionCalls).toBeUndefined()
     })
 
     it('allows a mapping onto a ledger held only by a REVOKED connection (self-heal after disconnect)', async () => {
@@ -1619,7 +1656,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       )
 
       expect(res.status).toBe(200)
-      // No allocation — the existing mirrored assignment wins.
+      // No allocation - the existing mirrored assignment wins.
       expect(mockAllocate).not.toHaveBeenCalled()
       const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
       expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1940')
@@ -1884,6 +1921,74 @@ describe('PATCH /accounts (enable-banking)', () => {
       const body = await res.json()
       expect(body.error).toMatch(/account_mappings/)
       expect(body.unknown_uids).toEqual(['acc-typo'])
+    })
+  })
+  // crm#1021: the account was synced onto 1931 and moving it to 1930, where
+  // the imported history and the seeded manual 1930 row are, answered
+  // "Förfrågan innehåller ogiltiga uppgifter". The payload is the picker's,
+  // with synthetic identifiers.
+  describe('moving an account onto the ledger the books already use (crm#1021)', () => {
+    const accountsData: StoredAccount[] = [
+      { uid: 'acc-main', currency: 'SEK', iban: 'SE00 0000 0000 0000 0000 0001', name: 'Företaget', enabled: true, ledger_account: '1931' },
+      { uid: 'acc-other', currency: 'SEK', iban: 'SE00 0000 0000 0000 0000 0002', name: 'Företaget', enabled: true, ledger_account: '1910' },
+    ]
+    const cashAccountRows: SupabaseStub['cashAccountRows'] = [
+      { id: 'cash-seeded', external_uid: null, bank_connection_id: null, ledger_account: '1930', iban: null, currency: 'SEK', name: 'Företagskonto (SEK)' },
+      { id: 'cash-main', external_uid: 'acc-main', bank_connection_id: 'conn-1', ledger_account: '1931', iban: accountsData[0].iban, currency: 'SEK' },
+      { id: 'cash-other', external_uid: 'acc-other', bank_connection_id: 'conn-1', ledger_account: '1910', iban: accountsData[1].iban, currency: 'SEK' },
+    ]
+    const request = makeRequest({
+      connection_id: 'conn-1',
+      enabled_uids: ['acc-main', 'acc-other'],
+      account_mappings: [{ uid: 'acc-main', ledger_account: '1930' }, { uid: 'acc-other', ledger_account: '1910' }],
+    })
+    const stubFor = (selectionError?: SupabaseStub['selectionError'] & { details?: string }): SupabaseStub => ({
+      authUser: { id: 'user-1' },
+      chartAccountNumbers: ['1930', '1910'],
+      cashAccountRows,
+      selectionError,
+      connectionRow: { id: 'conn-1', status: 'active', accounts_data: accountsData },
+    })
+
+    it('submits the move to the database: the seeded manual 1930 row is no claim of another connection', async () => {
+      const stub = stubFor()
+      const ctx = makeContext(buildSupabase(stub))
+
+      const res = await accountsRoute.handler(request.clone(), ctx)
+
+      expect(res.status).toBe(200)
+      expect(stub.selectionCalls?.[0]?.p_selections).toEqual([
+        { uid: 'acc-main', enabled: true, currency: 'SEK', ledger_account: '1930', reuse_cash_account_id: null },
+        { uid: 'acc-other', enabled: true, currency: 'SEK', ledger_account: '1910', reuse_cash_account_id: 'cash-other' },
+      ])
+      expect(mockedSync).not.toHaveBeenCalled()
+    })
+
+    it('answers a refused move with the refusal itself, naming the bank account, never the generic validation error', async () => {
+      const details = JSON.stringify({ ledger_account: '1930', dependencies: ['reconciliation-attachment'],
+        cash_account: { id: 'cash-main', ledger_account: '1931', name: 'Företaget', iban_last4: '0001', bank_name: 'Test bank', connection_live: true } })
+      const ctx = makeContext(buildSupabase(stubFor({ code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES', details })))
+
+      const res = await accountsRoute.handler(request.clone(), ctx)
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES')
+      expect(body.error.message).toBe('Bankkontot Företaget (Test bank ••0001) kan inte flyttas från 1931 till 1930 automatiskt, '
+        + 'eftersom kontot på 1931 har underlag bifogade till en avstämning. Inget sparades. '
+        + 'Behåll 1931, eller kontakta supporten så hjälper vi dig att flytta det.')
+      expect(ctx.emit).not.toHaveBeenCalled()
+    })
+
+    it('still answers the refusal by its own code when the database names no account', async () => {
+      const ctx = makeContext(buildSupabase(stubFor({ code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES' })))
+
+      const res = await accountsRoute.handler(request.clone(), ctx)
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('CASH_ACCOUNT_RETIREMENT_HAS_DEPENDENCIES')
+      expect(body.error.message).not.toMatch(/ogiltiga uppgifter/)
     })
   })
 })

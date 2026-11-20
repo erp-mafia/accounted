@@ -79,7 +79,7 @@ export function EditorStatusLine<TStep>({
           : status.cause === 'deduction'
             ? 'status_split_deduction'
             : 'status_split_other'
-    content = <p className="text-[12.5px] leading-5 text-muted-foreground">{t(key, { pages: status.pages })}</p>
+    content = <p className="text-xs leading-5 text-muted-foreground">{t(key, { pages: status.pages })}</p>
   }
 
   return (

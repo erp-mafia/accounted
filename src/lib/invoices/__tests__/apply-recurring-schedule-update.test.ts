@@ -234,6 +234,7 @@ describe('applyRecurringScheduleUpdate', () => {
         unit_price: 5000,
         vat_rate: null,
         dimensions: {},
+        article_id: null,
       },
       {
         schedule_id: SCHEDULE_ID,
@@ -245,8 +246,29 @@ describe('applyRecurringScheduleUpdate', () => {
         unit_price: 5000,
         vat_rate: 25,
         dimensions: {},
+        article_id: null,
       },
     ])
+  })
+
+  it('writes the lines again without article_id while that column is not migrated (accounted#52)', async () => {
+    const h = createHarness({
+      itemsSnapshot: [storedItem()],
+      itemsInsertErrors: [{ message: "Could not find the 'article_id' column", code: 'PGRST204' }, null],
+    })
+
+    const result = await applyRecurringScheduleUpdate(h.supabase, {
+      scheduleId: SCHEDULE_ID,
+      companyId: COMPANY_ID,
+      fields: {},
+      items: [makeItem({ description: 'Rad A', article_id: '7c9e6679-7425-40de-944b-e07fc1f90ae7' })],
+      log: h.log,
+    })
+
+    expect(result).toEqual({ ok: true })
+    expect(h.inserts[ITEMS]).toHaveLength(2)
+    expect(h.inserts[ITEMS][0][0]).toMatchObject({ article_id: '7c9e6679-7425-40de-944b-e07fc1f90ae7' })
+    expect('article_id' in (h.inserts[ITEMS][1][0] as Record<string, unknown>)).toBe(false)
   })
 
   it('rolls the header fields back when the items insert fails on a combined edit', async () => {

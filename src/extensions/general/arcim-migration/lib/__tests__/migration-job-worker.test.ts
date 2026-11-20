@@ -3,31 +3,66 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProviderMigrationJob } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
+import { FortnoxApiError } from '@/lib/providers/fortnox/client'
+import { BokioApiError } from '@/lib/providers/bokio/client'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
+import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
-const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
-vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
+import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn(), error: vi.fn(),
+  // A provider whose customer list carries the terms: the pass hands the list form back untouched.
+  hydrateCustomers: vi.fn(async (_provider: string, _token: string, _company: unknown, customers: unknown[], _budgetMs?: number) =>
+    ({ customers, unhydratedIds: new Set<string>(), hydration: {} })),
+  hydrateSuppliers: vi.fn(async (_provider: string, _token: string, _company: unknown, suppliers: unknown[], _budgetMs?: number) =>
+    ({ suppliers, unhydratedIds: new Set<string>(), hydration: {} })) }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: mocks.error }) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: mocks.resolve }))
-vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mocks.page, hydrateSalesInvoices: mocks.hydrate, hydrateSupplierInvoices: mocks.hydrate }))
+vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mocks.page, hydrateSalesInvoices: mocks.hydrate, hydrateSupplierInvoices: mocks.hydrate,
+  hydrateCustomers: mocks.hydrateCustomers, hydrateSuppliers: mocks.hydrateSuppliers,
+  fetchCompanyInfoDirect: mocks.probe }))
 vi.mock('@/lib/invoices/link-migrated-registration-vouchers', () => ({ linkMigratedRegistrationVouchers: mocks.link }))
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({ reconcileSupplierInvoiceVouchers: mocks.reconcile }))
+// The phone rides along only when the record has one, so every other row stays { name }.
+type MappedParty = { party: { name: string; contact?: { telephone?: string } } }
+const mappedParty = (dto: MappedParty) => ({ name: dto.party.name, ...(dto.party.contact?.telephone ? { phone: dto.party.contact.telephone } : {}) })
 vi.mock('../entity-mapper', () => ({
-  mapCustomer: (dto: { party: { name: string } }) => ({ name: dto.party.name }),
-  mapSupplier: (dto: { party: { name: string } }) => ({ name: dto.party.name }),
+  mapCustomer: vi.fn((dto: MappedParty) => mappedParty(dto)),
+  mapSupplier: vi.fn((dto: MappedParty) => mappedParty(dto)),
+  proposedExpenseAccount: (dto: { defaultExpenseAccount?: string }) => dto.defaultExpenseAccount ?? null,
   buildFxRateIndex: vi.fn().mockResolvedValue(new Map()),
   mapSalesInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
-  mapSupplierInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
+  mapSupplierInvoice: vi.fn(() => ({ invoice: { supplier_invoice_number: 'S-1', subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
 }))
-import { mapSalesInvoice, mapSupplierInvoice } from '../entity-mapper'
+import { mapCustomer, mapSalesInvoice, mapSupplier, mapSupplierInvoice } from '../entity-mapper'
 import { invoicePartySourceId, migrationRpc, pairMigratedCreditNotes, runProviderMigrationWorker, withinMigrationDeadline, type MigrationChunk } from '../migration-job-worker'
+import { SIE_IMPORT_IN_PLACE_JOB_FILTER } from '@/lib/bookkeeping/sie-import-in-place'
 
 function database(overrides: Partial<ProviderMigrationJob> = {}) {
   const job = { id: 'job', company_id: 'company', user_id: 'user', consent_id: 'consent', provider: 'visma',
     resources: ['customers'], resource_index: 1, next_page: 1, phase: 'discover', state: 'queued',
     account_key: '5560000000', attempt: 0, failures: 0, fiscal_year_scope: null, ...overrides } as ProviderMigrationJob
   type Row = { id: string; resource: string; source_id: string; payload: string; state: string; target_id?: string; receipt?: unknown }
+  // Card updates, as written: the enrichment of matched cards (crm#1436).
+  const updates: { table: string; payload: Record<string, unknown> }[] = []
+  let failUpdates = false
   const rows: Row[] = []
+  // The company's customer register and the job's source map, read by the
+  // customer match before each commit (crm#1294).
+  // And the chart a supplier's proposed default account is read against (crm#1744).
+  // And the company's SIE imports, which the invoices are judged by (crm#2002).
+  const register: { customers: Record<string, unknown>[]; suppliers: Record<string, unknown>[]; migration_source_records: Record<string, unknown>[];
+    chart_of_accounts: Record<string, unknown>[]; sie_imports: Record<string, unknown>[] } = {
+    customers: [], suppliers: [], migration_source_records: [], chart_of_accounts: [], sie_imports: [],
+  }
+  // The `or` filters asked, per table: the in-place reading of an SIE import.
+  const orFilters: { table: string; filter: string }[] = []
+  // As the RPCs: a register's last page, or its refusal, moves the cursor to
+  // the next register, and past the last one discovery ends.
+  const nextRegister = () => {
+    Object.assign(job, { resource_index: job.resource_index + 1, next_page: 1, failures: 0, error_code: null })
+    if (job.resource_index > job.resources.length) job.phase = 'import'
+  }
   const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
     if (name === 'claim_provider_migration_job') {
       if (job.state === 'completed' || job.state === 'needs_attention') return { data: null }
@@ -38,8 +73,17 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
       for (const r of args.p_records as Row[]) {
         if (!rows.some(row => row.source_id === r.source_id)) rows.push({ ...r, id: r.source_id, resource: args.p_resource as string, state: 'pending' })
       }
-      if (args.p_next_page === null) job.phase = 'import'
+      if (args.p_next_page === null) nextRegister()
       else if (args.p_next_page !== 0) job.next_page = args.p_next_page as number
+    }
+    if (name === 'skip_provider_migration_resource') {
+      job.refused_resources = { ...job.refused_resources, [args.p_resource as string]: args.p_reason as 'license' | 'permission' }
+      nextRegister()
+    }
+    if (name === 'adopt_provider_migration_invoice_party') {
+      register.migration_source_records.push({ company_id: job.company_id, provider: job.provider, account_key: job.account_key,
+        resource: 'customers', source_id: args.p_source_id, target_id: args.p_customer })
+      return { data: args.p_customer, error: null }
     }
     if (name === 'commit_provider_migration_records') {
       for (const r of args.p_records as { id: string; error?: string }[]) rows.find(row => row.id === r.id)!.state = r.error ? 'needs_attention' : 'done'
@@ -58,17 +102,37 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
   })
   const supabase = { rpc, from: (table: string) => {
     let state: string | undefined; let limit = Infinity
+    let payload: Record<string, unknown> | undefined
     const filters: Record<string, unknown> = {}
+    const within: Record<string, unknown[]> = {}
+    const empty: string[] = []
+    const registerRows = () => (register[table as keyof typeof register] ?? []).filter(row =>
+      Object.entries(filters).every(([key, value]) => !(key in row) || row[key] === value)
+      && Object.entries(within).every(([key, values]) => values.includes(row[key]))
+      && empty.every(key => !(key in row) || row[key] === null))
+    // As PostgREST: the update writes the rows its filters leave, and answers the first.
+    const updated = () => {
+      if (failUpdates) return { data: null, error: { code: '23514', message: 'check violated: Kund AB 08-123 45 67' } }
+      updates.push({ table, payload: payload! })
+      const hit = registerRows()
+      for (const row of hit) for (const [key, value] of Object.entries(payload!)) if (value !== undefined) row[key] = value
+      return { data: hit[0] ? { id: hit[0].id } : null, error: null }
+    }
     const chain = { select: () => chain, eq: (key: string, value: unknown) => {
       filters[key] = value; if (key === 'state') state = value as string; return chain
     },
+      update: (value: Record<string, unknown>) => { payload = value; return chain },
+      in: (key: string, values: unknown[]) => { within[key] = values; return chain },
+      or: (filter: string) => { orFilters.push({ table, filter }); return chain },
+      is: (key: string, value: unknown) => { if (value === null) empty.push(key); return chain }, lt: () => chain, range: () => chain,
       order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
-      then: (resolve: (data: unknown) => void) => resolve({ data: table === 'migration_jobs'
+      then: (resolve: (data: unknown) => void) => resolve(payload ? updated() : { data: table === 'migration_jobs'
         ? Object.entries(filters).every(([key, value]) => job[key as keyof ProviderMigrationJob] === value) ? { ...job } : null
+        : table in register ? registerRows()
         : rows.filter(r => r.state === state).slice(0, limit), error: null }) }
     return chain
   } } as unknown as SupabaseClient
-  return { supabase, rpc, job, rows }
+  return { supabase, rpc, job, rows, register, updates, orFilters, failUpdates: () => { failUpdates = true } }
 }
 const customer = (id: number) => ({ id: `customer-${id}`, active: true, party: { name: `Customer ${id}` } })
 
@@ -108,7 +172,7 @@ describe('bounded durable worker', () => {
     const dto = resource === 'salesInvoices' ? mapBokioToSalesInvoice(raw) : mapBokioToSupplierInvoice(raw)
     const mapper = resource === 'salesInvoices' ? mapSalesInvoice : mapSupplierInvoice
     vi.mocked(mapper).mockReturnValueOnce({
-      invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 },
+      invoice: { supplier_invoice_number: 'S-1', subtotal: 100, vat_amount: 25, total_sek: 125 },
       items: [{ line_total: 100, vat_amount: 0 }],
       fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
     })
@@ -128,7 +192,7 @@ describe('bounded durable worker', () => {
     const dto = mapBokioToSupplierInvoice({ id: 'invoice', supplierRef: { id: 'supplier', name: 'Supplier' }, totalAmount: 125,
       lineItems: [{ description: 'Test', quantity: 1, unitPrice: 100 }] })
     vi.mocked(mapSupplierInvoice).mockReturnValueOnce({
-      invoice: { subtotal: 125, vat_amount: 0, total_sek: 125 },
+      invoice: { supplier_invoice_number: 'S-1', subtotal: 125, vat_amount: 0, total_sek: 125 },
       items: [], rowsMismatch: true,
       fxUnresolved: null, vatUnresolved: true, creditNoteUnlinked: false, creditedInvoiceRef: null,
     })
@@ -153,7 +217,7 @@ describe('bounded durable worker', () => {
       lineItems: [{ description: 'Test', quantity: 1, unitPrice: 1000, taxRate: 25 }] })
     const dto = provider === 'bokio' ? enrichBokioSupplierInvoice(listed) : listed
     vi.mocked(mapSupplierInvoice).mockReturnValueOnce({
-      invoice: { subtotal: 1000, vat_amount: 250, total_sek: 1250 },
+      invoice: { supplier_invoice_number: '1001', subtotal: 1000, vat_amount: 250, total_sek: 1250 },
       items: [], rowsMismatch: false, rowsUnaccounted: true,
       fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
     })
@@ -255,14 +319,14 @@ describe('bounded durable worker', () => {
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
     expect(db.job.state).toBe('completed')
   })
-  it('yields a hung provider request at the worker deadline without advancing its cursor', async () => {
+  it('yields a hung provider request at the worker deadline without advancing its cursor, as a stall', async () => {
     vi.useFakeTimers()
     const db = database()
     mocks.page.mockReturnValue(new Promise(() => {}))
     const run = runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 20_000 })
     await vi.advanceTimersByTimeAsync(16_000)
     await run
-    expect(db.job).toMatchObject({ state: 'queued', next_page: 1 })
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED', failures: 1, next_page: 1 })
     expect(db.rows).toHaveLength(0)
   })
   it('names the step and the error class when a register page times out', async () => {
@@ -275,14 +339,43 @@ describe('bounded durable worker', () => {
       errorName: 'TimeoutError', elapsedMs: expect.any(Number),
     }))
   })
-  it('treats its own exhausted budget as a deferral even on a long failure streak', async () => {
+  it('treats its own exhausted budget as a deferral after a saved page, even on a long failure streak', async () => {
     const db = database({ failures: 4, next_page: 4 })
-    mocks.page.mockRejectedValue(new ExecutionBudgetExceeded('migration-list'))
+    mocks.page.mockResolvedValueOnce({ items: [customer(1)], nextPage: 5, total: 2 })
+      .mockRejectedValue(new ExecutionBudgetExceeded('migration-list'))
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    expect(db.job).toMatchObject({ state: 'queued', error_code: null, failures: 0, next_page: 4 })
+    expect(db.job).toMatchObject({ state: 'queued', error_code: null, failures: 0, next_page: 5 })
     expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
       code: 'MIGRATION_DEADLINE', needsAttention: false, errorName: 'ExecutionBudgetExceeded',
     }))
+  })
+  it('counts a claim that ran out of time with nothing saved as a stall, and parks the job after five in a row (#115)', async () => {
+    const db = database({ next_page: 4 })
+    mocks.page.mockRejectedValue(new ExecutionBudgetExceeded('migration-list'))
+    for (let claim = 1; claim <= 4; claim++) {
+      await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+      expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED', failures: claim, next_page: 4 })
+    }
+    expect(db.rpc).toHaveBeenLastCalledWith('release_provider_migration_job', expect.objectContaining({
+      p_error_code: 'MIGRATION_STALLED', p_retry_seconds: 120,
+    }))
+    expect(mocks.error).not.toHaveBeenCalled()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'MIGRATION_STALLED', failures: 5, next_page: 4 })
+    expect(mocks.error).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'MIGRATION_STALLED', needsAttention: true, phase: 'discover', page: 4,
+    }))
+  })
+  it('reports a claim whose time ran out before the first step as a stall', async () => {
+    vi.useFakeTimers()
+    const db = database()
+    mocks.resolve.mockImplementationOnce(async () => {
+      vi.setSystemTime(Date.now() + 15_000)
+      return { accessToken: 'token', consent: { provider: 'visma', org_number: '556000-0000' } }
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 20_000 })
+    expect(mocks.page).not.toHaveBeenCalled()
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED', failures: 1 })
   })
   it('logs a database failure by its code and keeps the message out', async () => {
     const db = database()
@@ -393,6 +486,565 @@ it('recognizes the consent resolver’s structured authorization errors', async 
 })
 
 /**
+ * A register Fortnox refuses (PH 149, PH 145). Its answer never changes on a
+ * retry: 2001101 (HTTP 400) when the company's plan lacks the module, a 403
+ * or 2000663 when the user who connected lacks the right. The worker used to
+ * retry it five times over about four minutes and then park the whole job at
+ * discovery, so not even the registers Fortnox did hand out were imported.
+ */
+describe('Fortnox customers take their terms from the detail form (crm#1245)', () => {
+  const listed = (id: string) => ({ id, customerNumber: id, active: true, party: { name: `Listed ${id}` }, _raw: { CustomerNumber: id } })
+  const detailed = (id: string) => ({ ...listed(id), party: { name: `Detailed ${id}` }, defaultPaymentTermsDays: 10 })
+  const committed = (db: ReturnType<typeof database>) => db.rpc.mock.calls
+    .filter(([name]) => name === 'commit_provider_migration_records')
+    .flatMap(([, args]) => args.p_records as Record<string, unknown>[])
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+
+  it('imports a listed customer from its detail form', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockResolvedValueOnce({ customers: [detailed('1001')], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrateCustomers).toHaveBeenCalledWith('fortnox', 'token', undefined, [listed('1001')], expect.any(Number))
+    expect(committed(db)).toEqual([expect.objectContaining({ id: 'c1', row: { name: 'Detailed 1001' } })])
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+
+  it('skips a customer its detail form names inactive, which Fortnox\'s list cannot say', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockResolvedValueOnce({ customers: [{ ...detailed('1001'), active: false }], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: 'c1', skip: 'inactive' }])
+  })
+  it('never saves a customer from its list form: one whose detail cannot be read is retried (crm#1436)', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockResolvedValueOnce({ customers: [listed('1001')], unhydratedIds: new Set(['1001']),
+      hydration: { needed: 1, hydrated: 0, failed: 1, skippedForBudget: 0 } })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: 'c1', error: 'MIGRATION_DETAIL_RETRY' }])
+    expect(db.rows.map(row => row.state)).toEqual(['needs_attention'])
+  })
+
+  it('leaves the customer pending when only the invocation time runs out', async () => {
+    vi.useFakeTimers()
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockImplementationOnce(async (...args) => {
+      expect(args[4]).toBeLessThan(15000)
+      return { customers: [listed('1001')], unhydratedIds: new Set(['1001']), hydration: { abortedBy: 'budget' } }
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 15000 })
+    expect(committed(db)).toEqual([])
+    expect(db.rows.map(row => row.state)).toEqual(['pending'])
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED' })
+  })
+})
+
+describe('Fortnox suppliers take their country and VAT number from the detail form (crm#1436)', () => {
+  const listed = (id: string) => ({ id, supplierNumber: id, active: true, party: { name: `Listed ${id}` }, _raw: { SupplierNumber: id } })
+  const detailed = (id: string) => ({ ...listed(id), party: { name: `Detailed ${id}` }, vatNumber: 'DE123456789' })
+  const committed = (db: ReturnType<typeof database>) => db.rpc.mock.calls
+    .filter(([name]) => name === 'commit_provider_migration_records')
+    .flatMap(([, args]) => args.p_records as Record<string, unknown>[])
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+
+  it('imports a listed supplier from its detail form', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    db.rows.push({ id: 's1', source_id: '7', resource: 'suppliers', state: 'pending', ...sealMigrationPayload(listed('7')) })
+    mocks.hydrateSuppliers.mockResolvedValueOnce({ suppliers: [detailed('7')], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrateSuppliers).toHaveBeenCalledWith('fortnox', 'token', undefined, [listed('7')], expect.any(Number))
+    expect(committed(db)).toEqual([expect.objectContaining({ id: 's1', row: { name: 'Detailed 7' } })])
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+  it('never saves a supplier from its list form: one whose detail cannot be read is retried', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    db.rows.push({ id: 's1', source_id: '7', resource: 'suppliers', state: 'pending', ...sealMigrationPayload(listed('7')) })
+    mocks.hydrateSuppliers.mockResolvedValueOnce({ suppliers: [listed('7')], unhydratedIds: new Set(['7']),
+      hydration: { needed: 1, hydrated: 0, failed: 1, skippedForBudget: 0 } })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: 's1', error: 'MIGRATION_DETAIL_RETRY' }])
+    expect(db.rows.map(row => row.state)).toEqual(['needs_attention'])
+  })
+
+  it('leaves the supplier pending when only the invocation time runs out', async () => {
+    vi.useFakeTimers()
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    db.rows.push({ id: 's1', source_id: '7', resource: 'suppliers', state: 'pending', ...sealMigrationPayload(listed('7')) })
+    mocks.hydrateSuppliers.mockImplementationOnce(async (...args) => {
+      expect(args[4]).toBeLessThan(15000)
+      return { suppliers: [listed('7')], unhydratedIds: new Set(['7']), hydration: { abortedBy: 'budget' } }
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 15000 })
+    expect(committed(db)).toEqual([])
+    expect(db.rows.map(row => row.state)).toEqual(['pending'])
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED' })
+  })
+
+  it('skips a supplier its detail form names inactive', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    db.rows.push({ id: 's1', source_id: '7', resource: 'suppliers', state: 'pending', ...sealMigrationPayload(listed('7')) })
+    mocks.hydrateSuppliers.mockResolvedValueOnce({ suppliers: [{ ...detailed('7'), active: false }], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: 's1', skip: 'inactive' }])
+  })
+
+  it('skips an inactive supplier without asking for its detail', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    db.rows.push({ id: 's1', source_id: '7', resource: 'suppliers', state: 'pending', ...sealMigrationPayload({ ...listed('7'), active: false }) })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrateSuppliers).not.toHaveBeenCalled()
+    expect(committed(db)).toEqual([{ id: 's1', skip: 'inactive' }])
+  })
+})
+
+describe('the customer number and a supplier\'s default account reach the row (crm#1744)', () => {
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+  const supplier = (id: string, account?: string) => ({ id, supplierNumber: id, active: true, party: { name: `Leverantör ${id}` },
+    _raw: { SupplierNumber: id }, ...(account ? { defaultExpenseAccount: account } : {}) })
+  const withSuppliers = (...suppliers: ReturnType<typeof supplier>[]) => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    for (const s of suppliers) db.rows.push({ id: `s${s.id}`, source_id: s.id, resource: 'suppliers', state: 'pending', ...sealMigrationPayload(s) })
+    const from = vi.spyOn(db.supabase, 'from')
+    return { db, chartReads: () => from.mock.calls.filter(([table]) => table === 'chart_of_accounts').length }
+  }
+
+  it('maps a customer with the provider it came from, which says where its number is', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    const listed = { id: '1001', customerNumber: '1001', active: true, party: { name: 'Kund AB' }, _raw: { CustomerNumber: '1001' } }
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed) })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mapCustomer).toHaveBeenCalledWith(listed, 'user', 'company', 'fortnox')
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+  it('hands the mapper the proposed account when the chart holds it active', async () => {
+    const { db } = withSuppliers(supplier('7', '5410'))
+    db.register.chart_of_accounts.push({ company_id: 'company', account_number: '5410', is_active: true })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mapSupplier).toHaveBeenCalledWith(expect.objectContaining({ id: '7' }), 'user', 'company', new Set(['5410']))
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+  })
+
+  it('hands it no account the chart lacks or holds inactive, and the supplier still imports', async () => {
+    const { db } = withSuppliers(supplier('7', '5410'), supplier('8', '6110'))
+    db.register.chart_of_accounts.push({ company_id: 'company', account_number: '5410', is_active: false })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mapSupplier).toHaveBeenCalledWith(expect.objectContaining({ id: '7' }), 'user', 'company', new Set())
+    expect(mapSupplier).toHaveBeenCalledWith(expect.objectContaining({ id: '8' }), 'user', 'company', new Set())
+    expect(db.rows.map(row => row.state)).toEqual(['done', 'done'])
+  })
+
+  it('reads the chart once per account in a batch, and not at all for a supplier that proposes none', async () => {
+    const twice = withSuppliers(supplier('7', '5410'), supplier('8', '5410'))
+    twice.db.register.chart_of_accounts.push({ company_id: 'company', account_number: '5410', is_active: true })
+    await runProviderMigrationWorker({ supabase: twice.db.supabase, jobId: twice.db.job.id })
+    expect(twice.chartReads()).toBe(1)
+    expect(mapSupplier).toHaveBeenLastCalledWith(expect.objectContaining({ id: '8' }), 'user', 'company', new Set(['5410']))
+
+    const none = withSuppliers(supplier('9'))
+    await runProviderMigrationWorker({ supabase: none.db.supabase, jobId: none.db.job.id })
+    expect(none.chartReads()).toBe(0)
+    expect(mapSupplier).toHaveBeenLastCalledWith(expect.objectContaining({ id: '9' }), 'user', 'company', undefined)
+  })
+})
+
+describe('a register record committed onto an existing card fills what the card lacks (crm#1436)', () => {
+  const listed = (id: string, phone?: string) => ({ id, customerNumber: id, active: true,
+    party: { name: 'Kund AB', ...(phone ? { contact: { telephone: phone } } : {}) }, _raw: { CustomerNumber: id } })
+  const card = (overrides: Record<string, unknown> = {}) => ({
+    id: 'card-1', company_id: 'company', name: 'Kund AB', org_number: null, customer_type: 'swedish_business',
+    contact_person: null, invoice_email_cc_addresses: null, invoice_email_bcc_addresses: null,
+    email: null, phone: null, address_line1: null, address_line2: null, postal_code: null, city: null,
+    country: 'SE', vat_number: null, notes: null, ...overrides,
+  })
+  // The commit resolves the record onto the card it already maps to.
+  const committedOnto = (db: ReturnType<typeof database>, resource: string, phone: string) =>
+    db.rows.push({ id: 'c1', source_id: '1001', resource, state: 'pending', target_id: 'card-1', ...sealMigrationPayload(listed('1001', phone)) })
+
+  it('fills the phone of the invoice stub the customer record lands on', async () => {
+    const db = database({ phase: 'import', resources: ['customers'] })
+    db.register.customers.push(card())
+    committedOnto(db, 'customers', '08-123 45 67')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+    expect(db.register.customers[0]).toMatchObject({ phone: '08-123 45 67' })
+    expect(db.updates).toEqual([{ table: 'customers', payload: expect.objectContaining({ phone: '08-123 45 67' }) }])
+  })
+
+  it('never replaces a phone the card already has', async () => {
+    const db = database({ phase: 'import', resources: ['customers'] })
+    db.register.customers.push(card({ phone: '070-999 99 99' }))
+    committedOnto(db, 'customers', '08-123 45 67')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.register.customers[0]).toMatchObject({ phone: '070-999 99 99' })
+    expect(db.updates).toEqual([])
+  })
+
+  it('fills a supplier card the same way', async () => {
+    const db = database({ phase: 'import', resources: ['suppliers'] })
+    db.register.suppliers.push({ id: 'card-1', company_id: 'company', name: 'Kund AB', org_number: null, email: null, phone: null,
+      address_line1: null, address_line2: null, postal_code: null, city: null, country: 'SE', vat_number: null,
+      bankgiro: null, plusgiro: null, bank_account: null, notes: null })
+    committedOnto(db, 'suppliers', '031-12 34 56')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.register.suppliers[0]).toMatchObject({ phone: '031-12 34 56' })
+  })
+
+  it('fills the customer number of a card that has none, and never replaces one (crm#1744)', async () => {
+    vi.mocked(mapCustomer).mockImplementation((dto) => ({ ...mappedParty(dto), customer_number: '1001' }))
+    try {
+      const db = database({ phase: 'import', resources: ['customers'] })
+      db.register.customers.push(card({ customer_number: null }))
+      committedOnto(db, 'customers', '08-123 45 67')
+      await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+      expect(db.register.customers[0]).toMatchObject({ customer_number: '1001', phone: '08-123 45 67' })
+
+      const typed = database({ phase: 'import', resources: ['customers'] })
+      typed.register.customers.push(card({ customer_number: 'K-7', phone: '070-999 99 99' }))
+      committedOnto(typed, 'customers', '08-123 45 67')
+      await runProviderMigrationWorker({ supabase: typed.supabase, jobId: typed.job.id })
+      expect(typed.register.customers[0]).toMatchObject({ customer_number: 'K-7' })
+      expect(typed.updates).toEqual([])
+    } finally {
+      vi.mocked(mapCustomer).mockImplementation((dto) => mappedParty(dto))
+    }
+  })
+
+  it('fills the default account of a supplier card that has none with the one the row vetted (crm#1744)', async () => {
+    vi.mocked(mapSupplier).mockImplementationOnce((dto) => ({ ...mappedParty(dto), default_expense_account: '5410' }))
+    const db = database({ phase: 'import', resources: ['suppliers'] })
+    db.register.suppliers.push({ id: 'card-1', company_id: 'company', name: 'Kund AB', org_number: null, email: null, phone: null,
+      address_line1: null, address_line2: null, postal_code: null, city: null, country: 'SE', vat_number: null,
+      bankgiro: null, plusgiro: null, bank_account: null, default_expense_account: null, notes: null })
+    committedOnto(db, 'suppliers', '031-12 34 56')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.register.suppliers[0]).toMatchObject({ default_expense_account: '5410', phone: '031-12 34 56' })
+  })
+
+  it('keeps the committed import when the fill fails, and logs no customer data', async () => {
+    const db = database({ phase: 'import', resources: ['customers'] })
+    db.register.customers.push(card())
+    committedOnto(db, 'customers', '08-123 45 67')
+    db.failUpdates()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+    expect(db.job.state).not.toBe('retry_wait')
+    const warned = mocks.warn.mock.calls.find(([message]) => message === 'matched cards left without the register details')!
+    expect(warned[1]).toMatchObject({ jobId: 'job', filled: 0, dbCode: '23514' })
+    expect(JSON.stringify(warned[1])).not.toMatch(/Kund AB|08-123|check violated/)
+  })
+})
+
+describe('a register the provider refuses', () => {
+  const fortnoxError = (status: number, code: number, message: string) =>
+    new FortnoxApiError(`Fortnox API error: ${status}`, status, JSON.stringify({ ErrorInformation: { error: 1, message, code } }))
+  const supplier = (id: number) => ({ id: `supplier-${id}`, active: true, party: { name: `Supplier ${id}` } })
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+
+  it('is fetched once, recorded with a missing licence, and the other registers import and complete the job', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'] })
+    const unlicensed = () => fortnoxError(400, 2001101, 'Det finns ingen aktiv licens för önskat scope.')
+    mocks.page.mockRejectedValueOnce(unlicensed())
+      .mockResolvedValueOnce({ items: [supplier(1)], nextPage: null, total: 1 })
+      .mockRejectedValueOnce(unlicensed())
+      .mockResolvedValueOnce({ items: [], nextPage: null, total: 0 })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page.mock.calls.map(call => [call[3], call[4]])).toEqual([
+      ['customers', 1], ['suppliers', 1], ['salesInvoices', 1], ['supplierInvoices', 1],
+    ])
+    expect(db.rpc.mock.calls.filter(([name]) => name === 'skip_provider_migration_resource').map(([, args]) => args)).toEqual([
+      { p_job_id: 'job', p_worker_id: expect.any(String), p_attempt: 1, p_resource: 'customers', p_page: 1, p_reason: 'license' },
+      { p_job_id: 'job', p_worker_id: expect.any(String), p_attempt: 1, p_resource: 'salesInvoices', p_page: 1, p_reason: 'license' },
+    ])
+    expect(db.rpc.mock.calls.some(([name, args]) => name === 'release_provider_migration_job' && args.p_error_code)).toBe(false)
+    expect(db.job).toMatchObject({ state: 'completed', failures: 0, error_code: null,
+      refused_resources: { customers: 'license', salesInvoices: 'license' } })
+    expect(db.rows.map(row => [row.resource, row.state])).toEqual([['suppliers', 'done']])
+    expect(mocks.warn).toHaveBeenCalledWith('migration register refused by the provider: skipped', expect.objectContaining({
+      jobId: 'job', resource: 'customers', page: 1, reason: 'license', errorName: 'FortnoxApiError', httpStatus: 400, providerCode: '2001101',
+    }))
+  })
+
+  it('records a per-register 403 as a missing permission and keeps what was already fetched', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers'] })
+    // The live answer spells its keys with capitals.
+    mocks.page.mockResolvedValueOnce({ items: [customer(1)], nextPage: null, total: 1 })
+      .mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 403', 403,
+        '{"ErrorInformation":{"Error":1,"Message":"Saknar behörighet för leverantörsregister.","Code":2003275}}'))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledTimes(2)
+    expect(db.job).toMatchObject({ state: 'completed', refused_resources: { suppliers: 'permission' } })
+    expect(db.rows.map(row => [row.resource, row.state])).toEqual([['customers', 'done']])
+    expect(mocks.warn).toHaveBeenCalledWith('migration register refused by the provider: skipped', expect.objectContaining({
+      resource: 'suppliers', reason: 'permission', httpStatus: 403, providerCode: '2003275',
+    }))
+  })
+
+  it('records a user-right refusal Fortnox answers with HTTP 400 as a missing permission, not as a retry (crm#1014)', async () => {
+    // A Fortnox user restricted so only the accounting firm sees supplier
+    // invoices: the suppliers register answers 403 2003275, the supplier
+    // invoices register 400 2002182, and customers elsewhere 400 2001538
+    // (seen 2026-10-05 and 2026-10-12). The 400s used to park the job on
+    // MIGRATION_RETRY, and every "Återuppta" got the same answer.
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers', 'supplierInvoices'] })
+    mocks.page.mockRejectedValueOnce(fortnoxError(400, 2001538, 'Saknar behörighet för kundregister.'))
+      .mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 403', 403,
+        '{"ErrorInformation":{"Error":1,"Message":"Saknar behörighet för leverantörsregister.","Code":2003275}}'))
+      .mockRejectedValueOnce(fortnoxError(400, 2002182, 'Saknar behörighet för leverantörsfaktura.'))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledTimes(3)
+    expect(db.job).toMatchObject({ state: 'completed', error_code: null,
+      refused_resources: { customers: 'permission', suppliers: 'permission', supplierInvoices: 'permission' } })
+    expect(mocks.warn).toHaveBeenCalledWith('migration register refused by the provider: skipped', expect.objectContaining({
+      resource: 'supplierInvoices', reason: 'permission', httpStatus: 400, providerCode: '2002182',
+    }))
+    expect(mocks.warn).not.toHaveBeenCalledWith('migration yielded', expect.anything())
+  })
+
+  it('still parks the job at once when the whole API licence is missing, without skipping anything', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(fortnoxError(400, 2001103, 'Api-licens saknas.'))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledOnce()
+    expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_LICENSE_MISSING', resource_index: 1 })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'PROVIDER_LICENSE_MISSING', needsAttention: true, httpStatus: 400, providerCode: '2001103',
+    }))
+  })
+
+  it('leaves a transient provider failure on the retry path', async () => {
+    const db = database({ provider: 'fortnox', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 503', 503, ''))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'PROVIDER_UPSTREAM_ERROR', failures: 1, resource_index: 1 })
+  })
+})
+
+/**
+ * A token that works but may not read everything (crm#1081). A Bokio
+ * integration token carries the read permissions it was created with, and
+ * answers 403 for anything outside them, the same status a dead grant can
+ * give. The job used to park every such 403 as an expired connection, and
+ * the reconnect that asked for brought the same token back. The worker now
+ * asks the token itself (company information) before it calls a 403 a dead
+ * grant.
+ */
+describe('a 403 on a token that still works', () => {
+  const forbidden = () => new BokioApiError('Bokio API error: 403 Forbidden', 403, '{"code":"forbidden"}')
+  const invoice = (id: string) => ({ id, issueDate: '2026-01-01', currencyCode: 'SEK', _raw: {},
+    customer: { name: 'Customer', identifications: [] }, lines: [{}] })
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', providerCompanyId: 'bokio-company',
+      consent: { provider: 'bokio', org_number: '556000-0000' } })
+  })
+
+  it('stops the import on the refused detail as a missing permission, not an expired connection', async () => {
+    const db = database({ provider: 'bokio', phase: 'import', resources: ['salesInvoices'] })
+    for (const id of ['a', 'b']) db.rows.push({ id, source_id: id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(invoice(id)) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [invoice('a')], unhydratedIds: new Set(), hydration: {} })
+      .mockResolvedValueOnce({ invoices: [invoice('b')], unhydratedIds: new Set(['b']), hydration: { abortedBy: 'auth' }, authError: forbidden() })
+    mocks.probe.mockResolvedValueOnce({ name: 'Company' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.probe).toHaveBeenCalledExactlyOnceWith('bokio', 'token', 'bokio-company')
+    expect(db.rows.map(r => r.state)).toEqual(['done', 'pending'])
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_RESOURCE_FORBIDDEN' })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'PROVIDER_RESOURCE_FORBIDDEN', needsAttention: true, httpStatus: 403,
+    }))
+  })
+
+  it('keeps an expired connection when the token no longer answers either', async () => {
+    const db = database({ provider: 'bokio', phase: 'import', resources: ['salesInvoices'] })
+    db.rows.push({ id: 'a', source_id: 'a', resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(invoice('a')) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [invoice('a')], unhydratedIds: new Set(['a']), hydration: { abortedBy: 'auth' }, authError: forbidden() })
+    mocks.probe.mockRejectedValueOnce(new BokioApiError('Bokio API error: 401 Unauthorized', 401))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
+  })
+
+  it('never probes a 401: that is the dead token itself', async () => {
+    const db = database({ provider: 'bokio', phase: 'import', resources: ['salesInvoices'] })
+    db.rows.push({ id: 'a', source_id: 'a', resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(invoice('a')) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [invoice('a')], unhydratedIds: new Set(['a']), hydration: { abortedBy: 'auth' },
+      authError: new BokioApiError('Bokio API error: 401 Unauthorized', 401) })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.probe).not.toHaveBeenCalled()
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({ httpStatus: 401 }))
+  })
+
+  it('skips a register the token may not list and imports the rest, for any provider', async () => {
+    const db = database({ provider: 'bokio', resources: ['customers', 'supplierInvoices'] })
+    mocks.page.mockResolvedValueOnce({ items: [customer(1)], nextPage: null, total: 1 }).mockRejectedValueOnce(forbidden())
+    mocks.probe.mockResolvedValueOnce({ name: 'Company' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledTimes(2)
+    expect(db.job).toMatchObject({ state: 'completed', refused_resources: { supplierInvoices: 'permission' } })
+    expect(db.rows.map(row => [row.resource, row.state])).toEqual([['customers', 'done']])
+  })
+
+  it('parks the job when the Bokio plan has no API access: reconnecting cannot change it', async () => {
+    const db = database({ provider: 'bokio', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(new BokioApiError('Bokio API error: 403 Forbidden', 403, '{"error":"price_plan_feature_required"}'))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledOnce()
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'BOKIO_PLAN_NO_API' })
+  })
+
+  it('parks the job as an expired connection when the probe cannot vouch for the token', async () => {
+    const db = database({ provider: 'bokio', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(forbidden())
+    // No provider company id to ask with: no proof either way.
+    mocks.probe.mockResolvedValueOnce(null)
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED', resource_index: 1 })
+  })
+})
+
+describe('paid Fortnox supplier invoices on request (crm#1114)', () => {
+  const years = { start: '2025-01-01', end: '2025-12-31' }
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+  })
+
+  it('lists the whole register only for a job whose scope asks for it', async () => {
+    const asked = database({ provider: 'fortnox', resources: ['supplierInvoices'], fiscal_year_scope: { ...years, allSupplierInvoices: true } })
+    const plain = database({ provider: 'fortnox', resources: ['supplierInvoices'], fiscal_year_scope: years })
+    mocks.page.mockResolvedValue({ items: [], nextPage: null, total: 0 })
+
+    await runProviderMigrationWorker({ supabase: asked.supabase, jobId: asked.job.id })
+    await runProviderMigrationWorker({ supabase: plain.supabase, jobId: plain.job.id })
+
+    expect(mocks.page.mock.calls.map(call => [call[3], call[5]])).toEqual([
+      ['supplierInvoices', { allSupplierInvoices: true }], ['supplierInvoices', { allSupplierInvoices: false }],
+    ])
+  })
+
+  it('skips an invoice cancelled in Fortnox without fetching its detail', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['supplierInvoices'],
+      fiscal_year_scope: { ...years, allSupplierInvoices: true } })
+    const cancelled = mapFortnoxToSupplierInvoice({ GivenNumber: '7', Cancelled: true, Total: '500', Balance: '500',
+      InvoiceDate: '2025-03-01', DueDate: '2025-03-31', SupplierName: 'Leverantör AB', SupplierNumber: '1' })
+    db.rows.push({ id: cancelled.id, source_id: cancelled.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(cancelled) })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.hydrate).not.toHaveBeenCalled()
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [{ id: cancelled.id, skip: 'cancelled' }],
+    }))
+  })
+})
+
+/**
+ * crm#2002: a job created after the first fiscal years of a migration were
+ * imported judged every invoice by those years, so the invoices of the years
+ * imported next were declined as outside the imported years. An invoice is
+ * judged by the years imported when it is processed.
+ */
+describe('the fiscal years an invoice is judged by', () => {
+  const firstRun = { start: '2017-05-01', end: '2023-04-30' }
+  const year = (start: string, end: string, extra: Record<string, unknown> = {}) =>
+    ({ company_id: 'company', status: 'completed', fiscal_year_start: start, fiscal_year_end: end, ...extra })
+  function seed(db: ReturnType<typeof database>, issueDate: string, paid = false) {
+    const dto = { ...mapBokioToSalesInvoice({ id: `inv-${issueDate}`, invoiceDate: issueDate, customerRef: { id: 'customer', name: 'Customer' },
+      totalAmount: 125, totalTax: 25, lineItems: [{ description: 'Test', quantity: 1, unitPrice: 100, taxRate: 25 }] }) }
+    dto.paymentStatus = { ...dto.paymentStatus, paid }
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    return dto
+  }
+  const committed = (db: ReturnType<typeof database>) => db.rpc.mock.calls
+    .filter(([name]) => name === 'commit_provider_migration_records')
+    .flatMap(([, args]) => args.p_records as Record<string, unknown>[])
+
+  it('imports an invoice of a year imported after the job was created', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    db.register.sie_imports.push(year('2017-05-01', '2018-04-30'), year('2022-05-01', '2023-04-30'), year('2025-05-01', '2026-04-30'))
+    const dto = seed(db, '2025-09-14')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrate).toHaveBeenCalledOnce()
+    expect(committed(db)).toEqual([expect.objectContaining({ id: dto.id, row: expect.any(Object) })])
+  })
+
+  it('still declines an invoice issued after the last year imported now, without fetching its detail', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    db.register.sie_imports.push(year('2017-05-01', '2018-04-30'), year('2025-05-01', '2026-04-30'))
+    const dto = seed(db, '2026-05-02')
+    mocks.hydrate.mockReset()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(mocks.hydrate).not.toHaveBeenCalled()
+    expect(committed(db)).toEqual([{ id: dto.id, skip: 'outsideFiscalYears' }])
+  })
+
+  it('reads the company\'s imports in place, and only those', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    // Another company's year, and a year whose import failed, widen nothing.
+    db.register.sie_imports.push(year('2017-05-01', '2023-04-30'),
+      year('2025-05-01', '2026-04-30', { company_id: 'other' }), year('2025-05-01', '2026-04-30', { status: 'failed' }))
+    const dto = seed(db, '2025-09-14')
+    mocks.hydrate.mockReset()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: dto.id, skip: 'outsideFiscalYears' }])
+    expect(db.orFilters).toEqual([{ table: 'sie_imports', filter: SIE_IMPORT_IN_PLACE_JOB_FILTER }])
+  })
+
+  it('falls back to the years stored on the job when no import has bounds to read', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], fiscal_year_scope: firstRun })
+    db.register.sie_imports.push(year('2017-05-01', '2023-04-30'), year('2025-05-01', '2026-04-30', { fiscal_year_end: null }))
+    const dto = seed(db, '2025-09-14')
+    mocks.hydrate.mockReset()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: dto.id, skip: 'outsideFiscalYears' }])
+  })
+
+  it('reads no imports for a batch without invoices', async () => {
+    const db = database({ phase: 'import', resources: ['customers'], fiscal_year_scope: firstRun })
+    db.rows.push({ id: 'c1', source_id: 'c1', resource: 'customers', state: 'pending', ...sealMigrationPayload(customer(1)) })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.orFilters).toEqual([])
+  })
+})
+
+/**
  * Credit-note pairing (crm#110). Chunks import in id order, so the invoice a
  * kreditfaktura credits may be inserted after it: the pairing runs in the
  * link phase, resolving the provider's reference through this job's chunks
@@ -403,8 +1055,8 @@ describe('pairMigratedCreditNotes', () => {
   type Update = { table: string; payload: unknown; filters: unknown[][] }
   type SupplierFacts = { supplier_id: string; currency: string; total: number; is_credit_note: boolean }
   function pairingDb(answers: { chunkTarget?: string | null; invoicesByNumber?: { id: string }[]; updateError?: { code: string; message: string }
-    /** supplier_invoices rows by id (the pairing facts), and the ids a number lookup answers with. */
-    supplierRows?: Record<string, SupplierFacts>; supplierIdsByNumber?: { id: string }[] } = {}) {
+    /** supplier_invoices rows by id (the pairing facts), and the ids a number or löpnummer lookup answers with. */
+    supplierRows?: Record<string, SupplierFacts>; supplierIdsByNumber?: { id: string }[]; supplierIdsByFortnoxNumber?: { id: string }[] } = {}) {
     const updates: Update[] = []
     const reads: { table: string; filters: unknown[][] }[] = []
     const from = vi.fn((table: string) => {
@@ -423,6 +1075,9 @@ describe('pairMigratedCreditNotes', () => {
         if (table === 'invoices') return resolve({ data: answers.invoicesByNumber ?? [], error: null })
         if (table === 'supplier_invoices') {
           const byId = filters.find(f => f[0] === 'eq' && f[1] === 'id')
+          if (filters.some(f => f[0] === 'eq' && f[1] === 'fortnox_number')) {
+            return resolve({ data: answers.supplierIdsByFortnoxNumber ?? [], error: null })
+          }
           return resolve({ data: byId ? answers.supplierRows?.[byId[2] as string] ?? null : answers.supplierIdsByNumber ?? [], error: null })
         }
         return resolve({ data: null, error: null })
@@ -523,6 +1178,39 @@ describe('pairMigratedCreditNotes', () => {
           ['neq', 'id', 'scn-row'], ['eq', 'supplier_id', 'sup-1'], ['eq', 'is_credit_note', false]]) })
     })
 
+    it('pairs a Fortnox credit note on the löpnummer it names, before any supplier number (crm#1157)', async () => {
+      const fortnoxJob = { ...job, provider: 'fortnox' } as ProviderMigrationJob
+      const db = pairingDb({ chunkTarget: null, supplierIdsByFortnoxNumber: [{ id: 'orig-row' }], supplierIdsByNumber: [{ id: 'wrong-row' }],
+        supplierRows: { 'scn-row': credit, 'orig-row': original } })
+      await pairMigratedCreditNotes(db.supabase, fortnoxJob, [supplierChunk()], deadline())
+      expect(db.updates.map(u => u.payload)).toEqual([{ credited_invoice_id: 'orig-row' }])
+      expect(db.reads.find(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'fortnox_number'))).toMatchObject({
+        filters: expect.arrayContaining([['eq', 'company_id', 'company'], ['eq', 'fortnox_number', '311'], ['neq', 'id', 'scn-row']]) })
+      expect(db.reads.some(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'supplier_invoice_number'))).toBe(false)
+    })
+
+    it('still pairs a Fortnox credit note on the löpnummer once the supplier\'s own number is the invoice number (crm#1157 step 2)', async () => {
+      const fortnoxJob = { ...job, provider: 'fortnox' } as ProviderMigrationJob
+      const dto = mapFortnoxToSupplierInvoice({ GivenNumber: '312', InvoiceNumber: 'K-5531', SupplierNumber: '7', SupplierName: 'Leverantör AB',
+        InvoiceDate: '2026-03-10', DueDate: '2026-04-09', Currency: 'SEK', Credit: true, CreditReference: 311, Total: -1250, Balance: 0 })
+      expect(dto.invoiceNumber).toBe('K-5531')
+      const db = pairingDb({ chunkTarget: null, supplierIdsByFortnoxNumber: [{ id: 'orig-row' }], supplierRows: { 'scn-row': credit, 'orig-row': original } })
+      await pairMigratedCreditNotes(db.supabase, fortnoxJob, [supplierChunk({ receipt: { link: { kind: 'supplier', sourceVoucher: null,
+        invoiceDate: dto.issueDate, totalSek: -1250, creditedInvoiceRef: dto.creditedInvoiceRef } } })], deadline())
+      expect(db.updates.map(u => u.payload)).toEqual([{ credited_invoice_id: 'orig-row' }])
+      expect(db.reads.find(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'fortnox_number'))).toMatchObject({
+        filters: expect.arrayContaining([['eq', 'fortnox_number', '311']]) })
+    })
+
+    it('falls back for Fortnox only to a row imported before the löpnummer column', async () => {
+      const fortnoxJob = { ...job, provider: 'fortnox' } as ProviderMigrationJob
+      const db = pairingDb({ chunkTarget: null, supplierIdsByNumber: [{ id: 'orig-row' }], supplierRows: { 'scn-row': credit, 'orig-row': original } })
+      await pairMigratedCreditNotes(db.supabase, fortnoxJob, [supplierChunk()], deadline())
+      expect(db.updates.map(u => u.payload)).toEqual([{ credited_invoice_id: 'orig-row' }])
+      expect(db.reads.find(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'supplier_invoice_number'))).toMatchObject({
+        filters: expect.arrayContaining([['eq', 'supplier_invoice_number', '311'], ['eq', 'supplier_id', 'sup-1'], ['is', 'fortnox_number', null]]) })
+    })
+
     it.each([
       ['another supplier\'s invoice', { ...original, supplier_id: 'sup-2' }],
       ['another credit note', { ...original, is_credit_note: true }],
@@ -570,6 +1258,83 @@ describe('pairMigratedCreditNotes', () => {
         warnings: expect.objectContaining({ creditNoteUnlinked: false }),
       })],
     }))
+  })
+})
+
+/**
+ * crm#1039: a foreign-currency invoice the linker links at the source's rate
+ * commits through the function that also writes the SEK amount its verifikat
+ * books. Until that migration is applied the invoice stops for review.
+ */
+describe('link phase at the source rate', () => {
+  const sourceRate = { total: 1000, totalSek: 11234.5, subtotalSek: 11234.5, vatAmountSek: 0, exchangeRate: 11.2345,
+    exchangeRateDate: '2026-05-04', previousTotalSek: 11200, previousExchangeRate: 11.2 }
+  /** One imported EUR invoice in the link phase; follow-up commits settle its chunk. */
+  function linkPhase(rpcFailure?: { code: string; message: string }) {
+    const db = database({ phase: 'link', resources: ['salesInvoices'] })
+    db.rows.push({ id: 'chunk', resource: 'salesInvoices', source_id: 'source', payload: '', state: 'imported', target_id: 'invoice',
+      receipt: { link: { kind: 'customer', sourceVoucher: { series: 'B', number: 501 }, invoiceDate: '2026-05-04', totalSek: 11200,
+        currencyCode: 'EUR' } } })
+    mocks.link.mockResolvedValue({ reports: [{ invoiceId: 'invoice', kind: 'customer', invoiceNumber: 'F-1', outcome: 'linked',
+      journalEntryId: 'entry', reason: 'would link at the source rate (dry run)', sourceRate }] })
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      // A rejection in the shape supabase-js hands back, outside the helper's happy-path union.
+      if (name === 'commit_provider_migration_source_rate_links' && rpcFailure) return { data: null, error: rpcFailure } as never
+      if (name === 'commit_provider_migration_source_rate_links' || name === 'commit_provider_migration_followup') {
+        for (const r of args.p_records as { id: string; error?: string }[]) {
+          db.rows.find(row => row.id === r.id)!.state = r.error ? 'needs_attention' : 'done'
+        }
+        return { data: null, error: null }
+      }
+      return original(name, args)
+    })
+    return db
+  }
+  const commits = (db: ReturnType<typeof database>) => db.rpc.mock.calls
+    .filter(([name]) => String(name).startsWith('commit_provider_migration_'))
+
+  it('commits the batch through commit_provider_migration_source_rate_links, with the values the invoice takes', async () => {
+    const db = linkPhase()
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db)).toEqual([['commit_provider_migration_source_rate_links', expect.objectContaining({
+      p_records: [{ id: 'chunk', journal_entry_id: 'entry', report: expect.objectContaining({ outcome: 'linked', sourceRate }) }],
+    })]])
+    expect(db.rows[0].state).toBe('done')
+  })
+
+  it('leaves the invoice for review through the plain follow-up while the function is not deployed', async () => {
+    const db = linkPhase({ code: 'PGRST202', message: 'Could not find the function' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db).map(([name]) => name)).toEqual([
+      'commit_provider_migration_source_rate_links', 'commit_provider_migration_followup',
+    ])
+    expect(commits(db)[1][1]).toEqual(expect.objectContaining({ p_records: [{ id: 'chunk', error: 'MIGRATION_REGISTRATION_REVIEW' }] }))
+    expect(db.rows[0].state).toBe('needs_attention')
+  })
+
+  it('does not swallow any other failure of the function', async () => {
+    const db = linkPhase({ code: '40001', message: 'could not serialize access' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db).map(([name]) => name)).toEqual(['commit_provider_migration_source_rate_links'])
+    expect(db.rows[0].state).toBe('imported')
+    expect(db.job.state).toBe('retry_wait')
+  })
+
+  it('keeps a batch without source-rate links on the plain follow-up', async () => {
+    const db = linkPhase()
+    mocks.link.mockResolvedValue({ reports: [{ invoiceId: 'invoice', kind: 'customer', invoiceNumber: 'F-1', outcome: 'linked',
+      journalEntryId: 'entry', reason: 'would link (dry run)' }] })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(commits(db).map(([name]) => name)).toEqual(['commit_provider_migration_followup'])
   })
 })
 
@@ -652,6 +1417,221 @@ describe('supplier credit notes in the import phase', () => {
     expect(reads).toEqual([])
     expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
       p_records: [expect.objectContaining({ id: 'si-1', link: expect.objectContaining({ totalSek: 125 }) })],
+    }))
+  })
+})
+
+/**
+ * The review a finished job stops for (PH 143, PH 145, PH 149): which records
+ * fail, and what the worker keeps with them so the wizard can say why.
+ */
+describe('records the review lists', () => {
+  /** Mark follow-up outcomes the way commit_provider_migration_followup does. */
+  function withFollowup(db: ReturnType<typeof database>, next: string) {
+    const original = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'commit_provider_migration_followup') {
+        for (const r of args.p_records as { id: string; error?: string }[]) {
+          db.rows.find(row => row.id === r.id)!.state = r.error ? 'needs_attention' : next
+        }
+        return { data: null, error: null }
+      }
+      return original(name, args)
+    })
+  }
+  /** migration_source_records answers with the given rows; every other table as before. */
+  function withSourceRecords(db: ReturnType<typeof database>, existing: { id: string }[]) {
+    const reads: unknown[][][] = []
+    const original = db.supabase.from.bind(db.supabase)
+    ;(db.supabase as unknown as { from: unknown }).from = (table: string) => {
+      if (table !== 'migration_source_records') return original(table)
+      const filters: unknown[][] = []
+      const chain: Record<string, unknown> = {}
+      for (const name of ['select', 'eq', 'limit']) chain[name] = (...args: unknown[]) => { filters.push([name, ...args]); return chain }
+      chain.then = (resolve: (value: unknown) => void) => { reads.push(filters); return resolve({ data: existing, error: null }) }
+      return chain
+    }
+    return reads
+  }
+  const numberless = () => mapBokioToSupplierInvoice({ id: 'si-nonumber', invoiceDate: '2026-02-10', currency: 'SEK',
+    totalAmount: 450, remainingAmount: 0, supplierRef: { id: 'supplier', name: 'Supplier' },
+    lineItems: [{ description: 'Abonnemang', quantity: 1, unitPrice: 450, taxRate: 0 }] })
+
+  it('imports a sales invoice with no rows at the source as its header instead of refusing it', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'] })
+    const dto = { id: 'rowless', invoiceNumber: '1002', issueDate: '2026-02-01', currencyCode: 'SEK', _raw: { CustomerId: 'customer' },
+      customer: { name: 'Customer', identifications: [] }, lines: [] }
+    vi.mocked(mapSalesInvoice).mockReturnValueOnce({ invoice: { subtotal: 1000, vat_amount: 250, total_sek: 1250 }, items: [],
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: 'rowless', items: [], warnings: expect.objectContaining({ linesMissing: true }) })],
+    }))
+    expect(db.job.state).toBe('completed')
+  })
+  it('still refuses a sales invoice whose rows the mapper could not keep', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'] })
+    const dto = { id: 'dropped', issueDate: '2026-01-01', currencyCode: 'SEK', _raw: { CustomerId: 'customer' },
+      customer: { name: 'Customer', identifications: [] }, lines: [{}] }
+    vi.mocked(mapSalesInvoice).mockReturnValueOnce({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [],
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [{ id: 'dropped', error: 'MIGRATION_SOURCE_LINES_MISSING' }],
+    }))
+  })
+  // crm#1039: supplier_invoice_number takes NULL since 20261005225009, so a
+  // supplier invoice without a number goes to the commit like any other.
+  it('sends a new supplier invoice without a number on to the commit with a NULL number', async () => {
+    const db = database({ phase: 'import', resources: ['supplierInvoices'], provider: 'bokio' })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } })
+    const reads = withSourceRecords(db, [])
+    const dto = numberless()
+    expect(dto.invoiceNumber).toBe('')
+    vi.mocked(mapSupplierInvoice).mockReturnValueOnce({ invoice: { supplier_invoice_number: null, subtotal: 450, vat_amount: 0, total_sek: 450 },
+      items: [{ line_total: 450, vat_amount: 0 }], fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    const records = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')?.[1].p_records as
+      { id: string; error?: string; row?: { supplier_invoice_number?: string | null } }[]
+    expect(records).toEqual([expect.objectContaining({ id: 'si-nonumber', row: expect.objectContaining({ supplier_invoice_number: null }) })])
+    expect(records[0].error).toBeUndefined()
+    // No up-front check of earlier imports: the commit adopts by source record.
+    expect(reads).toEqual([])
+  })
+  it('keeps what a voucher-link review found, so the review can say why', async () => {
+    const db = database({ phase: 'link', resources: ['salesInvoices'] })
+    withFollowup(db, 'done')
+    db.rows.push({ id: 'chunk', source_id: 'inv-1', resource: 'salesInvoices', state: 'imported', target_id: 'invoice-1',
+      payload: '', receipt: { link: { kind: 'customer', invoiceDate: '2026-02-03', totalSek: 11200, currencyCode: 'EUR',
+        sourceVoucher: { series: 'K', number: 4 } } } })
+    mocks.link.mockResolvedValueOnce({ reports: [{ invoiceId: 'invoice-1', kind: 'customer', invoiceNumber: '1001',
+      outcome: 'amountMismatch', reason: 'net debit on 151x is 11240', bookedSek: 11240, expectedSek: 11200 }] })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: 'chunk', error: 'MIGRATION_REGISTRATION_REVIEW',
+        review: { kind: 'registration', outcome: 'amountMismatch', bookedSek: 11240, expectedSek: 11200 } })],
+    }))
+    expect(db.job.state).toBe('needs_attention')
+  })
+  it('hands the followup the reversed copy a registration link moves from, inside the report', async () => {
+    // commit_provider_migration_followup reads report.replacesJournalEntryId
+    // and writes the move only for a reversed copy of the same source voucher.
+    const db = database({ phase: 'link', resources: ['salesInvoices'] })
+    withFollowup(db, 'done')
+    db.rows.push({ id: 'chunk', source_id: 'inv-1', resource: 'salesInvoices', state: 'imported', target_id: 'invoice-1',
+      payload: '', receipt: { link: { kind: 'customer', invoiceDate: '2026-05-04', totalSek: 2500, currencyCode: 'SEK',
+        sourceVoucher: { series: 'B', number: 57 } } } })
+    mocks.link.mockResolvedValueOnce({ reports: [{ invoiceId: 'invoice-1', kind: 'customer', invoiceNumber: '1001',
+      outcome: 'linked', journalEntryId: 'live', replacesJournalEntryId: 'copy',
+      reason: 'would move the link from its reversed copy (dry run)' }] })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({
+      p_records: [{ id: 'chunk', journal_entry_id: 'live', report: expect.objectContaining({ replacesJournalEntryId: 'copy' }) }],
+    }))
+    expect(db.rows.find(row => row.id === 'chunk')!.state).toBe('done')
+  })
+  it('keeps why a payment needs review', async () => {
+    const db = database({ phase: 'reconcile', resources: ['supplierInvoices'] })
+    withFollowup(db, 'planned')
+    db.rows.push({ id: 'chunk', source_id: 'si-1', resource: 'supplierInvoices', state: 'linked', target_id: 'supplier-invoice-1',
+      payload: '', receipt: {} })
+    mocks.reconcile.mockResolvedValueOnce({ links: [], review: [{ supplier_invoice_id: 'supplier-invoice-1',
+      supplier_invoice_number: '1', reason: 'multiple_candidates', candidates: [] }] })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_followup', expect.objectContaining({
+      p_records: [{ id: 'chunk', payment: null, error: 'MIGRATION_PAYMENT_REVIEW',
+        review: { kind: 'payment', reason: 'multiple_candidates' } }],
+    }))
+  })
+})
+
+describe('a number-less Bokio draft (crm#1084)', () => {
+  const DRAFT_ID = 'cec22965-5dc1-4e13-bde6-4d51c7d7a680'
+
+  it.each([
+    ['keeps the Bokio id an older import stored as its number, so the commit adopts that invoice', true, DRAFT_ID],
+    ['goes to the commit with no number when nothing is stored under its id', false, null],
+  ] as const)('%s', async (_label, storedUnderId, expected) => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], provider: 'bokio' })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } })
+    const dto = mapBokioToSalesInvoice({ id: DRAFT_ID, invoiceNumber: null, status: 'draft', invoiceDate: '2025-02-18',
+      currency: 'SEK', totalAmount: 125, totalTax: 25, paidAmount: 0, customerRef: { id: 'customer', name: 'Customer' },
+      lineItems: [{ id: 1, description: 'Test', itemType: 'salesItem', quantity: 1, unitPrice: 100, taxRate: 25 }] })
+    expect(dto.invoiceNumber).toBe('')
+    vi.mocked(mapSalesInvoice).mockReturnValueOnce({
+      invoice: { invoice_number: null, status: 'draft', subtotal: 100, vat_amount: 25, total_sek: 125 },
+      items: [{ line_total: 100, vat_amount: 25 }],
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
+    })
+    const lookups: Record<string, unknown>[] = []
+    const from = db.supabase.from.bind(db.supabase)
+    ;(db.supabase as unknown as { from: (table: string) => unknown }).from = (table: string) => {
+      if (table !== 'invoices') return from(table)
+      const filters: Record<string, unknown> = {}
+      const chain = { select: () => chain, eq: (key: string, value: unknown) => { filters[key] = value; return chain },
+        limit: () => chain,
+        then: (resolve: (data: unknown) => void) => {
+          lookups.push(filters)
+          resolve({ data: storedUnderId && filters.invoice_number === DRAFT_ID ? [{ id: 'stored' }] : [], error: null })
+        } }
+      return chain
+    }
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(lookups).toEqual([{ company_id: 'company', invoice_number: DRAFT_ID }])
+    const commit = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')!
+    const [record] = (commit[1] as { p_records: { row: Record<string, unknown> }[] }).p_records
+    expect(record.row.invoice_number).toBe(expected)
+  })
+})
+
+describe('an invoice-only import into a hand-made customer register (crm#1294)', () => {
+  // Skatteverket's published test personnummer. Fortnox puts a privatperson's
+  // personnummer in the invoice's OrganisationNumber field.
+  const invoice = (id: string) => ({ id, invoiceNumber: id, issueDate: '2026-02-01', currencyCode: 'SEK',
+    _raw: { CustomerNumber: '2329' },
+    customer: { name: 'Anna  Exempel ', identifications: [{ id: '19500118-2046', schemeId: 'SE:ORGNR' }] }, lines: [] })
+  const handMade = () => ({ id: 'hand-made', company_id: 'company', name: 'Anna Exempel', org_number: null,
+    personal_number: encryptCustomerPersonalNumber('195001182046'), vat_number: null, customer_number: '2329' })
+  function salesInvoiceJob(dto: ReturnType<typeof invoice>) {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], provider: 'fortnox', created_at: '2026-10-18T08:32:56Z' })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'fortnox', org_number: '556000-0000' } })
+    db.register.customers.push(handMade())
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    return db
+  }
+
+  it('maps the invoice customer onto the hand-made card before the commit, instead of a stub', async () => {
+    const db = salesInvoiceJob(invoice('1001'))
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    const calls = db.rpc.mock.calls.map(([name]) => name)
+    expect(calls.indexOf('adopt_provider_migration_invoice_party')).toBeGreaterThan(-1)
+    expect(calls.indexOf('adopt_provider_migration_invoice_party')).toBeLessThan(calls.indexOf('commit_provider_migration_records'))
+    expect(db.rpc).toHaveBeenCalledWith('adopt_provider_migration_invoice_party',
+      { p_job_id: 'job', p_source_id: '2329', p_customer: 'hand-made' })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: '1001', party_source_id: '2329' })],
+    }))
+  })
+
+  it('leaves an existing mapping as it is on a re-run', async () => {
+    const db = salesInvoiceJob(invoice('1002'))
+    db.register.migration_source_records.push({ company_id: 'company', provider: 'fortnox', account_key: '5560000000',
+      resource: 'customers', source_id: '2329', target_id: 'stub-from-an-earlier-run' })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc.mock.calls.map(([name]) => name)).not.toContain('adopt_provider_migration_invoice_party')
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [expect.objectContaining({ id: '1002', party_source_id: '2329' })],
     }))
   })
 })

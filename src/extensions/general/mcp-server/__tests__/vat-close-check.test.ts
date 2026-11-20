@@ -7,7 +7,8 @@
  * supabase call here would couple tests to internal query order.
  */
 import { describe, it, expect } from 'vitest'
-import { tools, computeMomsDeadline, UNCATEGORIZED_TRANSACTIONS_HINT } from '../server'
+import { tools } from '../server'
+import { computeMomsDeadline, UNCATEGORIZED_TRANSACTIONS_HINT } from '@/lib/reports/vat-close-check'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
 describe('gnubok_vat_close_check', () => {

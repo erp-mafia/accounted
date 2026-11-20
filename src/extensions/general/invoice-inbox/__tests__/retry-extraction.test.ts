@@ -4,12 +4,20 @@ import {
   createQueuedMockSupabase,
   createMockRequest,
   parseJsonResponse,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', () => ({
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', () => ({
   extractInvoiceFields: vi.fn(),
   fetchOwnCompanyIdentity: vi.fn().mockResolvedValue({ orgNumber: null, name: null }),
+}))
+
+// The document stamp is asserted from what reaches the mirror (its own
+// helpers stay real); the write itself is mirror-extraction.test.ts's.
+vi.mock('@/lib/documents/inbox-extraction/mirror-extraction', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/documents/inbox-extraction/mirror-extraction')>()),
+  mirrorExtractionToDocument: vi.fn(),
 }))
 
 vi.mock('@/lib/rate-limits/inbox', () => ({
@@ -34,12 +42,13 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
-import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { hasCapability } from '@/lib/entitlements/has-capability'
+import { extractionStamp, mirrorExtractionToDocument, type ExtractionOutcome } from '@/lib/documents/inbox-extraction/mirror-extraction'
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path,
   )!
 }
@@ -54,7 +63,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as ExtensionContext
@@ -86,11 +94,6 @@ beforeEach(() => {
 })
 
 describe('POST /items/:id/retry-extraction', () => {
-  it('returns 401 when no context', async () => {
-    const res = await retryRoute.handler(makeReq(), undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
 
   it('returns 429 when the per-company rate limit is exceeded', async () => {
     vi.mocked(checkInboxUploadRateLimit).mockResolvedValueOnce({
@@ -178,6 +181,45 @@ describe('POST /items/:id/retry-extraction', () => {
     const { status, body } = await parseJsonResponse<{ data: { extracted_data: { totals: { total: number } } } }>(res)
     expect(status).toBe(200)
     expect(body.data.extracted_data.totals.total).toBe(125)
+    // An item with no mail is read with no email context, as an upload is.
+    expect(extractInvoiceFields).toHaveBeenCalledWith(
+      expect.objectContaining({ emailContext: { subject: null, receivedAt: null } }),
+    )
+  })
+
+  it('reads again with the mail the item came with, as on arrival (crm#1749)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'item-1',
+        document_id: 'doc-1',
+        correlation_id: null,
+        created_supplier_invoice_id: null,
+        email_subject: 'Your invoice of Nov 7, 2026',
+        email_received_at: '2026-11-07T07:41:00+00:00',
+      },
+      error: null,
+    })
+    enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
+    enqueue({
+      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // supplier name lookup: no match
+    enqueue({ data: null, error: null }) // inbox update on success
+    serviceDownloadMock.mockResolvedValue({
+      data: new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }),
+      error: null,
+    })
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce(EXTRACTION_SUCCESS as never)
+
+    const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
+    expect(res.status).toBe(200)
+    expect(extractInvoiceFields).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailContext: { subject: 'Your invoice of Nov 7, 2026', receivedAt: '2026-11-07T07:41:00+00:00' },
+      }),
+    )
   })
 
   it('re-links the supplier on retry, matching a foreign supplier by VAT number', async () => {
@@ -280,5 +322,40 @@ describe('POST /items/:id/retry-extraction', () => {
     expect(status).toBe(500)
     expect(body.error).toBe('pdfjs blew up')
     spy.mockRestore()
+  })
+
+  it('stamps a manual retry that hits another outage as failed:provider_unavailable, so the sweep picks it up again', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null, extracted_data: null },
+      error: null,
+    })
+    enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
+    enqueue({
+      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // inbox update
+
+    serviceDownloadMock.mockResolvedValue({
+      data: new Blob([new Uint8Array([1])], { type: 'application/pdf' }),
+      error: null,
+    })
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({
+      data: { ...EXTRACTION_SUCCESS.data, supplier: { ...EXTRACTION_SUCCESS.data.supplier, name: null }, invoice: { ...EXTRACTION_SUCCESS.data.invoice, invoiceNumber: null, invoiceDate: null }, totals: { subtotal: null, vatAmount: null, total: null }, confidence: 0 },
+      rawText: null,
+      model: null,
+      failure: 'provider_unavailable',
+    } as never)
+
+    const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
+
+    expect(res.status).toBe(200)
+    const [documentId, outcome] = vi.mocked(mirrorExtractionToDocument).mock.calls[0] as [string, ExtractionOutcome]
+    expect(documentId).toBe('doc-1')
+    expect(outcome.failure).toBe('provider_unavailable')
+    expect(extractionStamp(outcome)).toBe('failed:provider_unavailable')
+    // The item is received with its empty reading, not an error: the Inkorg then says the AI service did not respond.
+    expect(findCalls('invoice_inbox_items', 'update')[0][0]).toMatchObject({ status: 'received', error_message: null, extraction_skipped: false })
   })
 })

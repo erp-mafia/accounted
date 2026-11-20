@@ -80,7 +80,7 @@ export default function EditKonteringDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+      <DialogContent size="document">
         <DialogHeader>
           <DialogTitle>Ändra kontering</DialogTitle>
           {matchedTransaction && (
@@ -143,7 +143,7 @@ export default function EditKonteringDialog({
                 className="h-[60vh]"
               />
             ) : (
-              <div className="h-[60vh] grid place-items-center rounded-lg border text-xs text-muted-foreground">
+              <div className="h-[60vh] grid place-items-center rounded-lg text-xs text-muted-foreground bg-control shadow-raised">
                 {t('dialog_no_document')}
               </div>
             )}

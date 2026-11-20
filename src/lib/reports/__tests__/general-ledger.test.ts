@@ -1,38 +1,76 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The period's unlinked IB verifikat has its own tests
+// (opening-balance/unlinked.test.ts, opening-balances.test.ts); here the
+// year has none, so the queued journal reads stay the report's own.
+vi.mock('@/lib/import/opening-balance/unlinked', () => ({
+  findUnlinkedOpeningBalance: vi.fn(async () => null),
+}))
+
 // ============================================================
 // Mock: table-keyed result queues
 //
-// The report fetches lines via the two-step entry-lines helper
-// (lib/bookkeeping/entry-lines.ts): journal_entries first, then
-// journal_entry_lines by entry id, reattaching the parent entry on each line
-// under `journal_entries`. Tests queue entry rows (with the entry fields the
-// report reads) and line rows that reference them via journal_entry_id.
+// Tests queue entry rows (journal_entries, with the entry fields the report
+// reads) and line rows that reference them via journal_entry_id
+// (journal_entry_lines). The opening-balance entry is read with the two-step
+// entry-lines helper (lib/bookkeeping/entry-lines.ts), which consumes them as
+// queries; the period's lines come from the get_general_ledger_lines RPC,
+// which the mock answers from the next queued entries and lines, joined the
+// way the SQL joins them (the SQL's own filtering and order are pinned by
+// tests/pg/ledger-account-days.pg.test.ts; the rows come back unsorted here
+// so the report's own grouping and sorting are what is tested).
 // ============================================================
 
 type MockResult = { data?: unknown; error?: unknown }
 let mockResults: Record<string, MockResult[]>
+
+function consume(key: string): MockResult {
+  const queue = mockResults[key]
+  if (!queue || queue.length === 0) return { data: null, error: null }
+  return queue.shift()!
+}
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
   for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'order', 'range', 'contains']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
-  const consume = (): MockResult => {
-    const queue = mockResults[tableName]
-    if (!queue || queue.length === 0) return { data: null, error: null }
-    return queue.shift()!
-  }
-  b.single = vi.fn().mockImplementation(async () => consume())
-  b.then = (resolve: (v: unknown) => void) => resolve(consume())
+  b.single = vi.fn().mockImplementation(async () => consume(tableName))
+  b.then = (resolve: (v: unknown) => void) => resolve(consume(tableName))
   return b
+}
+
+/** get_general_ledger_lines' rows from the next queued entries and lines. */
+function ledgerLineRows(): unknown[] {
+  const entries = (consume('journal_entries').data ?? []) as Array<Record<string, unknown>>
+  const lines = (consume('journal_entry_lines').data ?? []) as Array<Record<string, unknown>>
+  const byId = new Map(entries.map((e) => [e.id, e]))
+  return lines
+    .filter((l) => byId.has(l.journal_entry_id))
+    .map((l, i) => {
+      const e = byId.get(l.journal_entry_id)!
+      return {
+        line_id: l.id ?? `line-${i}`,
+        account_number: l.account_number,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+        dimensions: l.dimensions ?? {},
+        journal_entry_id: l.journal_entry_id,
+        entry_date: e.entry_date,
+        voucher_series: e.voucher_series,
+        voucher_number: e.voucher_number,
+        description: e.description,
+        source_type: e.source_type,
+      }
+    })
 }
 
 function makeClient() {
   const rpc = vi.fn().mockImplementation(async (fn: string) => {
     const queue = mockResults[`rpc:${fn}`]
-    if (!queue || queue.length === 0) return { data: [], error: null }
-    return queue.shift()!
+    if (queue && queue.length > 0) return queue.shift()!
+    if (fn === 'get_general_ledger_lines') return { data: ledgerLineRows(), error: null }
+    return { data: [], error: null }
   })
   return {
     from: vi.fn().mockImplementation((table: string) => makeBuilder(table)),
@@ -41,7 +79,13 @@ function makeClient() {
   } as any
 }
 
-import { generateGeneralLedger } from '../general-ledger'
+import {
+  generateGeneralLedger,
+  generateGeneralLedgerAccountPage,
+  generateGeneralLedgerArrangedPage,
+  generateGeneralLedgerOverview,
+  GENERAL_LEDGER_INLINE_LINES,
+} from '../general-ledger'
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -135,63 +179,6 @@ describe('generateGeneralLedger', () => {
     expect(acc1930.total_debit).toBe(1250)
     expect(acc1930.total_credit).toBe(0)
     expect(acc1930.closing_balance).toBe(1250)
-  })
-
-  it('does not double a balance when an unstable page boundary re-serves a line (#790/#791)', async () => {
-    // Reproduces the doubling bug's mechanism: a paginated LINE query whose
-    // order was not stable can return the same journal_entry_line on two
-    // pages. Page 1 must be a FULL page (PAGE_SIZE rows) so fetchAllRows
-    // fetches a second page; page 2 re-serves the 5010 line. dedupeBy(line id)
-    // must collapse it so the single 4000 posting totals 4000, not 8000.
-    const PAGE_SIZE = 1000
-    const filler = Array.from({ length: PAGE_SIZE - 1 }, (_, i) => ({
-      id: `f${i}`,
-      account_number: '1930',
-      debit_amount: 0,
-      credit_amount: 0,
-      journal_entry_id: 'e1',
-    }))
-    const rentLine = {
-      id: 'rent-line-1',
-      account_number: '5010',
-      debit_amount: 4000,
-      credit_amount: 0,
-      journal_entry_id: 'e2',
-    }
-
-    mockResults = {
-      fiscal_periods: [
-        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
-      ],
-      journal_entries: [
-        {
-          data: [
-            { id: 'e1', entry_date: '2024-01-02', voucher_number: 1, voucher_series: 'A', description: 'filler', source_type: 'manual' },
-            { id: 'e2', entry_date: '2024-01-15', voucher_number: 2, voucher_series: 'A', description: 'Lokalhyra', source_type: 'manual' },
-          ],
-          error: null,
-        },
-      ],
-      journal_entry_lines: [
-        { data: [...filler, rentLine], error: null }, // page 1: full → triggers page 2
-        { data: [rentLine], error: null },            // page 2: duplicate of the 5010 line
-      ],
-      chart_of_accounts: [
-        {
-          data: [
-            { account_number: '1930', account_name: 'Företagskonto' },
-            { account_number: '5010', account_name: 'Lokalhyra' },
-          ],
-          error: null,
-        },
-      ],
-    }
-
-    const report = await generateGeneralLedger(supabase, 'company-1', 'period-1')
-
-    const acc5010 = report.accounts.find((a) => a.account_number === '5010')!
-    expect(acc5010.total_debit).toBe(4000) // not 8000
-    expect(acc5010.lines).toHaveLength(1) // verifikat listed once, not twice
   })
 
   it('computes opening balance from prior period entries', async () => {
@@ -493,7 +480,7 @@ describe('generateGeneralLedger', () => {
     expect(acc.closing_balance).toBe(4000)
   })
 
-  it('uses Math.round for monetary precision', async () => {
+  it('rounds amounts to öre', async () => {
     mockResults = {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
@@ -523,5 +510,323 @@ describe('generateGeneralLedger', () => {
     const acc = report.accounts[0]
     expect(acc.total_debit).toBe(33.33)
     expect(acc.closing_balance).toBe(33.33)
+  })
+})
+
+describe('generateGeneralLedgerOverview', () => {
+  const PERIOD = { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }
+
+  function overviewMocks(counts: Array<{ account_number: string; line_count: number }>) {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      'rpc:compute_prior_opening_balances': [
+        { data: [{ account_number: '1930', debit: 10000, credit: 0 }, { account_number: '2440', debit: 0, credit: 300 }], error: null },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        {
+          data: [
+            { bucket: 'rollforward', account_number: '1930', debit: 0, credit: 2000 },
+            { bucket: 'period', account_number: '1930', debit: 500, credit: 120.5 },
+            { bucket: 'period', account_number: '5010', debit: 4000, credit: 0 },
+          ],
+          error: null,
+        },
+      ],
+      'rpc:get_ledger_line_counts': [{ data: counts, error: null }],
+      chart_of_accounts: [
+        { data: [{ account_number: '1930', account_name: 'Företagskonto' }, { account_number: '5010', account_name: 'Lokalhyra' }], error: null },
+      ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2026-06-10', voucher_number: 4, voucher_series: 'A', description: 'Insättning', source_type: 'manual' },
+            { id: 'e2', entry_date: '2026-06-12', voucher_number: 5, voucher_series: 'A', description: 'Hyra', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            { account_number: '1930', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '1930', debit_amount: 0, credit_amount: 120.5, journal_entry_id: 'e2' },
+            { account_number: '5010', debit_amount: 4000, credit_amount: 0, journal_entry_id: 'e2' },
+          ],
+          error: null,
+        },
+      ],
+    }
+  }
+
+  it('opens each account at its IB plus the movement before the window, and closes it after the window', async () => {
+    overviewMocks([{ account_number: '1930', line_count: 2 }, { account_number: '5010', line_count: 1 }])
+    const overview = await generateGeneralLedgerOverview(supabase, 'company-1', 'period-1', undefined, undefined, {
+      fromDate: '2026-06-01',
+      toDate: '2026-06-30',
+    })
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_trial_balance_aggregates', expect.objectContaining({
+      p_closing_mode: 'include', p_from_date: '2026-06-01', p_to_date: '2026-06-30', p_exclude_entry_id: null,
+    }))
+    expect(overview.period).toEqual({ start: '2026-06-01', end: '2026-06-30' })
+    expect(overview.lines_included).toBe(true)
+    expect(overview.accounts.map((a) => ({ ...a, lines: a.lines?.map((l) => [l.description, l.balance]) }))).toEqual([
+      {
+        account_number: '1930', account_name: 'Företagskonto', opening_balance: 8000, closing_balance: 8379.5,
+        total_debit: 500, total_credit: 120.5, line_count: 2,
+        lines: [['Insättning', 8500], ['Hyra', 8379.5]],
+      },
+      // An account that only carries a balance into the window is listed, with no lines.
+      {
+        account_number: '2440', account_name: 'Konto 2440', opening_balance: -300, closing_balance: -300,
+        total_debit: 0, total_credit: 0, line_count: 0, lines: [],
+      },
+      {
+        account_number: '5010', account_name: 'Lokalhyra', opening_balance: 0, closing_balance: 4000,
+        total_debit: 4000, total_credit: 0, line_count: 1, lines: [['Hyra', 4000]],
+      },
+    ])
+  })
+
+  it('leaves the lines out when the accounts in range have more than the inline limit', async () => {
+    overviewMocks([{ account_number: '1930', line_count: GENERAL_LEDGER_INLINE_LINES }, { account_number: '5010', line_count: 1 }])
+    const overview = await generateGeneralLedgerOverview(supabase, 'company-1', 'period-1')
+
+    expect(overview.lines_included).toBe(false)
+    expect(overview.accounts.every((a) => a.lines === undefined)).toBe(true)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('get_general_ledger_lines', expect.anything())
+  })
+
+  it('counts only the accounts in range against the inline limit', async () => {
+    overviewMocks([{ account_number: '1930', line_count: 2 }, { account_number: '5010', line_count: GENERAL_LEDGER_INLINE_LINES }])
+    const overview = await generateGeneralLedgerOverview(supabase, 'company-1', 'period-1', '1000', '1999')
+
+    expect(overview.accounts.map((a) => a.account_number)).toEqual(['1930'])
+    expect(overview.lines_included).toBe(true)
+    expect(supabase.rpc).toHaveBeenCalledWith('get_general_ledger_lines', expect.objectContaining({
+      p_account_from: '1000', p_account_to: '1999',
+    }))
+  })
+
+  it('returns an empty overview without a period', async () => {
+    mockResults = { fiscal_periods: [{ data: null, error: null }] }
+    const overview = await generateGeneralLedgerOverview(supabase, 'company-1', 'period-1')
+    expect(overview).toEqual({ accounts: [], period: { start: '', end: '' }, lines_included: true })
+  })
+
+  it('throws when the movements cannot be read', async () => {
+    overviewMocks([])
+    mockResults['rpc:get_trial_balance_aggregates'] = [{ data: null, error: { code: '57014', message: 'timeout' } }]
+    await expect(generateGeneralLedgerOverview(supabase, 'company-1', 'period-1')).rejects.toThrow(/get_trial_balance_aggregates/)
+  })
+})
+
+describe('generateGeneralLedgerAccountPage', () => {
+  const PERIOD = { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }
+
+  function pageRow(i: number, debit: number, credit: number) {
+    return {
+      line_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      account_number: '1930',
+      debit_amount: debit,
+      credit_amount: credit,
+      dimensions: {},
+      journal_entry_id: `e${i}`,
+      entry_date: '2026-06-10',
+      voucher_series: 'A',
+      voucher_number: 10 + i,
+      description: `Rad ${i}`,
+      source_type: 'manual',
+    }
+  }
+
+  it('continues the running balance from the IB and every line before the page', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      'rpc:compute_prior_opening_balances': [{ data: [{ account_number: '1930', debit: 10000, credit: 0 }], error: null }],
+      'rpc:get_general_ledger_account_page': [
+        { data: { before_debit: 700, before_credit: 2200.25, lines: [pageRow(1, 100, 0), pageRow(2, 0, 50.5)] }, error: null },
+      ],
+    }
+    const page = await generateGeneralLedgerAccountPage(supabase, 'company-1', 'period-1', '1930', {
+      after: { date: '2026-06-09', voucher_number: 9, line_id: '00000000-0000-4000-8000-000000000009' },
+      limit: 2,
+    })
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_general_ledger_account_page', expect.objectContaining({
+      p_account_number: '1930', p_exclude_entry_id: null,
+      p_after_date: '2026-06-09', p_after_voucher: 9, p_after_line_id: '00000000-0000-4000-8000-000000000009', p_limit: 2,
+    }))
+    // 10000 + 700 - 2200.25 = 8499.75, then +100 and -50.5.
+    expect(page.lines.map((l) => [l.voucher_number, l.debit, l.credit, l.balance])).toEqual([[11, 100, 0, 8599.75], [12, 0, 50.5, 8549.25]])
+    // A full page: the next one starts after its last line.
+    expect(page.next).toEqual({ date: '2026-06-10', voucher_number: 12, line_id: '00000000-0000-4000-8000-000000000002' })
+  })
+
+  it('ends the account on a short page', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      'rpc:get_general_ledger_account_page': [{ data: { before_debit: 0, before_credit: 0, lines: [pageRow(1, 100, 0)] }, error: null }],
+    }
+    const page = await generateGeneralLedgerAccountPage(supabase, 'company-1', 'period-1', '1930')
+    expect(page.lines).toHaveLength(1)
+    expect(page.lines[0].balance).toBe(100)
+    expect(page.next).toBeNull()
+  })
+
+  it('throws when the page cannot be read', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      'rpc:get_general_ledger_account_page': [{ data: null, error: { code: '57014', message: 'timeout' } }],
+    }
+    await expect(generateGeneralLedgerAccountPage(supabase, 'company-1', 'period-1', '1930')).rejects.toThrow(/get_general_ledger_account_page/)
+  })
+})
+
+describe('generateGeneralLedgerArrangedPage', () => {
+  const PERIOD = { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }
+  const lineId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+
+  function ledgerRow(i: number, date: string, voucher: number, description: string, debit: number, credit: number) {
+    return {
+      line_id: lineId(i),
+      account_number: '1930',
+      debit_amount: debit,
+      credit_amount: credit,
+      dimensions: {},
+      journal_entry_id: `e${i}`,
+      entry_date: date,
+      voucher_series: 'A',
+      voucher_number: voucher,
+      description,
+      source_type: 'manual',
+    }
+  }
+
+  // The account in ledger order. IB 10 000.
+  const ROWS = [
+    ledgerRow(1, '2026-01-05', 3, 'Kundbetalning', 12500, 0),
+    ledgerRow(2, '2026-01-20', 4, 'Hyra januari', 0, 8000),
+    ledgerRow(3, '2026-02-01', 7, 'Bankavgift', 0, 45.5),
+    ledgerRow(4, '2026-03-15', 9, 'Hyra mars', 0, 8000),
+  ]
+  const BALANCES = [22500, 14500, 14454.5, 6454.5]
+
+  /** Every read of the account answers `pages` in turn (one RPC page each). */
+  function accountMocks(pages: Array<{ before_debit?: number; before_credit?: number; lines: unknown[] }>) {
+    mockResults = {
+      fiscal_periods: pages.map(() => ({ data: PERIOD, error: null })),
+      'rpc:compute_prior_opening_balances': pages.map(() => ({
+        data: [{ account_number: '1930', debit: 10000, credit: 0 }],
+        error: null,
+      })),
+      'rpc:get_general_ledger_account_page': pages.map((page) => ({
+        data: { before_debit: 0, before_credit: 0, ...page },
+        error: null,
+      })),
+    }
+  }
+
+  it('in ledger order without a search it is the account page: the same lines and balances', async () => {
+    accountMocks([{ lines: ROWS }])
+    const paged = await generateGeneralLedgerAccountPage(supabase, 'company-1', 'period-1', '1930')
+    accountMocks([{ lines: ROWS }])
+    const arranged = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {})
+
+    expect(arranged.lines).toEqual(paged.lines)
+    expect(arranged.lines.map((l) => l.balance)).toEqual(BALANCES)
+    expect(arranged).toMatchObject({ line_count: 4, next_offset: null, matched: null })
+  })
+
+  it('reads the account in the window, under the filter, from its first line', async () => {
+    accountMocks([{ lines: ROWS }])
+    await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      dimensions: { '1': 'KS01' },
+      fromDate: '2026-01-01',
+      toDate: '2026-06-30',
+      sort: { column: 'debit', ascending: false },
+    })
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_general_ledger_account_page', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_account_number: '1930',
+      p_from_date: '2026-01-01',
+      p_to_date: '2026-06-30',
+      p_exclude_entry_id: null,
+      p_dimensions: { '1': 'KS01' },
+      p_after_date: null,
+      p_after_voucher: null,
+      p_after_line_id: null,
+      p_limit: 5000,
+    })
+  })
+
+  it('sorts newest first with each line still carrying the balance after it', async () => {
+    accountMocks([{ lines: ROWS }])
+    const page = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      sort: { column: 'date', ascending: false },
+    })
+
+    expect(page.lines.map((l) => [l.voucher_number, l.balance])).toEqual([
+      [9, 6454.5], [7, 14454.5], [4, 14500], [3, 22500],
+    ])
+    expect(page.matched).toBeNull()
+  })
+
+  it('narrows by a search and sums everything it found, keeping the ledger balances', async () => {
+    accountMocks([{ lines: ROWS }])
+    const page = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      search: '8 000 kr',
+    })
+
+    expect(page.lines.map((l) => [l.voucher_number, l.credit, l.balance])).toEqual([[4, 8000, 14500], [9, 8000, 6454.5]])
+    expect(page.line_count).toBe(2)
+    expect(page.matched).toEqual({ debit: 0, credit: 16000 })
+    expect(page.next_offset).toBeNull()
+  })
+
+  it('pages the arrangement by offset, with the count and the sums of all of it', async () => {
+    accountMocks([{ lines: ROWS }])
+    const first = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      search: 'a', sort: { column: 'credit', ascending: false }, limit: 3,
+    })
+    expect(first.lines.map((l) => l.voucher_number)).toEqual([4, 9, 7])
+    expect(first).toMatchObject({ line_count: 4, next_offset: 3, matched: { debit: 12500, credit: 16045.5 } })
+
+    accountMocks([{ lines: ROWS }])
+    const second = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      search: 'a', sort: { column: 'credit', ascending: false }, limit: 3, offset: 3,
+    })
+    expect(second.lines.map((l) => l.voucher_number)).toEqual([3])
+    expect(second).toMatchObject({ line_count: 4, next_offset: null, matched: { debit: 12500, credit: 16045.5 } })
+  })
+
+  it('reads a long account to its end, continuing the balance over the reads', async () => {
+    // A full read of 5 000 lines says another follows; the short one ends it.
+    const many = Array.from({ length: 5000 }, (_, i) => ledgerRow(i + 1, '2026-01-10', i + 1, `Rad ${i + 1}`, 1, 0))
+    const tail = [ledgerRow(5001, '2026-02-01', 5001, 'Sista raden', 0, 250)]
+    accountMocks([{ lines: many }, { before_debit: 5000, lines: tail }])
+    const page = await generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', {
+      sort: { column: 'date', ascending: false }, limit: 2,
+    })
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_general_ledger_account_page', expect.objectContaining({
+      p_after_date: '2026-01-10', p_after_voucher: 5000, p_after_line_id: lineId(5000), p_limit: 5000,
+    }))
+    expect(page.line_count).toBe(5001)
+    // 10 000 + 5 000 - 250, then the line before it.
+    expect(page.lines.map((l) => [l.voucher_number, l.balance])).toEqual([[5001, 14750], [5000, 15000]])
+    expect(page.next_offset).toBe(2)
+  })
+
+  it('throws when the account cannot be read', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      'rpc:get_general_ledger_account_page': [{ data: null, error: { code: '57014', message: 'timeout' } }],
+    }
+    await expect(
+      generateGeneralLedgerArrangedPage(supabase, 'company-1', 'period-1', '1930', { search: 'hyra' }),
+    ).rejects.toThrow(/get_general_ledger_account_page/)
   })
 })

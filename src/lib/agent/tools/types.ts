@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { AgentReasonArg } from '@/lib/pending-operations/agent-reason'
 
 // Actor context for the tool dispatch. Mirrors the shape the MCP server's
 // ActorContext type uses (extensions/general/mcp-server/server.ts:70) so a
@@ -12,7 +13,7 @@ export interface AgentActorContext {
 }
 
 // Slim, core-defined tool contract. Extensions register tools that satisfy
-// this shape via registerAgentTools(); the chat agent dispatches against it
+// this shape via registerAgentToolLoader(); the chat agent dispatches against it
 // without importing @/extensions/* directly (CI rule).
 //
 // The shape intentionally mirrors the MCP McpTool definition so the
@@ -31,6 +32,9 @@ export interface AgentTool {
     idempotentHint?: boolean
     openWorldHint?: boolean
   }
+  // How a staging tool takes the agent's reason (lib/pending-operations/
+  // agent-reason.ts): split off its arguments before execute() runs.
+  agentReason?: AgentReasonArg
   execute: (
     args: Record<string, unknown>,
     companyId: string,
@@ -46,6 +50,8 @@ export interface AgentTool {
 export interface StagedOperationResult {
   staged: true
   operation_id?: string
+  /** The proposal's number in its company ("Förslag 128"); none while the column is not there yet. */
+  operation_number?: number
   risk_level: 'low' | 'medium' | 'high'
   actor: { type: string; id?: string; label?: string }
   message: string

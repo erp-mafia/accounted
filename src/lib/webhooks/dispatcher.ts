@@ -25,11 +25,22 @@
  * A delivery whose endpoint has not passed the ownership handshake (and is not
  * in a legacy grace window, lib/webhooks/verification.ts) is withheld: no
  * request, counted as a failed attempt with error 'endpoint_unverified'.
+ *
+ * Deliveries given up on for good (dead) are warnings per delivery, and each
+ * cycle reports them per webhook and reason (reportGivenUp): an error when
+ * the webhook had no other dead delivery in the 24 hours before (a streak
+ * starts), a warning while the streak goes on, and always an error when the
+ * cycle disabled the webhook (410, unsafe URL, redirect). Nobody reads a
+ * warning and the customer is told nothing (the delivery list of the API is
+ * the only place it shows), but an error per dead delivery, or per cycle,
+ * would be an alert per event for an endpoint that stays down. An endpoint
+ * that stays down is NOT disabled here: that changes what API users see and
+ * is the operators' decision.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { signPayload } from './signing'
-import { pinnedHttpsFetch, type PinnedFetchResult } from './pinned-fetch'
+import { pinnedHttpsFetch } from './pinned-fetch'
 import { verificationAllowsDelivery } from './verification'
 import { createLogger } from '@/lib/logger'
 
@@ -189,17 +200,47 @@ export async function dispatchDueDeliveries(args: {
   summary.recovered = recovery.recovered
   summary.recoveredDead = recovery.dead
 
+  // What this cycle gave up on, per webhook and reason, for the report.
+  const givenUp = new Map<string, GivenUp>()
+  const noteGivenUp = (webhook: { id: string; company_id: string }, reason: string, deliveryId: string, disabled = false): void => {
+    const entry = givenUp.get(webhook.id) ?? { webhookId: webhook.id, companyId: webhook.company_id, dead: 0, reasons: {}, deliveryIds: [], disabled: false }
+    entry.dead++
+    entry.reasons[reason] = (entry.reasons[reason] ?? 0) + 1
+    entry.deliveryIds.push(deliveryId)
+    entry.disabled ||= disabled
+    givenUp.set(webhook.id, entry)
+  }
+  // The rows the stuck sweep took dead, under their webhooks too.
+  const sweptUnattributed = await noteSweptDead(args.supabase, recovery.deadIds, noteGivenUp)
+  const report = () => reportGivenUp(args.supabase, givenUp, sweptUnattributed, now)
+
   // Real clock, not the injectable `now`: the budget bounds this invocation's
   // wall time, so a fixed test `now` must not be able to trip it.
   const cycleStartedAt = Date.now()
 
   const due = await claimDueDeliveries(args.supabase, batchSize, now)
   summary.picked = due.length
-  if (due.length === 0) return summary
+  if (due.length === 0) {
+    await report()
+    return summary
+  }
 
   // Dedupe webhook lookups within a single cycle.
   const webhookIds = Array.from(new Set(due.map((d) => d.webhook_id)))
   const webhookMap = await loadWebhooksByIds(args.supabase, webhookIds)
+  if (!webhookMap) {
+    // The lookup failed, not the webhooks: read as an empty map, every claimed
+    // row would die as 'webhook_deleted', a terminal state for an endpoint
+    // that still exists. Hand the claims back for the next tick instead.
+    await releaseUnattempted(
+      args.supabase,
+      due.map((d) => ({ id: d.id, attempts: d.attempts })),
+      now,
+    )
+    summary.released = due.length
+    await report()
+    return summary
+  }
 
   for (const [index, delivery] of due.entries()) {
     // Out of budget: hand back everything we will not reach rather than
@@ -277,6 +318,7 @@ export async function dispatchDueDeliveries(args: {
       if (delivery.attempts + 1 >= MAX_ATTEMPTS) {
         await markDead(args.supabase, delivery.id, 'endpoint_unverified', withheld)
         summary.dead++
+        noteGivenUp(webhook, 'endpoint_unverified', delivery.id)
       } else {
         await markFailedForRetry(args.supabase, delivery.id, delivery.attempts, withheld, now)
       }
@@ -319,6 +361,7 @@ export async function dispatchDueDeliveries(args: {
         await markDead(args.supabase, delivery.id, outcome.reason, outcome)
         log.warn('delivery dead', { ...logCtx, reason: outcome.reason, responseStatus: outcome.responseStatus })
         summary.dead++
+        noteGivenUp(webhook, outcome.reason, delivery.id, outcome.disableWebhook)
         if (outcome.disableWebhook) {
           await disableWebhook(args.supabase, webhook.id, webhook.company_id, outcome.reason)
           log.warn('webhook auto-disabled', { ...logCtx, reason: outcome.reason })
@@ -329,6 +372,7 @@ export async function dispatchDueDeliveries(args: {
           await markDead(args.supabase, delivery.id, 'attempts_exhausted', outcome)
           log.warn('delivery dead: attempts exhausted', { ...logCtx, lastError: outcome.error })
           summary.dead++
+          noteGivenUp(webhook, 'attempts_exhausted', delivery.id)
         } else {
           await markFailedForRetry(args.supabase, delivery.id, delivery.attempts, outcome, now)
           log.info('delivery failed: retry scheduled', { ...logCtx, error: outcome.error, responseStatus: outcome.responseStatus })
@@ -338,7 +382,112 @@ export async function dispatchDueDeliveries(args: {
     }
   }
 
+  await report()
   return summary
+}
+
+interface GivenUp {
+  webhookId: string
+  companyId: string
+  dead: number
+  /** Dead deliveries by reason: attempts_exhausted, endpoint_unverified, http_410_gone, redirect_blocked, url_unsafe:<class>, stalled. */
+  reasons: Record<string, number>
+  /** The deliveries this cycle took dead, so the 24-hour look-back leaves them out. */
+  deliveryIds: string[]
+  /** This cycle disabled the webhook (410, unsafe URL, redirect): always an error. */
+  disabled: boolean
+}
+
+/** A dead delivery is an error when its webhook had no other in this window before it (a streak starts), a warning while the streak goes on. */
+const GIVEN_UP_ERROR_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * The rows the stuck sweep took dead (its function answers ids only): read
+ * their webhooks and note them as 'stalled'. Answers how many could not be
+ * put under a webhook (the read failed), which the report names as an error.
+ */
+async function noteSweptDead(
+  supabase: SupabaseClient,
+  deadIds: string[],
+  note: (webhook: { id: string; company_id: string }, reason: string, deliveryId: string) => void,
+): Promise<number> {
+  if (deadIds.length === 0) return 0
+  let rows: Array<{ id: string; webhook_id: string | null; company_id: string }> = []
+  try {
+    const { data, error } = await supabase.from('webhook_deliveries').select('id, webhook_id, company_id').in('id', deadIds)
+    if (error) return deadIds.length
+    rows = (data ?? []) as typeof rows
+  } catch {
+    // The report must never break the cycle: the rows are named as unattributed.
+    return deadIds.length
+  }
+  let unattributed = deadIds.length - rows.length
+  for (const row of rows) {
+    if (row.webhook_id) note({ id: row.webhook_id, company_id: row.company_id }, 'stalled', row.id)
+    else unattributed++
+  }
+  return unattributed
+}
+
+/**
+ * The cycle's report of what it gave up on, per webhook and reason: an error
+ * for each webhook with no other dead delivery in the 24 hours before (read
+ * from webhook_deliveries, leaving out this cycle's), so a streak of deaths
+ * is one error when it starts and warnings while it goes on, never one error
+ * per event. A webhook this cycle disabled is always an error. When the
+ * look-back fails the webhook counts as first: never quiet on a guess.
+ * Nothing is logged for a cycle that gave up on none. A delivery whose
+ * webhook was deleted is not in it: nobody is waiting for that event.
+ */
+async function reportGivenUp(
+  supabase: SupabaseClient,
+  givenUp: ReadonlyMap<string, GivenUp>,
+  sweptUnattributed: number,
+  now: Date,
+): Promise<void> {
+  if (givenUp.size === 0 && sweptUnattributed === 0) return
+  const since = new Date(now.getTime() - GIVEN_UP_ERROR_WINDOW_MS).toISOString()
+  const first: GivenUp[] = []
+  const again: GivenUp[] = []
+  for (const entry of givenUp.values()) {
+    let reportedBefore = false
+    try {
+      const { data, error } = await supabase
+        .from('webhook_deliveries')
+        .select('id')
+        .eq('webhook_id', entry.webhookId)
+        .eq('status', 'dead')
+        .gte('updated_at', since)
+        .not('id', 'in', `(${entry.deliveryIds.join(',')})`)
+        .limit(1)
+      reportedBefore = !error && ((data ?? []) as unknown[]).length > 0
+    } catch {
+      // The report must never break the cycle; unknown counts as first.
+    }
+    if (reportedBefore && !entry.disabled) again.push(entry)
+    else first.push(entry)
+  }
+  const shape = (entries: GivenUp[]) =>
+    entries.map((entry) => ({
+      webhookId: entry.webhookId,
+      companyId: entry.companyId,
+      dead: entry.dead,
+      reasons: entry.reasons,
+      ...(entry.disabled ? { disabled: true } : {}),
+    }))
+  if (first.length > 0 || sweptUnattributed > 0) {
+    log.error('webhook deliveries given up on', {
+      dead: first.reduce((sum, w) => sum + w.dead, 0),
+      ...(sweptUnattributed > 0 ? { sweptDeadUnattributed: sweptUnattributed } : {}),
+      webhooks: shape(first),
+    })
+  }
+  if (again.length > 0) {
+    log.warn('webhook deliveries given up on: each webhook had another dead delivery in the 24 hours before', {
+      dead: again.reduce((sum, w) => sum + w.dead, 0),
+      webhooks: shape(again),
+    })
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -378,7 +527,7 @@ export async function dispatchDueDeliveries(args: {
 async function recoverStuckInFlight(
   supabase: SupabaseClient,
   now: Date,
-): Promise<{ recovered: number; dead: number }> {
+): Promise<{ recovered: number; dead: number; deadIds: string[] }> {
   const stuckBefore = new Date(now.getTime() - STUCK_IN_FLIGHT_AFTER_MS)
   const { data, error } = await supabase.rpc('recover_stuck_webhook_deliveries', {
     p_stuck_before: stuckBefore.toISOString(),
@@ -389,10 +538,11 @@ async function recoverStuckInFlight(
 
   if (error) {
     log.warn('stuck in_flight recovery failed', { code: error.code })
-    return { recovered: 0, dead: 0 }
+    return { recovered: 0, dead: 0, deadIds: [] }
   }
   const rows = (data ?? []) as Array<{ id: string; status: string; attempts: number }>
-  const dead = rows.filter((r) => r.status === 'dead').length
+  const deadIds = rows.filter((r) => r.status === 'dead').map((r) => r.id)
+  const dead = deadIds.length
   if (rows.length > 0) {
     log.warn('recovered stuck in_flight rows', {
       count: rows.length,
@@ -402,8 +552,9 @@ async function recoverStuckInFlight(
   }
   // Counts are returned as well as logged: a tick that takes deliveries
   // terminal is the event worth alerting on, and it must be visible in the
-  // cron's own summary line rather than only in a helper-level warn.
-  return { recovered: rows.length, dead }
+  // cron's own summary line rather than only in a helper-level warn. The dead
+  // ids go to the cycle's report, under their webhooks.
+  return { recovered: rows.length, dead, deadIds }
 }
 
 async function claimDueDeliveries(
@@ -433,10 +584,11 @@ async function claimDueDeliveries(
   return (data ?? []) as DueDelivery[]
 }
 
+/** Null when the lookup itself failed, so a read error is never mistaken for deleted webhooks. */
 async function loadWebhooksByIds(
   supabase: SupabaseClient,
   ids: string[],
-): Promise<Map<string, WebhookForDelivery>> {
+): Promise<Map<string, WebhookForDelivery> | null> {
   // Include company_id so the dispatch loop can assert that the delivery
   // row's company_id matches the webhook's: defense in depth against a
   // poisoned delivery row pointing at another tenant's webhook
@@ -450,7 +602,7 @@ async function loadWebhooksByIds(
 
   if (error || !data) {
     log.error('webhook lookup for dispatch failed', error as Error)
-    return new Map()
+    return null
   }
   return new Map((data as WebhookForDelivery[]).map((w) => [w.id, w]))
 }
@@ -702,7 +854,7 @@ async function disableWebhook(
     // see the classification in migration 20260515170000), so a dropped
     // row here is an operational audit-integrity gap, not a legal one,
     // and the dispatch cycle must not abort over it. But warn is
-    // suppressed in prod-adjacent noise filters and never reaches the
+    // suppressed in production-adjacent noise filters and never reaches the
     // observability sink, which made this a silent gap; error always
     // forwards (lib/logger.ts) so the missing SECURITY_EVENT is alertable
     // (CC7.2).

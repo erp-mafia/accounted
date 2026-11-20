@@ -14,10 +14,13 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { traceIdColumn, writeWithTraceId } from '@/lib/observability/trace-column'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
+import { whereInboxItemOpen } from '@/lib/documents/inbox-item-state'
 import { adjudicate } from './adjudicate'
 import { attachSekTotals } from './fx'
 import { extractMailDocuments } from './mail-intelligence'
@@ -44,6 +47,24 @@ import {
  * counted, and still get asked about in the weekly digest.
  */
 export const MIN_AMOUNT_SEK = 100
+
+/**
+ * The floor in kronor, as a PostgREST filter: a row's kronor are `amount_sek`
+ * when it carries one, and its own `amount` when it does not.
+ *
+ * On a USD or EUR cash account `amount` is in that currency, so holding it
+ * against 100 skipped a USD 50 card charge (some 500 kr) and let a JPY 150 one
+ * (some 10 kr) through (crm#1785). `amount_sek` is set at ingest on foreign
+ * rows and signed like `amount`; a SEK row leaves it null or holds the same
+ * number, so a SEK row is weighed exactly as before, and a foreign row without
+ * one keeps its old comparison rather than dropping out. The same pick the
+ * agent worklist ranks by (`amount_sek ?? amount`).
+ *
+ * A filter rather than a pass over fetched rows, so the rows under the floor
+ * never leave the database and fetchAllRows pages the set it returns.
+ */
+const SEK_FLOOR_FILTER =
+  `amount_sek.lte.${-MIN_AMOUNT_SEK},and(amount_sek.is.null,amount.lte.${-MIN_AMOUNT_SEK})`
 
 /** How far back a purchase may be and still be hunted. */
 export const LOOKBACK_MONTHS = 12
@@ -193,31 +214,28 @@ export interface HuntOptions {
 }
 
 /**
- * Purchases with no receipt that nobody has booked yet. Exported for the
- * agent worklist (agent-worklist.ts), so both engines share one predicate.
+ * Purchases with no receipt that nobody has booked yet, from MIN_AMOUNT_SEK up
+ * in kronor (SEK_FLOOR_FILTER), whatever the row's own currency.
+ * The agent worklist (agent-worklist.ts) does not read this: its mail search
+ * runs in the user's own agent, so it takes every purchase without underlag
+ * (purchases-without-underlag.ts) and this floor stays the
+ * nightly hunt's own cost bound (crm#1785).
  */
 export async function fetchCandidateTransactions(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<HuntTransaction[]> {
-  const since = new Date()
-  since.setMonth(since.getMonth() - LOOKBACK_MONTHS)
-  const sinceDate = since.toISOString().slice(0, 10)
+  const sinceDate = addMonthsIso(todayIsoStockholm(), -LOOKBACK_MONTHS)
 
   const rows = await fetchAllRows<HuntTransaction>((range) =>
     supabase
-      .from('transactions')
+      .from('open_bank_rows')
       .select('id, company_id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate')
       .eq('company_id', companyId)
-      .is('journal_entry_id', null)
       .is('document_id', null)
-      .eq('is_ignored', false)
-      // is_business IS DISTINCT FROM false: NULL is untriaged and true is
-      // "business, not yet booked". Only an explicit false means the user
-      // called it private, and a private purchase needs no underlag.
-      .not('is_business', 'is', false)
-      // Outflows only, and amount <= -MIN covers the floor in one filter.
-      .lte('amount', -MIN_AMOUNT_SEK)
+      // Outflows only, then the floor in kronor.
+      .lt('amount', 0)
+      .or(SEK_FLOOR_FILTER)
       .gte('date', sinceDate)
       .order('id', { ascending: true })
       .range(range.from, range.to),
@@ -253,14 +271,13 @@ async function fetchPool(
   for (const a of attachments) fileNames.set(a.id, a.file_name ?? 'underlag')
 
   const items = await fetchAllRows<HuntPoolItem>((range) =>
-    supabase
-      .from('invoice_inbox_items')
-      .select('id, document_id, extracted_data, channel_context')
-      .eq('company_id', companyId)
-      .is('matched_transaction_id', null)
-      .is('created_journal_entry_id', null)
-      .is('created_supplier_invoice_id', null)
-      .not('document_id', 'is', null)
+    whereInboxItemOpen(
+      supabase
+        .from('invoice_inbox_items')
+        .select('id, document_id, extracted_data, channel_context')
+        .eq('company_id', companyId)
+        .not('document_id', 'is', null),
+    )
       .order('id', { ascending: true })
       .range(range.from, range.to),
   )
@@ -429,7 +446,7 @@ export async function huntCompany(
       // Cached messages carry their bodies. A body is read to extract fields
       // and must not outlive the run that read it, including when the run
       // fails partway.
-      getMailSearchService().releaseCache?.()
+      ;(await getMailSearchService()).releaseCache?.()
     }
   }
 
@@ -507,7 +524,7 @@ export async function huntCompany(
   const byId = new Map(transactions.map((t) => [t.id, t]))
   const riskLevel = getRiskLevel(OPERATION_TYPE)
 
-  const rows = proposals.map((proposal) => {
+  const rowsWith = (traceId: string | null) => proposals.map((proposal) => {
     const tx = byId.get(proposal.transaction_id) as HuntTransaction
     const fileName = fileNames.get(proposal.document_id) ?? 'underlag'
     const hunted = proposal.mailProvenance != null
@@ -532,6 +549,8 @@ export async function huntCompany(
       actor_type: 'cron',
       actor_label: HUNT_ACTOR_LABEL,
       risk_level: riskLevel,
+      // The request (usually the cron run) that staged them.
+      ...traceIdColumn(traceId),
       agent_metadata: {
         source: hunted ? 'receipt_hunt_mail' : 'receipt_hunt',
         run_id: runId,
@@ -545,10 +564,10 @@ export async function huntCompany(
     }
   })
 
-  const { error } = await supabase.from('pending_operations').insert(rows)
+  const { error } = await writeWithTraceId((traceId) => supabase.from('pending_operations').insert(rowsWith(traceId)))
   if (error) throw new Error(`Failed to stage receipt-hunt proposals: ${error.message}`)
 
-  return { ...base, proposed: rows.length }
+  return { ...base, proposed: proposals.length }
 }
 
 /**
@@ -622,7 +641,7 @@ async function harvestReceiptsFromMail(
   maxReceipts: number,
   maxMails: number,
 ): Promise<MailHuntSummary> {
-  const service = getMailSearchService()
+  const service = await getMailSearchService()
   const summary: MailHuntSummary = {
     searchable: 0,
     searched: 0,

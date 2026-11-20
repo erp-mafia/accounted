@@ -1,5 +1,6 @@
 import { cache } from 'react'
 import { getDashboardAuthContext } from './request-context'
+import { whereSieImportInPlace } from '@/lib/bookkeeping/sie-import-in-place'
 
 /**
  * Reads the Hem islands share. The two islands stream independently and
@@ -24,7 +25,7 @@ export const countTransactions = cache(async (companyId: string) => {
 
 export const countCompletedSieImports = cache(async (companyId: string) => {
   const { supabase } = await getDashboardAuthContext()
-  return supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed')
+  return whereSieImportInPlace(supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId))
 })
 
 export const countInboxItems = cache(async (companyId: string) => {

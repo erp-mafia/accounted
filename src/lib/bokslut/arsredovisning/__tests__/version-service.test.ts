@@ -28,6 +28,7 @@ function model(signedAt: string | null): CanonicalAnnualReport {
     fiscal_period_id: 'period-1',
     entity_type: 'aktiebolag',
     report: {
+      company: { entity_type: 'aktiebolag' },
       accounting_framework: 'k2',
       signatures: [{ role: 'Styrelseledamot', name: 'Anna Andersson', signed_at: signedAt }],
       resultatrakning: buildRrRows(mapping),

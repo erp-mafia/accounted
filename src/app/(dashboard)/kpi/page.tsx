@@ -2,27 +2,31 @@
 
 import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Settings2 } from 'lucide-react'
+import { AdjustmentsHorizontalIcon, PrinterIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { KPIPanes, KPIBreakdown } from '@/components/kpi/KPIStory'
 import { KPIMonthsTable } from '@/components/kpi/KPIMonthsTable'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
+import { KPIFreshness } from '@/components/kpi/KPIFreshness'
+import { ReportPrintHeader } from '@/components/reports/ReportPrintHeader'
 import { saveKPIPreferences } from '@/components/kpi/save-preferences'
 import { loadKPIPreferences } from '@/components/kpi/load-preferences'
 import { failureDescription, type ActionFailure } from '@/lib/browser/action-failure'
 import { dimensionScopedPreferences } from '@/lib/reports/kpi-definitions'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import type { ReportDataStatusResult } from '@/lib/reports/data-status'
 import type { KPIReport, KPIPreferences } from '@/types'
 
 /**
- * Nyckeltal in the founder-picked "Instrumentbrädan" layout: a grid of
+ * Nyckeltal in the chosen "Instrumentbrädan" layout: a grid of
  * bordered instrument panes (monthly result bars + the preference-driven
  * KPIs) with the cost story as quiet rows below. Plain SVG bars: no
  * charting bundle on this page anymore.
@@ -31,11 +35,16 @@ export default function KpiPage() {
   const t = useTranslations('kpi')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
-  const [selectedPeriod, setSelectedPeriod] = useState<string>('')
+  // The fiscal year is app-wide context (the sidebar); a KPI view needs one started year.
+  const { periodId: scopedPeriodId } = useFiscalScope({ allowAll: false, hideFuture: true })
+  const selectedPeriod = scopedPeriodId ?? ''
   // The catalog flags nyckeltal as dimension-filterable; the API narrows the
   // P&L figures and leaves the balance-side ones company-wide.
   const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(null)
   const [report, setReport] = useState<KPIReport | null>(null)
+  // How current the figures are (unbooked bank rows, last bank sync): the
+  // route's data_status, landing with the report it describes.
+  const [dataStatus, setDataStatus] = useState<ReportDataStatusResult | null>(null)
   // null = the stored layout is not known: still loading, or the read failed
   // (prefsError). It never holds a fabricated value.
   const [preferences, setPreferences] = useState<KPIPreferences | null>(null)
@@ -95,8 +104,11 @@ export default function KpiPage() {
       }
       const res = await fetch(`/api/reports/kpi?${params}`)
       if (!res.ok) throw new Error(t('fetch_failed'))
-      const { data } = await res.json()
-      if (seq === requestSeq.current) setReport(data)
+      const { data, data_status } = await res.json()
+      if (seq === requestSeq.current) {
+        setReport(data)
+        setDataStatus(data_status ?? null)
+      }
     } catch {
       if (seq === requestSeq.current) setError(t('fetch_failed'))
     } finally {
@@ -168,6 +180,20 @@ export default function KpiPage() {
           }
           action={
             <div className="flex items-center gap-2">
+              {/* The browser's print dialog also saves a PDF. The shell's print
+                  rules (globals.css) leave only the page on paper, and
+                  ReportPrintHeader below states company, period and date. */}
+              <Button
+                size="toolbar"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => window.print()}
+                disabled={!report || isLoadingReport}
+                title={t('print_hint')}
+              >
+                <PrinterIcon className="h-3.5 w-3.5" />
+                {t('print')}
+              </Button>
               {preferences ? (
                 <KPISettingsDialog
                   preferences={preferences}
@@ -179,25 +205,21 @@ export default function KpiPage() {
                 // complete draft, so while the stored layout is unknown the
                 // control that opens it must not exist: a save from here would
                 // overwrite the row with a layout the user never chose.
-                <Button size="sm"
+                <Button size="toolbar"
                   variant="outline"
                   className="gap-1.5"
                   disabled
                   aria-describedby={prefsError ? prefsStatusId : undefined}
                 >
-                  <Settings2 className="h-3.5 w-3.5" />
+                  <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
                   {t('customize')}
                 </Button>
               )}
-              <FyPicker
-                value={selectedPeriod || null}
-                onChange={(id) => setSelectedPeriod(id || '')}
-                includeAllOption={false}
-                hideFuturePeriods
-              />
             </div>
           }
         />
+
+        <ReportPrintHeader period={report?.period ?? null} className="mb-3" />
 
         {/* Live region always mounted so a failed read is announced when it
             appears, not merely inserted. Inline, never a toast: TOAST_LIMIT is
@@ -220,14 +242,20 @@ export default function KpiPage() {
             </AttnLine>
           )}
         </div>
+
+        {/* Shown with the figures it describes, so it never speaks for a
+            report that is still loading or failed. Prints with the page. */}
+        {!isLoadingReport && !error && report && dataStatus && (
+          <KPIFreshness status={dataStatus} quiet={prefsError !== null} className="mt-3" />
+        )}
       </div>
 
       {/* Renders nothing unless the company uses dimensions; when a value is
           picked it shows the partial-view chip the filtered reports carry. */}
       <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
 
-      {error && (
-        <p className="py-8 text-center text-sm text-muted-foreground">{error}</p>
+      {error && selectedPeriod && (
+        <LoadError title={error} onRetry={() => void fetchReport(selectedPeriod)} />
       )}
 
       {(isLoadingReport || (!error && report !== null && isLoadingPrefs)) && (
@@ -260,10 +288,10 @@ export default function KpiPage() {
 
 function LoadingSkeleton() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <LateReveal className="grid gap-4 sm:grid-cols-2">
       {[1, 2, 3, 4].map((i) => (
         <Skeleton key={i} className="h-40 w-full rounded-lg" />
       ))}
-    </div>
+    </LateReveal>
   )
 }

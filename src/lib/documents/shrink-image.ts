@@ -1,8 +1,9 @@
 import {
+  DOCUMENT_MAX_UPLOAD_BYTES,
   HOSTED_MAX_UPLOAD_BYTES,
+  documentTooLargeMessage,
   exceedsHostedUploadLimit,
   isShrinkableImage,
-  tooLargeMessage,
 } from './upload-size'
 
 /**
@@ -79,16 +80,18 @@ function jpegName(name: string): string {
 export type PreparedUpload = { ok: true; file: File } | { ok: false; message: string }
 
 /**
- * The gate every multipart document upload goes through before it leaves the
- * browser. A file over the platform ceiling is shrunk when it is a photo; one
- * that still does not fit is refused here, with its size, instead of being
- * sent into a 413 that no route ever sees (crm#203: a phone photo replacing a
- * voucher's underlag failed as a bare "network error").
+ * The gate every document upload goes through before it leaves the browser
+ * (postDocumentForm then sends it inline or straight to Storage). A photo over
+ * the platform ceiling is still shrunk: the archive keeps a faithful copy
+ * either way, and a smaller one is cheaper to keep for seven years. What is
+ * refused here is only a file over the archive's own ceiling, with its size,
+ * instead of a refusal from the route after the bytes were sent (crm#203: a
+ * phone photo replacing a voucher's underlag failed as a bare "network error").
  */
-export async function prepareForMultipartUpload(file: File): Promise<PreparedUpload> {
+export async function prepareDocumentUpload(file: File): Promise<PreparedUpload> {
   const prepared = exceedsHostedUploadLimit(file.size) ? await shrinkImageForUpload(file) : file
-  if (exceedsHostedUploadLimit(prepared.size)) {
-    return { ok: false, message: tooLargeMessage(prepared.size) }
+  if (prepared.size > DOCUMENT_MAX_UPLOAD_BYTES) {
+    return { ok: false, message: documentTooLargeMessage(prepared.size) }
   }
   return { ok: true, file: prepared }
 }

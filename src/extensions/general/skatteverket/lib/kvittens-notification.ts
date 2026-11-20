@@ -8,8 +8,8 @@
  * kvittens crons (AGI and VAT) call this after flipping the local state.
  *
  * Email is the delivery channel: it is the one notification surface that is
- * always available (push-notifications is a separate, optional extension and
- * cross-extension imports are not allowed). Deduplication goes through
+ * always available (cross-extension imports are not allowed, so it cannot use
+ * another extension's channel). Deduplication goes through
  * notification_log under type 'skv_kvittens' so a re-observed kvittens never
  * notifies twice: the log row is inserted FIRST as a claim, guarded by a
  * partial unique index on (user_id, reference_id) where notification_type =
@@ -49,7 +49,7 @@ export async function sendKvittensNotification(
 ): Promise<{ sent: boolean; reason?: string }> {
   const referenceUuid = toReferenceUuid(input.referenceId)
   try {
-    const email = getEmailService()
+    const email = await getEmailService()
     if (!email.isConfigured()) return { sent: false, reason: 'email_not_configured' }
 
     // Dedup fast path: cheap read that skips the work below on re-observed

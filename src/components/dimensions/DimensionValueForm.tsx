@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { Trash2 } from 'lucide-react'
+import { TrashIcon } from '@/components/icons'
 import {
   DIMENSION_CODE_PATTERN,
   type DimensionDto,
@@ -195,14 +195,14 @@ export default function DimensionValueForm({
             disabled={isSaving}
             onClick={() => setConfirmDeleteOpen(true)}
           >
-            <Trash2 className="mr-2 h-4 w-4" />
+            <TrashIcon className="h-4 w-4" />
             {t('form_delete')}
           </Button>
         ) : (
           <span />
         )}
         <Button type="submit" loading={isSaving}>
-          {isEditing ? t('form_save') : t('form_create')}
+          {isEditing ? t('form_save') : t('form_create_value')}
         </Button>
       </div>
 

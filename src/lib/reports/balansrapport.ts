@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTrialBalance } from './trial-balance'
-import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { generateTrialBalanceWithYearOpening } from './trial-balance'
+import { buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { computedResult } from './balance-sheet'
 import { getLatestPostedVouchers } from './latest-vouchers'
 import { roundOre, sumOre } from '@/lib/money'
 import { preparesArsredovisning, resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -55,8 +56,10 @@ interface LayoutNode {
 /**
  * Balansrapport: operational balance report.
  *
- * Lists every account in classes 1-2 with IB, period change, and UB, under
- * the balance-sheet headings of the årsredovisning (ÅRL bilaga 1, K2):
+ * Lists every account in classes 1-2 with the year's ingående balans, the
+ * ingående saldo when the range starts (the two differ for a range that
+ * starts after the year's first day), the change within the range and UB,
+ * under the balance-sheet headings of the årsredovisning (ÅRL bilaga 1, K2):
  * Anläggningstillgångar with its immateriella, materiella and finansiella
  * sections, Omsättningstillgångar, Eget kapital, Obeskattade reserver,
  * Avsättningar, Långfristiga and Kortfristiga skulder, each with subtotals.
@@ -73,7 +76,9 @@ interface LayoutNode {
  * accounts (debit balance) render positive; class 2 accounts (credit balance)
  * render negative. This matches Fortnox/Visma/Bokio and lets the user verify
  * the balance by adding rows: total_assets_ub + total_equity_liabilities_ub
- * = beraknat_resultat (the running-year P&L residual, 0 after year-end close).
+ * = beraknat_resultat + differens. Beräknat resultat is the running-year
+ * result (0 after year-end close); differens is 0 whenever the saldobalans
+ * balances.
  */
 export async function generateBalansrapport(
   supabase: SupabaseClient,
@@ -97,7 +102,7 @@ export async function generateBalansrapport(
 
   const entityType = await resolveCompanyEntityType(supabase, companyId)
 
-  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+  const trialBalance = await generateTrialBalanceWithYearOpening(supabase, companyId, fiscalPeriodId, {
     // Class 1-2 only, and 2099 must carry årets resultat.
     closingEntry: 'include',
     fromDate: options?.fromDate,
@@ -115,12 +120,16 @@ export async function generateBalansrapport(
       .filter((r) => r.account_class === klass)
       .sort((a, b) => a.account_number.localeCompare(b.account_number))
       .flatMap((r) => {
+        const yearOpening = trialBalance.yearOpening.get(r.account_number)
+        const yearIb = yearOpening ? roundOre(yearOpening.debit - yearOpening.credit) : 0
         const ib = roundOre(r.opening_debit - r.opening_credit)
         const ub = roundOre(r.closing_debit - r.closing_credit)
-        if (ib === 0 && ub === 0) return []
+        // An account emptied before the range still shows: its year IB is not 0.
+        if (yearIb === 0 && ib === 0 && ub === 0) return []
         return [{
           account_number: r.account_number,
           account_name: r.account_name,
+          year_ib: yearIb,
           ib,
           ub,
           period_change: roundOre(ub - ib),
@@ -135,36 +144,29 @@ export async function generateBalansrapport(
       class: klass,
       class_label: CLASS_LABELS[klass],
       sections,
-      ...subtotals(sections.map((s) => ({ ib: s.subtotal_ib, ub: s.subtotal_ub }))),
+      ...subtotals(sections.map((s) => ({ year_ib: s.subtotal_year_ib, ib: s.subtotal_ib, ub: s.subtotal_ub }))),
     })
   }
 
   const totalAssetsUb = groups.find((g) => g.class === 1)?.subtotal_ub ?? 0
   const totalEquityLiabilitiesUb = groups.find((g) => g.class === 2)?.subtotal_ub ?? 0
 
-  // Beräknat resultat: the residual on the balance side. With both classes in
-  // debit-positive sign, assets are positive and eq_liab is negative; their sum
-  // equals the running-year P&L residual. Trial balance guarantees
-  // sum_all(debit - credit) = 0, so sum_balance = -sum_pl = revenues - costs.
-  // After year-end close posts the result into 2099, the residual is 0.
-  const beraknatResultat = roundOre(totalAssetsUb + totalEquityLiabilitiesUb)
+  // Beräknat resultat: the running-year result, read from the result accounts
+  // as the Balansräkning reads its Årets resultat (computedResult). With both
+  // classes debit-positive, assets + eq_liab equal it only while the
+  // saldobalans balances. When the opening balance does not, the gap is the
+  // differens, reported apart: the residual used to be shown as this year's
+  // result. After year-end close posts the result into 2099, both read 0.
+  const beraknatResultat = computedResult(trialBalance.rows)
+  const differens = roundOre(totalAssetsUb + totalEquityLiabilitiesUb - beraknatResultat)
 
   // An unbalanced trial balance here means the opening balance itself is
-  // broken — double-entry guarantees period activity balances. Explain why
-  // (usually a prior year's untransferred result) instead of leaving a bare
-  // "Balanserar ej". Best-effort: a diagnosis failure never breaks the report.
-  let imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined
-  if (!trialBalance.isBalanced) {
-    const differens = roundOre(trialBalance.totalDebit - trialBalance.totalCredit)
-    try {
-      const untransferred = await findUntransferredResults(supabase, companyId, {
-        beforePeriodStart: period.period_start,
-      })
-      imbalanceDiagnosis = buildImbalanceDiagnosis(untransferred, differens) ?? undefined
-    } catch {
-      // Best-effort diagnosis only.
-    }
-  }
+  // broken: double-entry guarantees period activity balances. An earlier
+  // year's untransferred result no longer causes it (the derived opening
+  // balance carries it), so the diagnosis only names the differens.
+  const imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined = trialBalance.isBalanced
+    ? undefined
+    : buildImbalanceDiagnosis(roundOre(trialBalance.totalDebit - trialBalance.totalCredit)) ?? undefined
 
   // Reconciliation aid for the header: which vouchers are actually in here.
   // The balansrapport accumulates from the fiscal year start, so the window has
@@ -184,6 +186,7 @@ export async function generateBalansrapport(
     total_assets_ub: totalAssetsUb,
     total_equity_liabilities_ub: totalEquityLiabilitiesUb,
     beraknat_resultat: beraknatResultat,
+    differens,
     is_balanced: trialBalance.isBalanced,
     period: { start: effectiveFromDate, end: effectiveToDate },
     ...(imbalanceDiagnosis ? { imbalance_diagnosis: imbalanceDiagnosis } : {}),
@@ -251,8 +254,8 @@ function section(
   children: BalansrapportSection[],
 ): BalansrapportSection {
   const parts = rows.length > 0
-    ? rows.map((r) => ({ ib: r.ib, ub: r.ub }))
-    : children.map((c) => ({ ib: c.subtotal_ib, ub: c.subtotal_ub }))
+    ? rows.map((r) => ({ year_ib: r.year_ib, ib: r.ib, ub: r.ub }))
+    : children.map((c) => ({ year_ib: c.subtotal_year_ib, ib: c.subtotal_ib, ub: c.subtotal_ub }))
   return {
     key: node.key,
     label: node.label,
@@ -264,12 +267,18 @@ function section(
   }
 }
 
-function subtotals(parts: Array<{ ib: number; ub: number }>): {
+function subtotals(parts: Array<{ year_ib: number; ib: number; ub: number }>): {
+  subtotal_year_ib: number
   subtotal_ib: number
   subtotal_change: number
   subtotal_ub: number
 } {
   const ib = sumOre(parts.map((p) => p.ib))
   const ub = sumOre(parts.map((p) => p.ub))
-  return { subtotal_ib: ib, subtotal_change: roundOre(ub - ib), subtotal_ub: ub }
+  return {
+    subtotal_year_ib: sumOre(parts.map((p) => p.year_ib)),
+    subtotal_ib: ib,
+    subtotal_change: roundOre(ub - ib),
+    subtotal_ub: ub,
+  }
 }

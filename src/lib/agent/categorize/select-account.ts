@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { getAiService } from '@/lib/ai'
 import { roundOre } from '@/lib/money'
 import type { AskTier } from '@/lib/agent/ask/ask-service'
@@ -5,7 +6,10 @@ import {
   getDefaultAccountForCategory,
   getDefaultVatTreatmentForCategory,
 } from '@/lib/bookkeeping/category-mapping'
+import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { vatTreatmentForRegistration } from '@/lib/bookkeeping/vat-registration'
+import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import type { ExpenseVatCase } from '@/lib/expenses/expense-claim-vat'
 import type { EntityType, TransactionCategory, VatTreatment } from '@/types'
 
 /**
@@ -16,7 +20,7 @@ import type { EntityType, TransactionCategory, VatTreatment } from '@/types'
  * counterparty templates, rules, history), the model reasons and then CHOOSES,
  * from a CLOSED set of options:
  *   - one of the retrieved candidate accounts (the "known" path), or
- *   - one of the standard business categories (the "novel" path — a first-time
+ *   - one of the standard business categories (the "novel" path - a first-time
  *     vendor with no candidate), which maps deterministically to a BAS account, or
  *   - `needs_review` when nothing fits (routed to a human, never auto-applied).
  *
@@ -64,7 +68,7 @@ const CATEGORY_LABEL_SV: Record<TransactionCategory, string> = {
   income_other: 'Intäkt: övrigt',
   expense_equipment: 'Utrustning/inventarier',
   expense_software: 'Programvara',
-  expense_travel: 'Resor',
+  expense_travel: 'Resor: övrigt (t.ex. hyrd bil eller elsparkcykel)',
   expense_office: 'Kontor',
   expense_marketing: 'Marknadsföring',
   expense_professional_services: 'Konsulter/tjänster',
@@ -81,7 +85,51 @@ const CATEGORY_LABEL_SV: Record<TransactionCategory, string> = {
   uncategorized: 'Okategoriserad',
 }
 
+/**
+ * Travel split the way the catalog already prices it. The category's own
+ * default is 25 % moms, right for a hired car or scooter but not for a ticket
+ * (6 %, ML 9 kap. 8 §) or a hotel night (12 %): every train, flight and hotel
+ * the model put under "Resor" was proposed with 25 % ingående moms. Each
+ * option books its catalog template's account and VAT, so the rate stays in
+ * code; a journey to or from another country is the "utomlands" answer.
+ */
+const TRAVEL_OPTIONS: Array<{ id: string; template: string; label: string }> = [
+  { id: 'cat:expense_travel:persontransport', template: 'travel_transport', label: 'Resor: biljett för persontransport (flyg, tåg, buss, taxi, båt)' },
+  { id: 'cat:expense_travel:logi', template: 'travel_hotel', label: 'Resor: hotell och logi' },
+]
+
 const NEEDS_REVIEW = 'needs_review'
+
+/** The Swedish moms rates a purchase answered "sverige" can carry. */
+const SWEDISH_PURCHASE_RATES: ReadonlySet<VatTreatment> = new Set<VatTreatment>(['standard_25', 'reduced_12', 'reduced_6'])
+
+/**
+ * Where the purchase is taxed, as the model reads it off the row or the
+ * underlag: the utlägg dialog's "Var finns säljaren?" (ExpenseVatCase), asked
+ * of the model as a closed choice. It decides the VAT treatment and, for
+ * omvänd skattskyldighet, which box the purchase is reported in. It never
+ * decides the account.
+ */
+export type SelectorVatCase = ExpenseVatCase
+
+const VAT_CASE_BY_ID = {
+  sverige: 'domestic',
+  utomlands: 'abroad',
+  omvand_eu: 'reverse_charge_eu',
+  omvand_utanfor_eu: 'reverse_charge_non_eu',
+} as const satisfies Record<string, SelectorVatCase>
+
+/**
+ * The basis box of a reverse-charge answer (ruta 21 or 22), carried with the
+ * read to the booking: the treatment alone books every such purchase as an
+ * EU service (crm#1028).
+ */
+const REVERSE_CHARGE_KIND_BY_CASE: Partial<Record<SelectorVatCase, ReverseChargeKind>> = {
+  reverse_charge_eu: 'eu_services',
+  reverse_charge_non_eu: 'non_eu_services',
+}
+type VatCaseId = keyof typeof VAT_CASE_BY_ID
+const VAT_CASE_IDS = Object.keys(VAT_CASE_BY_ID) as VatCaseId[]
 const DEFAULT_SAMPLES = 3
 const DEFAULT_MAX_TOKENS = 700
 
@@ -124,7 +172,7 @@ export interface SelectAccountInput {
 
 export type SelectionChoice =
   | { kind: 'candidate'; account: string }
-  | { kind: 'category'; category: TransactionCategory }
+  | { kind: 'category'; category: TransactionCategory; /** Catalog template that prices it (TRAVEL_OPTIONS). */ template?: string }
   | { kind: 'needs_review' }
 
 export interface AccountSelection {
@@ -132,7 +180,15 @@ export interface AccountSelection {
   account: string | null
   category: TransactionCategory | null
   vatTreatment: VatTreatment | null
+  /** Where the model read the purchase as taxed; 'domestic' when it said nothing or nothing fit. */
+  vatCase: SelectorVatCase
   reverseCharge: boolean
+  /**
+   * Which reverse-charge purchase the model read (EU or non-EU service); null
+   * when the treatment is not reverse charge, or is one a candidate's history
+   * carried without saying which.
+   */
+  reverseChargeKind: ReverseChargeKind | null
   /** Combined, uncalibrated confidence in [0,1] (model conf × agreement × candidate signal). */
   confidence: number
   /** The model's own stated confidence, kept separately (never trusted alone). */
@@ -142,6 +198,8 @@ export interface AccountSelection {
   reasoning: string
   choice: SelectionChoice
   model: string
+  /** SHA-256 of the system prompt and the prompt the model was given: which prompt produced the read. */
+  promptSha256: string
   /** True when the resolved choice was one of the retrieved candidates. */
   fromCandidate: boolean
 }
@@ -154,7 +212,11 @@ Regler:
 - Finns inget lämpligt kandidatkonto: välj en KATEGORI som passar, så sätts standardkontot automatiskt.
 - Passar inget alls, eller är underlaget för tunt för att avgöra: välj "needs_review". Hitta ALDRIG på ett konto.
 - Kontonummer är strängar, aldrig tal att räkna på.
-- reverse_charge = true endast för EU-inköp av varor/tjänster där omvänd skattskyldighet gäller (köparen redovisar momsen).`
+- "moms" säger var köpet beskattas. Välj EXAKT ett:
+  - "sverige": säljaren finns i Sverige eller tar ut svensk moms. Standardvalet; momssatsen följer kontot eller kategorin.
+  - "utomlands": köpt och förbrukat på plats utomlands, i eller utanför EU: restaurang, kafé, hotell, taxi, parkering, drivmedel, livsmedel. Även en resa mellan Sverige och ett annat land (flyg, tåg, färja, buss). Det beskattas där det utförs, så ingen svensk moms dras av och hela beloppet är kostnad. Aldrig omvänd skattskyldighet. Välj det bara när raden eller underlaget visar platsen (ort, land eller utländsk valuta) eller att resan går till eller från utlandet, t.ex. ett flygbolag som inte flyger inrikes i Sverige.
+  - "omvand_eu": vara eller tjänst utan moms från en säljare i ett annat EU-land, där omvänd skattskyldighet gäller (köparen redovisar momsen).
+  - "omvand_utanfor_eu": tjänst utan moms från en säljare i ett land utanför EU (t.ex. USA, Storbritannien, Norge, Schweiz): programvara, molntjänst, licens, annonsering, konsult. Omvänd skattskyldighet gäller. Var säljaren finns avgör, inte valutan.`
 
 interface OptionRow {
   id: string
@@ -187,6 +249,11 @@ function buildOptions(candidates: AccountCandidate[]): {
     const id = `cat:${category}`
     rows.push({ id, choice: { kind: 'category', category } })
     lines.push(`- ${id} → ${CATEGORY_LABEL_SV[category]}`)
+    if (category !== 'expense_travel') continue
+    for (const t of TRAVEL_OPTIONS) {
+      rows.push({ id: t.id, choice: { kind: 'category', category, template: t.template } })
+      lines.push(`- ${t.id} → ${t.label}`)
+    }
   }
   lines.push('')
   rows.push({ id: NEEDS_REVIEW, choice: { kind: 'needs_review' } })
@@ -229,7 +296,7 @@ function selectionSchema(optionIds: string[]) {
       properties: {
         reasoning: { type: 'string', description: 'Kort resonemang på svenska INNAN valet.' },
         choice: { type: 'string', enum: optionIds },
-        reverse_charge: { type: 'boolean' },
+        moms: { type: 'string', enum: VAT_CASE_IDS },
         confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
       },
       required: ['reasoning', 'choice', 'confidence'],
@@ -241,7 +308,9 @@ function selectionSchema(optionIds: string[]) {
 interface RawPick {
   reasoning: string
   choice: string
-  reverseCharge: boolean
+  vatCase: SelectorVatCase
+  /** False when the model left "moms" out or answered outside the set, and vatCase is the default. */
+  answeredMoms: boolean
   confidence: 'high' | 'medium' | 'low'
 }
 
@@ -251,10 +320,13 @@ function parsePick(value: unknown, validIds: Set<string>): RawPick {
   const choice = typeof v.choice === 'string' && validIds.has(v.choice) ? v.choice : NEEDS_REVIEW
   const conf = v.confidence
   const confidence = conf === 'high' || conf === 'medium' || conf === 'low' ? conf : 'low'
+  const answeredMoms = VAT_CASE_IDS.includes(v.moms as VatCaseId)
   return {
     reasoning: typeof v.reasoning === 'string' ? v.reasoning : '',
     choice,
-    reverseCharge: v.reverse_charge === true,
+    // No answer, or one outside the closed set, is the default: Swedish moms.
+    vatCase: answeredMoms ? VAT_CASE_BY_ID[v.moms as VatCaseId] : 'domestic',
+    answeredMoms,
     confidence,
   }
 }
@@ -308,6 +380,7 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
   )
   const picks: RawPick[] = results.map((r) => parsePick(r.value, validIds))
   const model = results[results.length - 1]?.model ?? ''
+  const promptSha256 = createHash('sha256').update(SYSTEM_PROMPT).update('\n\n').update(prompt).digest('hex')
 
   // Majority vote across samples (self-consistency).
   const tally = new Map<string, number>()
@@ -340,8 +413,9 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
     vatTreatment = cand?.vatTreatment ?? null
   } else if (choice.kind === 'category') {
     category = choice.category
-    account = getDefaultAccountForCategory(choice.category, input.entityType)
-    vatTreatment = getDefaultVatTreatmentForCategory(choice.category)
+    const template = choice.template ? getTemplateById(choice.template) : undefined
+    account = template?.debit_account ?? getDefaultAccountForCategory(choice.category, input.entityType)
+    vatTreatment = template ? template.vat_treatment : getDefaultVatTreatmentForCategory(choice.category)
   }
 
   // A company that is not VAT-registered books no moms line, so the category
@@ -350,10 +424,36 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
   // (lib/bookkeeping/vat-registration.ts). Undefined leaves it untouched.
   vatTreatment = vatTreatmentForRegistration(vatTreatment, input.vatRegistered)
 
-  // Reverse charge overrides VAT only for a VAT-registered company; it never
-  // invents an account, only the treatment.
-  const reverseCharge = winningSample.reverseCharge && choice.kind !== 'needs_review'
+  // Where the purchase is taxed overrides the treatment, never the account.
+  // Reverse charge only for a VAT-registered company. A purchase used on the
+  // spot abroad carries no Swedish moms whatever the category's default or
+  // the candidate's history says: without this a restaurant meal in another
+  // country was proposed with 25 % ingående moms on 2641, a deduction for
+  // VAT nobody charged.
+  const vatCase: SelectorVatCase = choice.kind === 'needs_review' ? 'domestic' : winningSample.vatCase
+  const answeredKind = REVERSE_CHARGE_KIND_BY_CASE[vatCase] ?? null
+  const reverseCharge = answeredKind !== null
   if (reverseCharge && input.vatRegistered) vatTreatment = 'reverse_charge'
+  if (vatCase === 'abroad' && input.transaction.amount < 0) vatTreatment = 'exempt'
+  // Sweden read off the underlag outranks a reverse charge that only came
+  // from a candidate's history or the catalog (crm#1498): the invoice shows
+  // Swedish moms or a seller in Sweden. Without underlag "sverige" is also
+  // the model's default, so the candidate's reverse charge stands and its
+  // box is still asked for.
+  if (
+    vatTreatment === 'reverse_charge' &&
+    vatCase === 'domestic' &&
+    winningSample.answeredMoms &&
+    choice.kind !== 'needs_review' &&
+    !!input.underlag?.trim() &&
+    input.transaction.amount < 0
+  ) {
+    const categoryRate = category ? getDefaultVatTreatmentForCategory(category) : null
+    vatTreatment = vatTreatmentForRegistration(
+      categoryRate && SWEDISH_PURCHASE_RATES.has(categoryRate) ? categoryRate : 'standard_25',
+      input.vatRegistered,
+    )
+  }
 
   // Confidence is driven by DETERMINISTIC BACKING, not the model's self-report.
   // "backing" = the confidence of a candidate that independently points at the
@@ -381,13 +481,16 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
     account,
     category,
     vatTreatment,
+    vatCase,
     reverseCharge,
+    reverseChargeKind: vatTreatment === 'reverse_charge' ? answeredKind : null,
     confidence,
     modelConfidence: winningSample.confidence,
     agreement,
     reasoning: winningSample.reasoning,
     choice,
     model,
+    promptSha256,
     fromCandidate,
   }
 }

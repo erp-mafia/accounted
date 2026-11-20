@@ -223,9 +223,21 @@ export function captureMessage(
  * timed out or threw; never rejects.
  */
 export async function flushObservability(timeoutMs = 2000): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    return await activeSink.flush(timeoutMs)
+    // The timeout is kept here, not left to the adapter: an adapter that
+    // ignores it (a provider client with its own retries) would hold the
+    // answer of every job that awaits this for as long as the provider is slow.
+    return await Promise.race([
+      activeSink.flush(timeoutMs),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs)
+      }),
+    ])
   } catch {
+    // Contract: never rejects. A flush that failed is a flush that did not drain.
     return false
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }

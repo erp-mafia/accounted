@@ -4,6 +4,7 @@
   "exportName": "exampleBrandingExtension",
   "entryPoint": "@/extensions/general/_example-branding",
   "workspace": null,
+  "branding": true,
   "requiredEnvVars": [],
   "optionalEnvVars": [],
   "npmDependencies": [],

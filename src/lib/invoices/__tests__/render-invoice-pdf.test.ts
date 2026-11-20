@@ -27,7 +27,7 @@ vi.mock('@/lib/invoices/pdf-template', () => ({
 // The real payee resolution, without the logo fetch and font registration.
 vi.mock('@/lib/invoices/pdf-render-helpers', async () => {
   const { companyWithInvoicePaymentAccount, assertInvoicePaymentAccountForRender } = await import(
-    '@/lib/invoices/payment-accounts'
+    '@/lib/cash-accounts/invoice-payment-accounts'
   )
   return {
     prepareInvoicePdfRender: (
@@ -149,6 +149,30 @@ describe('renderInvoicePdfBuffer', () => {
     expect(mocks.prepare).toHaveBeenCalledWith(expect.anything(), 'SEK', expect.objectContaining({ payee }))
     // The printed payee has no giro and no Swish: no code, whatever the company default holds.
     expect(result.paymentQr).toEqual({ kind: null, mode: 'auto', reason: 'no_printed_giro' })
+    expect(templateProps().paymentQr).toBeNull()
+  })
+
+  it('draws no code for a frozen payee that is only a bank account, never the company\'s bankgiro (crm#1191)', async () => {
+    const payee: InvoicePaymentAccount = {
+      bank_name: 'Handelsbanken',
+      clearing_number: '6000',
+      account_number: '658159712',
+      bankgiro: null,
+      plusgiro: null,
+      swish: null,
+      iban: null,
+      bic: null,
+      bank_code: null,
+      foreign_account_number: null,
+    }
+    const result = await renderInvoicePdfBuffer({
+      invoice: sentInvoice({ payment_details: payee }),
+      customer: makeCustomer({ customer_type: 'swedish_business' }),
+      items: [],
+      company: company(),
+    })
+    // The payee's account decides, not the company's bankgiro: a code must pay where the page says.
+    expect(result.paymentQr).toEqual({ kind: null, mode: 'auto', reason: 'bank_account_only' })
     expect(templateProps().paymentQr).toBeNull()
   })
 

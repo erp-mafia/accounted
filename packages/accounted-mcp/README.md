@@ -9,7 +9,7 @@ MCP server. New connections receive the `accounted_*` tool namespace. Existing
 
 ## Setup
 
-1. Create an API key in Accounted under **Settings > API**.
+1. Create an API key in Accounted under **Agents › Connect an agent** (`/settings/api`, the Developers group).
 2. Add the bridge to your MCP client:
 
 ```json
@@ -109,4 +109,4 @@ a dry-run option that packs and validates without publishing.
 
 ## Gather what is missing
 
-Accounted's nightly check lists documents the bookkeeping expects but the archive lacks, as the resource `Accounted://arkiv/missing`. The skill in `skills/accounted-gather/SKILL.md` of the Accounted repository tells an assistant how to find those documents in the mail and drives it already has access to, upload them with the person's approval, and close each item with `gnubok_resolve_missing`. Install it as a custom skill in claude.ai or Claude Code next to this bridge.
+Accounted's nightly check lists documents the bookkeeping expects but the archive lacks, as the resource `Accounted://arkiv/missing`. The skill in `skills/accounted-gather/SKILL.md` of the Accounted repository tells an assistant how to find those documents in the mail and drives it already has access to, upload them with the person's approval, and close each item with `accounted_resolve_missing`. Install it as a custom skill in claude.ai or Claude Code next to this bridge.

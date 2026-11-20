@@ -6,20 +6,22 @@ import { useTranslations } from 'next-intl'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { Skeleton, LateReveal } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { Package, Plus } from 'lucide-react'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { CubeIcon, PlusIcon } from '@/components/icons'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Asset, AssetCategory } from '@/types'
 import { CreateAssetDialog } from '@/components/bookkeeping/assets/CreateAssetDialog'
 import { EditAssetDialog } from '@/components/bookkeeping/assets/EditAssetDialog'
+import { useViewerLock } from '@/components/ui/viewer-lock'
 
 /** GET /api/assets annotates each row with whether depreciation has posted
  *  and whether the row may be deleted (never reached the books). */
@@ -28,6 +30,7 @@ type AssetRow = Asset & { has_posted_depreciation?: boolean; deletable?: boolean
 const CATEGORY_LABEL_KEYS: Record<AssetCategory, string> = {
   immaterial: 'category_immaterial',
   building: 'category_building',
+  land: 'category_land',
   land_improvement: 'category_land_improvement',
   machinery: 'category_machinery',
   equipment: 'category_equipment',
@@ -38,8 +41,12 @@ const CATEGORY_LABEL_KEYS: Record<AssetCategory, string> = {
 
 export default function AssetsPage() {
   const t = useTranslations('assets')
+  const tCommon = useTranslations('common')
+  // The top bar says what the menu row says (design.md convention 2).
+  const tNav = useTranslations('nav')
   const router = useRouter()
   const { toast } = useToast()
+  const { canWrite, lockedTitle } = useViewerLock()
   const { dialogProps: confirmProps, confirm } = useDestructiveConfirm()
   const [assets, setAssets] = useState<AssetRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -47,6 +54,10 @@ export default function AssetsPage() {
   const [editing, setEditing] = useState<AssetRow | null>(null)
 
   const [reloadKey, setReloadKey] = useState(0)
+  const retryLoad = useCallback(() => {
+    setError(null)
+    setReloadKey((k) => k + 1)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -117,36 +128,44 @@ export default function AssetsPage() {
     <div className="space-y-8">
       {/* Page header (concept scene 29): title + Ny tillgång */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <Button size="sm" onClick={() => setDialogOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
+        <h1 className="page-header-title">{tNav('v3_assets')}</h1>
+        <Button size="toolbar" onClick={() => setDialogOpen(true)} disabled={!canWrite} title={lockedTitle}>
+          <PlusIcon className="h-4 w-4" />
           {t('new_asset')}
         </Button>
       </div>
 
       {assets === null && !error && (
-        <div className="space-y-3">
+        <LateReveal>
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+            <div key={i} className="flex h-11 items-center gap-6 border-b-hairline">
+              <Skeleton className="h-3.5 w-64" />
+              <Skeleton className="h-3.5 w-24" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
           ))}
-        </div>
+        </LateReveal>
       )}
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && assets === null && <LoadError title={error} onRetry={retryLoad} />}
+
+      {error && assets !== null && (
+        <AttnLine action={{ label: tCommon('retry'), onClick: retryLoad }}>{tCommon('refresh_failed')}</AttnLine>
+      )}
 
       {assets !== null && assets.length === 0 && (
         <EmptyState
-          icon={Package}
+          icon={CubeIcon}
           title={t('empty_title')}
           description={t('empty_description')}
-          actionLabel={t('new_asset')}
-          onAction={() => setDialogOpen(true)}
+          actionLabel={canWrite ? t('new_asset') : undefined}
+          onAction={canWrite ? () => setDialogOpen(true) : undefined}
         />
       )}
 
       {assets !== null && assets.length > 0 && (
         <>
-          <div className="overflow-x-auto">
+          <div className="-mx-2 overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
@@ -178,16 +197,20 @@ export default function AssetsPage() {
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground md:table-cell')}>
                         {t(CATEGORY_LABEL_KEYS[asset.category])}
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right date-figures text-muted-foreground sm:table-cell')}>
                         {formatDate(asset.acquisition_date)}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                        {formatCurrency(Number(asset.acquisition_cost))}
+                        {formatRowAmount(Number(asset.acquisition_cost))}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground md:table-cell')}>
-                        {t('useful_life_format', { years, months: asset.useful_life_months })}
+                        {asset.k3_components && asset.k3_components.length > 0
+                          ? t('components.count', { count: asset.k3_components.length })
+                          : asset.category === 'land'
+                            ? t('not_depreciated')
+                            : t('useful_life_format', { years, months: asset.useful_life_months })}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right date-figures')}>
                         {disposed ? (
                           <span className="inline-flex items-center gap-2">
                             <Badge variant="secondary" className="font-normal">
@@ -219,6 +242,8 @@ export default function AssetsPage() {
                               type="button"
                               className={QUIET_LINK_CLASS}
                               onClick={() => router.push(`/assets/${asset.id}/dispose`)}
+                              disabled={!canWrite}
+                              title={lockedTitle}
                             >
                               {t('action_dispose')}
                             </button>
@@ -227,6 +252,8 @@ export default function AssetsPage() {
                                 type="button"
                                 className={cn(QUIET_LINK_CLASS, 'text-destructive')}
                                 onClick={() => void handleDelete(asset)}
+                                disabled={!canWrite}
+                                title={lockedTitle}
                               >
                                 {t('action_delete')}
                               </button>

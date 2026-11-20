@@ -91,15 +91,16 @@ describe('fetch*InvoicesHydrated with a select predicate (fortnox)', () => {
       if (/\/supplierinvoices\/\d/.test(url)) {
         return json({ SupplierInvoice: { GivenNumber: 7, InvoiceDate: '2026-02-02', Currency: 'SEK', Total: 500, Balance: 500, SupplierInvoiceRows: [] } });
       }
+      // Both open: a settled one never leaves the open register (fortnoxSupplierInvoiceNotOpen).
       return json(listResponse('SupplierInvoices', [
-        { GivenNumber: 6, InvoiceDate: '2024-11-01', Currency: 'SEK', Total: 1250, Balance: 0 },
+        { GivenNumber: 6, InvoiceDate: '2024-11-01', Currency: 'SEK', Total: 1250, Balance: 1250 },
         { GivenNumber: 7, InvoiceDate: '2026-02-02', Currency: 'SEK', Total: 500, Balance: 500 },
       ]));
     });
 
     const { invoices, excluded } = await fetchSupplierInvoicesHydrated(
       'fortnox', 'token', undefined, undefined,
-      (dto) => !dto.paymentStatus.paid,
+      (dto) => dto.issueDate >= '2025-01-01',
     );
 
     expect(invoices.map((i) => i.id)).toEqual(['7']);

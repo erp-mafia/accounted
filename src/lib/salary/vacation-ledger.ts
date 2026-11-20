@@ -19,6 +19,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { runDeviationWindow } from './deviation-period'
 import {
   effectiveVacationAsOfDate,
@@ -30,6 +31,7 @@ import {
   getVacationYearStart,
   type VacationYearBasis,
 } from './vacation-year'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface VacationBalanceRow {
   id: string
@@ -54,7 +56,7 @@ export interface VacationBalanceRow {
 }
 
 /** The cutover opening-balance columns the ledger seeds from. */
-interface LedgerOpeningRow {
+export interface LedgerOpeningRow {
   employee_id: string
   cutover_date: string
   vacation_paid_days_remaining: number
@@ -66,9 +68,10 @@ interface LedgerOpeningRow {
   vacation_extra_paid_days_remaining?: number | null
 }
 
-interface BookedRunRow {
+export interface BookedRunRow {
   employee_id: string
   vacation_days_taken: number
+  vacation_paid_days_per_day_off: number | null
   line_items?: VacationLineLike[] | null
   salary_run: {
     period_year: number
@@ -94,6 +97,113 @@ export async function getVacationYearBasis(
     : 'calendar') as VacationYearBasis
 }
 
+/** The ledger figures of one employee's vacation year, as the sync stores them. */
+export interface DerivedVacationLedgerRow {
+  entitled_days: number
+  accrued_days: number
+  taken_days: number
+  saved_days: Record<string, number>
+  forced_payout_days: number
+  unpaid_days: number
+  advance_days: number
+  saved_days_taken: Record<string, number>
+}
+
+export interface VacationLedgerDerivationInput {
+  basis: VacationYearBasis
+  yearStart: string
+  /** The date accrued_days is computed per. */
+  asOfDate: string
+  employee: { vacation_days_per_year: number; vacation_days_saved: number; employment_start: string }
+  opening: LedgerOpeningRow | null
+  /**
+   * The stored row of the year, whose seeds (sparade dagar by origin year,
+   * forced payout days) carry over. null derives a row that does not exist
+   * yet: the sparade dagar are seeded from the cutover opening balance of
+   * that year, else from the legacy master field.
+   */
+  seedRow: { saved_days: Record<string, number> | null; forced_payout_days: number | null } | null
+  /**
+   * The employee's runs that count as taken: the sync passes every booked
+   * run; a valuation as of a date passes the ones it counts by then.
+   */
+  bookedRuns: readonly BookedRunRow[]
+}
+
+/**
+ * One employee's ledger row for one vacation year, derived from the booked
+ * runs, the cutover opening balance and the year's seeds. Pure: the sync
+ * stores it, and the semesterlöneskuld valuation (vacation-liability-
+ * valuation.ts) derives the same figures as of a date without writing.
+ *
+ * A run belongs to the vacation year its avvikelseperiod ends in: the leave
+ * it deducts was taken there, and under previous_month that is the month
+ * before the pay month (an April run deducting March leave closes the Apr-Mar
+ * year, it does not open the next one). A run whose window ended on or before
+ * the opening balance's as-of date is already inside the migrated balance and
+ * is skipped, or the days would be deducted twice.
+ *
+ * entitled_days is re-derived every time (a stale stored value would
+ * otherwise survive forever): the cutover opening balance is the migrated
+ * truth from the previous system and outranks recomputation for the year
+ * containing cutover_date; every other year gets Semesterlagen 7 § via
+ * computeEntitledDays.
+ */
+export function deriveVacationLedgerRow(input: VacationLedgerDerivationInput): DerivedVacationLedgerRow {
+  const { basis, yearStart, asOfDate, employee, opening } = input
+  const bounds = getVacationYearBounds(yearStart)
+  const cutover =
+    opening && opening.cutover_date >= yearStart && opening.cutover_date < bounds.end ? opening : null
+  const openingAsOf = opening ? effectiveVacationAsOfDate(opening) : null
+  const runs: BookedRunRow[] = []
+  for (const row of input.bookedRuns) {
+    if (!row.salary_run) continue
+    const leaveEnd = runDeviationWindow(row.salary_run).end
+    if (leaveEnd < bounds.start || leaveEnd >= bounds.end) continue
+    if (openingAsOf && leaveEnd <= openingAsOf) continue
+    runs.push(row)
+  }
+  // Chronological by the leave the run deducts, so a 'saved' line without an
+  // origin year takes the oldest saved year first across runs.
+  runs.sort((a, b) => runDeviationWindow(a.salary_run!).end.localeCompare(runDeviationWindow(b.salary_run!).end))
+
+  let seedSaved: Record<string, number>
+  if (input.seedRow) {
+    seedSaved = input.seedRow.saved_days ?? {}
+  } else if (cutover) {
+    seedSaved = cutover.vacation_saved_days_by_year ?? {}
+  } else if ((employee.vacation_days_saved || 0) > 0) {
+    // Legacy master field has no origin-year data: attribute the whole
+    // balance to the year before this one (the most conservative choice for
+    // the 5-year expiry: it expires EARLIER, never later).
+    seedSaved = { [String(Number(yearStart.slice(0, 4)) - 1)]: employee.vacation_days_saved }
+  } else {
+    seedSaved = {}
+  }
+
+  // Days already taken pre-cutover under the previous system: folded into
+  // BOTH entitled and taken so remaining (entitled - taken) still equals the
+  // imported vacation_paid_days_remaining.
+  const openingTaken = cutover ? (cutover.vacation_days_taken_this_year || 0) : 0
+  const split = splitVacationTaken(runs, seedSaved, String(Number(yearStart.slice(0, 4)) - 1))
+  return {
+    // Extra betalda are paid days above the statutory entitlement: they
+    // belong to the same paid pool for the intjänandeår.
+    entitled_days: cutover
+      ? (cutover.vacation_paid_days_remaining || 0) + (cutover.vacation_extra_paid_days_remaining || 0) + openingTaken
+      : computeEntitledDays(basis, yearStart, employee.vacation_days_per_year, employee.employment_start),
+    accrued_days: computeAccruedDays(basis, yearStart, asOfDate, employee.vacation_days_per_year, employee.employment_start),
+    taken_days: split.paid + openingTaken,
+    saved_days: seedSaved,
+    forced_payout_days: input.seedRow ? (input.seedRow.forced_payout_days ?? 0) : 0,
+    // Pools seeded only by the cutover row: unpaid days never carry and
+    // förskott is a cutover-only grant, so both read 0 elsewhere.
+    unpaid_days: Math.max(0, (cutover?.vacation_unpaid_days_remaining || 0) - split.unpaid),
+    advance_days: Math.max(0, (cutover?.vacation_advance_days_remaining || 0) - split.advance),
+    saved_days_taken: split.savedByYear,
+  }
+}
+
 /**
  * Recompute the OPEN ledger rows for the given employees and lazy-seed the
  * current vacation year's row where none exists.
@@ -107,7 +217,7 @@ export async function syncVacationLedgerForEmployees(
   asOf?: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   if (employeeIds.length === 0) return { ok: true }
-  const asOfDate = asOf ?? new Date().toISOString().slice(0, 10)
+  const asOfDate = asOf ?? todayIsoStockholm()
 
   try {
     const basis = await getVacationYearBasis(supabase, companyId)
@@ -154,47 +264,23 @@ export async function syncVacationLedgerForEmployees(
     // Booked vacation days per employee, bucketed later per year bounds. The
     // embedded vacation lines carry the category split; vacation_days_taken
     // stays the authoritative total (a run without categorized lines
-    // contributes exactly what it always did).
-    const { data: bookedRows, error: bookedErr } = await supabase
-      .from('salary_run_employees')
-      .select(
-        'employee_id, vacation_days_taken, ' +
-          'line_items:salary_line_items(item_type, quantity, vacation_category, vacation_saved_year), ' +
-          'salary_run:salary_runs!inner(period_year, period_month, status, deviation_period_start, deviation_period_end)',
-      )
-      .eq('company_id', companyId)
-      .eq('salary_run.status', 'booked')
-      .in('employee_id', employeeIds)
-    if (bookedErr) return { ok: false, message: bookedErr.message }
-    const booked = ((bookedRows ?? []) as unknown as BookedRunRow[])
-      .filter((r) => r.salary_run?.status === 'booked')
-      // Chronological by the leave the run deducts, so a 'saved' line without
-      // an origin year takes the oldest saved year first across runs.
-      .sort((a, b) => runDeviationWindow(a.salary_run!).end.localeCompare(runDeviationWindow(b.salary_run!).end))
-
-    /**
-     * The booked runs that count toward `yearStart` for an employee. A run
-     * belongs to the vacation year its avvikelseperiod ends in: the leave it
-     * deducts was taken there, and under previous_month that is the month
-     * before the pay month (an April run deducting March leave closes the
-     * Apr-Mar year, it does not open the next one). A run whose window ended
-     * on or before the opening balance's as-of date is already inside the
-     * migrated balance and is skipped, or the days would be deducted twice.
-     */
-    const bookedInYear = (employeeId: string, yearStart: string): BookedRunRow[] => {
-      const bounds = getVacationYearBounds(yearStart)
-      const opening = openingByEmployee.get(employeeId)
-      const asOf = opening ? effectiveVacationAsOfDate(opening) : null
-      const rows: BookedRunRow[] = []
-      for (const row of booked) {
-        if (row.employee_id !== employeeId) continue
-        const leaveEnd = runDeviationWindow(row.salary_run!).end
-        if (leaveEnd < bounds.start || leaveEnd >= bounds.end) continue
-        if (asOf && leaveEnd <= asOf) continue
-        rows.push(row)
-      }
-      return rows
-    }
+    // contributes exactly what it always did). Paged on id: past 1,000
+    // payslips the rest of the taken days were silently dropped.
+    const bookedRows = await fetchAllRows<BookedRunRow>(({ from, to }) =>
+      supabase
+        .from('salary_run_employees')
+        .select(
+          'employee_id, vacation_days_taken, vacation_paid_days_per_day_off, ' +
+            'line_items:salary_line_items(item_type, quantity, vacation_category, vacation_saved_year), ' +
+            'salary_run:salary_runs!inner(period_year, period_month, status, deviation_period_start, deviation_period_end)',
+        )
+        .eq('company_id', companyId)
+        .eq('salary_run.status', 'booked')
+        .in('employee_id', employeeIds)
+        .order('id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: BookedRunRow[] | null; error: { message: string } | null }>,
+    )
+    const booked = bookedRows.filter((r) => r.salary_run?.status === 'booked')
 
     const upserts: Array<Record<string, unknown>> = []
 
@@ -202,115 +288,28 @@ export async function syncVacationLedgerForEmployees(
       const employee = employeeById.get(employeeId)
       if (!employee) continue
 
-      const opening = openingByEmployee.get(employeeId)
-      const cutoverInYear = (yearStart: string): boolean =>
-        !!opening &&
-        opening.cutover_date >= yearStart &&
-        opening.cutover_date < getVacationYearBounds(yearStart).end
-
+      const opening = openingByEmployee.get(employeeId) ?? null
+      const employeeRuns = booked.filter((r) => r.employee_id === employeeId)
       const rowsForEmployee = openRows.filter((r) => r.employee_id === employeeId)
       const hasCurrentYearRow = rowsForEmployee.some(
         (r) => r.vacation_year_start === currentYearStart,
       )
+      const derive = (yearStart: string, seedRow: VacationLedgerDerivationInput['seedRow']) => ({
+        company_id: companyId,
+        employee_id: employeeId,
+        vacation_year_start: yearStart,
+        ...deriveVacationLedgerRow({ basis, yearStart, asOfDate, employee, opening, seedRow, bookedRuns: employeeRuns }),
+        status: 'open',
+      })
 
-      // Recompute every open year the employee has. entitled_days is
-      // re-derived like the seed path (a stale stored value would otherwise
-      // survive forever): the cutover opening balance is the migrated truth
-      // from the previous system and outranks recomputation for the year
-      // containing cutover_date; every other year gets Semesterlagen 7 §
-      // via computeEntitledDays.
+      // Recompute every open year the employee has.
       for (const row of rowsForEmployee) {
-        const cutoverRow = cutoverInYear(row.vacation_year_start)
-        const cutover = cutoverRow && opening ? opening : null
-        const openingTaken = cutover ? (cutover.vacation_days_taken_this_year || 0) : 0
-        const seedSaved = row.saved_days ?? {}
-        const split = splitVacationTaken(
-          bookedInYear(employeeId, row.vacation_year_start),
-          seedSaved,
-          String(Number(row.vacation_year_start.slice(0, 4)) - 1),
-        )
-        upserts.push({
-          company_id: companyId,
-          employee_id: employeeId,
-          vacation_year_start: row.vacation_year_start,
-          // Extra betalda are paid days above the statutory entitlement: they
-          // belong to the same paid pool for the intjänandeår.
-          entitled_days: cutover
-            ? (cutover.vacation_paid_days_remaining || 0) +
-              (cutover.vacation_extra_paid_days_remaining || 0) +
-              openingTaken
-            : computeEntitledDays(
-                basis,
-                row.vacation_year_start,
-                employee.vacation_days_per_year,
-                employee.employment_start,
-              ),
-          accrued_days: computeAccruedDays(basis, row.vacation_year_start, asOfDate, employee.vacation_days_per_year, employee.employment_start),
-          taken_days: split.paid + openingTaken,
-          saved_days: seedSaved,
-          forced_payout_days: row.forced_payout_days ?? 0,
-          status: 'open',
-          // Pools seeded only by the cutover row: unpaid days never carry
-          // and förskott is a cutover-only grant, so both read 0 elsewhere.
-          unpaid_days: Math.max(0, (cutover?.vacation_unpaid_days_remaining || 0) - split.unpaid),
-          advance_days: Math.max(0, (cutover?.vacation_advance_days_remaining || 0) - split.advance),
-          saved_days_taken: split.savedByYear,
-        })
+        upserts.push(derive(row.vacation_year_start, row))
       }
 
       // Lazy-seed the current year on first touch.
       if (!hasCurrentYearRow) {
-        const cutoverInThisYear = cutoverInYear(currentYearStart)
-
-        let savedDays: Record<string, number>
-        if (cutoverInThisYear && opening) {
-          savedDays = opening.vacation_saved_days_by_year ?? {}
-        } else if ((employee.vacation_days_saved || 0) > 0) {
-          // Legacy master field has no origin-year data: attribute the whole
-          // balance to the year before this one (the most conservative choice
-          // for the 5-year expiry: it expires EARLIER, never later).
-          const previousYear = String(Number(currentYearStart.slice(0, 4)) - 1)
-          savedDays = { [previousYear]: employee.vacation_days_saved }
-        } else {
-          savedDays = {}
-        }
-
-        // Days already taken pre-cutover under the previous system: folded
-        // into BOTH entitled and taken so remaining (entitled - taken) still
-        // equals the imported vacation_paid_days_remaining.
-        const cutover = cutoverInThisYear && opening ? opening : null
-        const seedOpeningTaken = cutover ? (cutover.vacation_days_taken_this_year || 0) : 0
-        const split = splitVacationTaken(
-          bookedInYear(employeeId, currentYearStart),
-          savedDays,
-          String(Number(currentYearStart.slice(0, 4)) - 1),
-        )
-        upserts.push({
-          company_id: companyId,
-          employee_id: employeeId,
-          vacation_year_start: currentYearStart,
-          // A cutover opening balance is the migrated truth from the previous
-          // system and outranks any recomputation. Extra betalda join the
-          // paid pool (see the recompute path above).
-          entitled_days: cutover
-            ? (cutover.vacation_paid_days_remaining || 0) +
-              (cutover.vacation_extra_paid_days_remaining || 0) +
-              seedOpeningTaken
-            : computeEntitledDays(
-                basis,
-                currentYearStart,
-                employee.vacation_days_per_year,
-                employee.employment_start,
-              ),
-          accrued_days: computeAccruedDays(basis, currentYearStart, asOfDate, employee.vacation_days_per_year, employee.employment_start),
-          taken_days: split.paid + seedOpeningTaken,
-          saved_days: savedDays,
-          forced_payout_days: 0,
-          status: 'open',
-          unpaid_days: Math.max(0, (cutover?.vacation_unpaid_days_remaining || 0) - split.unpaid),
-          advance_days: Math.max(0, (cutover?.vacation_advance_days_remaining || 0) - split.advance),
-          saved_days_taken: split.savedByYear,
-        })
+        upserts.push(derive(currentYearStart, null))
       }
     }
 

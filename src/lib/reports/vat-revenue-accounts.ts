@@ -1,10 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { ACCOUNT_TO_BOX, BOX_LABELS, type MomsBox } from '@/lib/vat/moms-box-mapping'
+import { ACCOUNT_TO_BOX, BOX_LABELS, isDeclarationVatAccount, type MomsBox } from '@/lib/vat/moms-box-mapping'
 import { isAccountVatBox, isVatBoxAccount, vatBoxRutaMapping } from '@/lib/vat/account-vat-box'
 import {
   defaultRateForVatTreatment,
   isAccountVatTreatment,
+  NOT_DOMESTIC_SALE,
   resolveVatTreatmentRuta,
   type AccountVatRutaMapping,
 } from '@/lib/vat/account-vat-treatment'
@@ -15,8 +16,6 @@ export const RUTA_05_EXCLUDED_ACCOUNTS = new Set([
 ])
 const RUTA_05_STATIC_RATE_ACCOUNTS = new Set(['3000'])
 const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = { '1': 0.25, '2': 0.12, '3': 0.06 }
-const CONTRADICTING_ACCOUNT_NAME =
-  /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\boss\b|\b0\s*%/i
 
 /**
  * Infer the domestic-sales VAT rate a class 3 account represents from its
@@ -27,7 +26,7 @@ const CONTRADICTING_ACCOUNT_NAME =
  */
 export function inferDomesticSalesRate(accountNumber: string, accountName: string): number | null {
   const accountMatch = /^30\d([123])$/.exec(accountNumber)
-  if (!accountMatch || CONTRADICTING_ACCOUNT_NAME.test(accountName)) return null
+  if (!accountMatch || NOT_DOMESTIC_SALE.test(accountName)) return null
   const expectedRate = DOMESTIC_SALES_RATE_BY_SUFFIX[accountMatch[1]]
   const namedRates = new Set(
     [...accountName.matchAll(/\b(25|12|6)\s*%\s*moms\b/gi)].map((match) => Number(match[1]) / 100),
@@ -95,6 +94,24 @@ export function resolveRevenueVatBox(row: VatAccountClassificationRow): MomsBox 
   return ACCOUNT_TO_BOX[row.account_number] ?? null
 }
 
+/**
+ * The momsdeklaration box a revenue (class 3) account's sales actually land
+ * in, the way fetchDynamicVatAccounts reaches it: a configured treatment's box
+ * (null for OSS), else the static BAS box, else ruta 05 when the account
+ * resolves to a taxable Swedish rate (the unconfigured branch, number and
+ * name inference included). Null when the declaration does not read the
+ * account. The webshop country rules use it to keep a sale taxed abroad out
+ * of ruta 05.
+ */
+export function resolveRevenueDeclarationBox(row: VatAccountClassificationRow): MomsBox | null {
+  if (isAccountVatTreatment(row.default_vat_treatment)) return resolveRevenueVatBox(row)
+  const staticBox = ACCOUNT_TO_BOX[row.account_number]
+  if (staticBox) return staticBox
+  if (RUTA_05_EXCLUDED_ACCOUNTS.has(row.account_number)) return null
+  const rate = resolveEffectiveVatRate(row)
+  return rate !== null && TAXABLE_RATES.includes(rate) ? '05' : null
+}
+
 export interface DynamicVatAccounts {
   accounts: string[]
   mappingByAccount: Map<string, AccountVatRutaMapping>
@@ -111,12 +128,22 @@ export interface DynamicVatAccounts {
    * in vat-declaration.ts, which is where revenueAccountsWithoutRuta drops it.
    */
   unconfiguredRevenueAccounts: Map<string, string>
+  /**
+   * VAT accounts (BAS 2610-2649, isDeclarationVatAccount) without a momsruta
+   * of the company's own, keyed by account number to the account name. Not
+   * summed into any ruta here; the declaration reads them only to name the
+   * ones with a balance no ruta reads (VAT_ACCOUNT_WITHOUT_RUTA). An account
+   * in the fixed BAS ruta map is listed too: vatAccountsWithoutRuta in
+   * vat-declaration.ts drops it, as revenueAccountsWithoutRuta does.
+   */
+  unconfiguredVatAccounts: Map<string, string>
 }
 
 const emptyDynamicVatAccounts = (): DynamicVatAccounts => ({
   accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
   rateByAccount: new Map(), staticRateByAccount: new Map(),
   rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+  unconfiguredVatAccounts: new Map(),
 })
 
 /** Explicit account treatments win; accounts without one keep BAS fallback. */
@@ -149,8 +176,13 @@ export async function fetchDynamicVatAccounts(
     if (row.account_class === 2) {
       // A VAT account with an explicit momsruta leaves its BAS box (explicit)
       // and feeds the chosen one. A class-2 row without an override is not a
-      // VAT classification at all.
-      if (!isVatBoxAccount(account) || !isAccountVatBox(row.vat_box)) continue
+      // VAT classification at all; a moms account among them is listed, so
+      // the declaration can name a balance on it that no ruta reads.
+      if (!isVatBoxAccount(account)) continue
+      if (!isAccountVatBox(row.vat_box)) {
+        if (isDeclarationVatAccount(account)) result.unconfiguredVatAccounts.set(account, row.account_name)
+        continue
+      }
       result.explicitAccounts.add(account)
       result.mappingByAccount.set(account, vatBoxRutaMapping(row.vat_box))
       result.accounts.push(account)

@@ -127,11 +127,12 @@ describe('commitPendingOperation: book_skattekonto_row(s)', () => {
     single.enqueue({ data: null, error: null })
     await commitPendingOperation(single.supabase as never, 'user-1', 'company-1', makePendingOp({
       operation_type: 'book_skattekonto_row',
-      params: { transaction_id: 'skv-1', allow_duplicate: true },
+      params: { transaction_id: 'skv-1', allow_duplicate: true, duplicate_reason: 'Debiterades två gånger' },
     }))
     expect(book).toHaveBeenLastCalledWith(expect.anything(), 'user-1', 'company-1', {
       ids: ['skv-1'],
       allow_duplicate_ids: ['skv-1'],
+      duplicate_reason: 'Debiterades två gånger',
     })
 
     const rows = createQueuedMockSupabase()

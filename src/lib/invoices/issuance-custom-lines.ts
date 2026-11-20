@@ -1,5 +1,5 @@
 import { MarkInvoiceSentSchema } from '@/lib/api/schemas'
-import { roundOre } from '@/lib/money'
+import { lineBalance } from '@/lib/bookkeeping/line-balance'
 
 /**
  * Shared parse + validation for user-edited issuance lines accepted by
@@ -73,9 +73,8 @@ export function parseCustomIssuanceLines(rawBody: unknown): CustomIssuanceLinesR
     }
   }
 
-  const totalDebit = lines.reduce((s, l) => s + roundOre(l.debit_amount), 0)
-  const totalCredit = lines.reduce((s, l) => s + roundOre(l.credit_amount), 0)
-  if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+  const { balanced, totalDebit, totalCredit } = lineBalance(lines)
+  if (!balanced) {
     return { ok: false, error: 'unbalanced', details: { totalDebit, totalCredit } }
   }
 

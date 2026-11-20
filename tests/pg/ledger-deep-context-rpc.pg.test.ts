@@ -4,7 +4,9 @@
  * The deep, full-history analysis behind the "Vad din agent vet" page: merges
  * counterparties across name variants, mines booked verifikat for spend, and
  * detects recurrence. Verifies variant-merging, occurrence/spend rollup,
- * dominant-account + share, recurrence cadence, and supplier entities.
+ * dominant-account + share, recurrence cadence, and supplier entities (whose
+ * dominant account counts the kontering only, never a moms or
+ * öresavrundning row, crm#1310).
  *
  * Also covers the SEK honesty contract from migration 20260726150000: a
  * foreign-currency row is summed and ranked at its SEK value when one can be
@@ -165,6 +167,32 @@ describe('get_ledger_deep_context', () => {
       )
     }
 
+    // crm#1310: two invoices in the shape the provider migration and
+    // register-booked store, the ingående moms as a row of its own (2641,
+    // no moms of its own) and on one of them an öresavrundning row (3740).
+    const programvaraId = randomUUID()
+    await getPool().query(`INSERT INTO public.suppliers (id, user_id, company_id, name) VALUES ($1,$2,$3,'Programvara AB')`,
+      [programvaraId, userId, companyId])
+    for (const [d, rows] of [
+      ['2026-04-20', [['5420', 400], ['2641', 100]]],
+      ['2026-05-20', [['5420', 400], ['2641', 100], ['3740', 0.4]]],
+    ] as const) {
+      const invId = randomUUID()
+      await getPool().query(
+        `INSERT INTO public.supplier_invoices
+           (id,user_id,company_id,supplier_id,arrival_number,supplier_invoice_number,invoice_date,due_date,status,vat_treatment,is_credit_note,subtotal,vat_amount,total,total_sek)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'registered','standard_25',false,400,100,500,500)`,
+        [invId, userId, companyId, programvaraId, arr++, `SI-${arr}`, d],
+      )
+      for (const [account, amount] of rows) {
+        await getPool().query(
+          `INSERT INTO public.supplier_invoice_items (supplier_invoice_id,description,quantity,unit_price,line_total,account_number,vat_rate,vat_amount)
+           VALUES ($1,'Line',1,$2,$2,$3,0,0)`,
+          [invId, amount, account],
+        )
+      }
+    }
+
     // --- FX cohort (migration 20260726150000) -------------------------------
     // Four single-booking counterparties chosen so that reading the raw amount
     // produces a DIFFERENT ranking than reading the SEK value, because
@@ -260,6 +288,19 @@ describe('get_ledger_deep_context', () => {
     expect(telia!.dominant_account_total).toBe(2)
     expect(telia!.dominant_vat).toBe('standard_25')
     expect(telia!.cadence_days).toBeGreaterThanOrEqual(30)
+  })
+
+  it('names the cost account, not the moms row every invoice carries (crm#1310)', async () => {
+    const deep = await callRpc(companyId, null)
+    const programvara = deep.supplier_entities.find((e) => e.name === 'Programvara AB')
+    expect(programvara).toMatchObject({
+      occurrences: 2,
+      dominant_account_number: '5420',
+      dominant_account_count: 2,
+      // The moms and öresavrundning rows no longer count toward the total.
+      dominant_account_total: 2,
+      dominant_account_share: 0.75,
+    })
   })
 
   it('converts a foreign booking at the SEK value stored on the row', async () => {

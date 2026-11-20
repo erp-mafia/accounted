@@ -33,6 +33,21 @@ describe('buildSplitSelection', () => {
     expect(split.balanced).toBe(true)
   })
 
+  it('offers only the remainder of a verifikat other rows already settle in part', () => {
+    // je-2's +700 is half linked to another bank row: 350 is left of it.
+    const partial = [
+      ...lines.filter((l) => l.journal_entry_id !== 'je-2'),
+      { journal_entry_id: 'je-2', debit_amount: 700, credit_amount: 0, remaining_amount: '350.00' },
+    ]
+    const split = buildSplitSelection(partial, ['je-1', 'je-2'], 850)
+
+    expect(split.allocations).toEqual([
+      { journal_entry_id: 'je-1', amount: 500 },
+      { journal_entry_id: 'je-2', amount: 350 },
+    ])
+    expect(split.balanced).toBe(true)
+  })
+
   it('reports what an incomplete pick leaves unexplained', () => {
     const split = buildSplitSelection(lines, ['je-1', 'je-2'], 1500)
 

@@ -101,11 +101,11 @@ describe('deriveAgreement: loan', () => {
   })
 
   it('treats a convertible with compounding interest as a bullet loan: no monthly rows, the principal at maturity, no amortisation start', () => {
-    const convertible = payload({ lender_name: 'Propel Capital VII AB', lender_org_number: '5595138057', principal: 400000, interest_rate: 10, interest_terms: '10% per year, compounded, added to the Loan; payable on Maturity Date or upon Conversion', term_months: 24, disbursed_on: '2025-10-13', maturity_on: '2027-10-13', amortisation_free_months: 24 })
+    const convertible = payload({ lender_name: 'Exempel Kapital AB', lender_org_number: '5533557798', principal: 400000, interest_rate: 10, interest_terms: '10% per year, compounded, added to the Loan; payable on Maturity Date or upon Conversion', term_months: 24, disbursed_on: '2025-10-13', maturity_on: '2027-10-13', amortisation_free_months: 24 })
     const out = deriveAgreement({ schemaType: 'agreement.loan', payload: convertible, reviewFields: [], today: TODAY })!
     expect(out.agreement).toMatchObject({ amount: 400000, period: 'one_time', principal: 400000, endsOn: '2027-10-13' })
     expect(out.obligations).toEqual([])
-    expect(out.deadlines).toEqual([{ key: 'maturity', title: 'Lån Propel Capital VII AB förfaller till slutbetalning', dueOn: '2027-10-13', priority: 'important', fields: ['maturity_on'] }])
+    expect(out.deadlines).toEqual([{ key: 'maturity', title: 'Lån Exempel Kapital AB förfaller till slutbetalning', dueOn: '2027-10-13', priority: 'important', fields: ['maturity_on'] }])
     const soon = deriveAgreement({ schemaType: 'agreement.loan', payload: convertible, reviewFields: [], today: '2027-06-01' })!
     expect(soon.obligations).toEqual([{ kind: 'amortisation', dueOn: '2027-10-13', amount: 400000, currency: 'SEK', estimate: true, fields: ['principal', 'maturity_on'] }])
   })
@@ -173,12 +173,12 @@ describe('phase 6 kinds', () => {
   it('expects an investment to arrive at closing and a customer fee to arrive each period', () => {
     const investment = deriveAgreement({
       schemaType: 'agreement.investment',
-      payload: { investor_name: f('Propel VII AB'), investor_org_number: f('5595138057'), investment_amount: f(400000), closing_on: f('2026-10-13'), signed_on: f('2026-09-10') },
+      payload: { investor_name: f('Exempel Invest AB'), investor_org_number: f('5533557798'), investment_amount: f(400000), closing_on: f('2026-10-13'), signed_on: f('2026-09-10') },
       reviewFields: [],
       today,
     })!
     expect(investment.obligations).toEqual([{ kind: 'payment', dueOn: '2026-10-13', amount: 400000, currency: 'SEK', estimate: false, fields: ['investment_amount', 'closing_on'], direction: 'in' }])
-    expect(investment.deadlines[0]).toMatchObject({ key: 'closing', title: 'Tillträde för investeringen Propel VII AB' })
+    expect(investment.deadlines[0]).toMatchObject({ key: 'closing', title: 'Tillträde för investeringen Exempel Invest AB' })
 
     const customer = deriveAgreement({
       schemaType: 'agreement.customer',
@@ -194,35 +194,35 @@ describe('phase 6 kinds', () => {
   it('files an adherence agreement under the joining party, not as a second copy of the main agreement', () => {
     const adherence = deriveAgreement({
       schemaType: 'agreement.shareholder',
-      payload: { parties_summary: f('Boltonshield AB ansluter'), company_name: f('Arcim Technology AB'), adherence: f('yes'), adhering_party_name: f('Boltonshield AB'), adhering_party_org_number: f('5594605627') },
+      payload: { parties_summary: f('Partnerbolaget AB ansluter'), company_name: f('Exempelbolaget AB'), adherence: f('yes'), adhering_party_name: f('Partnerbolaget AB'), adhering_party_org_number: f('5522446680') },
       reviewFields: [],
       today,
     })!
-    expect(adherence.agreement).toMatchObject({ kind: 'shareholder', title: 'Anslutningsavtal Boltonshield AB till aktieägaravtal Arcim Technology AB', counterparty: { name: 'Boltonshield AB', orgNumber: '5594605627', hint: null } })
+    expect(adherence.agreement).toMatchObject({ kind: 'shareholder', title: 'Anslutningsavtal Partnerbolaget AB till aktieägaravtal Exempelbolaget AB', counterparty: { name: 'Partnerbolaget AB', orgNumber: '5522446680', hint: null } })
     const investment = deriveAgreement({
       schemaType: 'agreement.investment',
-      payload: { investor_name: f('Boltonshield AB'), investment_amount: f(1000000), adherence: f('yes') },
+      payload: { investor_name: f('Partnerbolaget AB'), investment_amount: f(1000000), adherence: f('yes') },
       reviewFields: [],
       today,
     })!
-    expect(investment.agreement.title).toBe('Investering Boltonshield AB (anslutning)')
+    expect(investment.agreement.title).toBe('Investering Partnerbolaget AB (anslutning)')
   })
 
   it('shows a counterparty name that is under review as a hint, never as a source', () => {
     const loan = deriveAgreement({
       schemaType: 'agreement.loan',
-      payload: { lender_name: f('Propel Capital VII AB'), lender_org_number: f('5595138057'), principal: f(400000), disbursed_on: f('2025-10-13'), interest_terms: f('10% compounded, added to the loan') },
+      payload: { lender_name: f('Exempel Kapital AB'), lender_org_number: f('5533557798'), principal: f(400000), disbursed_on: f('2025-10-13'), interest_terms: f('10% compounded, added to the loan') },
       reviewFields: ['lender_name'],
       today,
     })!
     // The hint names the title; the settled name stays null so no party is made from a disputed reading.
-    expect(loan.agreement).toMatchObject({ title: 'Lån Propel Capital VII AB', counterparty: { name: null, orgNumber: '5595138057', hint: 'Propel Capital VII AB' } })
+    expect(loan.agreement).toMatchObject({ title: 'Lån Exempel Kapital AB', counterparty: { name: null, orgNumber: '5533557798', hint: 'Exempel Kapital AB' } })
     expect(loan.agreement.sources).not.toHaveProperty('lender_name')
   })
 
   it('records a shareholders agreement and any other agreement without inventing payments', () => {
-    const sha = deriveAgreement({ schemaType: 'agreement.shareholder', payload: { parties_summary: f('A och B'), company_name: f('Arcim Technology AB'), effective_on: f('2026-01-01') }, reviewFields: [], today })!
-    expect(sha.agreement).toMatchObject({ kind: 'shareholder', title: 'Aktieägaravtal Arcim Technology AB', startsOn: '2026-01-01', amount: null })
+    const sha = deriveAgreement({ schemaType: 'agreement.shareholder', payload: { parties_summary: f('A och B'), company_name: f('Exempelbolaget AB'), effective_on: f('2026-01-01') }, reviewFields: [], today })!
+    expect(sha.agreement).toMatchObject({ kind: 'shareholder', title: 'Aktieägaravtal Exempelbolaget AB', startsOn: '2026-01-01', amount: null })
     expect(sha.obligations).toEqual([])
     const other = deriveAgreement({ schemaType: 'agreement.other', payload: { counterparty_name: f('Sting'), subject: f('Core-programmet'), amount: f(0), ends_on: f('2026-12-31'), notice_months: f(2) }, reviewFields: [], today })!
     expect(other.agreement).toMatchObject({ kind: 'other', title: 'Avtal Sting', period: 'one_time' })

@@ -106,6 +106,22 @@ export async function resolveReadAuth(
     }
   }
 
+  return resolveUserReadAuth(supabase, companyId, { userId: opts.userId })
+}
+
+/**
+ * The user-token half of resolveReadAuth, for reads no ombud role covers.
+ * AGI kvittens reads (arbetsgivardeklaration hantera redovisningsperiod) need
+ * "Registreringsombud arbetsgivardeklaration", which Accounted neither asks
+ * companies for nor tracks, so they always run on a member's own token. Routing
+ * them through the lasombud grant would send a skattekonto credential to the
+ * AGI API, and its 403 would then revoke the skattekonto grant.
+ */
+export async function resolveUserReadAuth(
+  supabase: SupabaseClient,
+  companyId: string,
+  opts: { userId?: string } = {}
+): Promise<ResolvedReadAuth> {
   // The caller's own token wins when it exists; any other member's active
   // token serves otherwise. Passing userId no longer short-circuits to "the
   // caller's row or nothing": a member who never connected used to resolve

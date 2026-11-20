@@ -32,7 +32,9 @@ const SRE = (name: [string, string], gross: number, tax: number, avgifter: numbe
   tax_withheld: tax,
   net_salary: gross - tax,
   avgifter_amount: avgifter,
+  avgifter_basis: gross,
   avgifter_rate: 0.3142,
+  avgifter_category: 'standard',
   vacation_accrual: vacation,
   vacation_accrual_avgifter: 0,
   sick_days: 0,
@@ -86,6 +88,7 @@ describe('buildSalaryRunUnderlag', () => {
   it('carries the per-employee lönejournal figures, totals and the posted verifikat with account names', async () => {
     enqueue({ data: BOOKED_RUN }) // salary_runs
     enqueue({ data: { name: 'Gammalt Namn AB', org_number: '556677-8899' } }) // companies
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings: the number's reader
     enqueue({
       data: [SRE(['Örjan', 'Berg'], 40000, 12000, 12568, 4800), SRE(['Anna', 'Ek'], 30000, 9000, 9426, 3600)],
     }) // salary_run_employees
@@ -102,7 +105,7 @@ describe('buildSalaryRunUnderlag', () => {
     if (!result.ok) return
     const data = result.data
 
-    // Current company name, as on the payslip; org number from companies.
+    // Current company name, as on the payslip; org number from the one reader.
     expect(data.companyName).toBe('Testbolaget AB')
     expect(data.companyOrgNumber).toBe('556677-8899')
     expect(data.generatedAt).toBe('2026-09-01T10:00:00.000Z')
@@ -116,9 +119,11 @@ describe('buildSalaryRunUnderlag', () => {
     expect(data.totals.netSalary).toBe(49000)
     expect(data.totals.avgifterAmount).toBe(21994)
     expect(data.totals.vacationAccrual).toBe(8400)
+    // Whole-krona salaries: the öre-exact avgift already is the declared one.
+    expect(data.declaredAvgifter).toBeNull()
 
     expect(data.entries).toHaveLength(2)
-    expect(data.entries[0].voucher).toBe('L-8')
+    expect(data.entries[0].voucher).toBe('L8')
     expect(data.entries[0].lines[0]).toEqual({
       account_number: '7210',
       account_name: 'Löner till tjänstemän',
@@ -137,23 +142,41 @@ describe('buildSalaryRunUnderlag', () => {
     expect(findCall('chart_of_accounts', 'in')).toEqual(['account_number', ['7210', '2710', '1930', '7510', '2731']])
   })
 
+  it('carries the whole-krona avgift the AGI declares when it differs from the öre-exact total (crm#1149)', async () => {
+    enqueue({ data: { ...BOOKED_RUN, calculation_params: { avgifterTotal: 0.3142 } } })
+    enqueue({ data: { name: 'X AB', org_number: '556677-8899' } })
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings: the number's reader
+    // 3 456,78 × 31,42 % = 1 086,12 öre-exact; the AGI declares
+    // trunc(3 456 × 31,42 %) = 1 085.
+    enqueue({ data: [SRE(['Anna', 'Ek'], 3456.78, 0, 1086.12, 0)] })
+    enqueue({ data: POSTED })
+    enqueue({ data: [] })
+    const result = await buildSalaryRunUnderlag(db, 'company-1', 'run-1')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.totals.avgifterAmount).toBe(1086.12)
+    expect(result.data.declaredAvgifter).toBe(1085)
+  })
+
   it('prints a corrected run with its original verifikat: the correction keeps the entry ids on the run', async () => {
     // lib/salary/correct-run.ts only flips status to 'corrected' and storno-
     // reverses the entries; the run's *_entry_id columns stay, so the
     // underlag still names the vouchers it was booked with.
     enqueue({ data: { ...BOOKED_RUN, status: 'corrected' } })
     enqueue({ data: { name: 'X AB', org_number: '556677-8899' } })
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings: the number's reader
     enqueue({ data: [] })
     enqueue({ data: POSTED })
     enqueue({ data: [] })
     const corrected = await buildSalaryRunUnderlag(db, 'company-1', 'run-1')
     expect(corrected.ok && corrected.data.corrected).toBe(true)
-    expect(corrected.ok && corrected.data.entries.map((e) => e.voucher)).toEqual(['L-8', 'L-9'])
+    expect(corrected.ok && corrected.data.entries.map((e) => e.voucher)).toEqual(['L8', 'L9'])
   })
 
   it('marks a correction run, and skips the account-name lookup when nothing was posted', async () => {
     enqueue({ data: { ...BOOKED_RUN, is_correction: true, salary_entry_id: null, avgifter_entry_id: null } })
     enqueue({ data: { name: 'X AB', org_number: '556677-8899' } })
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings: the number's reader
     enqueue({ data: [] })
     enqueue({ data: [] })
     const correction = await buildSalaryRunUnderlag(db, 'company-1', 'run-1')
@@ -165,6 +188,7 @@ describe('buildSalaryRunUnderlag', () => {
   it('throws when the posted-voucher lookup fails, never prints an underlag without its verifikat', async () => {
     enqueue({ data: BOOKED_RUN })
     enqueue({ data: { name: 'X AB', org_number: '556677-8899' } })
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings: the number's reader
     enqueue({ data: [] })
     enqueue({ data: null, error: { message: 'rls denied' } }) // journal_entries
     await expect(buildSalaryRunUnderlag(db, 'company-1', 'run-1')).rejects.toThrow(

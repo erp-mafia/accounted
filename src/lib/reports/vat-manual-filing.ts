@@ -23,17 +23,21 @@ const OUTPUT_VAT_RUTOR: (keyof VatDeclarationRutor)[] = [
 
 /**
  * The rutor exactly as they are filed at Skatteverket: every ruta truncated to
- * a whole krona (öretal faller bort per SFL 22 kap 1 §: dropped, not rounded to
- * nearest) and the ruta 49 net recomputed from those truncated output/input
- * rutor rather than from the pre-computed öre value, so the arithmetic ties out
- * exactly to what is filed. This is NOT bookkeeping math (nothing here is
- * posted), so the öre-precision money rule (Math.round(x*100)/100) does not
- * apply; it mirrors the SRU income-tax path, which drops öre under the same
- * statute.
+ * a whole krona (öretal faller bort per SFF 2011:1261 22 kap. 1 §: dropped,
+ * not rounded to nearest) and the ruta 49 net recomputed from those truncated
+ * output/input rutor rather than from the pre-computed öre value, so the
+ * arithmetic ties out exactly to what is filed. This is NOT bookkeeping math
+ * (nothing here is posted), so the öre-precision money rule
+ * (Math.round(x*100)/100) does not apply; it mirrors the SRU income-tax path,
+ * which drops öre under the same rule.
  *
- * This is the single source of truth for the whole-krona amounts shared by the
- * manual-filing PDF (buildManualFilingRows) and the eSKD XML file
- * (lib/reports/vat-eskd-file.ts), so the two can never disagree.
+ * This is the single source of truth for the whole-krona amounts of a
+ * momsdeklaration. Every output takes them from here and none computes its
+ * own: the manual-filing PDF (buildManualFilingRows), the eSKD XML file
+ * (lib/reports/vat-eskd-file.ts), the settlement proposal's net on 2650/1650
+ * (lib/reports/vat-settlement.ts) and the payload the Skatteverket integration
+ * files (rutorToMomsuppgift in the skatteverket extension). A second rule in
+ * any of them files one amount and books another.
  */
 export function buildFiledAmounts(rutor: VatDeclarationRutor): {
   /** Every ruta truncated to whole kronor. ruta49 carries its sign (negative = återfå). */
@@ -41,7 +45,8 @@ export function buildFiledAmounts(rutor: VatDeclarationRutor): {
   /** The recomputed ruta 49 net, signed: positive = att betala, negative = att återfå. */
   net: number
 } {
-  // Truncate toward zero: öretal faller bort (SFL 22 kap 1 §), never round up.
+  // Truncate toward zero: öretal faller bort (SFF 2011:1261 22 kap. 1 §), never
+  // round up, and a negative ruta never gains a krona (-100,75 files as -100).
   const kr = (key: keyof VatDeclarationRutor): number => Math.trunc(rutor[key] ?? 0)
 
   const outputVat = OUTPUT_VAT_RUTOR.reduce((sum, key) => sum + kr(key), 0)
@@ -62,14 +67,14 @@ export function buildFiledAmounts(rutor: VatDeclarationRutor): {
  * hela kronor.
  *
  * Skatteverket files whole kronor with no öre, so each ruta is truncated to a
- * whole krona (öretal faller bort per SFL 22 kap 1 §: the öre are dropped, not
- * rounded to nearest) and ruta 49 (the net) is recomputed from the truncated
- * output/input rutor, not from the pre-computed öre value, so the document's
- * arithmetic ties out exactly to what the user types into the form. This
- * whole-krona truncation is intentional and specific to the filing document; it
- * is NOT bookkeeping math (nothing here is posted), so the usual öre-precision
- * money rule (Math.round(x*100)/100) does not apply. It also matches the SRU
- * income-tax filing path, which drops öre under the same statute.
+ * whole krona (öretal faller bort per SFF 2011:1261 22 kap. 1 §: the öre are
+ * dropped, not rounded to nearest) and ruta 49 (the net) is recomputed from the
+ * truncated output/input rutor, not from the pre-computed öre value, so the
+ * document's arithmetic ties out exactly to what the user types into the form.
+ * This whole-krona truncation is intentional and specific to the filing
+ * document; it is NOT bookkeeping math (nothing here is posted), so the usual
+ * öre-precision money rule (Math.round(x*100)/100) does not apply. It also
+ * matches the SRU income-tax filing path, which drops öre under the same rule.
  *
  * Only populated rutor are included, plus ruta 48 and the ruta 49 net (always),
  * so a manual filer sees every box that needs a value and nothing that doesn't.

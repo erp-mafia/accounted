@@ -4,6 +4,18 @@ audience: developer
 
 # Peppol Network Architecture, AS4, SMP, SML, PKI
 
+## Contents
+
+- The four-corner model
+- SML, Service Metadata Locator
+- SMP, Service Metadata Publisher
+- AS4 transport
+- PKI, G2 to G3 migration
+- Identifier schemes (ICD / EAS codes)
+- Becoming a Peppol Service Provider, the operational path
+- Swedish Peppol traffic statistics (Q4 2025, published by DIGG before the handover)
+- Authoritative source list
+
 ## The four-corner model
 
 Standard Peppol routing:

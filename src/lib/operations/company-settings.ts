@@ -32,6 +32,7 @@ import {
   getCompanySettings,
   updateCompanySettings,
   type CompanySettingsChanges,
+  type UpdateCompanySettingsOptions,
 } from '@/lib/company/settings-service'
 import {
   refineInvoiceSettings,
@@ -39,9 +40,10 @@ import {
 } from '@/lib/pending-operations/schemas/company-settings'
 import { defineOperation, type OperationContext, type OperationOutcome, type OperationWarning } from './types'
 import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
-import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { INVOICE_QR_MODES } from '@/types'
+import { maskPersonnummer } from '@/lib/salary/personnummer-format'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 
 const S = UpdateSettingsSchema.shape
 
@@ -72,6 +74,10 @@ export const GENERAL_SETTINGS_FIELDS = [
   'swish',
   'iban',
   'bic',
+  'swedbank_signer_id',
+  'swedbank_corporate_pay_id',
+  'nordea_signer_id',
+  'nordea_agreement_id',
   'invoice_payment_accounts',
   'invoice_prefix',
   'next_invoice_number',
@@ -86,10 +92,13 @@ export const GENERAL_SETTINGS_FIELDS = [
   'invoice_show_payment_qr',
   'invoice_qr_mode',
   'invoice_show_logo',
+  'invoice_show_article_number',
   'invoice_show_company_name',
   'invoice_company_name_position',
   'invoice_late_fee_text',
   'invoice_credit_terms_text',
+  'invoice_late_fee_text_en',
+  'invoice_credit_terms_text_en',
   'invoice_payment_links_enabled',
   'invoice_email_texts',
   'invoice_email_cc_addresses',
@@ -119,6 +128,9 @@ export const GENERAL_SETTINGS_FIELDS = [
   'proforma_enabled',
   'recurring_invoices_enabled',
   'self_billing_enabled',
+  'self_billing_prefix',
+  'next_self_billing_number',
+  'self_billing_acceptance_text',
   'salary_vacation_year_basis',
 ] as const
 
@@ -183,16 +195,14 @@ export function toSettingsResource(companyId: string, row: SettingsRow): Record<
  * An enskild firma's org number is the owner's personnummer (GDPR Art. 5(1)(c)
  * data minimisation): this read also feeds MCP, i.e. an agent's context, so
  * the birth date is kept and the last four digits (sex and checksum) are
- * masked, the same rule as maskPersonnummer on v1 rosters. An unknown legal
- * form is treated as a person. A legal person's org number is public.
+ * masked: maskPersonnummer, the one display form. An unknown legal form is
+ * treated as a person. A legal person's org number is public.
  */
 function minimizedOrgNumber(orgNumber: unknown, entityType: unknown): string | null {
   if (typeof orgNumber !== 'string' || orgNumber === '') return null
   const form = typeof entityType === 'string' ? parseEntityType(entityType) : null
   if (form && !usesPersonnummerAsOrgNumber(form)) return orgNumber
-  const digits = orgNumber.replace(/\D/g, '')
-  if (digits.length !== 10 && digits.length !== 12) return 'XXXXXXXXXX'
-  return `${digits.slice(0, digits.length - 4)}XXXX`
+  return maskPersonnummer(orgNumber)
 }
 
 /** A column-keyed map under public names (default_our_reference is contact_person). */
@@ -223,10 +233,13 @@ const SettingsResource = z.object({
     [
       'company_name', 'address_line1', 'address_line2', 'postal_code', 'city', 'registered_office', 'country', 'phone', 'email',
       'website', 'tax_contact_name', 'tax_contact_phone', 'tax_contact_email', 'bank_name', 'clearing_number',
-      'account_number', 'bankgiro', 'plusgiro', 'swish', 'iban', 'bic', 'invoice_prefix', 'invoice_default_notes',
+      'account_number', 'bankgiro', 'plusgiro', 'swish', 'iban', 'bic', 'swedbank_signer_id',
+      'swedbank_corporate_pay_id', 'nordea_signer_id', 'nordea_agreement_id', 'invoice_prefix', 'invoice_default_notes',
       'invoice_company_name_position', 'invoice_late_fee_text', 'invoice_credit_terms_text',
+      'invoice_late_fee_text_en', 'invoice_credit_terms_text_en',
       'invoice_email_reply_to', 'invoice_primary_color', 'invoice_accent_color', 'invoice_font_family',
       'invoice_header_text', 'invoice_footer_text', 'default_voucher_series', 'sector_slug',
+      'self_billing_prefix', 'self_billing_acceptance_text',
       'salary_vacation_year_basis', 'vat_number', 'moms_period', 'vat_filing_method',
       'periodisk_sammanstallning_period', 'periodisk_sammanstallning_filing_method', 'accounting_method',
       'bookkeeping_locked_through',
@@ -235,7 +248,7 @@ const SettingsResource = z.object({
   ...Object.fromEntries(
     [
       'ore_rounding', 'invoice_show_ocr', 'invoice_show_bankgiro', 'invoice_show_plusgiro', 'invoice_show_swish',
-      'invoice_show_payment_qr', 'invoice_show_logo', 'invoice_show_company_name', 'invoice_payment_links_enabled', 'send_invoice_reminders',
+      'invoice_show_payment_qr', 'invoice_show_logo', 'invoice_show_article_number', 'invoice_show_company_name', 'invoice_payment_links_enabled', 'send_invoice_reminders',
       'reminder_fee_enabled', 'dimensions_enabled', 'mileage_enabled', 'sales_orders_enabled',
       'quotes_enabled', 'proforma_enabled', 'recurring_invoices_enabled', 'self_billing_enabled', 'f_skatt',
       'vat_registered', 'vat_taxable_base_over_40m', 'vat_has_eu_trade', 'periodisk_sammanstallning_enabled',
@@ -249,6 +262,7 @@ const SettingsResource = z.object({
       'next_invoice_number', 'next_arrival_number', 'invoice_default_days', 'reminder_days_level_1',
       'reminder_days_level_2', 'reminder_days_level_3', 'reminder_fee_amount', 'reminder_interest_rate_override',
       'fiscal_year_start_month', 'preliminary_tax_monthly', 'aktiekapital', 'antal_aktier', 'auto_lock_period_days',
+      'next_self_billing_number',
     ].map((key) => [key, nullableNumber]),
   ),
   ...Object.fromEntries(
@@ -257,6 +271,11 @@ const SettingsResource = z.object({
       'reminder_text_overrides', 'default_voucher_series_per_source_type', 'voucher_series_labels',
     ].map((key) => [key, json]),
   ),
+})
+
+/** settings.get only: the update operations neither take nor return the inbox address. */
+const SettingsReadResource = SettingsResource.extend({
+  inbox_address: z.string().nullable().describe('The document inbox address: mail sent or forwarded here becomes an inbox item. Null when the company has no inbox.'),
 })
 
 const atLeastOneField = (value: Record<string, unknown>) =>
@@ -274,8 +293,16 @@ async function runSettingsWrite(
   ctx: OperationContext,
   changes: CompanySettingsChanges,
   dryRun: boolean,
+  options: Pick<UpdateCompanySettingsOptions, 'refuseReopeningFiledVat'> = {},
 ): Promise<OperationOutcome<{ resource: Record<string, unknown>; deadlines_regenerated: boolean }>> {
-  const outcome = await updateCompanySettings(ctx, changes, { dryRun })
+  // A staged change (MCP, ?stage=true) runs here when it is approved.
+  const via = ctx.pendingOperationId ? 'approval' : 'api'
+  const outcome = await updateCompanySettings(ctx, changes, {
+    ...options,
+    dryRun,
+    via,
+    findReopenedFiledVatPeriods: filedVatPeriodsReopenedBy,
+  })
   if (!outcome.ok) return outcome
   if (outcome.dryRun) {
     const preview = outcome.preview
@@ -313,7 +340,7 @@ export const settingsGet = defineOperation({
   docs: {
     summary: 'Read the company settings.',
     description:
-      'Returns every company setting the API can write: contact and address, invoice payment details and layout, invoice email texts and recipients, reminders, voucher series, feature toggles, the tax profile (VAT/moms, F-skatt, employer registration, fiscal year, accounting method, share capital) and the bookkeeping lock, plus the fixed legal identity (entity_type, org_number). contact_person is the default "Vår referens" on new invoices.',
+      'Returns every company setting the API can write: contact and address, invoice payment details and layout, invoice email texts and recipients, reminders, voucher series, feature toggles, the tax profile (VAT/moms, F-skatt, employer registration, fiscal year, accounting method, share capital) and the bookkeeping lock, plus the fixed legal identity (entity_type, org_number) and the document inbox address (inbox_address). contact_person is the default "Vår referens" on new invoices.',
     useWhen:
       'Before creating invoices (payment details must exist), before any settings change, or to learn how the books are kept (accounting_method: accrual = faktureringsmetoden, cash = kontantmetoden; moms_period).',
     doNotUseFor:
@@ -340,7 +367,7 @@ export const settingsGet = defineOperation({
     },
   },
   input: z.object({}),
-  output: SettingsResource,
+  output: SettingsReadResource,
   errorCodes: ['NOT_FOUND'],
   http: { method: 'GET', path: SETTINGS_PATH },
   mcp: {
@@ -351,9 +378,15 @@ export const settingsGet = defineOperation({
     keywords: ['inställningar', 'företagsinställningar', 'momsperiod', 'bokföringsmetod', 'bankgiro'],
   },
   run: async (ctx) => {
-    const outcome = await getCompanySettings(ctx)
+    // The inbox address rides along: the MCP briefing has carried it since
+    // crm#1174, and a partner portal that shows it to the customer had no
+    // read of it. A failed address read is null, never a failed settings read.
+    const [outcome, inboxAddress] = await Promise.all([
+      getCompanySettings(ctx),
+      resolveInboxAddress(ctx.supabase, ctx.companyId),
+    ])
     if (!outcome.ok || outcome.dryRun) return outcome
-    return { ok: true, data: toSettingsResource(ctx.companyId, outcome.data) }
+    return { ok: true, data: { ...toSettingsResource(ctx.companyId, outcome.data), inbox_address: inboxAddress } }
   },
 })
 
@@ -363,6 +396,18 @@ const GeneralSettingsInput = z
     contact_person: S.default_our_reference.describe('Default "Vår referens" on new invoices. Null clears it.'),
     bankgiro: S.bankgiro.describe('7-8 digit Bankgiro with a valid Luhn check digit. Null or empty string clears it.'),
     plusgiro: S.plusgiro.describe('Plusgiro with hyphen and a valid Luhn check digit. Null or empty string clears it.'),
+    swedbank_signer_id: S.swedbank_signer_id.describe(
+      'Swedbank SignerID, format 123456789ORI0001, assigned by Swedbank. Written as the initiating party of the pain.001 payment files (supplier payments, tax payments, salaries) of a company whose bank is Swedbank or a savings bank; Swedbank refuses such a file without it. Null or empty string clears it.',
+    ),
+    swedbank_corporate_pay_id: S.swedbank_corporate_pay_id.describe(
+      'Swedbank Corporate Pay agreement id, format 123456789CPO0001, assigned by Swedbank. Written as the debtor id of the pain.001 payment files of a Swedbank company; required together with swedbank_signer_id. Null or empty string clears it.',
+    ),
+    nordea_signer_id: S.nordea_signer_id.describe(
+      'Nordea Signer ID, letters and digits (for example NB10000123456), agreed with or assigned by Nordea; Nordea shows it when it refuses a file for the wrong Signer ID. Written as the initiating party (SchmeNm CUST) of the pain.001 payment files (supplier payments, tax payments, salaries) of a company whose bank is Nordea; Nordea refuses such a file without it. Spaces and hyphens are dropped and letters upper-cased. Null or empty string clears it.',
+    ),
+    nordea_agreement_id: S.nordea_agreement_id.describe(
+      'Nordea CCM (Corporate Cash Management) agreement id, letters and digits, assigned by Nordea: at Nordea Business it starts with NB (for example NB123456). Written as the debtor id (SchmeNm BANK) of the pain.001 payment files of a company whose bank is Nordea; required together with nordea_signer_id, and Nordea rejects a file without it. Spaces and hyphens are dropped and letters upper-cased. Null or empty string clears it.',
+    ),
     invoice_email_texts: S.invoice_email_texts.describe(
       'Per-language (sv, en) overrides of subject, greeting, body, signoff. Placeholders: {fakturanummer} {kundnamn} {förnamn} {företag} {förfallodatum} {belopp}. Null clears every override.',
     ),
@@ -383,7 +428,7 @@ export const settingsUpdate = defineOperation({
   docs: {
     summary: 'Partially update company settings (contact, invoicing, reminders, voucher series, toggles).',
     description:
-      'Patches any subset of the non-legal company settings: contact and address, invoice payment details (bank account, Bankgiro, Plusgiro, Swish, IBAN/BIC, per-currency payment accounts), invoice numbering, layout and branding, invoice email texts and fixed copy recipients, reminders, voucher series, feature toggles and the vacation-year basis. Same rules as the settings page. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+      'Patches any subset of the non-legal company settings: contact and address, invoice payment details (bank account, Bankgiro, Plusgiro, Swish, IBAN/BIC, per-currency payment accounts), the Swedbank SignerID and Corporate Pay id for payment files, invoice numbering, layout and branding, invoice email texts and fixed copy recipients, reminders, voucher series, feature toggles and the vacation-year basis. Same rules as the settings page. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
     useWhen:
       'The payment or contact details on invoices change, invoice texts or reminders should be adjusted, or a feature should be switched on or off.',
     doNotUseFor:
@@ -392,6 +437,7 @@ export const settingsUpdate = defineOperation({
       'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.',
       'contact_person is stored as default_our_reference: the default "Vår referens" on new invoices.',
       'bankgiro and plusgiro must carry a valid Luhn check digit; null or empty string clears them.',
+      'iban and bic are what SEK invoices print. The salary, supplier and tax payment files pay from the account the salary is booked on (the primary bank account) with that account\'s own IBAN; they use iban and bic from here only when that account has no IBAN and is the company\'s only SEK bank account, or the company has no bank accounts. The bankgiro here is the sender of a Bankgirot LB file.',
       'invoice_email_texts only accepts the placeholders {fakturanummer} {kundnamn} {förnamn} {företag} {förfallodatum} {belopp}.',
       'reminder_days_level_1 < _2 < _3 must hold after the change (stored values fill in the ones not sent).',
       'The booking engine reads default_voucher_series_per_source_type, not default_voucher_series: send the map to move bookings to another series.',
@@ -440,58 +486,17 @@ export const settingsUpdate = defineOperation({
 })
 
 const TaxProfileInput = z
-  .object(pickShape(S, TAX_PROFILE_FIELDS))
+  .object({
+    ...pickShape(S, TAX_PROFILE_FIELDS),
+    accounting_method_correction_reason: S.accounting_method_correction_reason.describe(
+      'Needed to change accounting_method in a fiscal year with posted verifikat: why the setting was wrong (a correction, recorded in the behandlingshistorik).',
+    ),
+  })
   .strict()
   .superRefine((value, ctx) => {
-    if (!atLeastOneField(value)) ctx.addIssue({ code: 'custom', message: AT_LEAST_ONE })
+    const { accounting_method_correction_reason: _reason, ...fields } = value
+    if (!atLeastOneField(fields)) ctx.addIssue({ code: 'custom', message: AT_LEAST_ONE })
   })
-
-/**
- * The accounting method (kontantmetoden or faktureringsmetoden) governs a
- * whole fiscal year: BFL 5 kap 2 § lets a small business book at payment,
- * but every receivable and payable unpaid at year-end is booked anyway, and
- * on the VAT side a move to bokslutsmetoden needs Skatteverket (ML 7 kap
- * 17 §). A switch in the middle of a year with bookings leaves the year kept
- * under two methods. Over the API an agent may therefore switch only while
- * the current fiscal year has no posted verifikat (the onboarding fix of a
- * wrong choice); later the change belongs to a person, at a year boundary.
- */
-async function refuseMidYearMethodChange(
-  ctx: OperationContext,
-  requested: string | null | undefined,
-): Promise<Extract<OperationOutcome<never>, { ok: false }> | null> {
-  if (requested === undefined || requested === null) return null
-  const { data: current } = await ctx.supabase
-    .from('company_settings')
-    .select('accounting_method')
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  if (((current?.accounting_method as string | null | undefined) ?? 'accrual') === requested) return null
-
-  const today = todayIsoStockholm()
-  const { data: period } = await ctx.supabase
-    .from('fiscal_periods')
-    .select('id, name, period_start, period_end')
-    .eq('company_id', ctx.companyId)
-    .lte('period_start', today)
-    .gte('period_end', today)
-    .maybeSingle()
-  if (!period) return null
-
-  const { count } = await ctx.supabase
-    .from('journal_entries')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', ctx.companyId)
-    .eq('fiscal_period_id', period.id as string)
-    .eq('status', 'posted')
-  if (!count) return null
-  return {
-    ok: false,
-    code: 'ACCOUNTING_METHOD_CHANGE_MID_YEAR',
-    details: { fiscal_period_id: period.id, fiscal_year: period.name, posted_entries: count },
-    messageSv: `Bokföringsmetoden kan inte bytas mitt i räkenskapsåret ${String(period.name)}: det finns ${count} bokförda verifikationer. Byt inför nästa räkenskapsår i inställningarna.`,
-  }
-}
 
 export const settingsUpdateTaxProfile = defineOperation({
   id: 'settings.update-tax-profile',
@@ -504,7 +509,7 @@ export const settingsUpdateTaxProfile = defineOperation({
     description:
       'Patches the settings that decide how the books are kept and declared: VAT registration, VAT number and moms period, EU trade and periodisk sammanställning, F-skatt, preliminary tax, employer registration, fiscal year start month, accounting method (faktureringsmetoden/kontantmetoden), deferred invoice booking, share capital and the optional deadline reminders. Runs the settings page rules and, like it, regenerates the tax deadlines. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
     useWhen:
-      'The company registered or deregistered for VAT or as an employer, Skatteverket changed its moms period, or the fiscal year or accounting method was changed with the authorities.',
+      'The company registered or deregistered for VAT or as an employer, Skatteverket changed its moms period, the fiscal year or accounting method was changed with the authorities, or an accounting method set wrong at onboarding is corrected.',
     doNotUseFor:
       'Invoice, contact or payment details (PATCH /settings), the bookkeeping lock (PATCH /settings/bookkeeping-lock), entity type or org number (fixed).',
     pitfalls: [
@@ -517,7 +522,7 @@ export const settingsUpdateTaxProfile = defineOperation({
       'aktiekapital and antal_aktier are set or cleared together.',
       'accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).',
       'defer_invoice_booking=true: sent customer invoices and registered supplier invoices get no verifikat until they are booked with POST /invoices/{id}/book (or /invoices/bulk-book) and POST /supplier-invoices/{id}/book.',
-      'accounting_method can only change while the current fiscal year has no posted verifikat (409 ACCOUNTING_METHOD_CHANGE_MID_YEAR): the method governs the whole year (BFL 5 kap 2 §), and for VAT a move to bokslutsmetoden also needs Skatteverket (ML 7 kap 17 §).',
+      'accounting_method never changes while an open invoice has no verifikat of its own (409 ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES). Otherwise it changes freely only while the current fiscal year has no posted verifikat; later it is a correction of a wrong setting: send accounting_method_correction_reason (else 409 ACCOUNTING_METHOD_CHANGE_MID_YEAR). The method governs the whole year (BFL 5 kap 2 §); a real move to bokslutsmetoden needs Skatteverket first (ML 7 kap 17 §).',
     ],
     example: {
       request: { vat_registered: true, vat_number: 'SE556677889901', moms_period: 'quarterly' },
@@ -547,6 +552,7 @@ export const settingsUpdateTaxProfile = defineOperation({
     'SETTINGS_VAT_40M_REQUIRES_MONTHLY',
     'SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE',
     'ACCOUNTING_METHOD_CHANGE_MID_YEAR',
+    'ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES',
   ],
   http: { method: 'PATCH', path: `${SETTINGS_PATH}/tax-profile` },
   mcp: {
@@ -558,8 +564,6 @@ export const settingsUpdateTaxProfile = defineOperation({
     stage: { pendingType: 'update_company_tax_profile', title: () => 'Ändra skatte- och momsuppgifter' },
   },
   run: async (ctx, input, { dryRun }) => {
-    const refused = await refuseMidYearMethodChange(ctx, input.accounting_method)
-    if (refused) return refused
     const outcome = await runSettingsWrite(ctx, input, dryRun)
     if (!outcome.ok || outcome.dryRun) return outcome
     return {
@@ -576,7 +580,7 @@ const BookkeepingLockInput = z
       'Lock every date on or before this one (YYYY-MM-DD). Null removes the lock.',
     ),
     auto_lock_period_days: S.auto_lock_period_days.describe(
-      'Lock each month automatically this many days after it ends (the settings page offers 30, 60, 90). Null turns it off.',
+      'Lock each calendar month automatically this many days after it ends (the settings page offers 30, 60, 90): every night bookkeeping_locked_through is moved forward to the newest month end that many days back, never back. A number above 36500 is stored and locks nothing. Null turns it off.',
     ),
     acknowledge_filed_vat_periods: z
       .boolean()
@@ -600,14 +604,15 @@ export const settingsUpdateBookkeepingLock = defineOperation({
   docs: {
     summary: 'Set, move or remove the company-wide bookkeeping lock date.',
     description:
-      'Sets bookkeeping_locked_through (nothing dated on or before it can be booked, corrected or attached) and auto_lock_period_days. Moving the date back or clearing it reopens those dates, exactly as the settings page allows; the response then carries the warning BOOKKEEPING_LOCK_MOVED_BACKWARDS. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+      'Sets bookkeeping_locked_through (nothing dated on or before it can be booked, corrected or attached) and auto_lock_period_days. Moving the date back or clearing it reopens those dates, exactly as the settings page allows; the response then carries the warning BOOKKEEPING_LOCK_MOVED_BACKWARDS. A change of the stored date emits the period.lock_date_changed webhook. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
     useWhen: 'A period is reconciled and filed and should be protected, or a locked date must be reopened for a correction.',
     doNotUseFor:
       'Locking or closing a single fiscal period (POST /fiscal-periods/{id}/lock, /close), or correcting a posted verifikat (storno or rättelse).',
     pitfalls: [
       'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.',
-      'Refused while an SIE import is still holding a fiscal period (finish the import first).',
+      'Locking more (a first lock date, or a later one) is refused while an SIE import is still holding a fiscal period (finish the import first). Moving the date back or removing it is always allowed: that is how an SIE undo stopped by the lock date continues.',
       'A backwards move is allowed but high risk. When it reopens a filed momsdeklaration period it is refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT (details.filed_periods) unless acknowledge_filed_vat_periods is true: reopen a filed period only to book a correction and file a corrected declaration for it.',
+      'While auto_lock_period_days is set, a lock date moved back is moved forward again the next night (the automatic lock is a floor). Set auto_lock_period_days to null first to keep the dates open longer.',
     ],
     example: {
       request: { bookkeeping_locked_through: '2026-06-30' },
@@ -642,45 +647,18 @@ export const settingsUpdateBookkeepingLock = defineOperation({
     },
   },
   run: async (ctx, { acknowledge_filed_vat_periods: acknowledged, ...input }, { dryRun }) => {
-    let reopenedWarning: OperationWarning | null = null
-    if (input.bookkeeping_locked_through !== undefined) {
-      const { data: current } = await ctx.supabase
-        .from('company_settings')
-        .select('bookkeeping_locked_through')
-        .eq('company_id', ctx.companyId)
-        .maybeSingle()
-      const before = (current?.bookkeeping_locked_through as string | null | undefined) ?? null
-      const reopened = await filedVatPeriodsReopenedBy(
-        ctx.supabase,
-        ctx.companyId,
-        before,
-        input.bookkeeping_locked_through ?? null,
-      )
-      if (reopened.length > 0) {
-        const names = reopened.map((p) => p.tax_period).join(', ')
-        if (acknowledged !== true) {
-          return {
-            ok: false,
-            code: 'BOOKKEEPING_LOCK_REOPENS_FILED_VAT',
-            details: { filed_periods: reopened, acknowledge_with: 'acknowledge_filed_vat_periods' },
-            messageSv: `Låsdatumet skulle öppna momsperioder som redan är deklarerade (${names}). Bekräfta med acknowledge_filed_vat_periods om en rättelse ska bokföras där.`,
-          }
-        }
-        reopenedWarning = {
-          code: 'BOOKKEEPING_LOCK_REOPENED_FILED_VAT',
-          message_sv: `Deklarerade momsperioder öppnades igen (${names}). Bokför rättelsen och lämna en rättad momsdeklaration för perioden.`,
-          message_en: `Filed VAT periods were reopened (${names}). Book the correction and file a corrected VAT return for the period.`,
-        }
-      }
-    }
-    const outcome = await runSettingsWrite(ctx, input, dryRun)
+    // The service works out the filed periods a move reopens; this door
+    // refuses them until the caller acknowledges them.
+    const outcome = await runSettingsWrite(ctx, input, dryRun, { refuseReopeningFiledVat: acknowledged !== true })
     if (!outcome.ok) return outcome
     if (outcome.dryRun) {
-      return reopenedWarning
-        ? { ...outcome, preview: { ...outcome.preview, reopened_filed_vat_periods: reopenedWarning.message_en } }
+      const reopened = (outcome.preview.warnings as OperationWarning[] | undefined)?.find(
+        (warning) => warning.code === 'BOOKKEEPING_LOCK_REOPENED_FILED_VAT',
+      )
+      return reopened
+        ? { ...outcome, preview: { ...outcome.preview, reopened_filed_vat_periods: reopened.message_en } }
         : outcome
     }
-    const warnings = [...(outcome.warnings ?? []), ...(reopenedWarning ? [reopenedWarning] : [])]
-    return { ok: true, data: outcome.data.resource, ...(warnings.length > 0 ? { warnings } : {}) }
+    return { ok: true, data: outcome.data.resource, ...(outcome.warnings ? { warnings: outcome.warnings } : {}) }
   },
 })

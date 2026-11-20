@@ -5,26 +5,31 @@ import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { buildSIEAccountRows } from './account-sync'
 import { mappingsToMap } from './account-mapper'
 import { collectSIEDimensionUsage } from './sie-dimensions'
-import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, importVouchers, resolveAccumulatingDimensions, validateIBBalance } from './sie-import'
+import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, resultClosingMovementsOf, seriesNumberedInOrder, validateIBBalance,
+  type SIEPendingNumberGaps } from './sie-import'
 import { getEffectiveObjectOpeningBalances, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, parseSIEFile,
   selectObjectOpeningBalances, type ObjectOpeningBalanceSource } from './sie-parser'
 import { dimensionBagKey } from '@/lib/bookkeeping/dimension-carry'
+import { dimensionValueSnapshot, emitDimensionValuesCreated, type DimensionValueRow } from '@/lib/dimensions/value-events'
 import { validateEntryDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { DimensionValidationError } from '@/lib/bookkeeping/dimension-errors'
 import { defaultOpeningBalanceSeries } from './opening-balance-defaults'
-import { chunkSIEEntries, exceedsSIEEntryLimits, hashSIEPayload, SIE_JOB_VERSION, SIE_LIMITS, type SIEJob, type SIEPreparedEntry } from './sie-job-contract'
+import { chunkSIEEntries, exceedsSIEEntryLimits, hashSIEPayload, SIE_JOB_VERSION, SIE_LIMITS, sieFinalOrdinals, type SIEJob,
+  type SIEPreparedEntry } from './sie-job-contract'
 import type { OpeningBalanceSplitRefusal } from './sie-object-balances'
 import { applySIEFiscalYear, assertSIEReportingAccounts, readSIEJobSource, SIEJobValidationError, validateSIEAccountingAmounts, validateSIEJobInput, validateSIEReportingMappings, type SIEJobInput } from './sie-jobs'
 import type { ParsedSIEFile, SIEVoucher } from './types'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from './sie-artifact-scan'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
+import { appendConflictRefusal, appendInvalidRefusal, appendNothingNewRefusal, invalidSkippedVouchers,
+  readSIEAppendVerdicts, selectSIEAppendEntries } from './sie-append'
 
 // Disjoint namespaces keep immutable receipts stable when work resumes.
 export const SIE_CHECKPOINTS = { accounts: 0, dimensions: 10_000, values: 20_000,
   mappings: 40_000, names: 50_000, noDocuments: 60_000, snapshot: 100_000, prepared: 200_000 } as const
 
-type VoucherPreparation = Awaited<ReturnType<typeof importVouchers>>
+type VoucherPreparation = ReturnType<typeof prepareSIEVouchers>
 interface PreparedSummary {
   entries: number
   skipped: VoucherPreparation['skippedDetails']
@@ -33,12 +38,23 @@ interface PreparedSummary {
   chunkCount: number
 }
 interface Snapshot { parsed: ParsedSIEFile; voucherGroups: number; hasCurrentYearIb: boolean; sourceSeries: string[];
-  metadataGroups:number; artifactWarning?:string; openingBalanceVoucherCandidate?:boolean }
+  metadataGroups:number; artifactWarning?:string; openingBalanceVoucherCandidate?:boolean
+  /** seriesNumberedInOrder over the whole file; absent in a snapshot sealed before it, which holds no missing number. */
+  numberedInOrder?:string[] }
 interface PreparationTotals {
   entries:number; movements:Array<[string,number]>; skippedSample:VoucherPreparation['skippedDetails']
   openingEntries?:number
   skippedCounts:{empty:number;unbalanced:number;unmapped:number;singleLine:number;total:number}
+  /** An append (sie-append.ts): the file's vouchers left out because the books hold them. */
+  append?:SIEAppendCounts
+  /** Skipped vouchers whose number the next group's first booked voucher of the series holds. */
+  pendingNumberGaps?:SIEPendingNumberGaps
+  /** The last source number per series, so a number missing across a group boundary is held too. */
+  lastSourceNumbers?:Record<string,number>
+  /** Net per account of the file's resultatavslut among the booked vouchers (crm#1727); absent before it was recorded. */
+  resultClosingMovements?:Array<[string,number]>
 }
+export interface SIEAppendCounts { present:number; possibleDuplicatesSkipped:number; possibleDuplicatesIncluded:number }
 
 export async function sieJobRPC<T = unknown>(supabase: SupabaseClient, job: SIEJob, name: string, args: Record<string, unknown> = {}): Promise<T> {
   if (Buffer.byteLength(JSON.stringify(args), 'utf8') > SIE_LIMITS.chunkBytes) {
@@ -92,6 +108,35 @@ function reviveVoucher(value: SIEVoucher): SIEVoucher {
   return { ...value, date: new Date(value.date), registrationDate: value.registrationDate ? new Date(value.registrationDate) : undefined }
 }
 
+/**
+ * Source voucher groups per read. The read runs between the worker's last
+ * lease renewal and complete_sie_import_job, which needs the 2-minute lease
+ * still alive: a 150 000-voucher year has about 750 groups, one request each
+ * before. Twenty groups of at most 1 MiB keep a response bounded.
+ */
+const SOURCE_GROUPS_PER_READ = 20
+
+/** Every source voucher, revived. Read before complete_sie_import_job, which deletes the groups. */
+export async function readSIESourceVouchers(supabase: SupabaseClient, job: SIEJob, groups: number): Promise<SIEVoucher[]> {
+  const vouchers: SIEVoucher[] = []
+  for (let first = 0; first < groups; first += SOURCE_GROUPS_PER_READ) {
+    const count = Math.min(SOURCE_GROUPS_PER_READ, groups - first)
+    const start = SIE_CHECKPOINTS.snapshot + 1 + first
+    const { data, error } = await supabase.from('sie_import_chunks').select('chunk_no,payload')
+      .eq('company_id',job.company_id).eq('import_id',job.id).eq('phase','prepare')
+      .gte('chunk_no',start).lt('chunk_no',start + count).order('chunk_no').range(0,count - 1)
+    if (error) throw new Error(error.message)
+    const rows = (data ?? []) as Array<{ chunk_no: number; payload: [SIEVoucher[]] | null }>
+    if (rows.length !== count) throw new Error('SIE source group missing')
+    for (const row of rows) {
+      const raw = row.payload?.[0]
+      if (!raw) throw new Error('SIE source group missing')
+      for (const voucher of raw) vouchers.push(reviveVoucher(voucher))
+    }
+  }
+  return vouchers
+}
+
 // Appended keys only: the metadata groups before them keep their shape.
 // The object balances (#OIB/#OUB, issue #3313) split the IB per project.
 const SNAPSHOT_ARRAYS = ['accounts','openingBalances','closingBalances','resultBalances','dimensions','dimensionValues','issues',
@@ -113,6 +158,15 @@ export async function readSIESnapshot(supabase:SupabaseClient,job:SIEJob):Promis
     (arrays[item.key] ??= []).push(item.value)
   }
   return snapshot
+}
+
+/**
+ * The file's #UB rows, read back from the metadata groups: the root snapshot
+ * is sealed with every SNAPSHOT_ARRAYS key emptied, so a parsed file read with
+ * readCheckpoint has none.
+ */
+export async function readSIEClosingBalances(supabase:SupabaseClient,job:SIEJob):Promise<ParsedSIEFile['closingBalances']> {
+  return (await readSIESnapshot(supabase,job)).parsed.closingBalances
 }
 
 function boundedChunks<T extends {sourceId:string;lines:unknown[]}>(entries:T[]):T[][] {
@@ -144,7 +198,8 @@ async function snapshotSource(supabase: SupabaseClient, job: SIEJob, deadline: n
     openingBalanceVoucherCandidate:hasOpeningBalanceVoucherCandidate(parsed),
     metadataGroups:metadata.length,artifactWarning:artifactScan.flagged ? formatSieArtifactWarning(artifactScan) : undefined,
     sourceSeries:[...new Set(parsed.vouchers.map(v => v.series || input.options.voucherSeries || 'B'))],
-    hasCurrentYearIb: getEffectiveOpeningBalances(parsed).balances.length > 0 }
+    hasCurrentYearIb: getEffectiveOpeningBalances(parsed).balances.length > 0,
+    numberedInOrder: seriesNumberedInOrder(parsed.vouchers) }
   // Save the effective set as well: the global OB-voucher check must not be
   // repeated on a subset of the file during mapping/finalization.
   const effective = getEffectiveOpeningBalances(parsed)
@@ -203,8 +258,41 @@ async function createMetadata(supabase: SupabaseClient, job: SIEJob, snapshot: S
     await checkpointProgress(supabase,job,{...job.manifest,dimensionsGroup:group+1,dimensionKind:0,dimensionRows:0,
       taggedLines:Number(job.manifest.taggedLines ?? 0)+usage.taggedLines},job.prepared_through)
   }
+  if (!await announceCreatedDimensionValues(supabase,job,deadline)) return false
   await checkpointProgress(supabase,job,{...job.manifest,metadataComplete:true},job.prepared_through)
   return true
+}
+
+/** Values announced per page; the manifest records how far the announcement got. */
+const ANNOUNCE_PAGE = 200
+
+/**
+ * dimension_value.created for each value this import inserted
+ * (created_by_import_id), once the registry step is done (accounted#193):
+ * the RPC skips codes the company already has, so these are exactly the new
+ * ones. A page at a time inside the invocation's budget, the position kept in
+ * the manifest (dimensionValuesAnnounced), so a migration with thousands of
+ * projects resumes where it stopped instead of announcing them again. Answers
+ * false when the budget ran out first. A crash between a page's events and
+ * its checkpoint repeats that page: at least once, like every event.
+ */
+export async function announceCreatedDimensionValues(supabase: SupabaseClient, job: SIEJob, deadline: number): Promise<boolean> {
+  for (let from = Number(job.manifest.dimensionValuesAnnounced ?? 0); ; from += ANNOUNCE_PAGE) {
+    if (Date.now() > deadline) return false
+    const { data, error } = await supabase.from('dimension_values').select('id,dimension_id,code,name,is_active,start_date,end_date')
+      .eq('company_id',job.company_id).eq('created_by_import_id',job.id).order('id').range(from,from+ANNOUNCE_PAGE-1)
+    if (error) throw new Error(error.message)
+    const rows = (data ?? []) as DimensionValueRow[]
+    if (rows.length === 0) return true
+    const { data: dims, error: dimsError } = await supabase.from('dimensions').select('id,sie_dim_no,name')
+      .eq('company_id',job.company_id).in('id',[...new Set(rows.map(row => row.dimension_id))])
+    if (dimsError) throw new Error(dimsError.message)
+    const dimById = new Map(((dims ?? []) as Array<{ id: string; sie_dim_no: number; name: string }>).map(d => [d.id,d]))
+    await emitDimensionValuesCreated({ companyId: job.company_id, userId: job.execution_actor_id ?? job.user_id,
+      values: rows.flatMap(row => { const dimension = dimById.get(row.dimension_id); return dimension ? [dimensionValueSnapshot(row,dimension)] : [] }) })
+    await checkpointProgress(supabase,job,{...job.manifest,dimensionValuesAnnounced:from+rows.length},job.prepared_through)
+    if (rows.length < ANNOUNCE_PAGE) return true
+  }
 }
 
 export async function jobAccountIds(supabase: SupabaseClient, job: SIEJob): Promise<Map<string,string>> {
@@ -226,7 +314,8 @@ export function toPrepared(input: CreateJournalEntryInput, job: Pick<SIEJob,'id'
     entry.amount = roundOre(entry.amount+line.debit_amount-line.credit_amount)
     net.set(key,entry)
   }
-  return { sourceId:ordinal === 50_000 ? 'IB' : 'MIGRATION_ADJUSTMENT',sourceOrdinal:ordinal,
+  // The two generated entries (sieFinalOrdinals): the IB and the migration adjustment.
+  return { sourceId:input.source_type === 'opening_balance' ? 'IB' : 'MIGRATION_ADJUSTMENT',sourceOrdinal:ordinal,
     sieImportId:job.id,series:input.voucher_series ?? 'M',date:input.entry_date,description:input.description,
     sourceSeries:null,sourceNumber:null,sourceType:input.source_type === 'opening_balance' ? 'opening_balance' : 'import',
     lines:[...net.values()].filter(({amount}) => amount !== 0).map(({account,dimensions,amount},index) => ({account_number:account,
@@ -293,17 +382,42 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   }
   let chunkNo = Number(job.manifest.preparedChunks ?? 0)
   let sourceOrdinal = job.prepared_through
+  // An append writes only what the books do not hold, planned per group
+  // against the books as they are now (sie-append.ts): a conflict or a
+  // voucher that cannot be booked exactly as in the source fails the
+  // preparation, so nothing of the file is written.
+  const append = input.options.onExistingPeriod === 'append'
+  const sourceProgram = typeof job.manifest.source_program === 'string' ? job.manifest.source_program : null
+  // An append holds no numbers (sie-append.ts drops numberGap), so it gets no series to hold them in.
+  const numberedInOrder = append ? undefined : new Set(snapshot.numberedInOrder ?? [])
   for (let group = Number(job.manifest.preparedGroups ?? 0); group < snapshot.voucherGroups; group++) {
     if (Date.now() > deadline) return false
     const raw = await readCheckpoint<SIEVoucher[]>(supabase,job,SIE_CHECKPOINTS.snapshot+1+group)
     if (!raw) throw new Error('SIE source group missing')
     const vouchers = raw.map(reviveVoucher)
     validateSIEReportingMappings({...snapshot.parsed,vouchers},accountMap,input.options)
-    const prepared = input.options.importTransactions ? await importVouchers(supabase,job.company_id,
-      job.execution_actor_id ?? job.user_id,job.fiscal_period_id,{...snapshot.parsed,vouchers},
-      accountMap,input.options.voucherSeries ?? 'B',job.id,{startOrdinal:sourceOrdinal,only:true,
-        hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds}) : null
-    const entries = prepared?.preparedEntries ?? []
+    const prepared = input.options.importTransactions ? prepareSIEVouchers({...snapshot.parsed,vouchers},
+      accountMap,input.options.voucherSeries ?? 'B',job.id,{startOrdinal:sourceOrdinal,
+        hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds,pendingNumberGaps:totals.pendingNumberGaps,
+        numberedInOrder,lastSourceNumbers:totals.lastSourceNumbers}) : null
+    if (prepared) {
+      totals.pendingNumberGaps = prepared.pendingNumberGaps
+      totals.lastSourceNumbers = prepared.lastSourceNumbers
+    }
+    let entries = prepared?.preparedEntries ?? []
+    if (append && prepared) {
+      const groupStart = sourceOrdinal
+      const verdicts = await readSIEAppendVerdicts(supabase,job.company_id,job.fiscal_period_id,sourceProgram,entries)
+      const selected = selectSIEAppendEntries(entries,verdicts,ordinal => vouchers[ordinal-groupStart],accountMap,input.options)
+      if (selected.conflicts.length) throw new SIEJobValidationError(appendConflictRefusal(selected.conflicts).message)
+      const invalid = [...invalidSkippedVouchers(prepared.skippedDetails),...selected.invalid]
+      if (invalid.length) throw new SIEJobValidationError(appendInvalidRefusal(invalid).message)
+      entries = selected.entries
+      const counts = totals.append ?? {present:0,possibleDuplicatesSkipped:0,possibleDuplicatesIncluded:0}
+      totals.append = {present:counts.present+selected.present,
+        possibleDuplicatesSkipped:counts.possibleDuplicatesSkipped+selected.possibleDuplicatesSkipped,
+        possibleDuplicatesIncluded:counts.possibleDuplicatesIncluded+selected.possibleDuplicatesIncluded}
+    }
     totals.openingEntries = (totals.openingEntries ?? 0)+entries.filter(entry => entry.sourceType === 'opening_balance').length
     if (totals.openingEntries > 1) throw new SIEJobValidationError('Filen innehåller flera ingående balansverifikationer. Granska dem före import.')
     const summary: PreparedSummary = {entries:entries.length,skipped:prepared?.skippedDetails ?? [],movements:[],firstChunk:chunkNo,chunkCount:0}
@@ -311,6 +425,16 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     for (const entry of entries) for (const line of entry.lines) movements.set(line.account_number,
       roundOre((movements.get(line.account_number) ?? 0)+line.debit_amount-line.credit_amount))
     summary.movements = [...movements]
+    // The resultatavslut among this group's vouchers, for the migration
+    // adjustment's #RES comparison (resultClosingMovementsOf). The form's
+    // account is only resolved when a voucher falls on the year's last day.
+    const yearEnd = snapshot.parsed.stats.fiscalYearEnd ?? job.fiscal_year_end
+    if (entries.some(entry => entry.date === yearEnd)) {
+      const closing = resultClosingMovementsOf(entries,yearEnd,await differenceAccount())
+      const recorded = new Map(totals.resultClosingMovements ?? [])
+      for (const [account,amount] of closing) recorded.set(account,roundOre((recorded.get(account) ?? 0)+amount))
+      totals.resultClosingMovements = [...recorded]
+    }
     for (const payload of boundedChunks(entries)) {
       await sieJobRPC(supabase,job,'save_sie_import_chunk',{p_phase:'vouchers',p_chunk_no:chunkNo++,p_payload:payload})
       summary.chunkCount++
@@ -354,6 +478,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   const parsed = {...snapshot.parsed,openingBalances:job.manifest.effectiveOpeningBalances as ParsedSIEFile['openingBalances']}
   if (!snapshot.hasCurrentYearIb) parsed.closingBalances = parsed.closingBalances.filter(b => b.yearIndex !== -1)
   const finalEntries: SIEPreparedEntry[] = []
+  // Every voucher group is prepared: sourceOrdinal is the first ordinal past them.
+  const finalOrdinals = sieFinalOrdinals(sourceOrdinal)
   let rounding = 0
   let openingBalanceDifferenceAccount: string | undefined
   let openingBalanceSplitRefused: OpeningBalanceSplitRefusal | undefined
@@ -374,15 +500,19 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
         split && accumulating ? {rows:objectRows,accumulating} : {rows:[]})
       if (entry && job.manifest.derivedFromPriorYearUB) entry.description += ' (härledda från föregående års utgående balans)'
       return entry
-    },objectRows.length > 0,entry => toPrepared(entry,job,50_000,accountIds))
+    },objectRows.length > 0,entry => toPrepared(entry,job,finalOrdinals.openingBalance,accountIds))
     if (opening) {
       finalEntries.push(opening.prepared)
       openingBalanceSplitRefused = opening.splitRefused
     }
   }
-  const adjustment = adjustmentCount ? buildSIEMigrationAdjustmentEntry(job.fiscal_period_id,parsed,accountMap,movements,totals.skippedSample,adjustmentCount) : null
-  if (adjustment?.input) finalEntries.push(toPrepared(adjustment.input,job,50_001,accountIds))
+  const adjustment = adjustmentCount ? buildSIEMigrationAdjustmentEntry(job.fiscal_period_id,parsed,accountMap,movements,totals.skippedSample,adjustmentCount,
+    new Map(totals.resultClosingMovements ?? [])) : null
+  if (adjustment?.input) finalEntries.push(toPrepared(adjustment.input,job,finalOrdinals.adjustment,accountIds))
   assertSIEReportingAccounts(finalEntries.flatMap(entry => entry.lines.map(line => line.account_number)))
+  if (append && totals.entries === 0) {
+    throw new SIEJobValidationError(appendNothingNewRefusal(totals.append?.present ?? 0,totals.append?.possibleDuplicatesSkipped ?? 0).message)
+  }
   if (input.options.importTransactions && snapshot.parsed.stats.totalVouchers > 0 && totals.entries === 0 && !finalEntries.length) {
     throw new SIEJobValidationError('Importen skulle skapa 0 verifikationer. Granska kontomappningen och filen.')
   }
@@ -396,7 +526,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     migrationAdjustmentAccounts:adjustment?.deltaAccounts ?? 0,
     preparationWarnings:[...(adjustment?.warnings ?? []),...(snapshot.artifactWarning ? [snapshot.artifactWarning] : [])],finalChunks:finalChunk,
     skippedCounts:totals.skippedCounts,
-    preparedEntries:totals.entries,approvedInputHash:hashSIEPayload(input)}
+    preparedEntries:totals.entries,approvedInputHash:hashSIEPayload(input),finalOrdinals,
+    ...(append ? {appendCounts:totals.append ?? {present:0,possibleDuplicatesSkipped:0,possibleDuplicatesIncluded:0}} : {})}
   await sieJobRPC(supabase,job,'seal_sie_import_preparation',{p_manifest:manifest,p_chunks_total:chunkNo})
   job.manifest = manifest
   return true

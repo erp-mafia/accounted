@@ -1,4 +1,4 @@
-import { Resend } from 'resend'
+import { getResendClient } from '@/lib/email/resend-client'
 import type { EmailReceivedEvent, GetReceivingEmailResponseSuccess, WebhookEventPayload } from 'resend'
 
 export type ResendReceivedEmail = GetReceivingEmailResponseSuccess
@@ -8,12 +8,6 @@ export interface ResendAttachmentDownload {
   filename: string
   contentType: string
   buffer: ArrayBuffer
-}
-
-function getResend(): Resend {
-  const apiKey = process.env.RESEND_API_KEY
-  if (!apiKey) throw new Error('RESEND_API_KEY is required')
-  return new Resend(apiKey)
 }
 
 export class ResendSignatureError extends Error {
@@ -36,7 +30,7 @@ export function verifyInboundWebhook(rawBody: string, requestHeaders: Headers): 
     signature: requestHeaders.get('svix-signature') ?? '',
   }
 
-  const resend = getResend()
+  const resend = getResendClient()
   try {
     return resend.webhooks.verify({ payload: rawBody, headers: svixHeaders, webhookSecret: secret })
   } catch (err) {
@@ -45,9 +39,14 @@ export function verifyInboundWebhook(rawBody: string, requestHeaders: Headers): 
 }
 
 // Fetches the full received email (body, headers, attachment metadata) by email_id.
-export async function fetchReceivingEmail(emailId: string): Promise<ResendReceivedEmail> {
-  const resend = getResend()
-  const { data, error } = await resend.emails.receiving.get(emailId)
+// By default Resend rewrites the HTML's cid: image references to data: URIs;
+// htmlFormat 'cid' keeps the references as received.
+export async function fetchReceivingEmail(
+  emailId: string,
+  opts: { htmlFormat?: 'data_uri' | 'cid' } = {}
+): Promise<ResendReceivedEmail> {
+  const resend = getResendClient()
+  const { data, error } = await resend.emails.receiving.get(emailId, { html_format: opts.htmlFormat })
   if (error || !data) {
     throw new Error(`Failed to fetch received email ${emailId}: ${error?.message ?? 'no data'}`)
   }
@@ -59,7 +58,7 @@ export async function fetchInboundAttachment(
   emailId: string,
   attachmentId: string
 ): Promise<ResendAttachmentDownload> {
-  const resend = getResend()
+  const resend = getResendClient()
   const { data, error } = await resend.emails.receiving.attachments.get({ emailId, id: attachmentId })
   if (error || !data) {
     throw new Error(`Failed to fetch attachment ${attachmentId}: ${error?.message ?? 'no data'}`)
@@ -195,19 +194,68 @@ export function resolveKindHintForTags(tags: readonly string[]): {
   return { kindHint: hints.values().next().value ?? null, conflict: false }
 }
 
-// Splits every parseable recipient into { localPart, domain }, lowercased and
-// in original order. Used to match recipients against per-company verified
-// custom domains when none of them is on the shared inbound domain.
-export function parseRecipients(recipients: string[]): Array<{ localPart: string; domain: string }> {
-  const parsed: Array<{ localPart: string; domain: string }> = []
-  for (const addr of recipients) {
-    const match = addr.match(/^\s*([^@\s]+)@([^@\s]+?)\s*$/)
-    if (!match) continue
-    parsed.push({ localPart: match[1].toLowerCase(), domain: match[2].toLowerCase() })
-  }
-  return parsed
-}
-
 export function isEmailReceivedEvent(event: WebhookEventPayload): event is EmailReceivedEvent {
   return event.type === 'email.received'
+}
+
+/**
+ * How long a mail over the inbox's per-minute cap is handed back to Resend
+ * instead of being dropped. Resend retries a failed delivery after 5 seconds,
+ * 5 minutes, 30 minutes, 2 hours, 5 hours and 10 hours: inside the first hour
+ * the next attempt lands after the minute window has turned, so a burst (an
+ * agent forwarding 40 receipts in 20 seconds, crm#1783) comes in a few
+ * minutes late instead of not at all. A mail still over the cap after that
+ * belongs to a sustained flood: it is dropped and recorded as before, so it
+ * ends in a record and the cap keeps bounding what a flood costs.
+ */
+export const MINUTE_CAP_REDELIVERY_WINDOW_MS = 60 * 60 * 1000
+
+/**
+ * Whether a mail Resend received at `receivedAt` may still be handed back for
+ * redelivery. An unreadable time counts as too old: the drop is the outcome
+ * that always leaves a record.
+ */
+export function mayRedeliverOverMinuteCap(receivedAt: string | null | undefined, now: number = Date.now()): boolean {
+  const received = receivedAt ? Date.parse(receivedAt) : NaN
+  if (!Number.isFinite(received)) return false
+  return now - received < MINUTE_CAP_REDELIVERY_WINDOW_MS
+}
+
+/**
+ * A text/plain part of a mail: its plain-text alternative, or a client's
+ * ATT00001.txt. Never underlag the inbox takes, and next to any other part of
+ * the same mail it says nothing that part does not.
+ */
+export function isPlainTextPart(contentType: string | null | undefined): boolean {
+  return baseContentType(contentType) === 'text/plain'
+}
+
+/** A content type without its parameters, lowercased: "Text/Calendar; method=REQUEST" is "text/calendar". */
+export function baseContentType(contentType: string | null | undefined): string {
+  return String(contentType ?? '').split(';')[0].trim().toLowerCase()
+}
+
+/**
+ * Parts a mail carries for the mail's own sake: a calendar invite, an S/MIME
+ * or PGP signature and its key, a contact card, a delivery report. None is a
+ * document in any form, so none can be underlag. A closed list on purpose:
+ * a type the inbox merely does not take (a TIFF, a ZIP, an XML e-invoice) may
+ * be the receipt in a format to send again, and keeps its rejection row.
+ */
+const MAIL_MACHINERY_TYPES: ReadonlySet<string> = new Set([
+  'text/calendar',
+  'application/ics',
+  'application/pkcs7-signature',
+  'application/x-pkcs7-signature',
+  'application/pgp-signature',
+  'application/pgp-keys',
+  'text/vcard',
+  'text/x-vcard',
+  'message/delivery-status',
+  'message/disposition-notification',
+  'text/rfc822-headers',
+])
+
+export function isMailMachineryPart(contentType: string | null | undefined): boolean {
+  return MAIL_MACHINERY_TYPES.has(baseContentType(contentType))
 }

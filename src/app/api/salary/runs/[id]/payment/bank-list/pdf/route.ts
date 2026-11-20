@@ -1,14 +1,12 @@
-import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import {
   buildSalaryBankList,
   SalaryBankListQuery,
   salaryBankListErrorResponse,
   salaryBankListFileName,
 } from '@/lib/salary/payment/bank-list'
-import { SalaryBankListPDF } from '@/lib/salary/pdf/bank-list-template'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/salary/runs/{id}/payment/bank-list/pdf?format=pain001|bg_lb
@@ -31,16 +29,19 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (!result.ok) return salaryBankListErrorResponse(result, log, requestId)
 
+    const [{ renderToBuffer }, { SalaryBankListPDF }] = await Promise.all([
+      import('@react-pdf/renderer'),
+      import('@/lib/salary/pdf/bank-list-template'),
+    ])
     const buffer = await renderToBuffer(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       SalaryBankListPDF({ list: result.list, generatedAt: new Date().toISOString() }) as any,
     )
 
-    return new Response(buffer as unknown as BodyInit, {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': contentDisposition('inline', salaryBankListFileName(result.list)),
-      },
+    return fileResponse(buffer as unknown as BodyInit, {
+      filename: salaryBankListFileName(result.list),
+      contentType: 'application/pdf',
+      disposition: 'inline',
     })
   },
 )

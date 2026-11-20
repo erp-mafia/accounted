@@ -3,8 +3,18 @@
 import { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { Pin, PinOff, Archive, Pencil, Search, X, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
+import {
+  ArchiveBoxIcon,
+  BookmarkIcon,
+  BookmarkSlashIcon,
+  ChevronDoubleLeftIcon,
+  ChevronDoubleRightIcon,
+  MagnifyingGlassIcon,
+  PencilIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
+import { useRenderedNow } from '@/lib/hooks/use-clock-value'
 import { useAgentSheet } from './AgentSheetProvider'
 import AgentAvatar from './AgentAvatar'
 import {
@@ -17,13 +27,18 @@ import { useConversationList } from './use-conversation-list'
 
 interface Props {
   initialConversations: ConversationRow[]
+  /** When the server rendered the list (epoch ms): the "now" its day groups and "5 min" labels count from during hydration. */
+  renderedAt: number
 }
 
-export default function ChatSidebar({ initialConversations }: Props) {
+export default function ChatSidebar({ initialConversations, renderedAt }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const { openAgentSheet, identity } = useAgentSheet()
   const agentName = identity.displayName?.trim() || null
+  // The server's render instant while hydrating, then the browser's clock:
+  // both renders group and label the list from the same moment (React #418).
+  const now = useRenderedNow(renderedAt)
   // State + all three mutations live in the shared hook so this surface and the
   // in-sheet list cannot drift apart again. Pin/archive/rename here used to be
   // fire-and-forget with no rollback.
@@ -40,7 +55,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
     startEdit,
     cancelEdit,
     commitEdit,
-  } = useConversationList(initialConversations)
+  } = useConversationList(initialConversations, now)
   const [, startTransition] = useTransition()
   // Collapsed by default; persisted across reloads so power users keep
   // their preference. Hidden behind a thin rail when collapsed so the
@@ -73,7 +88,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
   // + new-chat buttons so the conversation pane runs near-edge-to-edge.
   const railAside = collapsed ? (
     <aside
-      className="hidden md:flex md:w-12 flex-col items-center border-r border-border bg-card/40 shrink-0 py-3 gap-2"
+      className="hidden md:flex md:w-12 flex-col items-center border-r-hairline bg-card/40 shrink-0 py-3 gap-2"
       aria-label="Konversationer (hopfälld)"
     >
       <button
@@ -83,7 +98,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
         title="Visa konversationer"
         className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
       >
-        <PanelLeftOpen className="h-4 w-4" />
+        <ChevronDoubleRightIcon className="h-4 w-4" />
       </button>
       <div className="h-px w-6 bg-border" />
       <button
@@ -103,21 +118,21 @@ export default function ChatSidebar({ initialConversations }: Props) {
     {railAside}
     <aside
       className={cn(
-        'flex-col border-r border-border bg-card/40 shrink-0',
+        'flex-col border-r-hairline bg-card/40 shrink-0',
         // Mobile: sidebar IS the page when no conversation; hidden otherwise.
         isConversationOpen ? 'hidden' : 'flex w-full',
         // Desktop: hidden if collapsed (rail takes its place); else 320px.
         collapsed ? 'md:hidden' : 'md:flex md:w-80',
       )}
     >
-      <div className="border-b border-border px-5 py-4 space-y-3">
+      <div className="border-b-hairline px-5 py-4 space-y-3">
         <div className="flex items-center gap-2">
           <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
           <div className="flex-1 min-w-0">
-            <h2 className="font-display text-base tracking-tight truncate">
+            <h2 className="text-base truncate">
               {agentName ?? 'Din assistent'}
             </h2>
-            <p className="text-[11px] text-muted-foreground">Konversationer</p>
+            <p className="text-xs text-muted-foreground">Konversationer</p>
           </div>
           <button
             onClick={toggleCollapsed}
@@ -125,23 +140,23 @@ export default function ChatSidebar({ initialConversations }: Props) {
             title="Dölj konversationer"
             className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
           >
-            <PanelLeftClose className="h-4 w-4" />
+            <ChevronDoubleLeftIcon className="h-4 w-4" />
           </button>
           <button
             onClick={() => openAgentSheet({ intentId: 'general.help' })}
-            className="text-xs uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             + Ny
           </button>
         </div>
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Sök…"
-            className="w-full rounded-lg border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="w-full rounded-lg pl-8 pr-7 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
           />
           {query.length > 0 && (
             <button
@@ -150,7 +165,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
               aria-label="Rensa sökning"
               className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             >
-              <X className="h-3 w-3" />
+              <XMarkIcon className="h-3 w-3" />
             </button>
           )}
         </div>
@@ -166,7 +181,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
         ) : (
           grouped.map(({ bucket, rows }) => (
             <section key={bucket} className="py-2">
-              <p className="px-4 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+              <p className="px-4 pb-1 text-xs text-muted-foreground">
                 {BUCKET_LABELS[bucket]}
               </p>
               <ul className="space-y-1">
@@ -191,7 +206,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                           placeholder="Namnge konversationen…"
                           maxLength={200}
                           aria-label="Nytt namn på konversationen"
-                          className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="w-full rounded-lg px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring bg-control shadow-raised"
                         />
                       </div>
                     ) : (
@@ -209,8 +224,8 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             <p className="text-sm font-medium truncate flex-1 min-w-0">
                               {c.title ?? intentLabel(c.intent_id)}
                             </p>
-                            <p className="text-[11px] text-muted-foreground tabular-nums shrink-0">
-                              {relativeTime(c.last_message_at ?? c.created_at)}
+                            <p className="text-xs text-muted-foreground tabular-nums shrink-0">
+                              {relativeTime(c.last_message_at ?? c.created_at, now)}
                             </p>
                           </div>
                           <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
@@ -230,9 +245,9 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             }}
                             title="Byt namn"
                             aria-label="Byt namn på konversation"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
-                            <Pencil className="h-3 w-3" />
+                            <PencilIcon className="h-3 w-3" />
                           </button>
                           <button
                             onClick={(e) => {
@@ -246,13 +261,13 @@ export default function ChatSidebar({ initialConversations }: Props) {
                               'inline-flex h-8 w-8 items-center justify-center rounded-sm transition-colors',
                               c.pinned
                                 ? 'text-foreground'
-                                : 'text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60',
+                                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
                             )}
                           >
                             {c.pinned ? (
-                              <Pin className="h-3 w-3" fill="currentColor" />
+                              <BookmarkIcon className="h-3 w-3" fill="currentColor" />
                             ) : (
-                              <PinOff className="h-3 w-3" />
+                              <BookmarkSlashIcon className="h-3 w-3" />
                             )}
                           </button>
                           <button
@@ -263,9 +278,9 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             }}
                             title="Arkivera"
                             aria-label="Arkivera konversation"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
-                            <Archive className="h-3 w-3" />
+                            <ArchiveBoxIcon className="h-3 w-3" />
                           </button>
                         </div>
                       </Link>

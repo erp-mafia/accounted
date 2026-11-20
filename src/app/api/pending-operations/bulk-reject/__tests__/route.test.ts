@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -21,6 +21,11 @@ vi.mock('@/lib/company/context', () => ({
 const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
+}))
+
+const appendMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...args: unknown[]) => appendMock(...args),
 }))
 
 import { POST } from '../route'
@@ -44,6 +49,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     requireWriteMock.mockResolvedValue({ ok: true })
+    appendMock.mockResolvedValue('event-1')
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -55,7 +61,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
 
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [VALID_ID_1] },
+      body: { ids: [VALID_ID_1], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status, body } = await parseJsonResponse(response)
@@ -72,7 +78,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
 
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [VALID_ID_1] },
+      body: { ids: [VALID_ID_1], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status } = await parseJsonResponse(response)
@@ -83,12 +89,30 @@ describe('POST /api/pending-operations/bulk-reject', () => {
   it('returns 400 when ids array is empty', async () => {
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [] },
+      body: { ids: [], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
+  })
+
+  it('returns 400 when the category is missing: a person always says what was wrong', async () => {
+    const request = createMockRequest('/api/pending-operations/bulk-reject', {
+      method: 'POST',
+      body: { ids: [VALID_ID_1] },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    expect(response.status).toBe(400)
+  })
+
+  it('returns 400 for a system category a client may not claim', async () => {
+    const request = createMockRequest('/api/pending-operations/bulk-reject', {
+      method: 'POST',
+      body: { ids: [VALID_ID_1], rejection_category: 'expired' },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    expect(response.status).toBe(400)
   })
 
   it('returns 400 for an unknown rejection_category', async () => {
@@ -107,7 +131,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
 
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [VALID_ID_1] },
+      body: { ids: [VALID_ID_1], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
@@ -124,7 +148,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
 
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [VALID_ID_1] },
+      body: { ids: [VALID_ID_1], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status, body } = await parseJsonResponse<ResultBody>(response)
@@ -146,7 +170,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
 
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [VALID_ID_1, VALID_ID_2] },
+      body: { ids: [VALID_ID_1, VALID_ID_2], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status, body } = await parseJsonResponse<ResultBody>(response)
@@ -188,6 +212,19 @@ describe('POST /api/pending-operations/bulk-reject', () => {
       { id: VALID_ID_3, status: 'skipped', error: 'Redan hanterad (godkänd)' },
     ])
     expect(body.data.summary).toEqual({ total: 3, rejected: 2, skipped: 1, failed: 0 })
+    // Who rejected is on every rejected row, and each one is audited.
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      rejection_category: 'duplicate',
+      result_data: { rejected_by: 'user-1', rejected_via: 'user' },
+    })
+    expect(appendMock).toHaveBeenCalledTimes(2)
+    expect(appendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aggregateId: VALID_ID_2,
+        eventType: 'PendingOperationRejected',
+        payload: expect.objectContaining({ channel: 'app', has_reason: true }),
+      }),
+    )
   })
 
   it('returns 500 when the update fails', async () => {
@@ -196,7 +233,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
 
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [VALID_ID_1] },
+      body: { ids: [VALID_ID_1], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
@@ -212,7 +249,7 @@ describe('POST /api/pending-operations/bulk-reject', () => {
 
     const request = createMockRequest('/api/pending-operations/bulk-reject', {
       method: 'POST',
-      body: { ids: [VALID_ID_1] },
+      body: { ids: [VALID_ID_1], rejection_category: 'other' },
     })
     const response = await POST(request)
     const { status, body } = await parseJsonResponse<ResultBody>(response)

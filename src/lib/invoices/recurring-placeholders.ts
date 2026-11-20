@@ -71,6 +71,16 @@ export function advancePeriodStart(periodStart: string, intervalMonths: number):
   return isoFromParts(year, month0, Math.min(day, lastDayOfMonth(year, month0)))
 }
 
+/**
+ * period_start one interval earlier: the inverse of advancePeriodStart, for a
+ * run whose draft was removed before it was issued (crm#1285). Exact unless
+ * the forward step clamped a day 29-31 into a shorter month (Jan 31 -> Feb 28
+ * steps back to Jan 28): that day was already lost on the way forward.
+ */
+export function previousPeriodStart(periodStart: string, intervalMonths: number): string {
+  return advancePeriodStart(periodStart, -intervalMonths)
+}
+
 /** Last day of the period: the day before the next period starts. */
 export function periodEndInclusive(periodStart: string, intervalMonths: number): string {
   const next = parseIsoDate(advancePeriodStart(periodStart, intervalMonths))

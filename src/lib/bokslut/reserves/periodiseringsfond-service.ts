@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { roundOre } from '@/lib/money'
+import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from '@/lib/reports/ink2/account-mappings'
 import type { ProposedDisposition } from '../types'
 
 /** Maximum periodiseringsfond avsättning for aktiebolag: 25 % of skattemässigt
@@ -70,7 +71,7 @@ export function getSchablonintaktRate(fiscalYear: number): number {
 
 /**
  * Resolve the schablonintäkt rate for one bokslut run. The rate only matters
- * when some 212X account carried a balance at beskattningsårets ingång
+ * when some periodiseringsfond account carried a balance at beskattningsårets ingång
  * (IL 30 kap 6a §: schablonintäkt = rate × opening fond balance), so a
  * company without periodiseringsfonder never consults the table and never
  * fails on an unmapped year: the bokslut wizard must not 500 for the common
@@ -91,6 +92,23 @@ export function resolveSchablonintaktRate(
 }
 
 /**
+ * The accounts that hold periodiseringsfonder: the INK2R 2.29 row of the BAS
+ * kopplingstabell (211x-213x), read from the declaration's own mapping so the
+ * bokslut's schablonintäkt base and the balance the declaration files as
+ * periodiseringsfonder can never cover different accounts.
+ */
+const PERIODISERINGSFOND_ACCOUNTS = INK2R_ACCOUNT_MAPPINGS.find(
+  (mapping) => mapping.description === 'Periodiseringsfonder',
+)
+
+function isPeriodiseringsfondAccount(accountNumber: string): boolean {
+  if (!PERIODISERINGSFOND_ACCOUNTS) {
+    throw new Error('INK2R mapping for periodiseringsfonder (2.29) is missing')
+  }
+  return isAccountInMapping(accountNumber, PERIODISERINGSFOND_ACCOUNTS)
+}
+
+/**
  * BAS account convention: account = '212' + (fiscalYear % 10). 2020 → '2120',
  * 2025 → '2125'. The collision year 2019/2029 maps to '2129' per the BAS
  * 2020 seed; if a company has fonder in both years on the same account, the
@@ -102,10 +120,13 @@ export function getPeriodiseringsfondCohortAccount(fiscalYear: number): string {
 }
 
 export interface ExistingFond {
-  /** BAS account number for the cohort (e.g. '2120'). */
+  /** BAS account number holding the fond (e.g. '2120'). */
   account_number: string
-  /** Cohort year derived from account naming convention (e.g. 2020 for 2120). */
-  cohort_year: number
+  /** Cohort year derived from account naming convention (e.g. 2020 for 2120
+   *  and for 2130, its "nr 2" twin). Null for a fond account that names no
+   *  year (211x): it counts in the schablonintäkt base, but the six-year
+   *  limit cannot be checked for it. */
+  cohort_year: number | null
   /** Current credit balance (positive = liability balance). */
   balance: number
   /** Credit balance at the START of the fiscal period (beskattningsårets
@@ -113,7 +134,8 @@ export interface ExistingFond {
    *  avsatt in this year's bokslut has opening 0 and yields none, while a
    *  fond fully återförd during the year still yields it in full. */
   opening_balance: number
-  /** True if the fond must be returned this year (cohort_year + 6 ≤ closing_year). */
+  /** True if the fond must be returned this year (cohort_year + 6 ≤ closing_year).
+   *  Always false when the cohort year is unknown. */
   must_return_this_year: boolean
 }
 
@@ -211,7 +233,10 @@ export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposit
 /**
  * List existing periodiseringsfonder by querying the account balance of every
  * 2110-2199 account as of the closing date of the fiscal period, plus the
- * balance at `periodStart` (the schablonintäkt base). Marks any fond whose
+ * balance at `periodStart` (the schablonintäkt base), and keeping the
+ * periodiseringsfond accounts (INK2R 2.29: 211x-213x). IL 30 kap 6a § puts
+ * every fond the company has at beskattningsårets ingång in the base,
+ * whichever of those accounts it is booked on. Marks any fond whose
  * cohort_year + 6 ≤ closing_year as `must_return_this_year`. Accounts where
  * BOTH balances are zero are dropped; a fond fully återförd during the
  * period is kept (closing 0, opening > 0) so its schablonintäkt survives.
@@ -311,28 +336,38 @@ export async function listExistingPeriodiseringsfonder(
   const fonder: ExistingFond[] = []
   for (const [accountNumber, { closing, opening }] of byAccount) {
     if (Math.abs(closing) < 0.005 && Math.abs(opening) < 0.005) continue
+    if (!isPeriodiseringsfondAccount(accountNumber)) continue
     const cohortYear = cohortYearFromAccount(accountNumber)
-    if (cohortYear === null) continue
     fonder.push({
       account_number: accountNumber,
       cohort_year: cohortYear,
       balance: roundOre(closing),
       opening_balance: roundOre(opening),
-      must_return_this_year: cohortYear + PFOND_MAX_HOLD_YEARS <= closingYear,
+      must_return_this_year:
+        cohortYear !== null && cohortYear + PFOND_MAX_HOLD_YEARS <= closingYear,
     })
   }
 
-  fonder.sort((a, b) => a.cohort_year - b.cohort_year)
+  // Oldest cohort first; fonder without a cohort year last.
+  fonder.sort((a, b) => {
+    if (a.cohort_year !== b.cohort_year) {
+      if (a.cohort_year === null) return 1
+      if (b.cohort_year === null) return -1
+      return a.cohort_year - b.cohort_year
+    }
+    return a.account_number.localeCompare(b.account_number)
+  })
   return fonder
 }
 
 /**
  * Derive the cohort year from a BAS account number. Returns null for accounts
- * that don't follow the '212X' convention (e.g. 2110 = grouping account, no
- * specific cohort).
+ * that don't follow the '212X' convention or its '213X' twin (BAS names 2130
+ * "Periodiseringsfond 2020: nr 2", and so on), e.g. 2110 = periodiseringsfonder
+ * in general, no specific cohort.
  */
 function cohortYearFromAccount(accountNumber: string): number | null {
-  if (!/^212\d$/.test(accountNumber)) return null
+  if (!/^21[23]\d$/.test(accountNumber)) return null
   const lastDigit = parseInt(accountNumber.slice(-1), 10)
   // BAS 2020: 2129 represents 2019 by convention; 2128 = 2028.
   if (lastDigit === 9) return 2019
@@ -381,6 +416,9 @@ export function proposeAteforing(
   let schablonintaktAmount = 0
 
   for (const fond of existingFonder) {
+    const fondName = fond.cohort_year === null
+      ? `konto ${fond.account_number}`
+      : String(fond.cohort_year)
     // Schablonintäkt runs on the opening balance regardless of what happens
     // to the fond during the year.
     schablonintaktAmount += Math.max(0, fond.opening_balance) * options.schablonintaktRate
@@ -402,13 +440,13 @@ export function proposeAteforing(
     const warnings: string[] = []
     if (isMandatory) {
       warnings.push(
-        `Periodiseringsfond ${fond.cohort_year} har nått 6-årsgränsen och måste återföras.`,
+        `Periodiseringsfond ${fondName} har nått 6-årsgränsen och måste återföras.`,
       )
     }
 
     proposals.push({
       kind: 'periodiseringsfond_ateforing',
-      label: `Återföring periodiseringsfond ${fond.cohort_year}`,
+      label: `Återföring periodiseringsfond ${fondName}`,
       description: `Debet ${fond.account_number}, kredit 8819.`,
       amount: returnAmount,
       lines: [
@@ -416,13 +454,13 @@ export function proposeAteforing(
           account_number: fond.account_number,
           debit_amount: returnAmount,
           credit_amount: 0,
-          line_description: `Återföring periodiseringsfond ${fond.cohort_year}`,
+          line_description: `Återföring periodiseringsfond ${fondName}`,
         },
         {
           account_number: '8819',
           debit_amount: 0,
           credit_amount: returnAmount,
-          line_description: `Återföring periodiseringsfond ${fond.cohort_year}`,
+          line_description: `Återföring periodiseringsfond ${fondName}`,
         },
       ],
       warnings,

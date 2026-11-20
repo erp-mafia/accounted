@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   computeNeighbors,
+  listReturnHref,
   readListContext,
   type ListContext,
 } from '@/lib/navigation/list-context'
@@ -90,4 +91,18 @@ export function useDetailPager(
     goPrev,
     goNext,
   }
+}
+
+/**
+ * The detail page's link back to its list: the list's address as it was when
+ * this record was opened from it (filters, search, page), `basePath` when the
+ * record was reached some other way. Read in an effect like the pager's
+ * context, so the server render and the first client render agree.
+ */
+export function useListReturnHref(contextKey: string, basePath: string, currentId: string): string {
+  const [context, setContext] = useState<ListContext | null>(null)
+  useEffect(() => {
+    setContext(readListContext(contextKey))
+  }, [contextKey])
+  return listReturnHref(context, currentId, basePath)
 }

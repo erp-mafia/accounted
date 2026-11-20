@@ -2,6 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateSalaryJournal } from '@/lib/reports/salary-journal'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { stockholmYearMonth } from '@/lib/dates/iso'
 
 /**
  * Lönejournal report, per BFNAR 2013:2 behandlingshistorik requirement.
@@ -9,7 +10,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  */
 export const GET = withRouteContext('report.salary_journal', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
-  const year = parseInt(searchParams.get('year') || new Date().getFullYear().toString())
+  const year = parseInt(searchParams.get('year') || String(stockholmYearMonth().year))
   const monthFrom = searchParams.get('month_from') ? parseInt(searchParams.get('month_from')!) : undefined
   const monthTo = searchParams.get('month_to') ? parseInt(searchParams.get('month_to')!) : undefined
 

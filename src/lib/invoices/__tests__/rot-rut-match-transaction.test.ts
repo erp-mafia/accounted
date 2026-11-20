@@ -15,11 +15,6 @@ vi.mock('@/lib/bookkeeping/settlement-account', () => ({
   resolveSettlementAccount: (...args: unknown[]) => mockResolveSettlementAccount(...args),
 }))
 
-const mockHasLiveLink = vi.fn()
-vi.mock('@/lib/transactions/link-journal-entry', () => ({
-  hasLiveJournalEntryLink: (...args: unknown[]) => mockHasLiveLink(...args),
-}))
-
 import { matchTransactionToRotRutPayout } from '../rot-rut-match-transaction'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
@@ -47,7 +42,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   reset()
   mockResolveSettlementAccount.mockResolvedValue('1930')
-  mockHasLiveLink.mockResolvedValue(false)
   mockSettle.mockResolvedValue({
     ok: true,
     journalEntryId: 'je-1',
@@ -98,23 +92,30 @@ describe('matchTransactionToRotRutPayout', () => {
     expect(mockSettle).not.toHaveBeenCalled()
   })
 
-  it('refuses a row that is already booked (live pointer or bank_line junction)', async () => {
+  it('refuses a row that is already booked (posted pointer or bank_line link) and an ignored row', async () => {
     enqueue({ data: makeTxRow({ journal_entry_id: 'je-old' }) })
-    mockHasLiveLink.mockResolvedValue(true)
+    enqueue({ data: [{ id: 'je-old', status: 'posted' }] }) // the pointer's verifikat
     const live = await matchTransactionToRotRutPayout(
       supabase, 'user-1', 'company-1', { transactionId: TX_ID, requestIds: [REQUEST_A] }, log,
     )
     expect(live).toMatchObject({ ok: false, code: 'ROT_RUT_MATCH_TX_ALREADY_LINKED' })
 
     reset()
-    mockHasLiveLink.mockResolvedValue(false)
     enqueue({
       data: makeTxRow({ transaction_voucher_links: [{ journal_entry_id: 'je-bulk', role: 'bank_line' }] }),
     })
+    enqueue({ data: [{ id: 'je-bulk', status: 'posted' }] }) // the link's verifikat
     const junction = await matchTransactionToRotRutPayout(
       supabase, 'user-1', 'company-1', { transactionId: TX_ID, requestIds: [REQUEST_A] }, log,
     )
     expect(junction).toMatchObject({ ok: false, code: 'ROT_RUT_MATCH_TX_ALREADY_LINKED' })
+
+    reset()
+    enqueue({ data: makeTxRow({ is_ignored: true }) })
+    const ignored = await matchTransactionToRotRutPayout(
+      supabase, 'user-1', 'company-1', { transactionId: TX_ID, requestIds: [REQUEST_A] }, log,
+    )
+    expect(ignored).toMatchObject({ ok: false, code: 'BANK_ROW_IGNORED' })
     expect(mockSettle).not.toHaveBeenCalled()
   })
 

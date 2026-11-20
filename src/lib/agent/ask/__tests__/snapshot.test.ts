@@ -62,6 +62,31 @@ describe('buildAssistantSnapshot', () => {
     expect(snap).toContain('bokföringsmetod: kontantmetod')
   })
 
+  // PH 244: three sent invoices had no verifikat because the company books
+  // invoices in a separate step; the assistant, told only "fakturametod",
+  // called it a fault and pointed at drafts and agent proposals.
+  it('says invoices are booked in a separate step when the company defers booking', async () => {
+    const deferred = await buildAssistantSnapshot(
+      supabaseWith({ vat_registered: true, accounting_method: 'accrual', defer_invoice_booking: true }),
+      'c1',
+    )
+    expect(deferred).toContain('fakturor bokförs i ett separat steg')
+    expect(deferred).toContain('Bokför')
+
+    const direct = await buildAssistantSnapshot(
+      supabaseWith({ vat_registered: true, accounting_method: 'accrual', defer_invoice_booking: false }),
+      'c1',
+    )
+    expect(direct).not.toContain('separat steg')
+
+    // Kontantmetoden books at payment whatever the flag says.
+    const cash = await buildAssistantSnapshot(
+      supabaseWith({ vat_registered: true, accounting_method: 'cash', defer_invoice_booking: true }),
+      'c1',
+    )
+    expect(cash).not.toContain('separat steg')
+  })
+
   describe('the salary fact', () => {
     // pays_salaries is NOT NULL DEFAULT false and only the Skatt settings form
     // writes it, so false is what every company that never opened that form

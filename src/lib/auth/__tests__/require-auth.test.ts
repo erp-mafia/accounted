@@ -4,8 +4,15 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
+// The request headers the route sees: what the proxy forwarded.
+const requestHeaders = vi.hoisted(() => ({ value: new Map<string, string>() }))
+vi.mock('next/headers', () => ({
+  headers: vi.fn(async () => ({ get: (name: string) => requestHeaders.value.get(name) ?? null })),
+}))
+
 import { requireAuth } from '../require-auth'
 import { createClient } from '@/lib/supabase/server'
+import { MFA_ASSURANCE_HEADER, signNoVerifiedFactor } from '../mfa-assurance'
 
 const CLAIMS = {
   iss: 'https://test.supabase.co/auth/v1',
@@ -73,6 +80,8 @@ function enableMfa() {
 describe('requireAuth', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    requestHeaders.value = new Map()
+    vi.stubEnv('SESSION_TIMEOUT_SECRET', 'require-auth-test-secret')
     // Deterministic baseline: MFA off unless a test stubs it on.
     vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'false')
     // Matches CLAIMS.iss so the fast path passes the issuer pinning.
@@ -407,6 +416,49 @@ describe('requireAuth', () => {
 
       expect(result.error).toBeNull()
       expect(listFactors).not.toHaveBeenCalled()
+    })
+
+    it("takes the proxy's signed verdict for this session instead of asking the auth server", async () => {
+      requestHeaders.value.set(MFA_ASSURANCE_HEADER, (await signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1' }))!)
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error).toBeNull()
+      expect(result.user?.id).toBe('user-1')
+      expect(listFactors).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['another session', () => signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-2' })],
+      ['another user', () => signNoVerifiedFactor({ userId: 'user-2', sessionId: 'sess-1' })],
+      ['an expired verdict', () => signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1', now: Date.now() - 60_000 })],
+      ['a forged verdict', async () => `${Date.now() + 10_000}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`],
+      ['another secret', () => signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1' }, { SESSION_TIMEOUT_SECRET: 'other' })],
+    ])('asks the auth server when the verdict is for %s', async (_case, verdict) => {
+      requestHeaders.value.set(MFA_ASSURANCE_HEADER, (await verdict())!)
+      const getClaims = vi.fn().mockResolvedValue({ data: { claims: CLAIMS }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getClaims, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+      expect(listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('asks the auth server on the getUser fallback path, verdict or not', async () => {
+      requestHeaders.value.set(MFA_ASSURANCE_HEADER, (await signNoVerifiedFactor({ userId: 'user-1', sessionId: 'sess-1' }))!)
+      const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
+      const listFactors = vi.fn().mockResolvedValue(factorList(VERIFIED_TOTP))
+      useSupabase({ getUser, mfa: { listFactors } })
+
+      const result = await requireAuth()
+
+      expect(result.error?.status).toBe(403)
+      expect(listFactors).toHaveBeenCalledTimes(1)
     })
 
     it('skips a user under a live time-boxed exemption', async () => {

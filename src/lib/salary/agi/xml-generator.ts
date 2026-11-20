@@ -1,7 +1,8 @@
 import { decryptPersonnummer } from '../personnummer'
-import { isOrgNumberShaped } from '@/lib/invariants/org-number'
+import { FilingIdentityError, isOrgNumberShaped, toRedovisare12 } from '@/lib/invariants/org-number'
 import { truncateToWholeKronor } from '@/lib/money'
 import { escapeXml } from '@/lib/xml/escape'
+import type { EntityType } from '@/types'
 
 /**
  * AGI XML generator: Arbetsgivardeklaration på individnivå.
@@ -19,6 +20,8 @@ import { escapeXml } from '@/lib/xml/escape'
  *   - IU identity: BetalningsmottagarId (215), Specifikationsnummer (570)
  *   - IU amounts: KontantErsattningUlagAG (011), AvdrPrelSkatt (001)
  *   - Every HU and IU must include AgRegistreradId (201) + RedovisningsPeriod (006)
+ *   - Every IU that is not a borttag carries FK001, as 0 when no tax was
+ *     withheld (kontroll S_183)
  *
  * CRITICAL: FK570 (specifikationsnummer) must stay consistent per employee.
  * Corrections are detected by Skatteverket matching the same FK570.
@@ -27,8 +30,12 @@ import { escapeXml } from '@/lib/xml/escape'
  * "Frånvarouppgift i samband med Arbetsgivardeklaration" technical doc:
  *   - One <gem:Franvarouppgift> per (employee, date, specifikationsnummer)
  *   - Sibling of <gem:Blankett>, top-level under <Skatteverket>
- *   - FranvaroChoice contains FranvaroTyp (TILLFALLIG_FORALDRAPENNING for VAB,
- *     FORALDRAPENNING for parental leave): the borttag flow is not used.
+ *   - FranvaroTyp (FK823) is a direct child of Franvarouppgift:
+ *     TILLFALLIG_FORALDRAPENNING for VAB, FORALDRAPENNING for parental
+ *     leave. The komponent schema declares Franvarouppgift as an xs:all
+ *     with no wrapper element; Skatteverket rejects a <FranvaroChoice>
+ *     ("elementnamnet FranvaroChoice är inte giltigt", PH 217). The
+ *     borttag flow (FK820) is not used.
  *   - Hours emitted via FranvaroTimmarTFP (FK825) for VAB or FranvaroTimmarFP
  *     (FK827) for parental. The procent variants (824/826) are not used:
  *     Accounted tracks hours, not percent.
@@ -90,10 +97,38 @@ export interface AGIAbsenceEvent {
   specifikationsnummer: number
 }
 
+/**
+ * What an IU's cash and benefits are underlag for, which picks the field
+ * family they are declared in (Bilaga Fältlista 1.1.18.1):
+ *
+ *  - 'arbetsgivaravgifter': the default. FK011 cash, FK012 övriga förmåner,
+ *    FK013 bil, FK018 drivmedel, housing flags FK041/FK043.
+ *  - 'egenavgifter': inkomst av tjänst for a mottagare med F-skatt. FK125
+ *    cash ("Det kan till exempel vara inkomst av tjänst för mottagare med
+ *    F-skatt"), FK126/FK127/FK128, housing flags FK123/FK124. The payer pays
+ *    no arbetsgivaravgifter on it (SAL 2 kap. 5 §) but it is underlag for
+ *    the recipient's egenavgifter (SAL 3 kap. 8 §).
+ *  - 'ej_socialavgifter': pay that is no underlag for socialavgifter. FK131
+ *    cash, FK132/FK133/FK134, housing flags FK137/FK138. The Fältlista text
+ *    for FK131 names "ersättning under 1 000 kronor" (SAL 2 kap. 14 §), pay to
+ *    an employee in another country's social insurance and pay to a juridisk
+ *    person with A-skatt; Teknisk beskrivning 1.1.18.2 avsnitt 5.4 puts
+ *    kontant ersättning "och eventuella förmåner, som totalt under året inte
+ *    uppgår till 1 000 kronor" in these fields, with FK001 = 0 when no tax
+ *    was withheld.
+ *
+ * Skatteverket computes the avgift from the UlagAG fields only (Bilaga
+ * Summering och beräkningsregler, AeIU = FK011 + FK012 + FK013 - FK019 plus
+ * the drivmedel term), so the family is what decides whether an amount
+ * carries arbetsgivaravgifter, whatever FK487 says.
+ */
+export type AGIUnderlag = 'arbetsgivaravgifter' | 'egenavgifter' | 'ej_socialavgifter'
+
 export interface AGIEmployeeData {
   personnummer: string       // Encrypted: decrypted for XML
   specificationNumber: number // FK570: MUST stay consistent per employee
-  grossSalary: number         // FK011 KontantErsattningUlagAG
+  /** Cash for work: FK011 KontantErsattningUlagAG, FK125 for 'egenavgifter', FK131 for 'ej_socialavgifter' (see `underlag`). */
+  grossSalary: number
   taxWithheld: number         // FK001 AvdrPrelSkatt
   avgifterBasis: number       // Retained for backwards compat; equals grossSalary for standard cases. Not emitted separately (FK011 already captures basis).
   /**
@@ -106,22 +141,26 @@ export interface AGIEmployeeData {
    */
   removed?: boolean
   /**
-   * FK048 FormanHarJusterats: set when any benefit value on this IU has
-   * been adjusted away from the standard schablon. Reflects
-   * salary_run_employees.benefits_adjusted.
+   * FK048 FormanHarJusterats: the employer has a decision from Skatteverket
+   * that adjusts a förmånsvärde for this payee (Fältlista 1.1.18.1 FK048;
+   * SAL 2 kap. 10 b-10 c §§), and the IU carries the adjusted value. Not a
+   * value the employer set below schablon on its own. Reflects
+   * salary_run_employees.benefits_adjusted. Emitted only next to a benefit
+   * amount kontroll S_017 accepts (FK012/FK013, FK126/FK127, FK132/FK133):
+   * Skatteverket rejects FK048 without one.
    */
   benefitsAdjusted?: boolean
-  fSkattPayment?: number      // FK131 KontantErsattningEjUlagSA
-  benefitCar?: number         // FK013 SkatteplBilformanUlagAG (amount, BELOPP7)
-  benefitFuel?: number        // FK018 DrivmVidBilformanUlagAG (amount, BELOPP7)
+  /** The field family for cash and benefits. Defaults to 'arbetsgivaravgifter'. */
+  underlag?: AGIUnderlag
   /**
-   * FK015 KostformanUlagAG (amount, BELOPP10). Kostförmån has its own
-   * dedicated field in the AGI spec with a PBB-linked schablon value:
-   * Skatteverket cross-checks the reported amount against the schablon.
-   * Aggregating meals into FK012 (övriga förmåner) triggers automated
-   * discrepancy notices. Always emit FK015 separately when > 0.
+   * FK013 SkatteplBilformanUlagAG (amount, BELOPP7), FK127 / FK133 per
+   * underlag. Undefined when there is no car benefit. A number is declared
+   * even at 0: a benefit the employee paid in full by nettolöneavdrag is
+   * still reported, with the value 0 (Teknisk beskrivning 1.1.18.2 avsnitt
+   * 5.3). The same holds for benefitOther.
    */
-  benefitMeals?: number
+  benefitCar?: number
+  benefitFuel?: number        // FK018 DrivmVidBilformanUlagAG (amount, BELOPP7), FK128 / FK134 per underlag
   /**
    * Housing benefit indicator. FK041 (smahus) and FK043 (ej_smahus) are
    * boolean KRYSS flags in the XSD: they just signal that this kind of
@@ -131,21 +170,32 @@ export interface AGIEmployeeData {
    */
   housingBenefit?: 'smahus' | 'ej_smahus'
   /**
-   * FK012 SkatteplOvrigaFormanerUlagAG (amount, BELOPP10). Catch-all for
-   * taxable benefits without their own dedicated FK code: bike, wellness,
-   * "other", AND the full krona-amount for housing (since FK041/FK043
-   * carry only the flag). Meals go in benefitMeals (FK015), NOT here.
+   * FK012 SkatteplOvrigaFormanerUlagAG (amount, BELOPP10). Every taxable
+   * benefit except bil (FK013) and drivmedel (FK018), summed: kost, bike,
+   * wellness, "other", AND the full krona-amount for housing (FK041/FK043
+   * carry only the flag). Kostförmån has no field of its own: Skatteverket's
+   * XML schema (arbetsgivardeklaration_component_1.1.xsd) and Bilaga
+   * Fältlista 1.1.18.1 define no KostformanUlagAG, so a file carrying one
+   * fails schema validation (#81). FK126 / FK132 per underlag. Undefined
+   * when there is no such benefit; a number is declared even at 0 (see
+   * benefitCar).
    */
   benefitOther?: number
   /**
-   * When true, benefit amounts and housing flags emit as the "ej underlag
-   * SA" variants (FK132/FK133/FK134/FK137/FK138) instead of the standard
-   * UlagAG variants (FK012/FK013/FK018/FK041/FK043). Set this for F-skatt
-   * holders and other payees whose benefits should not form basis for
-   * arbetsgivaravgifter. Defaults to false. FK131 (cash, ej UlagSA) is
-   * controlled separately via fSkattPayment.
+   * FK050 Bilersattning (KRYSS): skattefri bilersättning was paid this period
+   * for trips in tjänsten with a private car or a förmånsbil. The tax-free
+   * part is declared with this flag only, never with an amount; a payment
+   * above the schablon is lön and its excess goes in the cash field
+   * (Fältlista 1.1.18.1 FK050 and FK013). One flag per IU, whatever the
+   * underlag family.
    */
-  benefitsExcludedFromSAUnderlag?: boolean
+  mileageAllowancePaid?: boolean
+  /**
+   * FK051 Traktamente (KRYSS): skattefritt traktamente was paid this period
+   * for trips in tjänsten. Same rule as FK050: the tax-free part is the flag,
+   * the excess over the schablon is lön (Fältlista 1.1.18.1 FK051).
+   */
+  traktamentePaid?: boolean
   /** @deprecated Per-employee sick days are not reported via AGI (goes to Försäkringskassan separately). Kept for snapshot compatibility. */
   sickDays?: number
   /** @deprecated VAB is reported via top-level <Franvarouppgift> as per-event records (see absenceEvents), not as an IU day count. Kept for snapshot compatibility. */
@@ -160,7 +210,8 @@ export interface AGIEmployeeData {
 }
 
 export interface AGICompanyData {
-  orgNumber: string          // 10 digits after stripping dashes
+  orgNumber: string          // as stored: a 12-digit form keeps its exact century
+  entityType: EntityType     // decides 16 or the owner's birth century (toRedovisare12)
   companyName: string
   periodYear: number
   periodMonth: number
@@ -172,12 +223,18 @@ export interface AGICompanyData {
 export interface AGITotals {
   totalTax: number                // FK497 SummaSkatteavdr
   totalAvgifterBasis: number      // retained for compat (sum of IU underlag)
-  totalAvgifterAmount: number     // FK487 SummaArbAvgSlf (sum of calculated avgifter across categories)
+  totalAvgifterAmount: number     // FK487 SummaArbAvgSlf (calculated avgifter across categories, less regionalSupport.deduction)
   avgifterByCategory: {
     standard?: { basis: number; amount: number }
     reduced65plus?: { basis: number; amount: number }
     youth?: { basis: number; amount: number }
   }
+  /**
+   * Regionalt stöd (lib/salary/regional-support.ts): FK471 underlag and
+   * FK476 avdrag in HU. When present, totalAvgifterAmount is the category
+   * amounts less the avdrag (Skatteverket's IK587, kontroll B_006).
+   */
+  regionalSupport?: { underlag: number; deduction: number } | null
 }
 
 /**
@@ -191,12 +248,30 @@ export class AGIIncompleteDataError extends Error {
   }
 }
 
-function assertRequiredCompanyData(company: AGICompanyData): void {
+/**
+ * Where each required field is filled in, by the labels the settings pages
+ * show. The kontaktperson for skatteärenden (Moms och skatt) is what the AGI
+ * files with; telefon and e-post fall back to the company's own (Allmänt).
+ */
+const COMPANY_FIELD_PLACES: Readonly<Record<string, string>> = {
+  organisationsnummer: 'organisationsnummer under Inställningar → Företagsuppgifter',
+  'kontaktperson (namn)': 'namn under Inställningar → Moms och skatt → Kontaktperson för skatteärenden',
+  telefon:
+    'telefon under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller Telefon under Inställningar → Företagsuppgifter)',
+  'e-post':
+    'e-post under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller E-post under Inställningar → Företagsuppgifter)',
+}
+
+/**
+ * The company data an AGI cannot be filed without, as the error naming each
+ * missing field and where to fill it in; null when nothing is missing.
+ * Generation throws it; the staging doors answer it before anyone is asked
+ * to approve a generation that would fail (crm#1435).
+ */
+export function findMissingCompanyData(
+  company: Pick<AGICompanyData, 'orgNumber' | 'entityType' | 'contactName' | 'contactPhone' | 'contactEmail'>,
+): AGIIncompleteDataError | null {
   const missing: string[] = []
-  // Skatteverket's IDENTITET type requires either 10 digits (AB orgnr, we prefix
-  // with "16") or 12 digits (personnummer for enskild firma). Any other shape is
-  // a data-entry error that we cannot silently fix.
-  //
   // Shared rule (lib/invariants/org-number.ts), not a local digit-strip: the
   // previous `replace(/\D/g, '')` also swallowed letters, so a field holding
   // stray text still measured 10 digits and passed.
@@ -205,12 +280,27 @@ function assertRequiredCompanyData(company: AGICompanyData): void {
   if (!company.contactPhone.trim()) missing.push('telefon')
   if (!company.contactEmail.trim()) missing.push('e-post')
 
-  if (missing.length > 0) {
-    throw new AGIIncompleteDataError(
-      `AGI kan inte genereras, följande uppgifter saknas: ${missing.join(', ')}. ` +
-        'Fyll i dem under Inställningar → Företag och Inställningar → Lön.',
-      missing
-    )
+  if (missing.length === 0) return identitetRefusal(company.orgNumber, company.entityType)
+  return new AGIIncompleteDataError(
+    `AGI kan inte genereras, följande uppgifter saknas: ${missing.join(', ')}. ` +
+      `Fyll i ${missing.map((field) => COMPANY_FIELD_PLACES[field]).join('; ')}.`,
+    missing
+  )
+}
+
+function assertRequiredCompanyData(company: AGICompanyData): void {
+  const missing = findMissingCompanyData(company)
+  if (missing) throw missing
+}
+
+/** What toIdentitet would refuse this number with, or null when it passes. */
+function identitetRefusal(orgNumber: string, entityType: EntityType): AGIIncompleteDataError | null {
+  try {
+    toIdentitet(orgNumber, entityType)
+    return null
+  } catch (err) {
+    if (err instanceof AGIIncompleteDataError) return err
+    throw err
   }
 }
 
@@ -310,40 +400,66 @@ function assertPayloadSize(xml: string): void {
 const IDENTITET_PATTERN = /^(((19|20)[0-9][0-9])((((01|03|05|07|08|10|12)(6[1-9]|7[0-9]|8[0-9]|9[0-1]))|((04|06|09|11)(6[1-9]|7[0-9]|8[0-9]|90))|((02)(6[1-9]|7[0-9]|8[0-8])))|00[6-9][0-9]|[0-9][0-9]60)|(((19|20)(04|08|12|16|20|24|28|32|36|40|44|48|52|56|60|64|68|72|76|80|84|88|92|96)(0289))|(20000289)))(00[1-9]|0[1-9][0-9]|[1-9][0-9][0-9])[0-9]|16(1[0-9]|2[0-9]|3[0-9]|5[0-9]|6[0-4]|66|68|7[0-9]|8[0-9]|9[0-9])[2-9]\d{7}|((((19|20)[0-9][0-9])(((01|03|05|07|08|10|12)(0[1-9]|1[0-9]|2[0-9]|3[0-1]))|((04|06|09|11)(0[1-9]|1[0-9]|2[0-9]|30))|((02)(0[1-9]|1[0-9]|2[0-8]))))|(((19|20)(04|08|12|16|20|24|28|32|36|40|44|48|52|56|60|64|68|72|76|80|84|88|92|96)(0229))|(20000229)))(00[1-9]|0[1-9][0-9]|[1-9][0-9][0-9])[0-9]$/
 
 /**
- * Normalize an org number or personnummer to Skatteverket's 12-character
- * IDENTITET format, required by the AGI schema for Avsandare/Organisationsnummer,
- * AgRegistreradId, and Arendeagare.
+ * The company's identity in Skatteverket's 12-character IDENTITET format,
+ * required by the AGI schema for Avsandare/Organisationsnummer, AgRegistreradId
+ * and Arendeagare: toRedovisare12, the conversion every filing shares, so an
+ * enskild firma stored in 10-digit form takes the owner's birth century here as
+ * it does on the VAT return.
  *
- *   - 10-digit orgnr (AB e.g. 5561234567) → prefixed with "16" → 165561234567
- *   - 12-digit personnummer (EF e.g. 196904206942) → used as-is
- *
- * Throws AGIIncompleteDataError if the resulting value cannot match the
- * IDENTITET pattern: this catches bogus test data (e.g. "420694-2069") before
- * the file reaches Skatteverket.
+ * Throws AGIIncompleteDataError when the conversion refuses the number or the
+ * result cannot match the IDENTITET pattern: this catches bogus test data (e.g.
+ * "420694-2069") before the file reaches Skatteverket. The refusal's text is the
+ * shared one, with its way out: a valid number is locked at the settings door.
  */
-function toIdentitet(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  let candidate: string
-  if (digits.length === 12) candidate = digits
-  else if (digits.length === 10) candidate = `16${digits}`
-  else {
-    throw new AGIIncompleteDataError(
-      `Ogiltigt organisations-/personnummer (${digits.length} siffror). ` +
-        'Ange ett giltigt svenskt organisationsnummer (10 siffror, t.ex. 556123-4567) ' +
-        'eller fullständigt personnummer (12 siffror, YYYYMMDD-XXXX) under Inställningar → Företag.',
-      ['organisationsnummer']
-    )
+function toIdentitet(raw: string, entityType: EntityType): string {
+  try {
+    const candidate = toRedovisare12(raw, entityType)
+    if (IDENTITET_PATTERN.test(candidate)) return candidate
+    throw new FilingIdentityError()
+  } catch (err) {
+    if (!(err instanceof FilingIdentityError)) throw err
+    throw new AGIIncompleteDataError(err.message, ['organisationsnummer'])
   }
+}
 
-  if (!IDENTITET_PATTERN.test(candidate)) {
-    throw new AGIIncompleteDataError(
-      `Ogiltigt organisationsnummer "${raw}": värdet är inte ett svenskt organisationsnummer eller personnummer enligt Skatteverkets format. ` +
-        'Kontrollera värdet under Inställningar → Företag. För AB ska det vara 10 siffror (t.ex. 556123-4567). ' +
-        'För enskild firma ska det vara ett fullständigt 12-siffrigt personnummer (YYYYMMDD-XXXX).',
-      ['organisationsnummer']
-    )
-  }
-  return candidate
+/** [faltkod, XML element] of one IU field. */
+type AGIField = readonly [string, string]
+
+interface AGIUnderlagFields {
+  cash: AGIField
+  other: AGIField
+  car: AGIField
+  fuel: AGIField
+  housingSmahus: AGIField
+  housingEjSmahus: AGIField
+}
+
+/** Each underlag's field family, per Bilaga Fältlista 1.1.18.1 (see AGIUnderlag). */
+const UNDERLAG_FIELDS: Record<AGIUnderlag, AGIUnderlagFields> = {
+  arbetsgivaravgifter: {
+    cash: ['011', 'KontantErsattningUlagAG'],
+    other: ['012', 'SkatteplOvrigaFormanerUlagAG'],
+    car: ['013', 'SkatteplBilformanUlagAG'],
+    fuel: ['018', 'DrivmVidBilformanUlagAG'],
+    housingSmahus: ['041', 'BostadsformanSmahusUlagAG'],
+    housingEjSmahus: ['043', 'BostadsformanEjSmahusUlagAG'],
+  },
+  egenavgifter: {
+    cash: ['125', 'KontantErsattningUlagEA'],
+    other: ['126', 'SkatteplOvrigaFormanerUlagEA'],
+    car: ['127', 'SkatteplBilformanUlagEA'],
+    fuel: ['128', 'DrivmVidBilformanUlagEA'],
+    housingSmahus: ['123', 'BostadsformanSmahusUlagEA'],
+    housingEjSmahus: ['124', 'BostadsformanEjSmahusUlagEA'],
+  },
+  ej_socialavgifter: {
+    cash: ['131', 'KontantErsattningEjUlagSA'],
+    other: ['132', 'SkatteplOvrigaFormanerEjUlagSA'],
+    car: ['133', 'SkatteplBilformanEjUlagSA'],
+    fuel: ['134', 'DrivmVidBilformanEjUlagSA'],
+    housingSmahus: ['137', 'BostadsformanSmahusEjUlagSA'],
+    housingEjSmahus: ['138', 'BostadsformanEjSmahusEjUlagSA'],
+  },
 }
 
 /**
@@ -361,7 +477,7 @@ export function generateAGIXml(
   assertRequiredCompanyData(company)
   assertRequiredPeriod(company.periodYear, company.periodMonth)
 
-  const orgIdentitet = toIdentitet(company.orgNumber)
+  const orgIdentitet = toIdentitet(company.orgNumber, company.entityType)
   const period = `${company.periodYear}${String(company.periodMonth).padStart(2, '0')}`
   const createdAt = new Date().toISOString().replace(/\.\d+Z$/, '')
 
@@ -421,6 +537,13 @@ export function generateAGIXml(
   // FK487: Summa arbetsgivaravgifter och SLF (calculated total, NOT basis)
   if (totals.totalAvgifterAmount > 0) {
     lines.push(`        <gem:SummaArbAvgSlf faltkod="487">${formatAmount(totals.totalAvgifterAmount)}</gem:SummaArbAvgSlf>`)
+  }
+
+  // FK471/FK476: regionalt stöd, both or neither (kontroll S_106/S_108).
+  // FK487 above already carries the avgift after the avdrag (IK587, B_006).
+  if (totals.regionalSupport && totals.regionalSupport.deduction > 0) {
+    lines.push(`        <gem:UlagRegionaltStod faltkod="471">${formatAmount(totals.regionalSupport.underlag)}</gem:UlagRegionaltStod>`)
+    lines.push(`        <gem:AvdragRegionaltStod faltkod="476">${formatAmount(totals.regionalSupport.deduction)}</gem:AvdragRegionaltStod>`)
   }
 
   lines.push('      </gem:HU>')
@@ -484,72 +607,79 @@ export function generateAGIXml(
       continue
     }
 
-    // FK011: Kontant ersättning, underlag arbetsgivaravgifter (= gross salary)
+    const fields = UNDERLAG_FIELDS[emp.underlag ?? 'arbetsgivaravgifter']
+    const emit = ([code, elem]: AGIField, value: string) =>
+      lines.push(`        <gem:${elem} faltkod="${code}">${value}</gem:${elem}>`)
+
+    // Cash for work: FK011 (underlag arbetsgivaravgifter), FK125 (underlag
+    // egenavgifter) or FK131 (ej underlag), never two for the same payment.
     if (emp.grossSalary > 0) {
-      lines.push(`        <gem:KontantErsattningUlagAG faltkod="011">${formatAmount(emp.grossSalary)}</gem:KontantErsattningUlagAG>`)
+      emit(fields.cash, formatAmount(emp.grossSalary))
     }
 
-    // FK001: Avdragen preliminärskatt
-    if (emp.taxWithheld > 0) {
-      lines.push(`        <gem:AvdrPrelSkatt faltkod="001">${formatAmount(emp.taxWithheld)}</gem:AvdrPrelSkatt>`)
+    // FK001: Avdragen preliminärskatt, on every IU that is not a borttag,
+    // with 0 when no tax was withheld (jämkning to 0 %, a wage below the
+    // tax table threshold, an F-skatt payee, a benefit-only IU). Kontroll
+    // S_183 rejects an IU without FK205 unless one of the seven skattefält
+    // (FK001, FK274, FK275, FK094, FK114, FK253, FK276) has a value, and
+    // this generator emits none of the other six; S_175 allows at most one
+    // (Bilaga Kontroller 1.1.18.1). Teknisk beskrivning 1.1.18.2, 8.3.2:
+    // "Om ett beloppsfält ska användas men något skatteavdrag inte gjorts,
+    // ska noll (0) redovisas i beloppsfältet." (crm#1265)
+    lines.push(`        <gem:AvdrPrelSkatt faltkod="001">${formatAmount(emp.taxWithheld)}</gem:AvdrPrelSkatt>`)
+
+    // Car benefit AMOUNT: FK013 (UlagAG), FK127 (UlagEA) or FK133 (ej UlagSA).
+    // Declared at 0 too when the employee paid the whole benefit by
+    // nettolöneavdrag: "Har den anställda betalat hela förmånen genom
+    // nettolöneavdrag så att värdet blir noll (0) så ska det ändå redovisas"
+    // (Teknisk beskrivning 1.1.18.2 avsnitt 5.3).
+    const hasCar = typeof emp.benefitCar === 'number' && emp.benefitCar >= 0
+    if (hasCar) {
+      emit(fields.car, formatAmount(emp.benefitCar as number))
     }
 
-    const exclSA = emp.benefitsExcludedFromSAUnderlag === true
-
-    // Car benefit AMOUNT: FK013 (UlagAG) or FK133 (ej UlagSA)
-    if (emp.benefitCar && emp.benefitCar > 0) {
-      const code = exclSA ? '133' : '013'
-      const elem = exclSA ? 'SkatteplBilformanEjUlagSA' : 'SkatteplBilformanUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitCar)}</gem:${elem}>`)
-    }
-
-    // Fuel for car benefit AMOUNT: FK018 (UlagAG) or FK134 (ej UlagSA)
+    // Fuel for car benefit AMOUNT: FK018 (UlagAG), FK128 (UlagEA) or FK134 (ej UlagSA)
     if (emp.benefitFuel && emp.benefitFuel > 0) {
-      const code = exclSA ? '134' : '018'
-      const elem = exclSA ? 'DrivmVidBilformanEjUlagSA' : 'DrivmVidBilformanUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitFuel)}</gem:${elem}>`)
-    }
-
-    // Kostförmån AMOUNT: FK015 (UlagAG) or FK139 (ej UlagSA). Has its own
-    // field because Skatteverket cross-checks the krona-belopp against the
-    // PBB-anchored schablon: folding it into FK012 triggers discrepancy
-    // notices. Always emit separately when > 0.
-    if (emp.benefitMeals && emp.benefitMeals > 0) {
-      const code = exclSA ? '139' : '015'
-      const elem = exclSA ? 'KostformanEjUlagSA' : 'KostformanUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitMeals)}</gem:${elem}>`)
+      emit(fields.fuel, formatAmount(emp.benefitFuel))
     }
 
     // Housing benefit FLAGS (KRYSS, no amount on this element). The
-    // krona-amount belongs in benefitOther (FK012/FK132).
-    //   FK041 BostadsformanSmahusUlagAG    | FK137 BostadsformanSmahusEjUlagSA
-    //   FK043 BostadsformanEjSmahusUlagAG  | FK138 BostadsformanEjSmahusEjUlagSA
+    // krona-amount belongs in benefitOther (FK012/FK126/FK132; kontroll
+    // S_156/S_157 require it next to the ej-UlagSA and UlagEA flags).
+    //   FK041 BostadsformanSmahusUlagAG    | FK123 ...UlagEA | FK137 BostadsformanSmahusEjUlagSA
+    //   FK043 BostadsformanEjSmahusUlagAG  | FK124 ...UlagEA | FK138 BostadsformanEjSmahusEjUlagSA
     if (emp.housingBenefit === 'smahus') {
-      const code = exclSA ? '137' : '041'
-      const elem = exclSA ? 'BostadsformanSmahusEjUlagSA' : 'BostadsformanSmahusUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">1</gem:${elem}>`)
+      emit(fields.housingSmahus, '1')
     } else if (emp.housingBenefit === 'ej_smahus') {
-      const code = exclSA ? '138' : '043'
-      const elem = exclSA ? 'BostadsformanEjSmahusEjUlagSA' : 'BostadsformanEjSmahusUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">1</gem:${elem}>`)
+      emit(fields.housingEjSmahus, '1')
     }
 
-    // Övriga skattepliktiga förmåner AMOUNT: FK012 (UlagAG) or FK132 (ej UlagSA).
-    // Includes meals, bike, wellness, "other", and the full housing krona-amount.
-    if (emp.benefitOther && emp.benefitOther > 0) {
-      const code = exclSA ? '132' : '012'
-      const elem = exclSA ? 'SkatteplOvrigaFormanerEjUlagSA' : 'SkatteplOvrigaFormanerUlagAG'
-      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitOther)}</gem:${elem}>`)
+    // Övriga skattepliktiga förmåner AMOUNT: FK012 (UlagAG), FK126 (UlagEA)
+    // or FK132 (ej UlagSA). Includes meals, bike, wellness, "other", and the
+    // full housing krona-amount. Declared at 0 too, like the car benefit.
+    const hasOther = typeof emp.benefitOther === 'number' && emp.benefitOther >= 0
+    if (hasOther) {
+      emit(fields.other, formatAmount(emp.benefitOther as number))
     }
 
-    // FK131: Ersättning till mottagare med F-skattsedel (ej underlag SA)
-    if (emp.fSkattPayment && emp.fSkattPayment > 0) {
-      lines.push(`        <gem:KontantErsattningEjUlagSA faltkod="131">${formatAmount(emp.fSkattPayment)}</gem:KontantErsattningEjUlagSA>`)
-    }
-
-    // FK048: FormanHarJusterats (any benefit value adjusted away from schablon)
-    if (emp.benefitsAdjusted) {
+    // FK048 FormanHarJusterats: kontroll S_017 (Bilaga Kontroller 1.1.18.1)
+    // rejects it unless FK012, FK013, FK132, FK133, FK126 or FK127 is on the
+    // IU, i.e. an övriga-förmåner or bilförmån amount in any family. A flag
+    // with no such benefit this month has nothing to qualify and is dropped
+    // rather than failing the whole file (#82).
+    if (emp.benefitsAdjusted && (hasOther || hasCar)) {
       lines.push('        <gem:FormanHarJusterats faltkod="048">1</gem:FormanHarJusterats>')
+    }
+
+    // FK050 Bilersattning / FK051 Traktamente (KRYSS, "1 eller true om
+    // ikryssad, annars utelämnas fältet"): the only trace a tax-free
+    // milersättning or traktamente leaves in the AGI. Both are in kontroll
+    // S_167's list, so either flag alone makes a valid IU.
+    if (emp.mileageAllowancePaid) {
+      lines.push('        <gem:Bilersattning faltkod="050">1</gem:Bilersattning>')
+    }
+    if (emp.traktamentePaid) {
+      lines.push('        <gem:Traktamente faltkod="051">1</gem:Traktamente>')
     }
 
     // Sjuk/VAB/föräldra-dagar flows elsewhere:
@@ -599,15 +729,15 @@ export function generateAGIXml(
         const hoursFaltkod = isVab ? '825' : '827'
 
         lines.push('  <gem:Franvarouppgift>')
-        // Element order follows the spec example file (SKV 4785 doc, section 4).
+        // Franvarouppgift is an xs:all in the komponent schema 1.1, so every
+        // field is a direct child (no wrapper element). The order follows
+        // Skatteverket's example files 17 and 18 (Bilaga Exempelfiler).
         lines.push(`    <gem:AgRegistreradId faltkod="201">${orgIdentitet}</gem:AgRegistreradId>`)
         lines.push(`    <gem:RedovisningsPeriod faltkod="006">${period}</gem:RedovisningsPeriod>`)
         lines.push(`    <gem:FranvaroDatum faltkod="821">${event.date}</gem:FranvaroDatum>`)
         lines.push(`    <gem:BetalningsmottagarId faltkod="215">${pnr}</gem:BetalningsmottagarId>`)
         lines.push(`    <gem:FranvaroSpecifikationsnummer faltkod="822">${specNumber}</gem:FranvaroSpecifikationsnummer>`)
-        lines.push('    <gem:FranvaroChoice>')
-        lines.push(`      <gem:FranvaroTyp faltkod="823">${franvaroTyp}</gem:FranvaroTyp>`)
-        lines.push('    </gem:FranvaroChoice>')
+        lines.push(`    <gem:FranvaroTyp faltkod="823">${franvaroTyp}</gem:FranvaroTyp>`)
         lines.push(`    <gem:${hoursElement} faltkod="${hoursFaltkod}">${formatHours(event.hours)}</gem:${hoursElement}>`)
         lines.push('  </gem:Franvarouppgift>')
       })
@@ -621,39 +751,37 @@ export function generateAGIXml(
   return xml
 }
 
+/** One IU in agi_declarations.individuppgifter: no personnummer, in clear or sealed. */
+export interface AGIIndividuppgiftSnapshot {
+  specificationNumber: number
+  grossSalary: number
+  taxWithheld: number
+  avgifterBasis: number
+  removed: boolean
+}
+
 /**
  * Build individuppgifter snapshot for storage in agi_declarations.individuppgifter
- * (jsonb). Sole purpose: stabilise FK570 (specifikationsnummer) across
- * corrections by recording the (personnummer → specificationNumber) binding
- * along with the headline totals that drive a re-issue decision.
+ * (jsonb): per IU, its FK570 specifikationsnummer, the headline amounts and
+ * the FK205 borttag flag. FK570 stays stable across corrections through
+ * employees.specification_number.
  *
  * GDPR Art.25 (data minimisation): xml_content is the authoritative record
- * of what was filed. Storing the full per-benefit breakdown here would
- * duplicate sensitive financial detail with no incremental audit value, so
- * detailed benefit fields (car/fuel/housing/meals/other/fSkatt) are
- * deliberately omitted from the snapshot. Reconstruct them from
- * xml_content when needed.
+ * of what was filed, so the snapshot holds no personnummer and no
+ * per-benefit breakdown (car/fuel/housing/meals/other and their underlag
+ * family). Reconstruct them from xml_content when needed.
  */
 export function buildIndividuppgifterSnapshot(
   employees: AGIEmployeeData[]
-): Record<string, unknown>[] {
-  return employees.map(emp => {
-    let pnr: string
-    try {
-      pnr = decryptPersonnummer(emp.personnummer)
-    } catch {
-      pnr = 'DECRYPTION_FAILED'
-    }
-
-    return {
-      personnummer: pnr,
-      specificationNumber: emp.specificationNumber,
-      grossSalary: emp.grossSalary,
-      taxWithheld: emp.taxWithheld,
-      avgifterBasis: emp.avgifterBasis,
-      removed: emp.removed ?? false,
-    }
-  })
+): AGIIndividuppgiftSnapshot[] {
+  // Typed on the callback, so a key added back (a personnummer) fails to compile.
+  return employees.map((emp): AGIIndividuppgiftSnapshot => ({
+    specificationNumber: emp.specificationNumber,
+    grossSalary: emp.grossSalary,
+    taxWithheld: emp.taxWithheld,
+    avgifterBasis: emp.avgifterBasis,
+    removed: emp.removed ?? false,
+  }))
 }
 
 // ============================================================

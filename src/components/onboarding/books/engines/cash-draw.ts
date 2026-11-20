@@ -4,7 +4,7 @@
  * in amber, the biggest inflow in sage, each with its date and signed
  * amount) in a lane above, and a head that rings when the line lands. Starts in a hold: baseline and dates only, the origin
  * pulsing, until setPoints() hands it the real series (the bank request is
- * still running). Ported from the founder-approved prototype.
+ * still running). Ported from the approved prototype.
  */
 
 import type { CashPoint } from '@/lib/onboarding-books/cash-series'

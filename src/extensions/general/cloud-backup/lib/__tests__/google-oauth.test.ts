@@ -5,7 +5,12 @@ import {
   refreshAccessToken,
   getOAuthEnv,
   GoogleTokenRefreshError,
+  lacksDriveScope,
 } from '../google-oauth'
+import { googleDriveProvider } from '../google-provider'
+import { CloudScopeMissingError } from '../cloud-provider'
+
+const DRIVE_FILE = 'https://www.googleapis.com/auth/drive.file'
 
 beforeEach(() => {
   process.env.GOOGLE_CLIENT_ID = 'test-client-id'
@@ -129,5 +134,61 @@ describe('GoogleTokenRefreshError.isInvalidGrant', () => {
     expect(new GoogleTokenRefreshError(503, 'Service Unavailable').isInvalidGrant).toBe(
       false
     )
+  })
+})
+
+describe('lacksDriveScope', () => {
+  it('is true when Google states the granted scopes and drive.file is not among them', () => {
+    expect(lacksDriveScope('openid https://www.googleapis.com/auth/userinfo.email')).toBe(true)
+  })
+
+  it('is false when drive.file was granted', () => {
+    expect(
+      lacksDriveScope(`openid https://www.googleapis.com/auth/userinfo.email ${DRIVE_FILE}`)
+    ).toBe(false)
+  })
+
+  it('is false when Google states no scopes at all (RFC 6749 5.1: as requested)', () => {
+    expect(lacksDriveScope(undefined)).toBe(false)
+    expect(lacksDriveScope('')).toBe(false)
+  })
+})
+
+describe('googleDriveProvider.exchangeCode', () => {
+  function tokenResponse(scope: string): Response {
+    return new Response(
+      JSON.stringify({ access_token: 'at', refresh_token: 'rt', expires_in: 3600, scope }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  }
+
+  it('refuses a grant made with the Drive box unticked, before anything else', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(tokenResponse('openid https://www.googleapis.com/auth/userinfo.email'))
+
+    const err = await googleDriveProvider
+      .exchangeCode('http://localhost:3000', 'code')
+      .catch((e) => e)
+
+    expect(err).toBeInstanceOf(CloudScopeMissingError)
+    // Only the token exchange: no userinfo call, and no revoke (it would end
+    // the account's grant for every company connected with it).
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts a grant that includes drive.file', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(tokenResponse(`openid ${DRIVE_FILE}`))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ email: 'backup@example.com' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+
+    await expect(
+      googleDriveProvider.exchangeCode('http://localhost:3000', 'code')
+    ).resolves.toEqual({ refreshToken: 'rt', accountLabel: 'backup@example.com' })
   })
 })

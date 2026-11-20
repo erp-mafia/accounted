@@ -43,10 +43,7 @@ vi.mock('@/lib/webhooks/verification', async (importOriginal) => {
 })
 
 import { GET, maxDuration } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/webhooks/dispatch/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 const SUMMARY = {
   picked: 3,
@@ -97,7 +94,7 @@ describe('GET /api/webhooks/dispatch/cron', () => {
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/webhooks/dispatch/cron'))
 
     expect(response.status).toBe(401)
     expect(dispatchDueDeliveries).not.toHaveBeenCalled()
@@ -105,7 +102,7 @@ describe('GET /api/webhooks/dispatch/cron', () => {
   })
 
   it('returns the full dispatch summary, including the sweep outcome', async () => {
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/webhooks/dispatch/cron'))
     expect(response.status).toBe(200)
 
     const body = (await response.json()) as { data: typeof SUMMARY }
@@ -126,7 +123,7 @@ describe('GET /api/webhooks/dispatch/cron', () => {
       return SUMMARY
     })
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/webhooks/dispatch/cron'))
 
     expect(order).toEqual(['verify', 'dispatch'])
   })

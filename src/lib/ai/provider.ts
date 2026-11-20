@@ -1,5 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk'
-import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
+import type Anthropic from '@anthropic-ai/sdk'
+import type AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 import type { AiProviderKind } from './types'
 
 
@@ -106,16 +106,20 @@ export function hasAiCredentials(): boolean {
  * OpenAI-compatible backend: see the class doc. New code should not call this
  * at all; go through getAiService() from @/lib/ai (antipattern guard
  * direct-ai-client enforces that outside lib/ai/services).
+ *
+ * Async because the SDK is imported here, on first use, rather than at module
+ * load: every route reaches this module through lib/ai, and most never call AI.
  */
-export function createAiClient(): AiClient {
+export async function createAiClient(): Promise<AiClient> {
   const provider = resolveAiProvider()
   if (provider === 'openai-compatible') throw new AiProviderUnsupportedError(provider)
   if (provider === 'anthropic') {
+    const { default: AnthropicSdk } = await import('@anthropic-ai/sdk')
     const apiKey = process.env.ANTHROPIC_API_KEY
     // Omit the key when unset so the SDK resolves it itself and fails at call
     // time: throwing here would take down every route that merely imports a
     // module touching AI.
-    return apiKey ? new Anthropic({ apiKey }) : new Anthropic()
+    return apiKey ? new AnthropicSdk({ apiKey }) : new AnthropicSdk()
   }
 
   const awsRegion = process.env.AWS_REGION || 'eu-north-1'
@@ -124,9 +128,10 @@ export function createAiClient(): AiClient {
   // When both static keys are present, pass them. Otherwise omit them so the
   // SDK falls back to the AWS credential provider chain. The two-overload SDK
   // refuses a mix.
+  const { default: AnthropicBedrockSdk } = await import('@anthropic-ai/bedrock-sdk')
   return awsAccessKey && awsSecretKey
-    ? new AnthropicBedrock({ awsRegion, awsAccessKey, awsSecretKey })
-    : new AnthropicBedrock({ awsRegion })
+    ? new AnthropicBedrockSdk({ awsRegion, awsAccessKey, awsSecretKey })
+    : new AnthropicBedrockSdk({ awsRegion })
 }
 
 /**

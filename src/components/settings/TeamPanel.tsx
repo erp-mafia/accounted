@@ -2,7 +2,7 @@
 
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Mail, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowPathIcon, EnvelopeIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -20,6 +20,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { parseTeamMembersPayload } from '@/components/settings/members-payload'
+import {
+  TeamCompanyAccessDialog,
+  type TeamCompany,
+} from '@/components/settings/TeamCompanyAccessDialog'
 import { isInviteExpired } from '@/components/settings/invite-expiry'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatDateLong } from '@/lib/utils'
@@ -39,6 +43,11 @@ interface TeamMember {
   role: 'owner' | 'admin' | 'member'
   joined_at: string | null
   is_current_user: boolean
+  /** false: only the companies in company_ids and direct_company_ids. */
+  all_companies?: boolean
+  company_ids?: string[]
+  /** Memberships added directly on a company: the team choice cannot remove them. */
+  direct_company_ids?: string[]
 }
 
 interface TeamInvitation {
@@ -48,6 +57,17 @@ interface TeamInvitation {
   status: string
   created_at: string
   expires_at: string
+  /** The companies the invitation grants; null for every company. */
+  company_ids?: string[] | null
+}
+
+/** What the company access dialog is open for: the invite form or one member. */
+type AccessTarget = { kind: 'invite' } | { kind: 'member'; member: TeamMember }
+
+/** The companies a member reaches, or null for every company. */
+function memberCompanyIds(member: TeamMember): string[] | null {
+  if (member.all_companies !== false) return null
+  return [...new Set([...(member.company_ids ?? []), ...(member.direct_company_ids ?? [])])]
 }
 
 /**
@@ -98,6 +118,17 @@ export function TeamPanel() {
   // Confirm-up-front (UI convention 10): removal opens a dialog describing
   // the outcome; the DELETE only fires from its confirm button.
   const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null)
+  // Which client companies a member reaches: the team's clients, the invite
+  // form's choice (null = every company) and the open access dialog.
+  const [companies, setCompanies] = useState<TeamCompany[]>([])
+  const [inviteCompanyIds, setInviteCompanyIds] = useState<string[] | null>(null)
+  const [accessTarget, setAccessTarget] = useState<AccessTarget | null>(null)
+  const [savingAccess, setSavingAccess] = useState(false)
+
+  const accessLabel = (ids: string[] | null) =>
+    ids === null
+      ? t('access_all')
+      : t('access_some', { count: ids.length, total: companies.length })
 
   const roleLabel = (role: string) => {
     switch (role) {
@@ -144,6 +175,7 @@ export function TeamPanel() {
       }
       setMembers(parsed.members)
       setInvitations(parsed.invitations)
+      setCompanies(parsed.companies)
       setTeamId(parsed.teamId)
       setIsOwner(parsed.isOwner)
       // Management affordances follow the API's own gate: byrå owner/admin.
@@ -271,7 +303,12 @@ export function TeamPanel() {
       const res = await fetch('/api/team/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, role: inviteRole, ...(teamId ? { teamId } : {}) }),
+        body: JSON.stringify({
+          email,
+          role: inviteRole,
+          ...(teamId ? { teamId } : {}),
+          ...(inviteRole === 'member' && inviteCompanyIds ? { companyIds: inviteCompanyIds } : {}),
+        }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
@@ -292,11 +329,43 @@ export function TeamPanel() {
       })
       setInviteEmail('')
       setInviteRole('member')
+      setInviteCompanyIds(null)
       void fetchMembers()
     } catch {
       toast({ title: t('invite_failed'), variant: 'destructive' })
     } finally {
       setIsSending(false)
+    }
+  }
+
+  // The invite form only keeps the choice; a member row saves it right away.
+  const handleSaveAccess = async (value: string[] | null) => {
+    if (!accessTarget) return
+    if (accessTarget.kind === 'invite') {
+      setInviteCompanyIds(value)
+      setAccessTarget(null)
+      return
+    }
+    const { member } = accessTarget
+    setSavingAccess(true)
+    try {
+      const res = await fetch(`/api/team/members/${member.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyIds: value }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({ title: errorTitle(data, t('access_save_failed')), variant: 'destructive' })
+        return
+      }
+      toast({ title: t('access_saved_toast') })
+      setAccessTarget(null)
+      void fetchMembers()
+    } catch {
+      toast({ title: t('access_save_failed'), variant: 'destructive' })
+    } finally {
+      setSavingAccess(false)
     }
   }
 
@@ -332,7 +401,7 @@ export function TeamPanel() {
   }
 
   return (
-    <SettingsGroup label={<span data-ph-mask="">{teamName || t('team_fallback')}</span>}>
+    <SettingsGroup wide label={<span data-ph-mask="">{teamName || t('team_fallback')}</span>}>
       {/* Member roster: flat hairline rows, no cards. */}
       {members.map((member) => {
         // Role select gates mirror the API: own row stays read-only (no
@@ -343,7 +412,7 @@ export function TeamPanel() {
         return (
           <div
             key={member.id}
-            className="flex items-center gap-3 border-b border-border px-1 py-3"
+            className="flex items-center gap-3 border-b-hairline px-1 py-3"
           >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted/60">
               <span className="text-xs font-medium text-muted-foreground">
@@ -356,6 +425,21 @@ export function TeamPanel() {
                 <span className="ml-1 text-muted-foreground">{t('you_suffix')}</span>
               )}
             </p>
+            {/* Owners and admins always have every company: only a member
+                row carries the choice. */}
+            {canManage && companies.length > 0 && member.role === 'member' && (
+              <button
+                type="button"
+                onClick={() => setAccessTarget({ kind: 'member', member })}
+                className={cn(ROLE_TRIGGER_CLASS, 'text-xs text-muted-foreground hover:text-foreground')}
+                aria-label={t('access_aria', {
+                  access: accessLabel(memberCompanyIds(member)),
+                  email: member.email,
+                })}
+              >
+                {accessLabel(memberCompanyIds(member))}
+              </button>
+            )}
             {roleEditable ? (
               <Select
                 value={member.role}
@@ -382,12 +466,12 @@ export function TeamPanel() {
             {removable && (
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={t('remove_aria', { email: member.email })}
                 onClick={() => setRemoveTarget(member)}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <TrashIcon className="h-3.5 w-3.5" />
               </Button>
             )}
           </div>
@@ -401,10 +485,10 @@ export function TeamPanel() {
           return (
             <div
               key={inv.id}
-              className="flex items-center gap-3 border-b border-border px-1 py-3"
+              className="flex items-center gap-3 border-b-hairline px-1 py-3"
             >
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border">
-                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                <EnvelopeIcon className="h-3.5 w-3.5 text-muted-foreground" />
               </div>
               <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
                 {inv.email}
@@ -413,6 +497,9 @@ export function TeamPanel() {
                   {expired
                     ? t('invite_expired')
                     : t('invite_expires', { date: formatDateLong(inv.expires_at) })}
+                  {inv.company_ids && inv.company_ids.length > 0 && (
+                    <> · {accessLabel(inv.company_ids)}</>
+                  )}
                 </span>
               </p>
               <span className="shrink-0 text-xs text-muted-foreground">
@@ -420,25 +507,25 @@ export function TeamPanel() {
               </span>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0 text-muted-foreground hover:text-foreground"
                 aria-label={t('resend_aria', { email: inv.email })}
                 onClick={() => void handleResendInvite(inv)}
                 disabled={revokingId === inv.id}
                 loading={resendingId === inv.id}
               >
-                {resendingId !== inv.id && <RefreshCw className="h-3.5 w-3.5" />}
+                {resendingId !== inv.id && <ArrowPathIcon className="h-3.5 w-3.5" />}
               </Button>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className="shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={t('revoke_aria', { email: inv.email })}
                 onClick={() => void handleRevokeInvite(inv)}
                 disabled={resendingId === inv.id}
                 loading={revokingId === inv.id}
               >
-                {revokingId !== inv.id && <Trash2 className="h-3.5 w-3.5" />}
+                {revokingId !== inv.id && <TrashIcon className="h-3.5 w-3.5" />}
               </Button>
             </div>
           )
@@ -451,7 +538,7 @@ export function TeamPanel() {
       {canManage && shareInvite && (
         <div className="px-1 pt-3" role="status" aria-live="polite">
           {shareInvite.sent ? (
-            <p className="text-[12.5px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               {t('invite_link_sent', { email: shareInvite.email })}{' '}
               <button
                 type="button"
@@ -491,9 +578,17 @@ export function TeamPanel() {
             onChange={(e) => setInviteEmail(e.target.value)}
             disabled={isSending}
             required
-            className="border-border sm:flex-1"
+            // The field class grows along the row (flex-1); stacked on a phone that same rule would collapse its height, so it holds its own there.
+            className="flex-none border-border sm:flex-1"
           />
-          <Select value={inviteRole} onValueChange={setInviteRole}>
+          <Select
+            value={inviteRole}
+            onValueChange={(role) => {
+              setInviteRole(role)
+              // Admins always have every company.
+              if (role !== 'member') setInviteCompanyIds(null)
+            }}
+          >
             <SelectTrigger className={ROLE_TRIGGER_CLASS} aria-label={t('invite_role_label')}>
               <SelectValue />
             </SelectTrigger>
@@ -502,8 +597,19 @@ export function TeamPanel() {
               <SelectItem value="admin">{t('role_admin')}</SelectItem>
             </SelectContent>
           </Select>
-          <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
-            {!isSending && <Plus className="mr-2 h-4 w-4" />}
+          {inviteRole === 'member' && companies.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setAccessTarget({ kind: 'invite' })}
+              disabled={isSending}
+              className={cn(ROLE_TRIGGER_CLASS, 'text-left')}
+              aria-label={t('invite_access_aria', { access: accessLabel(inviteCompanyIds) })}
+            >
+              {accessLabel(inviteCompanyIds)}
+            </button>
+          )}
+          <Button type="submit" disabled={!inviteEmail.trim()} loading={isSending}>
+            {!isSending && <PlusIcon className="h-4 w-4" />}
             {t('invite_button')}
           </Button>
         </form>
@@ -531,6 +637,31 @@ export function TeamPanel() {
           if (removeTarget) await handleRemove(removeTarget)
         }}
       />
+
+      {canManage && (
+        <TeamCompanyAccessDialog
+          open={accessTarget !== null}
+          onOpenChange={(open) => {
+            if (!open && !savingAccess) setAccessTarget(null)
+          }}
+          description={
+            accessTarget?.kind === 'member'
+              ? t('access_dialog_description', { email: accessTarget.member.email })
+              : t('access_dialog_description_invite')
+          }
+          companies={companies}
+          value={
+            accessTarget?.kind === 'member'
+              ? memberCompanyIds(accessTarget.member)
+              : inviteCompanyIds
+          }
+          lockedIds={
+            accessTarget?.kind === 'member' ? (accessTarget.member.direct_company_ids ?? []) : []
+          }
+          saving={savingAccess}
+          onSave={(value) => void handleSaveAccess(value)}
+        />
+      )}
     </SettingsGroup>
   )
 }

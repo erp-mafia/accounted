@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { validateBody } from '@/lib/api/validate'
 import {
   evaluateBrandSignupGate,
@@ -10,6 +10,7 @@ import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolveTrustedAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createLogger } from '@/lib/logger'
+import { recordSignupAcceptances } from '@/lib/legal/acceptance'
 
 const log = createLogger('auth-signup')
 
@@ -130,6 +131,14 @@ export async function POST(request: Request) {
     : data.user && (data.user.identities?.length ?? 0) === 0
       ? 'duplicate'
       : 'confirmation_sent'
+
+  // The register page says creating an account accepts the terms and the
+  // DPA: record it for a new account (a duplicate created nothing). Service
+  // client, as there is no session before the mail is clicked. Never fails
+  // the signup; a failed write is logged with the user id.
+  if (status !== 'duplicate' && data.user?.id) {
+    await recordSignupAcceptances(createServiceClient(), data.user.id)
+  }
 
   return NextResponse.json({ data: { status } })
 }

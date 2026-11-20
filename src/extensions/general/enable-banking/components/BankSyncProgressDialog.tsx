@@ -11,9 +11,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { daysBetween } from '@/lib/company/fiscal-year'
 import type { StoredAccount } from '../types'
+import { describeEmptySync, describeOtherCurrency } from '../lib/empty-sync-text'
 
 export interface SyncProgressSummary {
   imported: number
@@ -27,6 +28,10 @@ export interface SyncProgressSummary {
   requested_from: string
   returned_min_date: string | null
   returned_max_date: string | null
+  /** Entries the bank sent but has not booked (PH 221). Optional: older responses omit it. */
+  not_booked?: number
+  /** Booked entries in another currency than the account's, not imported (crm#1767). Optional: older responses omit it. */
+  other_currency?: number
 }
 
 export interface SyncProgressError {
@@ -170,12 +175,12 @@ export function BankSyncProgressDialog({
         {state.kind === 'syncing' && (
           <div className="space-y-3 py-2">
             <div className="flex flex-col items-center justify-center gap-2 py-6">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <SpinnerIcon className="h-8 w-8 animate-spin text-muted-foreground" />
               <span className="text-xs text-muted-foreground tabular-nums" aria-live="polite">
                 {formatElapsed(elapsedSec)}
               </span>
             </div>
-            <ul className="rounded-lg border border-border divide-y divide-border text-sm">
+            <ul className="divide-y divide-border text-sm">
               {enabledAccounts.map((a) => (
                 <li key={a.uid} className="flex items-center justify-between gap-3 px-3 py-2">
                   <span className="truncate">{a.name || a.iban || a.uid}</span>
@@ -191,7 +196,7 @@ export function BankSyncProgressDialog({
         )}
 
         {state.kind === 'failed' && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+          <div className="rounded-lg p-3 text-sm text-muted-foreground bg-control shadow-raised">
             {state.error.message}
           </div>
         )}
@@ -243,12 +248,23 @@ function DoneBody({
     summary.returned_min_date && summary.returned_max_date
       ? daysBetween(summary.returned_min_date, new Date(summary.returned_max_date))
       : 0
-  const wasTruncated = requestedDays - returnedDays > 7
+  // An answer with no booked entry is not a short history (PH 221): it gets
+  // its own sentence below instead of "kortare historik än begärt".
+  const emptyText = describeEmptySync({
+    imported: summary.imported,
+    duplicates: summary.duplicates,
+    notBooked: summary.not_booked,
+    otherCurrency: summary.other_currency,
+  })
+  // Rows set aside as another currency than the account's are named even
+  // when others came in (crm#1767), in the same notice with the file import.
+  const noticeText = emptyText ?? describeOtherCurrency(summary.other_currency)
+  const wasTruncated = summary.returned_min_date !== null && requestedDays - returnedDays > 7
 
   return (
     <div className="space-y-3 py-2">
-      <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-4">
-        <CheckCircle2 className="h-6 w-6 shrink-0 text-foreground" />
+      <div className="flex items-center gap-3 rounded-lg p-4 bg-control shadow-raised">
+        <CheckCircleIcon className="h-6 w-6 shrink-0 text-foreground" />
         <div className="text-sm">
           <p>
             <span className="tabular-nums font-medium">{summary.imported}</span> nya transaktioner
@@ -273,9 +289,21 @@ function DoneBody({
         </div>
       </div>
 
+      {noticeText && (
+        <div className="flex items-start gap-2 rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            {noticeText}{' '}
+            <Link href="/import?mode=bank" className="text-foreground underline underline-offset-2">
+              Till bankfilsimporten
+            </Link>
+          </span>
+        </div>
+      )}
+
       {wasTruncated && (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="flex items-start gap-2 rounded-lg p-3 text-xs text-muted-foreground bg-control shadow-raised">
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             Banken returnerade kortare historik än begärt. För äldre data, använd{' '}
             <Link href="/import?mode=sie" className="text-foreground underline underline-offset-2">

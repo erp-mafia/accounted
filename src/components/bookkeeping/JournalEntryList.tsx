@@ -1,8 +1,7 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
   DataList,
@@ -10,13 +9,14 @@ import {
   DataListLoading,
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
+import { useCommitDraft } from '@/components/bookkeeping/use-commit-draft'
 import { Button } from '@/components/ui/button'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { ToolbarSearch, TOOLBAR_SEARCH_END_CLASS } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -26,32 +26,52 @@ import {
   DialogFooter,
   DialogClose,
 } from '@/components/ui/dialog'
-import {
-  STORAGE_KEY_PREFIX as FISCAL_YEAR_STORAGE_KEY_PREFIX,
-  ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
-} from '@/components/common/FiscalYearSelector'
-import { FyPicker } from '@/components/common/FyPicker'
+import { useFiscalScope } from '@/components/providers/FiscalScopeProvider'
+import { effectiveFiscalScope } from '@/lib/reference-data/fiscal-scope'
 import { AttnLine } from '@/components/ui/attn-line'
+import { LoadError } from '@/components/ui/empty-state'
+import { LateReveal } from '@/components/ui/skeleton'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
+import { IntentLink } from '@/components/ui/intent-link'
 import {
   TH_CLASS,
   TD_CLASS,
-  VTH_CLASS,
-  VTD_CLASS,
   QUIET_LINK_CLASS,
-  CHECKBOX_REVEAL_CLASS,
+  RowSelectCheckbox,
   HOVER_REVEAL_CLASS,
   RowFoldout,
+  SortableTh,
 } from '@/components/ui/dry-table'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
-import { cn, formatDate, formatCurrency } from '@/lib/utils'
-import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import {
+  AdjustmentsHorizontalIcon,
+  BookOpenIcon,
+  ChatBubbleLeftIcon,
+  CheckIcon,
+  ChevronDoubleLeftIcon,
+  ChevronDoubleRightIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  LockClosedIcon,
+  NoSymbolIcon,
+  PaperClipIcon,
+  QueueListIcon,
+  SpinnerIcon,
+  Square2StackIcon,
+  XMarkIcon,
+} from '@/components/icons'
+import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
+import { formatVoucher, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
-import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { planLedgerProbe } from '@/lib/bookkeeping/ledger-probe'
+import { isBoundedVerifikatScope } from '@/lib/bookkeeping/verifikat-search'
+import { useSeriesFilterLetters } from '@/components/bookkeeping/use-series-filter-letters'
+import { useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { readVerifikatListQuery, writeVerifikatListQuery, type VerifikatListQuery } from '@/lib/bookkeeping/verifikat-list-query'
+import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { Input } from '@/components/ui/input'
-import { AccountNumber } from '@/components/ui/account-number'
-import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
@@ -59,16 +79,22 @@ import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import VoucherGapNotice from '@/components/bookkeeping/VoucherGapNotice'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherActionDialog'
+import { useReverseJournalEntry } from '@/components/bookkeeping/use-reverse-journal-entry'
+import { mayHaveVoucherOwner, type VoucherOwner } from '@/lib/core/bookkeeping/voucher-owner'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
 import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
 import { useToast } from '@/components/ui/use-toast'
+import { fetchRattelseFlags } from '@/lib/bookkeeping/rattelse-flags'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
+import { collectPages } from '@/lib/lists/collect-pages'
 import type { JournalEntry, JournalEntryLine } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
 // waiver UI can never drift from the worklist count and the SQL predicate
@@ -122,86 +148,45 @@ const serializeSortStack = (stack: SortKey[]): string =>
 const sortStacksEqual = (a: SortKey[], b: SortKey[]): boolean =>
   serializeSortStack(a) === serializeSortStack(b)
 
-// Same shape as the invoices list header (app/(dashboard)/invoices/page.tsx):
-// click cycles the sort, inactive columns show a dimmed two-way arrow. Two
-// deliberate differences: the plain-click cycle has a third step back to
-// DEFAULT_SORT_STACK so a sort is always escapable from the header itself
-// (the invoices list starts unsorted and has nothing to return to), and
-// shift-click stacks the column as a secondary/tertiary key, shown with a
-// priority number next to the arrow.
-interface SortableHeaderProps {
-  label: string
-  sortLabel: string
-  column: SortColumn
-  stack: SortKey[]
-  onSort: (column: SortColumn, additive: boolean) => void
-  className?: string
-  align?: 'left' | 'right'
-}
-
-function SortableHeader({
-  label,
-  sortLabel,
-  column,
-  stack,
-  onSort,
-  className,
-  align = 'left',
-}: SortableHeaderProps) {
+// The shared SortableTh with two deliberate additions: the plain-click
+// cycle has a third step back to DEFAULT_SORT_STACK so a sort is always
+// escapable from the header itself (the invoices list starts unsorted and
+// has nothing to return to), and shift-click stacks the column as a
+// secondary/tertiary key, shown with its priority number next to the arrow.
+function sortHeadOf(stack: SortKey[], column: SortColumn): { direction: 'asc' | 'desc' | null; rank?: number } {
   const index = stack.findIndex((k) => k.column === column)
-  const active = index !== -1
-  const direction = active ? stack[index].direction : null
-  const SortIcon = !active ? ArrowUpDown : direction === 'asc' ? ArrowUp : ArrowDown
-
-  return (
-    <th
-      className={cn(TH_CLASS, className)}
-      aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
-    >
-      {/* Preflight sets text-transform: none on buttons, which would drop the
-          TH_CLASS uppercase idiom inside the sort control. */}
-      <button
-        type="button"
-        className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-          align === 'right' && 'ml-auto justify-end',
-        )}
-        aria-label={sortLabel}
-        onClick={(e) => onSort(column, e.shiftKey)}
-      >
-        <span>{label}</span>
-        <SortIcon
-          aria-hidden="true"
-          className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
-        />
-        {active && stack.length > 1 && (
-          <span className="text-[11px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
-            {index + 1}
-          </span>
-        )}
-      </button>
-    </th>
-  )
+  if (index === -1) return { direction: null }
+  return { direction: stack[index].direction, rank: stack.length > 1 ? index + 1 : undefined }
 }
 
-// Compact row density (support feedback: "kompakt visning av verifikat").
-// Persisted per company, mirroring the sort key convention.
+// Compact row density (support feedback: "kompakt visning av verifikat",
+// asked again in crm#1323). Persisted per company, mirroring the sort key
+// convention.
+const DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'
 
 // Page-size selector. Persisted per company, mirroring the sort key convention.
-// 'all' fetches everything in the current scope (capped server-side at MAX_LIMIT);
-// the numeric options paginate normally.
+// 'all' collects everything in the current scope in chunks of the most rows
+// one response may carry (collectPages); the numeric options paginate normally.
 type PageSizeChoice = '20' | '50' | '100' | 'all'
 const PAGE_SIZE_STORAGE_KEY_PREFIX = 'Accounted:journal-page-size:'
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
-// Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
-const ALL_PAGE_SIZE = 100000
+
+// The page the list lives on: its view is written into this page's address.
+const LIST_PATH = '/bookkeeping'
+
+// The search box's text as the list sends it. Require 2 or more characters:
+// a single character matches almost every verifikationstext and isn't a
+// useful filter, so 0-1 chars are "no search" instead of a query on every
+// keystroke (ASVS V2.4).
+function effectiveSearch(input: string): string {
+  const trimmed = input.trim()
+  return trimmed.length >= 2 ? trimmed : ''
+}
 
 export default function JournalEntryList({
   pristineSlot,
   refreshToken,
-  initialShowMissingOnly = false,
-  initialGapPeriodId = null,
 }: {
   pristineSlot?: ReactNode
   /**
@@ -212,27 +197,26 @@ export default function JournalEntryList({
    * selection, pagination and scroll position.
    */
   refreshToken?: number
-  /**
-   * Deep-link arrival (dashboard "Verifikat utan underlag" card,
-   * push-notification link): start with the "Visa saknade underlag" filter on
-   * and, for this visit only, scope to all fiscal years so the visible set
-   * matches the all-years dashboard count. The saved fiscal-year preference
-   * is not overwritten.
-   */
-  initialShowMissingOnly?: boolean
-  /**
-   * Deep-link arrival from the bokslut preflight ("Förklara luckan"): scope
-   * this visit to the räkenskapsår whose unexplained voucher gap blocked the
-   * bokslut, so the gap rows above the table are the ones it named. In memory
-   * only; the saved fiscal-year preference is not overwritten.
-   */
-  initialGapPeriodId?: string | null
 } = {}) {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  // The view the list opens on: its filters, search and page from the address
+  // (crm#1998), so Back from a verifikat, the verifikat's link back here, a
+  // reload and a shared link show the list as it was. Read once, on mount;
+  // from then on the state below is the view and the address follows it (the
+  // effect after fetchEntries). The deep links from Hem ("Verifikat utan
+  // underlag", the push notification) and the bokslut preflight ("Förklara
+  // luckan") arrive through the same reader: the first turns the
+  // saknade-underlag filter on for all years, the second opens this visit on
+  // the räkenskapsår whose gap blocked the bokslut. Neither overwrites the
+  // saved fiscal-year preference.
+  const [initialQuery] = useState<VerifikatListQuery>(() => readVerifikatListQuery(searchParams))
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
+  const tCommon = useTranslations('common')
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
@@ -260,7 +244,7 @@ export default function JournalEntryList({
   // first load and the whole ledger's total after a toggle (#2395); a badge
   // with no honest source is hidden, not guessed.
   const [missingCount, setMissingCount] = useState<number | null>(null)
-  const [page, setPage] = useState(0)
+  const [page, setPage] = useState(initialQuery.page)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
   // Entries a customer invoice points at (registration link or payment row):
   // backed by that invoice under BFL 5 kap 7 § (hänvisning), the same verdict
@@ -277,8 +261,11 @@ export default function JournalEntryList({
   // (BFL 5 kap 5 §), not only on the detail page.
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
-  const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showMissingOnly, setShowMissingOnly] = useState(initialQuery.missingOnly)
+  // Unexplained voucher gaps the VoucherGapNotice attn line is showing. The
+  // page has one attn slot (convention 6) and a missing BFNAR 2013:2
+  // explanation outranks the SIE import pointer, so that line yields.
+  const [unexplainedGapCount, setUnexplainedGapCount] = useState(0)
   // Radix' onCheckedChange carries no mouse event: the click that precedes it
   // records whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -290,32 +277,59 @@ export default function JournalEntryList({
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [correctionEntry, setCorrectionEntry] = useState<JournalEntry | null>(null)
   const [reverseEntryTarget, setReverseEntryTarget] = useState<JournalEntry | null>(null)
-  const [isReversing, setIsReversing] = useState(false)
+  // Vänd or Rätta on a verifikat an object owns: its own action first
+  // (OwnedVoucherActionDialog), as on the verifikat page.
+  const [ownedAction, setOwnedAction] = useState<{
+    entry: JournalEntry
+    owner: VoucherOwner
+    intent: 'reverse' | 'correct'
+  } | null>(null)
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
   const [sortStack, setSortStack] = useState<SortKey[]>(DEFAULT_SORT_STACK)
   const [sortHydrated, setSortHydrated] = useState(false)
-  const [periodId, setPeriodId] = useState<string | null>(null)
-  const [periodHydrated, setPeriodHydrated] = useState(false)
-  // One-shot: a deep-link arrival scopes the first period resolution to all
-  // years (see the period effect below) without touching the saved preference.
-  const deepLinkAllYearsRef = useRef(initialShowMissingOnly)
-  // One-shot as well: the räkenskapsår a bokslut gap blocker pointed at.
-  const deepLinkPeriodRef = useRef<string | null>(initialGapPeriodId)
+  // The year is app-wide context (the sidebar, useFiscalScope). A deep link
+  // can scope this one visit, in memory only, without touching it: the
+  // missing-underlag filter arrives on all years (the set the all-years
+  // dashboard badge counted), a bokslut gap blocker on the year it named
+  // (or the current one if that year is gone). Choosing a year in the
+  // sidebar ends the visit's scope.
+  const fiscalScope = useFiscalScope()
+  const [visitScope, setVisitScope] = useState<{ periodId: string | null } | null>(initialQuery.visitScope)
+  const [seenYear, setSeenYear] = useState<string | null | undefined>(undefined)
+  if (fiscalScope.ready && seenYear !== fiscalScope.periodId) {
+    setSeenYear(fiscalScope.periodId)
+    if (seenYear !== undefined) {
+      setVisitScope(null)
+      setPage(0)
+    }
+  }
+  const periodId = visitScope
+    ? visitScope.periodId === null
+      ? null
+      : effectiveFiscalScope(fiscalScope.periods, visitScope.periodId, { allowAll: false }).periodId
+    : fiscalScope.periodId
+  // Hold the first fetch until the scope is known; an all-years visit knows it at once.
+  const periodHydrated = visitScope?.periodId === null || fiscalScope.ready
   const [filterOpen, setFilterOpen] = useState(false)
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [dateFromInput, setDateFromInput] = useState('')
-  const [dateToInput, setDateToInput] = useState('')
-  const [seriesFilter, setSeriesFilter] = useState<string>('all')
-  const [searchInput, setSearchInput] = useState('')
-  const [search, setSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState(initialQuery.dateFrom)
+  const [dateTo, setDateTo] = useState(initialQuery.dateTo)
+  const [dateFromInput, setDateFromInput] = useState(initialQuery.dateFrom)
+  const [dateToInput, setDateToInput] = useState(initialQuery.dateTo)
+  const [seriesFilter, setSeriesFilter] = useState<string>(initialQuery.series ?? 'all')
+  const seriesLetters = useSeriesFilterLetters(company?.id, seriesFilter)
+  // Each letter with the name the company gave the series, or the standard
+  // name, through the one resolver every series picker uses (crm#1997).
+  const seriesLabels = useCompanySettings().settings?.voucher_series_labels ?? null
+  const [searchInput, setSearchInput] = useState(initialQuery.search)
+  const [search, setSearch] = useState(() => effectiveSearch(initialQuery.search))
   // Verifikat (committed) vs Utkast (drafts) view. Drafts are excluded from the
   // committed list server-side and surfaced here behind a count badge.
-  const [listMode, setListMode] = useState<'committed' | 'drafts'>('committed')
-  // Collapse correction groups to the live correction (hide the storno and
-  // reversed original a correction replaced; a pure storno stays visible).
-  // Toggled off via the filter dialog to reveal the full chain.
-  const [collapseCorrections, setCollapseCorrections] = useState(true)
+  const [listMode, setListMode] = useState<'committed' | 'drafts'>(initialQuery.mode)
+  // Storno and reversed (Omförd) rows, chosen in the filter dialog:
+  // 'collapse' (default) folds a correction group to the live correction and
+  // keeps a pure storno pair, so the series stays gapless (#3149); 'hide'
+  // drops every storno and reversed original (PH 231); 'all' shows the chain.
+  const [correctionView, setCorrectionView] = useState<'all' | 'collapse' | 'hide'>(initialQuery.correctionView)
   const [draftCount, setDraftCount] = useState(0)
   // All-years emptiness, resolved only when the scoped list comes back empty:
   // the pristine start card must key on "this ledger has never had an entry",
@@ -325,8 +339,9 @@ export default function JournalEntryList({
   const [ledgerHasAnyEntry, setLedgerHasAnyEntry] = useState<boolean | null>(null)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
+  const [compact, setCompact] = useState(false)
   const showingAll = pageSizeChoice === 'all'
-  const pageSize = showingAll ? ALL_PAGE_SIZE : Number(pageSizeChoice)
+  const pageSize = showingAll ? Number.POSITIVE_INFINITY : Number(pageSizeChoice)
 
   const normalizeDate = (v: string): string | null => {
     const trimmed = v.trim()
@@ -421,23 +436,12 @@ export default function JournalEntryList({
     }
   }, [])
 
-  const fetchRattelseFlags = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
-    if (entryIds.length === 0) {
-      setRattelseFlags(new Set())
-      return
-    }
-    try {
-      const res = await fetch(
-        `/api/bookkeeping/journal-entries/rattelse-flags?ids=${entryIds.join(',')}`
-      )
-      if (!res.ok) return
-      const { data } = await res.json()
-      if (!isCurrent()) return
-      setRattelseFlags(new Set((data || []) as string[]))
-    } catch {
-      // Non-critical: silently ignore
-    }
-  }, [])
+  const fetchRattelseMarkers = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
+    const { corrected, incomplete } = await fetchRattelseFlags(entryIds)
+    if (!isCurrent()) return
+    setRattelseFlags(corrected)
+    if (incomplete) toast({ title: t('rattelse_flags_failed'), variant: 'destructive' })
+  }, [t, toast])
 
   const fetchNoDocRequired = useCallback(async () => {
     try {
@@ -484,105 +488,36 @@ export default function JournalEntryList({
     setPageSizeHydrated(true)
   }, [company?.id])
 
-  // Resolve the initial fiscal-year scope from the session-cached period list.
-  // The list is period-oriented (BFL): verifikationsnummer run as an unbroken
-  // series *per räkenskapsår*, so the same number (e.g. A42) recurs once per
-  // year. Showing every year at once makes those look like duplicates and makes
-  // a bare "A42" reference ambiguous, so we default to the räkenskapsår the
-  // user is currently in rather than "all years". An explicit "Alla
-  // räkenskapsår" choice (persisted as ALL_YEARS_VALUE) is still honoured.
-  // Resolving the scope here, not in the dialog's FiscalYearSelector, which
-  // only mounts when opened, keeps the first fetch correct. periodHydrated
-  // gates that first fetch so the list loads already scoped to the resolved year.
-  //
-  // The periods come from useFiscalPeriods (seeded by the dashboard layout),
-  // so on a normal visit this resolves in the first effect tick with no
-  // round trip; the saved-scope shortcut below still unblocks the entries
-  // fetch first when the list is not cached yet. Resolution runs once per
-  // company: a background revalidation of the list must not snap the scope
-  // back (the deep-link "all years" visit in particular).
-  const { periods: fiscalPeriods, isLoading: fiscalPeriodsLoading } = useFiscalPeriods()
-  const periodScopeResolvedForRef = useRef<string | null>(null)
+  // Restore the persisted row density (per company). Purely visual, so it
+  // doesn't gate the first fetch; the effect-read avoids an SSR mismatch.
   useEffect(() => {
-    if (!company?.id) {
-      setPeriodId(null)
-      setPeriodHydrated(true)
-      return
+    if (typeof window !== 'undefined') {
+      setCompact(window.localStorage.getItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default')) === 'compact')
     }
-    if (periodScopeResolvedForRef.current === company.id) return
+  }, [company?.id])
 
-    // Deep-link arrival with the missing-underlag filter: scope this visit to
-    // all fiscal years (in memory only) so the list can show the same set the
-    // all-years dashboard badge counted. Consumed once; picking a year in the
-    // FyPicker afterwards works and persists as usual.
-    if (deepLinkAllYearsRef.current) {
-      deepLinkAllYearsRef.current = false
-      periodScopeResolvedForRef.current = company.id
-      setPeriodId(null)
-      setPeriodHydrated(true)
-      return
-    }
+  // Belopp shows the money that moved when a verifikat records one payment
+  // through one money account (crm#1280). A cash account kept outside 19xx
+  // (a payment provider's balance on 1686) counts as a money account too;
+  // disabled ones included, since old vouchers still sit on them.
+  const { cashAccounts } = useCashAccounts()
+  const extraMoneyAccounts = useMemo(
+    () => new Set(cashAccounts.map((a) => a.ledger_account).filter((a): a is string => !!a)),
+    [cashAccounts],
+  )
 
-    // Deep-link arrival from the bokslut preflight ("Förklara luckan"): scope
-    // this visit to the räkenskapsår the blocker named. Waits for the period
-    // list so a stale id falls back to the current year instead of scoping
-    // the list to nothing. In memory only, consumed once.
-    if (deepLinkPeriodRef.current) {
-      if (fiscalPeriodsLoading) return
-      const wanted = deepLinkPeriodRef.current
-      deepLinkPeriodRef.current = null
-      periodScopeResolvedForRef.current = company.id
-      const today = new Date().toISOString().split('T')[0]
-      setPeriodId(
-        fiscalPeriods.some((p) => p.id === wanted)
-          ? wanted
-          : resolveCurrentPeriodId(fiscalPeriods, today),
-      )
-      setPeriodHydrated(true)
-      return
-    }
-
-    const stored =
-      typeof window !== 'undefined'
-        ? window.localStorage.getItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id)
-        : null
-    // Optimistic hydration: a saved scope unblocks the first entries fetch
-    // immediately instead of waiting for the period list (the common
-    // returning-user case without a seed). The validation below still
-    // re-scopes to the current räkenskapsår if the saved id went stale (e.g.
-    // the period was deleted); the entries effect then refires with the
-    // corrected scope.
-    if (stored) {
-      // FISCAL_YEAR_ALL_VALUE = user explicitly chose "all years", respect it.
-      setPeriodId(stored === FISCAL_YEAR_ALL_VALUE ? null : stored)
-      setPeriodHydrated(true)
-    }
-
-    // Not cached yet and no seed: wait for the list, this effect re-runs.
-    if (fiscalPeriodsLoading) return
-    periodScopeResolvedForRef.current = company.id
-
-    if (stored === FISCAL_YEAR_ALL_VALUE) return
-    if (stored && fiscalPeriods.some((p) => p.id === stored)) return
-
-    // No (valid) saved scope → default to the current räkenskapsår.
-    const today = new Date().toISOString().split('T')[0]
-    setPeriodId(resolveCurrentPeriodId(fiscalPeriods, today))
-    setPeriodHydrated(true)
-  }, [company?.id, fiscalPeriods, fiscalPeriodsLoading])
-
-  // Debounce the free-text search before it reaches the API. Require ≥2 chars:
-  // a single character matches almost every verifikationstext and isn't a useful
-  // filter, so 0-1 chars are treated as "no search" instead of firing a query on
-  // every keystroke (ASVS V2.4).
+  // Debounce the free-text search before it reaches the API. Only a search
+  // that changes goes back to the first page: the search the list opened
+  // with (from the address) keeps the page it opened on.
   useEffect(() => {
+    const next = effectiveSearch(searchInput)
+    if (next === search) return
     const handle = setTimeout(() => {
-      const trimmed = searchInput.trim()
-      setSearch(trimmed.length >= 2 ? trimmed : '')
+      setSearch(next)
       setPage(0)
     }, 300)
     return () => clearTimeout(handle)
-  }, [searchInput])
+  }, [searchInput, search])
 
   // Sort/filter changes fire fetchEntries while an earlier request may still
   // be in flight; only the newest request may write state, or a slow earlier
@@ -596,11 +531,12 @@ export default function JournalEntryList({
   async function fetchEntries({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
     const gen = ++fetchGenRef.current
     const isCurrent = () => fetchGenRef.current === gen
+    // Set when this load moves to another page and leaves the loading state
+    // to the load that page starts.
+    let movedPage = false
     setLoading(true)
-    if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
+    if (!preserveSelection) selection.clear() // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
-      limit: String(pageSize),
-      offset: String(page * pageSize),
       sort_by: serializeSortStack(sortStack),
     })
     if (listMode === 'drafts') {
@@ -609,7 +545,8 @@ export default function JournalEntryList({
       params.set('status', 'draft')
     } else {
       params.set('exclude_draft', 'true')
-      if (collapseCorrections) params.set('collapse_corrections', 'true')
+      if (correctionView === 'hide') params.set('hide_reversed', 'true')
+      else if (correctionView === 'collapse') params.set('collapse_corrections', 'true')
       if (periodId) params.set('period_id', periodId)
       if (dateFrom) params.set('date_from', dateFrom)
       if (dateTo) params.set('date_to', dateTo)
@@ -622,50 +559,71 @@ export default function JournalEntryList({
     }
     if (search) params.set('search', search)
 
+    // One request per page. "Alla" collects the whole scope in chunks of the
+    // most rows one response may carry: a single large request came back cut
+    // at 1,000 rows while the count promised every verifikat. A failed chunk
+    // fails the load, so a partial list never renders as all of them.
+    // The rows' underlag counts ride along (include_counts) instead of a
+    // second request to /api/documents/counts; a chunk that came back without
+    // them sends the load to that route as before.
+    const carriedCounts: Record<string, number> = {}
+    const carriedReferenced: string[] = []
+    let countsCarried = true
+    const fetchChunk = async (offset: number, limit: number) => {
+      const chunkParams = new URLSearchParams(params)
+      chunkParams.set('limit', String(limit))
+      chunkParams.set('offset', String(offset))
+      chunkParams.set('include_counts', 'true')
+      const res = await fetch(`/api/bookkeeping/journal-entries?${chunkParams}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { data, count, attachment_counts, invoice_references } = await res.json()
+      if (attachment_counts && invoice_references) {
+        Object.assign(carriedCounts, attachment_counts as Record<string, number>)
+        carriedReferenced.push(...Object.keys(invoice_references as Record<string, number>))
+      } else {
+        countsCarried = false
+      }
+      return { data: (data || []) as JournalEntry[], count: typeof count === 'number' ? count : 0 }
+    }
+
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
+      const { data: loadedEntries, count: total } = showingAll
+        ? await collectPages(fetchChunk, { want: Number.POSITIVE_INFINITY })
+        : await fetchChunk(page * pageSize, pageSize)
       if (!isCurrent()) return
-      if (!res.ok) {
-        // Surface the failure: stale rows (if any) stay on screen, the empty
-        // case renders the error state below, and the toast covers refetches.
-        setLoadFailed(true)
-        setMissingCount(null)
-        toast({ title: t('load_failed_title'), variant: 'destructive' })
-        setHasLoaded(true)
+      // A page past the end (an address from before verifikat went away, or
+      // typed by hand) opens the last page instead of an empty table.
+      if (!showingAll && page > 0 && loadedEntries.length === 0 && (total || 0) > 0) {
+        movedPage = true
+        setPage(Math.ceil((total || 0) / pageSize) - 1)
         return
       }
       setLoadFailed(false)
-      const { data, count: total } = await res.json()
-      if (!isCurrent()) return
-      const loadedEntries = data || []
       setEntries(loadedEntries)
       setCount(total || 0)
       setMissingCount(showMissingOnly && listMode === 'committed' ? total || 0 : null)
-      if (preserveSelection) {
-        // Reconcile with the refreshed page: rows that left it (recommitted
-        // elsewhere, filtered out by the new data) must leave the selection
-        // too, or the bulk bar would act on rows no longer on screen.
-        const visibleIds = new Set(loadedEntries.map((e: JournalEntry) => e.id))
-        setSelectedIds((prev) => {
-          const next = new Set([...prev].filter((id) => visibleIds.has(id)))
-          return next.size === prev.size ? prev : next
-        })
-      }
+      // A preserved selection needs no reconcile here: rows that left the
+      // page (recommitted elsewhere, filtered out) leave useBulkSelection's
+      // selection when the new page renders.
 
       // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
       // on draftCount. When the committed list comes back empty, resolve the draft
       // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
       // a stale count of 0. Every other case refreshes the badge in the background.
       if (loadedEntries.length === 0 && listMode === 'committed') {
-        // A missing-underlag-filtered total of 0 says nothing about whether
-        // the ledger has entries, so that mode never short-circuits the probe.
-        const unscopedQuery =
-          !periodId && !dateFrom && !dateTo && seriesFilter === 'all' && !search && !showMissingOnly
+        // The all-years probe runs only when its answer can change what
+        // renders (lib/bookkeeping/ledger-probe.ts, crm#1390). A total with
+        // the makulerade pairs hidden says nothing about whether the ledger
+        // has entries, so that view probes instead of trusting the total.
+        const basePlan = planLedgerProbe({ periodId, search, seriesFilter, dateFrom, dateTo, showMissingOnly })
+        const probePlan = basePlan === 'from_total' && correctionView === 'hide' ? 'probe' : basePlan
         await Promise.all([
           fetchDraftCount(),
-          unscopedQuery
+          probePlan === 'from_total'
             ? Promise.resolve(setLedgerHasAnyEntry((total || 0) > 0))
-            : fetchLedgerHasAnyEntry(isCurrent),
+            : probePlan === 'probe'
+              ? fetchLedgerHasAnyEntry(isCurrent)
+              : Promise.resolve(),
         ])
       } else {
         if (listMode === 'committed' && loadedEntries.length > 0) setLedgerHasAnyEntry(true)
@@ -678,18 +636,25 @@ export default function JournalEntryList({
       // carrying the generation guard so their late completions can't
       // overwrite metadata a newer request just rendered.
       const ids = loadedEntries.map((e: JournalEntry) => e.id)
-      fetchAttachmentCounts(ids, isCurrent)
-      fetchRattelseFlags(ids, isCurrent)
+      if (countsCarried && ids.length > 0) {
+        setAttachmentCounts(carriedCounts)
+        setInvoiceReferenced(new Set(carriedReferenced))
+        setAttachmentCountsLoaded(true)
+      } else {
+        fetchAttachmentCounts(ids, isCurrent)
+      }
+      fetchRattelseMarkers(ids, isCurrent)
     } catch {
-      // Network-level rejection (offline, aborted response body): same
-      // surfacing as a non-OK response, or the list stays dimmed forever.
+      // A non-OK response or a network-level rejection (offline, aborted
+      // response body): stale rows (if any) stay on screen under the
+      // refresh-failed line, and the empty case renders LoadError below.
+      // Without this the list stays dimmed forever.
       if (!isCurrent()) return
       setLoadFailed(true)
       setMissingCount(null)
       setHasLoaded(true)
-      toast({ title: t('load_failed_title'), variant: 'destructive' })
     } finally {
-      if (isCurrent()) setLoading(false)
+      if (isCurrent() && !movedPage) setLoading(false)
     }
   }
 
@@ -731,7 +696,29 @@ export default function JournalEntryList({
   useEffect(() => {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
+  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, correctionView, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
+
+  // The address follows the view (crm#1998): the list's own keys are
+  // rewritten, every other parameter stays. The History API with no state of
+  // its own, which Next keeps in step with useSearchParams: no navigation and
+  // no server render per filter change or search.
+  const viewQuery: VerifikatListQuery = {
+    mode: listMode,
+    series: seriesFilter === 'all' ? null : seriesFilter,
+    dateFrom,
+    dateTo,
+    search,
+    correctionView,
+    missingOnly: showMissingOnly,
+    visitScope,
+    page,
+  }
+  const currentQuery = searchParams.toString()
+  const wantedQuery = writeVerifikatListQuery(currentQuery, viewQuery).toString()
+  useEffect(() => {
+    if (pathname !== LIST_PATH || wantedQuery === currentQuery) return
+    window.history.replaceState(null, '', wantedQuery ? `${LIST_PATH}?${wantedQuery}` : LIST_PATH)
+  }, [wantedQuery, currentQuery, pathname])
 
   // Parent-driven in-place refresh (see the refreshToken prop). Skips the
   // mount value: the main effect above owns the initial fetch, and a token
@@ -784,7 +771,7 @@ export default function JournalEntryList({
     if (mode === listMode) return
     setListMode(mode)
     setPage(0)
-    setSelectedIds(new Set())
+    selection.clear()
     if (mode === 'drafts') setShowMissingOnly(false)
   }
 
@@ -803,21 +790,24 @@ export default function JournalEntryList({
       .catch(() => {})
   }
 
+  // The commit meets the booking-time voucher warnings (useCommitDraft).
+  const { commit: commitDraft, dialog: commitWarningsDialog } = useCommitDraft<{ voucher_series?: string | null; voucher_number?: number | null } | null>({
+    onPosted: async (posted) => {
+      toast({
+        title: t('toast_posted_title'),
+        description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
+      })
+      await fetchEntries()
+    },
+    onFailed: (result) => {
+      toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+    },
+  })
+
   const handleCommit = async (entryId: string) => {
     setCommittingId(entryId)
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${entryId}/commit`, { method: 'POST' })
-      const result = await res.json()
-      if (res.ok) {
-        const posted = result.data
-        toast({
-          title: t('toast_posted_title'),
-          description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
-        })
-        await fetchEntries()
-      } else {
-        toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
-      }
+      await commitDraft(entryId)
     } catch {
       toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
     } finally {
@@ -825,32 +815,30 @@ export default function JournalEntryList({
     }
   }
 
-  // Pure reversal (storno) of a posted verifikat: books a stornoverifikation
-  // with no replacement, per BFL 5 kap 5§. Routes through the engine's
-  // reverseEntry (storno + reverses_id link; original → 'reversed', never
-  // deleted). "Rätta" stays the path for booking a replacement entry instead.
+  // Pure reversal (storno), shared with the verifikat page (useReverseJournalEntry).
+  const { reverse, isReversing } = useReverseJournalEntry({
+    onReversed: async () => {
+      setReverseEntryTarget(null)
+      await fetchEntries()
+    },
+  })
   const handleReverse = async () => {
-    const target = reverseEntryTarget
-    if (!target) return
-    setIsReversing(true)
+    if (reverseEntryTarget) await reverse(reverseEntryTarget.id)
+  }
+
+  // Vänd and Rätta ask for the verifikat's owner first, only for the source
+  // types that can have one; any other verifikat (or a failed lookup) goes
+  // straight on, so the list never waits on advice.
+  const startVoucherAction = async (entry: JournalEntry, intent: 'reverse' | 'correct') => {
+    const proceed = () => (intent === 'reverse' ? setReverseEntryTarget(entry) : setCorrectionEntry(entry))
+    if (!mayHaveVoucherOwner(entry.source_type)) return proceed()
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${target.id}/reverse`, { method: 'POST' })
-      const result = await res.json()
-      if (res.ok) {
-        const storno = result.data
-        toast({
-          title: t('toast_reverse_done_title'),
-          description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
-        })
-        setReverseEntryTarget(null)
-        await fetchEntries()
-      } else {
-        toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
-      }
+      const res = await fetch(`/api/bookkeeping/journal-entries/${entry.id}/references`)
+      const owner = res.ok ? (((await res.json())?.data?.owned_by ?? null) as VoucherOwner | null) : null
+      if (owner) setOwnedAction({ entry, owner, intent })
+      else proceed()
     } catch {
-      toast({ title: t('toast_reverse_failed'), variant: 'destructive' })
-    } finally {
-      setIsReversing(false)
+      proceed()
     }
   }
 
@@ -866,6 +854,19 @@ export default function JournalEntryList({
       !noDocRequired.has(entry.id),
     [attachmentCounts, invoiceReferenced, noDocRequired],
   )
+
+  // Imported verifikat missing underlag: the rows that used to carry the
+  // per-row "Underlag saknas" chip, counted once in the line above the table
+  // instead (2026-10-18: a migrated year was a wall of chips). Same
+  // population as the chip: posted, import, no attachment, not
+  // invoice-referenced, not marked "Inget underlag krävs". Counted over the
+  // loaded rows, so the line says "på den här sidan" unless the whole scope
+  // is on screen. NEEDS_DOC_SOURCE_TYPES and the worklist counts are
+  // untouched; only the list rows change.
+  const importedMissingCount = attachmentCountsLoaded
+    ? entries.filter((e) => e.source_type === 'import' && isEligibleForExempt(e)).length
+    : 0
+  const wholeScopeLoaded = entries.length >= count
 
   const handleBatchExempt = async () => {
     const ids = Array.from(selectedIds)
@@ -897,7 +898,7 @@ export default function JournalEntryList({
         for (const id of ids) next.set(id, reason)
         return next
       })
-      setSelectedIds(new Set())
+      selection.clear()
       setBatchReason('')
       toast({
         title: t('batch_no_doc_done_title'),
@@ -962,7 +963,7 @@ export default function JournalEntryList({
       setBulkOpen(false)
       setBulkCount(null)
       setBulkReason('')
-      setSelectedIds(new Set())
+      selection.clear()
       toast({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? 0 }),
@@ -986,9 +987,12 @@ export default function JournalEntryList({
 
   // Detail-pager context: the loaded page as rendered, written when the user
   // opens a verifikat. Server-paginated, so prev/next spans this page only.
+  // The list's own address rides along for the verifikat's link back here.
   const rememberListContext = () => {
+    const listQuery = writeVerifikatListQuery('', viewQuery).toString()
     writeListContext(listContextKey('bookkeeping', company?.id), {
       ids: filteredEntries.map((e) => e.id),
+      href: listQuery ? `${LIST_PATH}?${listQuery}` : LIST_PATH,
     })
   }
 
@@ -1001,23 +1005,36 @@ export default function JournalEntryList({
   const dialogFilterCount =
     (seriesFilter !== 'all' ? 1 : 0) +
     (dateFrom || dateTo ? 1 : 0) +
-    (showMissingOnly ? 1 : 0)
+    (showMissingOnly ? 1 : 0) +
+    // Hidden makulerade pairs count: the badge is the hint that rows are
+    // hidden, which the list lacked when stornos vanished silently (#3149).
+    (correctionView === 'hide' ? 1 : 0)
   // Year scope included: drives empty-state messaging + keeping the bar mounted.
-  const activeFilterCount = (periodId ? 1 : 0) + dialogFilterCount
+  // The year is app-wide context, not a page filter.
+  const activeFilterCount = dialogFilterCount
+
+  // The search box says what the request it sends can find. With "Visa
+  // saknade underlag" on, the list is read by an RPC that takes the text and
+  // the voucher label only (lib/bookkeeping/missing-underlag.ts). With no
+  // fiscal year on the request (all years, or the drafts view, which spans
+  // them) the route reads no amount (isBoundedVerifikatScope).
+  const searchReadsAmounts = listMode === 'committed' && isBoundedVerifikatScope({ periodId })
+  const searchPlaceholder = showMissingOnly
+    ? t('search_placeholder_missing')
+    : searchReadsAmounts
+      ? t('search_placeholder')
+      : t('search_placeholder_all_years')
+  const searchHint = showMissingOnly
+    ? t('search_hint_missing')
+    : searchReadsAmounts
+      ? t('search_hint')
+      : t('search_hint_all_years')
 
   // When any filter or search is active we keep the filter bar mounted even
   // with zero results, so the user can edit or clear their query. The pristine
   // "no entries yet" state below only applies to an untouched, empty ledger.
   const hasActiveFilters = Boolean(search) || activeFilterCount > 0
 
-  // Apply a fiscal-year selection. The FiscalYearSelector (now an inline control
-  // in the toolbar, not buried in the filter dialog) persists the choice to
-  // localStorage itself; here we only mirror it into local state and reset
-  // pagination.
-  const handlePeriodChange = (next: string | null) => {
-    setPeriodId(next)
-    setPage(0)
-  }
 
   // Change how many verifikat are shown per page. Resets to the first page and
   // persists the choice per company (same convention as the sort order).
@@ -1026,6 +1043,14 @@ export default function JournalEntryList({
     setPage(0)
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next)
+    }
+  }
+
+  const toggleDensity = () => {
+    const next = !compact
+    setCompact(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next ? 'compact' : 'comfortable')
     }
   }
 
@@ -1077,14 +1102,11 @@ export default function JournalEntryList({
   }
 
   const clearAllFilters = () => {
-    setPeriodId(null)
-    // Mirror the selector's "Alla räkenskapsår" write so the cleared scope
-    // survives a remount/reload instead of being restored from a stale value.
-    if (company?.id && typeof window !== 'undefined') {
-      window.localStorage.setItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id, FISCAL_YEAR_ALL_VALUE)
-    }
+    // A deep link's one-visit year scope goes with the filters it came with.
+    setVisitScope(null)
     setSeriesFilter('all')
     setShowMissingOnly(false)
+    setCorrectionView((v) => (v === 'hide' ? 'collapse' : v))
     setDateFrom('')
     setDateTo('')
     setDateFromInput('')
@@ -1094,27 +1116,12 @@ export default function JournalEntryList({
 
   // Rows on this page the user can batch-mark "Inget underlag krävs".
   const eligibleEntries = canWrite ? filteredEntries.filter(isEligibleForExempt) : []
-  const allEligibleSelected =
-    eligibleEntries.length > 0 && eligibleEntries.every((e) => selectedIds.has(e.id))
-  // Ranges walk the selectable rows of the current page, in rendered order.
-  const range = useRangeSelect({
-    visibleIds: eligibleEntries.map((e) => e.id),
-    selectedIds,
-    setSelectedIds,
-  })
-  const toggleSelect = (id: string, extend?: boolean) => range.toggle(id, extend)
-  const toggleSelectAll = () => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (allEligibleSelected) {
-        for (const e of eligibleEntries) next.delete(e.id)
-      } else {
-        for (const e of eligibleEntries) next.add(e.id)
-      }
-      return next
-    })
-    range.resetAnchor()
-  }
+  // Page-scoped: the selection holds only eligible rows of this page, so a
+  // search, a filter or an exemption that hides or disqualifies a row drops
+  // it before the batch call can carry it.
+  const selection = useBulkSelection(eligibleEntries.map((e) => e.id))
+  const selectedIds = selection.selectedIds
+  const toggleSelect = (id: string, extend?: boolean) => selection.toggle(id, extend)
 
   // Pristine, untouched ledger: nothing posted in ANY year, no drafts, no
   // search or dialog filters, and we're on the committed view. The fiscal-year
@@ -1134,13 +1141,19 @@ export default function JournalEntryList({
     return (
       <DataList className="stagger-enter">
         <DataListEmpty
-          icon={<BookOpen className="h-6 w-6" />}
+          icon={<BookOpenIcon className="h-6 w-6" />}
           title={t('empty_title')}
           description={t('empty_description')}
         />
       </DataList>
     )
   }
+
+  // Compact rows take the same 7px off every cell's top and bottom padding
+  // (and the copy button's tap padding, below), so a row goes from 49px to
+  // 31px and the cells keep their alignment.
+  const cellPad = compact ? 'py-1' : undefined
+  const controlCellPad = compact ? 'py-[2px]' : 'py-[9px]'
 
   return (
     <div className="space-y-4">
@@ -1157,43 +1170,11 @@ export default function JournalEntryList({
             { value: 'drafts', label: t('mode_drafts'), count: draftCount },
           ]}
         />
-        <div className="relative flex-1 sm:flex-none sm:w-[280px]">
-          <ToolbarSearch
-            type="text"
-            inputMode="search"
-            placeholder={t('search_placeholder')}
-            aria-label={t('search_placeholder')}
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            containerClassName="min-w-0 max-w-none"
-            className={cn('pr-7', loading && search && 'pr-12')}
-          />
-          {loading && search && (
-            // Search is server-side and can take a moment on a large ledger;
-            // without this the only signal was the list dimming.
-            <Loader2
-              className="absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
-              aria-hidden="true"
-            />
-          )}
-          {searchInput && (
-            <button
-              type="button"
-              onClick={() => setSearchInput('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-sm hover:bg-secondary/60 text-muted-foreground"
-              title={t('clear_search')}
-              aria-label={t('clear_search')}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-
         <Dialog open={filterOpen} onOpenChange={setFilterOpen}>
           <DialogTrigger asChild>
             <Button
               variant="outline"
-              size="sm"
+              size="toolbar"
               className="gap-2 shrink-0"
               aria-label={
                 dialogFilterCount > 0
@@ -1201,12 +1182,12 @@ export default function JournalEntryList({
                   : t('filter')
               }
             >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
+              <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
               {t('filter')}
               {dialogFilterCount > 0 && (
                 <Badge
                   variant="secondary"
-                  className="h-4 min-w-4 justify-center px-1 text-[11px] tabular-nums"
+                  className="h-4 min-w-4 justify-center px-1 text-xs tabular-nums"
                 >
                   {dialogFilterCount}
                 </Badge>
@@ -1252,16 +1233,23 @@ export default function JournalEntryList({
               <div className="space-y-2">
                 <Label className="text-sm font-medium">{t('filter_section_series')}</Label>
                 <Select value={seriesFilter} onValueChange={(v) => { setSeriesFilter(v); setPage(0) }}>
-                  <SelectTrigger className="h-9 w-full text-sm font-mono" aria-label={t('filter_section_series')}>
+                  <SelectTrigger className="h-9 w-full text-sm" aria-label={t('filter_section_series')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Alla serier</SelectItem>
-                    {'ABCDEFG'.split('').map((letter) => (
-                      <SelectItem key={letter} value={letter} className="font-mono">
-                        Serie {letter}
-                      </SelectItem>
-                    ))}
+                    {/* The letter and its name, as the series picker in
+                        Nytt verifikat shows them; a letter without a name
+                        stands alone. */}
+                    {seriesLetters.map((letter) => {
+                      const name = voucherSeriesLabel(letter, seriesLabels)
+                      return (
+                        <SelectItem key={letter} value={letter}>
+                          <span className="font-mono">{letter}</span>
+                          {name && <span className="ml-2 text-muted-foreground">{name}</span>}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               </div>
@@ -1307,7 +1295,7 @@ export default function JournalEntryList({
                       title={t('clear_date_filter')}
                       aria-label={t('clear_date_filter')}
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </button>
                   )}
                 </div>
@@ -1337,126 +1325,184 @@ export default function JournalEntryList({
                 )}
               </div>
 
-              {/* Reveal the storno + reversed-original rows the default view folds
-                  into the surviving correction (3 rows → 1). A storno that no
-                  correction replaced is always shown. */}
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="show-correction-chain"
-                  checked={!collapseCorrections}
-                  onCheckedChange={(on) => { setCollapseCorrections(!on); setPage(0) }}
-                />
-                <Label htmlFor="show-correction-chain" className="text-sm cursor-pointer">
-                  {t('show_correction_chain')}
-                </Label>
+              {/* Storno and Omförd rows. The old switch ("Visa storno- och
+                  rättade poster") only folded correction groups, so with it
+                  off a pure storno pair still showed (PH 231). Three named
+                  states instead: every option says what it hides. */}
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">{t('filter_section_corrections')}</Label>
+                <Select
+                  value={correctionView}
+                  disabled={listMode === 'drafts'}
+                  onValueChange={(v) => {
+                    if (v === 'all' || v === 'collapse' || v === 'hide') {
+                      setCorrectionView(v)
+                      setPage(0)
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full text-sm" aria-label={t('filter_section_corrections')}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="collapse">{t('corrections_collapse')}</SelectItem>
+                    <SelectItem value="hide">{t('corrections_hide')}</SelectItem>
+                    <SelectItem value="all">{t('corrections_all')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                {correctionView === 'hide' && (
+                  <p className="text-xs text-muted-foreground">{t('corrections_hide_hint')}</p>
+                )}
               </div>
             </div>
 
             <DialogFooter className="sm:justify-between">
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={clearAllFilters}
                 disabled={activeFilterCount === 0}
               >
                 {t('filter_clear_all')}
               </Button>
               <DialogClose asChild>
-                <Button variant="outline" size="sm">{t('filter_done')}</Button>
+                <Button variant="outline">{t('filter_done')}</Button>
               </DialogClose>
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        {/* The page context picker (convention 8): fiscal-year scope as a
-            chip-dropdown far right in the toolbar, one click to change,
-            always visible per BFL. Persists to localStorage (same key as
-            before); first-load scope resolution still happens
-            authoritatively in the period effect. */}
-        {periodHydrated && (
-          <div className="sm:ml-auto">
-            {/* suppressAutoRestore on deep-link visits: the arrival scope is a
-                deliberate in-memory "Alla räkenskapsår" (matches the all-years
-                dashboard badge); FyPicker's on-load restore of the persisted
-                year would otherwise snap the scope back right after load. */}
-            <FyPicker
-              value={periodId}
-              onChange={handlePeriodChange}
-              suppressAutoRestore={initialShowMissingOnly || initialGapPeriodId !== null}
+        {/* Search sits at the right end, after the view and the filter (V7 list
+            toolbars); the density toggle follows it as the last thing. Below
+            640px the shared class lets the box share a row from 160px, which
+            leaves its text 100px: enough for "Sök verifikat", not for a
+            placeholder that names what the box finds. Here it keeps the
+            240px it has on a wide screen, and takes a row of its own when
+            the first has no room for that, as it already did on a phone. */}
+        <div className={cn('relative', TOOLBAR_SEARCH_END_CLASS, 'min-w-60')}>
+          <ToolbarSearch
+            type="text"
+            inputMode="search"
+            placeholder={searchPlaceholder}
+            aria-label={searchHint}
+            title={searchHint}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            containerClassName="min-w-0 max-w-none"
+            className={cn('pr-7', loading && search && 'pr-12')}
+          />
+          {loading && search && (
+            // Search is server-side and can take a moment on a large ledger;
+            // without this the only signal was the list dimming.
+            <SpinnerIcon
+              className="absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
+              aria-hidden="true"
             />
-          </div>
-        )}
+          )}
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => setSearchInput('')}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-sm hover:bg-secondary/60 text-muted-foreground"
+              title={t('clear_search')}
+              aria-label={t('clear_search')}
+            >
+              <XMarkIcon className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        {/* Row density: comfortable vs compact, persisted per company. A toggle
+            (aria-pressed) rather than a mode buried in the filter dialog. It
+            carries its name like the Filter button beside it: as a bare icon
+            the only way to learn what it did was to press it, and people
+            pressed it back and forth. On is a check, not the tint alone. A
+            phone keeps the icon only; the toolbar has no room there. */}
+        <Button
+          variant="outline"
+          size="toolbar"
+          onClick={toggleDensity}
+          aria-pressed={compact}
+          aria-label={t('density_compact')}
+          className={cn('gap-2 shrink-0', compact ? 'bg-secondary text-foreground' : 'text-muted-foreground')}
+        >
+          {compact ? <CheckIcon className="h-3.5 w-3.5" /> : <QueueListIcon className="h-3.5 w-3.5" />}
+          <span className="hidden sm:inline">{t('density_compact')}</span>
+        </Button>
       </div>
 
-      {/* Holes in this year's voucher numbering with their documented
-          explanations, or the Förklara action: the surface that satisfies the
-          BFNAR 2013:2 documentation requirement the bokslut preflight checks.
-          Scoped to the selected räkenskapsår, or the current one under "Alla
+      {/* Holes in this year's voucher numbering: one attn line with the
+          Förklara action for unexplained gaps, explained ones behind a quiet
+          disclosure. The surface that satisfies the BFNAR 2013:2
+          documentation requirement the bokslut preflight checks. Scoped to
+          the selected räkenskapsår, or the current one under "Alla
           räkenskapsår"; hidden on the drafts view and when the series is
           unbroken. */}
-      {listMode === 'committed' && periodHydrated && (
+      {/* A failed refresh keeps the rows and takes the page's one attention
+          line, in place of the gap notice. */}
+      {loadFailed && filteredEntries.length > 0 ? (
+        <AttnLine action={{ label: tCommon('retry'), onClick: () => void fetchEntries() }}>
+          {tCommon('refresh_failed')}
+        </AttnLine>
+      ) : listMode === 'committed' && periodHydrated && (
         <VoucherGapNotice
           periodId={
             periodId ??
-            resolveCurrentPeriodId(fiscalPeriods, new Date().toISOString().split('T')[0])
+            resolveCurrentPeriodId(fiscalScope.periods, todayIsoStockholm())
           }
           series={seriesFilter !== 'all' ? seriesFilter : null}
           refreshToken={refreshToken}
+          onUnexplainedCountChange={setUnexplainedGapCount}
         />
       )}
 
       {loading && !hasLoaded ? (
-        <DataList className="stagger-enter">
-          <DataListLoading />
-        </DataList>
+        <LateReveal>
+          <DataList className="stagger-enter">
+            <DataListLoading />
+          </DataList>
+        </LateReveal>
       ) : loadFailed && filteredEntries.length === 0 ? (
         // Failed load with nothing on screen: an explicit error state with a
         // retry, never the "empty ledger" card. The toolbar above stays
         // mounted so the sort/filter that caused the failure can be changed.
-        <DataList className={cn('stagger-enter', loading && 'opacity-60')} aria-busy={loading || undefined}>
-          <DataListEmpty
-            icon={<CircleSlash className="h-6 w-6" />}
+        <div className={cn(loading && 'opacity-60')} aria-busy={loading || undefined}>
+          <LoadError
             title={t('load_failed_title')}
             description={t('load_failed_description')}
-            action={
-              <Button variant="outline" size="sm" onClick={() => fetchEntries()}>
-                {t('load_failed_retry')}
-              </Button>
-            }
+            onRetry={() => void fetchEntries()}
           />
-        </DataList>
+        </div>
+      ) : filteredEntries.length === 0 && listMode === 'committed' && hasActiveFilters ? (
+        // No hits for the search or filters: one muted line where the rows
+        // would be, with the quiet way back (convention 17).
+        <p
+          className={cn('px-1 py-3 text-[13px] text-muted-foreground', loading && 'opacity-60')}
+          aria-busy={loading || undefined}
+        >
+          {t('no_results_line')}{' '}
+          <button
+            type="button"
+            className={QUIET_LINK_CLASS}
+            onClick={() => {
+              setSearchInput('')
+              setSearch('')
+              clearAllFilters()
+            }}
+          >
+            {t('filter_clear_all')}
+          </button>
+        </p>
       ) : filteredEntries.length === 0 ? (
-        // Empty placeholder, scoped to the situation: an empty drafts view, a
-        // filtered committed view with no matches, or a committed view with no
-        // posted entries yet (but drafts exist, hence we got here, not the
-        // pristine early return above). Carries the same busy treatment as the
-        // table branch: widening a filter from an empty result would otherwise
-        // look identical to "still nothing" for the whole request.
+        // Empty placeholder, scoped to the situation: an empty drafts view, or
+        // a committed view with no posted entries yet (but drafts exist, hence
+        // we got here, not the pristine early return above). Carries the same
+        // busy treatment as the table branch.
         <DataList
           className={cn('stagger-enter', loading && 'opacity-60')}
           aria-busy={loading || undefined}
         >
           <DataListEmpty
-            icon={
-              listMode === 'drafts' || !hasActiveFilters ? (
-                <BookOpen className="h-6 w-6" />
-              ) : (
-                <Search className="h-6 w-6" />
-              )
-            }
-            title={
-              listMode === 'drafts'
-                ? t('empty_drafts_title')
-                : hasActiveFilters
-                  ? t('no_results_title')
-                  : t('empty_title')
-            }
-            description={
-              listMode === 'drafts'
-                ? t('empty_drafts_description')
-                : hasActiveFilters
-                  ? t('no_results_description')
-                  : t('empty_description')
-            }
+            icon={<BookOpenIcon className="h-6 w-6" />}
+            title={listMode === 'drafts' ? t('empty_drafts_title') : t('empty_title')}
+            description={listMode === 'drafts' ? t('empty_drafts_description') : t('empty_description')}
           />
         </DataList>
       ) : (
@@ -1471,101 +1517,106 @@ export default function JournalEntryList({
             selected via the hover checkboxes, then it pops in with the
             count and the batch actions. Select-all and the filter-scoped
             bulk mark live inside it as quiet actions. */}
-        {selectedIds.size > 0 && (
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
-            <span className="whitespace-nowrap">
-              <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-              {t('bulkbar_selected', { count: selectedIds.size })}
-            </span>
-            <Input
-              value={batchReason}
-              onChange={(e) => setBatchReason(e.target.value)}
-              placeholder={t('no_doc_required_reason_placeholder')}
-              list="batch-no-doc-suggestions"
-              maxLength={200}
-              className="h-8 w-56 text-xs"
-              disabled={batchSubmitting}
-            />
-            <datalist id="batch-no-doc-suggestions">
-              <option value={t('no_doc_required_suggestion_bank_fee')} />
-              <option value={t('no_doc_required_suggestion_interest')} />
-              <option value={t('no_doc_required_suggestion_internal_transfer')} />
-              <option value={t('no_doc_required_suggestion_tax_payment')} />
-              <option value={t('no_doc_required_suggestion_salary')} />
-            </datalist>
-            <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting}>
-              {t('batch_mark_no_doc')}
-            </Button>
-            {!allEligibleSelected && (
-              <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAll}>
-                {t('batch_select_all', { count: eligibleEntries.length })}
-              </button>
-            )}
-            {/* Filter-scoped: mark every missing-doc verifikat matching the
-                active filters across all pages: scales to a post-import flood. */}
-            <button type="button" className={QUIET_LINK_CLASS} onClick={openBulk}>
-              {t('batch_mark_all_missing')}
-            </button>
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => setSelectedIds(new Set())}
-              disabled={batchSubmitting}
-            >
-              {t('batch_clear_selection')}
-            </button>
-          </div>
-        )}
+        <BulkSelectionBar
+          selection={selection}
+          selectableCount={eligibleEntries.length}
+          countLabel={t('bulkbar_selected', { count: selectedIds.size })}
+          selectAllLabel={t('batch_select_all', { count: eligibleEntries.length })}
+          clearLabel={t('batch_clear_selection')}
+          busy={batchSubmitting}
+        >
+          <Input
+            value={batchReason}
+            onChange={(e) => setBatchReason(e.target.value)}
+            placeholder={t('no_doc_required_reason_placeholder')}
+            list="batch-no-doc-suggestions"
+            maxLength={200}
+            className="h-8 w-56 text-xs"
+            disabled={batchSubmitting}
+          />
+          <datalist id="batch-no-doc-suggestions">
+            <option value={t('no_doc_required_suggestion_bank_fee')} />
+            <option value={t('no_doc_required_suggestion_interest')} />
+            <option value={t('no_doc_required_suggestion_internal_transfer')} />
+            <option value={t('no_doc_required_suggestion_tax_payment')} />
+            <option value={t('no_doc_required_suggestion_salary')} />
+            <option value={t('no_doc_required_suggestion_archived_elsewhere')} />
+          </datalist>
+          <Button onClick={handleBatchExempt} loading={batchSubmitting}>
+            {t('batch_mark_no_doc')}
+          </Button>
+          {/* Filter-scoped: mark every missing-doc verifikat matching the
+              active filters across all pages: scales to a post-import flood. */}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={openBulk}>
+            {t('batch_mark_all_missing')}
+          </button>
+        </BulkSelectionBar>
 
-        {/* Discoverability for "Ångra import" (issue #1883): when the page
-            shows import-sourced vouchers, point at the SIE import history
-            where a bad import can be undone in one step. One page-domain
-            attn line (design convention 6). Only source_type 'import' is an
-            SIE marker: 'opening_balance' is also written by year-end closing
-            and the manual IB flows, which have nothing to undo here. */}
-        {entries.some((e) => e.source_type === 'import') && (
+        {/* The page's one page-domain attn slot (convention 6), in priority
+            order: unexplained voucher gaps (VoucherGapNotice above) win,
+            then imported verifikat missing underlag, then the "Ångra import"
+            pointer (issue #1883). The missing-underlag line opens the
+            existing "Underlag till importerade verifikat" import, which
+            attaches a folder of receipts by voucher number; the import
+            history stays one quiet link away in the same line. Only
+            source_type 'import' is an SIE marker: 'opening_balance' is also
+            written by year-end closing and the manual IB flows, which have
+            nothing to undo here. */}
+        {unexplainedGapCount === 0 && importedMissingCount > 0 ? (
           <AttnLine
             className="px-1 pb-2"
-            action={{ label: t('import_attn_action'), href: '/import?history=sie' }}
+            action={{ label: t('import_missing_attn_action'), href: '/import?mode=underlag' }}
+            trailing={
+              <>
+                <span className="text-muted-foreground print:hidden"> · </span>
+                <IntentLink href="/import?history=sie" className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
+                  {t('import_attn_action')}
+                </IntentLink>
+              </>
+            }
           >
-            {t('import_attn')}
+            {wholeScopeLoaded
+              ? t('import_missing_attn', { count: importedMissingCount })
+              : t('import_missing_attn_page', { count: importedMissingCount })}
           </AttnLine>
+        ) : (
+          unexplainedGapCount === 0 &&
+          entries.some((e) => e.source_type === 'import') && (
+            <AttnLine
+              className="px-1 pb-2"
+              action={{ label: t('import_attn_action'), href: '/import?history=sie' }}
+            >
+              {t('import_attn')}
+            </AttnLine>
+          )
         )}
 
-        <div className="overflow-x-auto">
+        <div className="-mx-2 overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
-                <SortableHeader
+                <SortableTh
                   label={t('th_voucher')}
-                  sortLabel={t('sort_by', { column: t('th_voucher') })}
-                  column="voucher"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'voucher')}
+                  onSort={(e) => handleHeaderSort('voucher', e.shiftKey)}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_date')}
-                  sortLabel={t('sort_by', { column: t('th_date') })}
-                  column="date"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'date')}
+                  onSort={(e) => handleHeaderSort('date', e.shiftKey)}
                   className="hidden sm:table-cell"
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_description')}
-                  sortLabel={t('sort_by', { column: t('th_description') })}
-                  column="description"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'description')}
+                  onSort={(e) => handleHeaderSort('description', e.shiftKey)}
                   className="w-full"
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_amount')}
-                  sortLabel={t('sort_by', { column: t('th_amount') })}
-                  column="total"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'total')}
+                  onSort={(e) => handleHeaderSort('total', e.shiftKey)}
                   className="text-right"
                   align="right"
                 />
@@ -1576,8 +1627,11 @@ export default function JournalEntryList({
               {filteredEntries.map((entry) => {
                 const isExpanded = expandedId === entry.id
                 const lines = (entry.lines || []) as JournalEntryLine[]
-                // Voucher total = sum of the debit side (= credit side when balanced).
-                const voucherTotal = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+                // The money line when the verifikat records one payment, else
+                // the omslutning (sum of the debit side); see
+                // lib/bookkeeping/voucher-display-amount.ts. The amount sort
+                // orders by its SQL mirror (the display_amount column).
+                const displayAmount = voucherDisplayAmount(entry, extraMoneyAccounts)
                 const selectable = canWrite && isEligibleForExempt(entry)
                 // A makulerad verifikat should read as struck out, the way
                 // Grundbok already renders it. Applied per data cell rather
@@ -1611,29 +1665,24 @@ export default function JournalEntryList({
                     >
                       {/* Hover-revealed selection checkbox (concept .cb) */}
                       <td
-                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px] select-none')}
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 select-none', controlCellPad)}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {selectable && (
-                          <Checkbox
+                          <RowSelectCheckbox
                             checked={selectedIds.has(entry.id)}
+                            dense={compact}
                             onClick={(e) => {
                               shiftHeld.current = e.shiftKey
                             }}
                             onCheckedChange={() => toggleSelect(entry.id, shiftHeld.current)}
                             aria-label={t('batch_select_row')}
-                            className={cn(
-                              'border-foreground duration-150',
-                              selectedIds.has(entry.id)
-                                ? 'opacity-100'
-                                : CHECKBOX_REVEAL_CLASS,
-                            )}
                           />
                         )}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap', cellPad)}>
                         <span className="inline-flex items-center gap-1">
-                          <Link
+                          <IntentLink
                             href={`/bookkeeping/${entry.id}`}
                             className={cn(
                               'font-mono text-[13px] tabular-nums hover:underline',
@@ -1649,16 +1698,16 @@ export default function JournalEntryList({
                             onKeyDown={(e) => e.stopPropagation()}
                           >
                             {formatVoucher(entry)}
-                          </Link>
+                          </IntentLink>
                           <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground', struckCell)}>
+                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap date-figures text-muted-foreground', struckCell, cellPad)}>
                         {formatDate(entry.entry_date)}
                       </td>
                       {/* overflow-hidden: see #2003, the shrink-0 status
                           chips cannot truncate and would paint over Belopp. */}
-                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden', cellPad)}>
                         <span className="flex min-w-0 items-center gap-2">
                           <span className={cn('truncate', struckCell)}>{entry.description}</span>
                           {entry.out_of_period && (
@@ -1684,11 +1733,32 @@ export default function JournalEntryList({
                           )}
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell)}>
-                        {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
+                      <td
+                        className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell, cellPad)}
+                        title={
+                          displayAmount.amount !== displayAmount.debitTotal
+                            ? t('amount_money_tooltip', {
+                                total: formatCurrency(displayAmount.debitTotal, 'SEK', { minimumFractionDigits: 2 }),
+                              })
+                            : undefined
+                        }
+                      >
+                        {formatAmount(displayAmount.amount)}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right', controlCellPad)}>
                         <span className="inline-flex items-center justify-end gap-2">
+                          {/* The internal note, readable on hover; the row's
+                              foldout shows it in full (accounted#183). */}
+                          {entry.notes?.trim() && (
+                            <span
+                              role="img"
+                              aria-label={t('note_indicator_aria')}
+                              title={entry.notes}
+                              className="inline-flex text-muted-foreground"
+                            >
+                              <ChatBubbleLeftIcon className="h-3.5 w-3.5" />
+                            </span>
+                          )}
                           {attachmentCounts[entry.id] ? (
                             <button
                               type="button"
@@ -1700,25 +1770,28 @@ export default function JournalEntryList({
                               }}
                               className="inline-flex items-center gap-0.5 rounded-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
                             >
-                              <Paperclip className="h-3.5 w-3.5" />
+                              <PaperClipIcon className="h-3.5 w-3.5" />
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
                             </button>
                           ) : (
                             attachmentCountsLoaded && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && !invoiceReferenced.has(entry.id) && (
                               noDocRequired.has(entry.id) ? (
                                 <span title={t('no_doc_required_indicator_tooltip')}>
-                                  <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <NoSymbolIcon className="h-3.5 w-3.5 text-muted-foreground" />
                                 </span>
                               ) : (
-                                <Badge variant="warning" title={t('missing_attachment_tooltip')}>
-                                  {t('missing_attachment_chip')}
-                                </Badge>
+                                // Imported rows are counted once in the line
+                                // above the table, not chipped row by row.
+                                entry.source_type !== 'import' && (
+                                  <Badge variant="warning" title={t('missing_attachment_tooltip')}>
+                                    {t('missing_attachment_chip')}
+                                  </Badge>
+                                )
                               )
                             )
                           )}
                           {entry.status === 'draft' && (
                             <Button
-                              size="sm"
                               variant="outline"
                               disabled={!canWrite}
                               loading={committingId === entry.id}
@@ -1745,16 +1818,19 @@ export default function JournalEntryList({
                                 // changing row height (the row is ~40px from
                                 // the description cell).
                                 'inline-flex items-center rounded-sm p-2 text-muted-foreground hover:text-foreground',
+                                // Compact rows: at 30px the button would set
+                                // the row height on its own.
+                                compact && 'p-1',
                                 // Quiet at rest; coarse pointers (phones and
                                 // tablets) keep the icon visible, since the
                                 // table has no mobile card to fall back on.
                                 HOVER_REVEAL_CLASS,
                               )}
                             >
-                              <Copy className="h-3.5 w-3.5" />
+                              <Square2StackIcon className="h-3.5 w-3.5" />
                             </button>
                           )}
-                          <ChevronRight
+                          <ChevronRightIcon
                             className={cn(
                               'h-3.5 w-3.5 text-muted-foreground transition-[transform,opacity] duration-150',
                               isExpanded
@@ -1767,70 +1843,20 @@ export default function JournalEntryList({
                     </tr>
                     {isExpanded && (
                       <tr data-no-stagger>
-                        <td colSpan={6} className="border-b border-border p-0">
+                        <td colSpan={6} className="border-b-hairline p-0">
                           <RowFoldout>
                             <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
                               {lines.length === 0 ? (
                                 <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
                               ) : (
-                                <table className="w-full border-collapse text-[12.5px]" aria-label={formatVoucher(entry)}>
-                                  <thead>
-                                    <tr>
-                                      <th className={cn(VTH_CLASS, 'w-[180px]')}>{t('account_column')}</th>
-                                      <th className={VTH_CLASS}>{t('description_column')}</th>
-                                      <th className={cn(VTH_CLASS, 'text-right')}>{t('debit')}</th>
-                                      <th className={cn(VTH_CLASS, 'text-right')}>{t('credit')}</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {lines
-                                      .slice()
-                                      .sort((a, b) => a.sort_order - b.sort_order)
-                                      .map((line) => {
-                                        const accountName = getAccountDescription(line.account_number)?.name
-                                        const desc = line.line_description
-                                        const showDesc = desc
-                                          && desc.toLowerCase() !== accountName?.toLowerCase()
-                                          && desc.toLowerCase() !== entry.description?.toLowerCase()
-                                        const debit = Number(line.debit_amount) || 0
-                                        const credit = Number(line.credit_amount) || 0
-                                        const fx = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-                                          ? `${Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${line.currency}`
-                                          : null
-                                        return (
-                                          <tr key={line.id}>
-                                            <td className={cn(VTD_CLASS, 'whitespace-nowrap')}>
-                                              <AccountNumber number={line.account_number} showName />
-                                            </td>
-                                            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
-                                              {showDesc ? desc : ''}
-                                            </td>
-                                            <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
-                                              {debit > 0 ? debit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                              {debit > 0 && fx && (
-                                                <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                              )}
-                                            </td>
-                                            <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
-                                              {credit > 0 ? credit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                              {credit > 0 && fx && (
-                                                <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                              )}
-                                            </td>
-                                          </tr>
-                                        )
-                                      })}
-                                    <tr>
-                                      <td colSpan={2} className="py-[7px] pr-4 font-medium">{t('sum_label')}</td>
-                                      <td className="py-[7px] pr-4 text-right tabular-nums font-medium">
-                                        {lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                                      </td>
-                                      <td className="py-[7px] pr-4 text-right tabular-nums font-medium">
-                                        {lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                                      </td>
-                                    </tr>
-                                  </tbody>
-                                </table>
+                                <VoucherLinesTable
+                                  aria-label={formatVoucher(entry)}
+                                  showTotals
+                                  redundantTexts={[entry.description]}
+                                  lines={voucherLineViews(
+                                    lines.slice().sort((a, b) => a.sort_order - b.sort_order),
+                                  )}
+                                />
                               )}
 
                               {entry.notes && (
@@ -1864,7 +1890,10 @@ export default function JournalEntryList({
                                     // Server-side saknade-underlag filter on: an
                                     // exempted row leaves the filtered set, so
                                     // refetch in place (keeps expansion state
-                                    // semantics of a background refresh).
+                                    // semantics of a background refresh). The
+                                    // toggle reports only once the mark and its
+                                    // reason are saved, so the row cannot leave
+                                    // before the reason was entered (crm#1003).
                                     if (exempted && showMissingOnly) {
                                       void fetchEntries({ preserveSelection: true })
                                     }
@@ -1877,30 +1906,29 @@ export default function JournalEntryList({
                               <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
                                 {entry.status === 'draft' && (
                                   <Button
-                                    size="sm"
                                     onClick={() => openCommitConfirm(entry)}
                                     disabled={!canWrite}
                                     loading={canWrite && committingId === entry.id}
                                     title={!canWrite ? t('read_only_tooltip') : undefined}
                                   >
-                                    {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                                    {!canWrite && <LockClosedIcon className="h-4 w-4" />}
                                     {t('post')}
                                   </Button>
                                 )}
-                                <Link
+                                <IntentLink
                                   href={`/bookkeeping/${entry.id}`}
                                   className={QUIET_LINK_CLASS}
                                   onClick={rememberListContext}
                                 >
                                   {t('show_details')}
-                                </Link>
-                                {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setCorrectionEntry(entry)}>
+                                </IntentLink>
+                                {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'correct')}>
                                     {t('create_correction')}
                                   </button>
                                 )}
                                 {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setReverseEntryTarget(entry)}>
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'reverse')}>
                                     {t('reverse_action')}
                                   </button>
                                 )}
@@ -1943,7 +1971,7 @@ export default function JournalEntryList({
           <div className="space-y-3 text-sm">
             {bulkCount === null ? (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <SpinnerIcon className="h-4 w-4 animate-spin" />
                 {t('bulk_mark_counting')}
               </div>
             ) : bulkCount === 0 ? (
@@ -1968,16 +1996,17 @@ export default function JournalEntryList({
                     <option value={t('no_doc_required_suggestion_internal_transfer')} />
                     <option value={t('no_doc_required_suggestion_tax_payment')} />
                     <option value={t('no_doc_required_suggestion_salary')} />
+                    <option value={t('no_doc_required_suggestion_archived_elsewhere')} />
                   </datalist>
                 </div>
               </>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}>
+            <Button variant="outline" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}>
               {t('bulk_cancel')}
             </Button>
-            <Button size="sm" onClick={handleBulkConfirm} disabled={!bulkCount} loading={bulkSubmitting}>
+            <Button onClick={handleBulkConfirm} disabled={!bulkCount} loading={bulkSubmitting}>
               {t('bulk_mark_confirm', { count: bulkCount ?? 0 })}
             </Button>
           </DialogFooter>
@@ -2008,12 +2037,7 @@ export default function JournalEntryList({
               ? t('confirm_post_description', {
                   voucher: commitVoucherPreview,
                   description: commitTarget.description || '',
-                  amount: formatCurrency(
-                    ((commitTarget.lines || []) as JournalEntryLine[]).reduce(
-                      (sum, l) => sum + (Number(l.debit_amount) || 0),
-                      0,
-                    ),
-                  ),
+                  amount: formatCurrency(voucherDisplayAmount(commitTarget, extraMoneyAccounts).amount),
                 })
               : t('confirm_post_description_generic', {
                   description: commitTarget.description || '',
@@ -2024,6 +2048,22 @@ export default function JournalEntryList({
             await handleCommit(commitTarget.id)
             setCommitTarget(null)
           }}
+        />
+      )}
+
+      {ownedAction && (
+        <OwnedVoucherActionDialog
+          owner={ownedAction.owner}
+          intent={ownedAction.intent}
+          open
+          onOpenChange={(open) => {
+            if (!open) setOwnedAction(null)
+          }}
+          onProceed={() =>
+            ownedAction.intent === 'reverse'
+              ? setReverseEntryTarget(ownedAction.entry)
+              : setCorrectionEntry(ownedAction.entry)
+          }
         />
       )}
 
@@ -2044,6 +2084,9 @@ export default function JournalEntryList({
           </div>
         </ConfirmationDialog>
       )}
+
+      {/* Booking-time voucher warnings on a draft's commit */}
+      {commitWarningsDialog}
 
       {/* Attachment preview sheet */}
       <AttachmentPreviewSheet
@@ -2077,8 +2120,12 @@ export default function JournalEntryList({
               </SelectContent>
             </Select>
             <span className="tabular-nums whitespace-nowrap">
-              {showingAll
+              {/* "Alla" says all only when every counted row is on screen;
+                  otherwise it states the range it actually holds. */}
+              {showingAll && entries.length >= count
                 ? t('showing_all', { total: count })
+                : showingAll
+                ? t('showing_range', { from: entries.length === 0 ? 0 : 1, to: entries.length, total: count })
                 : t('showing_range', {
                     from: count === 0 ? 0 : page * pageSize + 1,
                     to: Math.min((page + 1) * pageSize, count),
@@ -2092,46 +2139,46 @@ export default function JournalEntryList({
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={page === 0}
                 onClick={() => setPage(0)}
                 aria-label={t('first_page')}
                 title={t('first_page')}
               >
-                <ChevronsLeft className="h-4 w-4" />
+                <ChevronDoubleLeftIcon className="h-4 w-4" />
               </Button>
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={page === 0}
                 onClick={() => setPage(page - 1)}
                 aria-label={t('previous')}
                 title={t('previous')}
               >
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeftIcon className="h-4 w-4" />
               </Button>
               <span className="px-2 text-xs text-muted-foreground tabular-nums self-center whitespace-nowrap">
                 {t('page_of', { page: page + 1, total: Math.ceil(count / pageSize) })}
               </span>
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={(page + 1) * pageSize >= count}
                 onClick={() => setPage(page + 1)}
                 aria-label={t('next')}
                 title={t('next')}
               >
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRightIcon className="h-4 w-4" />
               </Button>
               <Button
                 variant="outline"
-                size="icon-sm"
+                size="icon"
                 disabled={(page + 1) * pageSize >= count}
                 onClick={() => setPage(Math.ceil(count / pageSize) - 1)}
                 aria-label={t('last_page')}
                 title={t('last_page')}
               >
-                <ChevronsRight className="h-4 w-4" />
+                <ChevronDoubleRightIcon className="h-4 w-4" />
               </Button>
             </div>
           )}

@@ -2,11 +2,12 @@
  * The v1 voucher doors (POST /journal-entries and /journal-entries/batch-create)
  * accept every source type the dimension-rule policy enforces (integrations
  * label their own business vouchers, e.g. a webshop integration posts
- * 'webshop_order'), plus 'import' for history replayed from another system.
- * The rule-exempt, engine-owned types are refused: accepting them let a
- * business voucher claim that type's dimension-policy exemption ('system'
- * skips every rule, 'accrual' skips registry validation) and show a false
- * source in the ledger.
+ * 'webshop_order'). The rule-exempt, engine-owned types are refused: accepting
+ * them let a business voucher claim that type's dimension-policy exemption
+ * ('system' skips every rule, 'accrual' skips registry validation) and show a
+ * false source in the ledger. 'import' is refused with a pointer to the SIE
+ * import: the database refuses an import voucher without the batch identity
+ * only the SIE import writes, so the label answered 500 on every call.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -97,8 +98,10 @@ const ENGINE_OWNED = [
   'vat_settlement',
   'rot_rut_payout',
   'rot_rut_reclaim',
+  'rot_rut_reclassification',
   'expense_payout',
   'stripe_payout',
+  'collection_settlement',
 ]
 
 function makeRequest(path: string, body: unknown, { auth = true } = {}): Request {
@@ -189,16 +192,19 @@ describe('POST /api/v1/companies/:companyId/journal-entries: source_type', () =>
     )
   })
 
-  it('keeps accepting import for history replayed from another system', async () => {
+  it('refuses import with 400 naming the SIE import and manual instead of reaching the engine', async () => {
+    // The database refuses an import voucher without a SIE batch identity
+    // (23514): before this answer the caller got 500 BOOKKEEPING_DATABASE_ERROR.
     const res = await createDraft(makeRequest('', { ...ENTRY, source_type: 'import' }), routeParams)
+    const body = (await res.json()) as ErrorBody
 
-    expect(res.status).toBe(201)
-    expect(mockCreateDraft).toHaveBeenCalledWith(
-      expect.anything(),
-      COMPANY_ID,
-      'user-1',
-      expect.objectContaining({ source_type: 'import' })
-    )
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    const issue = body.error.details?.issues?.find((i) => i.field === 'source_type')
+    expect(issue?.message).toContain('/imports/sie')
+    expect(issue?.message).toContain('source_type "manual"')
+    expect(issue?.message).not.toContain('motorägd')
+    expect(mockCreateDraft).not.toHaveBeenCalled()
   })
 })
 
@@ -233,20 +239,35 @@ describe('POST /api/v1/companies/:companyId/journal-entries/batch-create: source
     expect(mockCreateDraft).not.toHaveBeenCalled()
   })
 
-  it('creates manual, import and business-labelled drafts', async () => {
+  it('refuses the whole batch with 400 naming the SIE import when an item carries import', async () => {
     const res = await batchCreate(
       makeRequest('/batch-create', {
-        journal_entries: [ENTRY, { ...ENTRY, source_type: 'import' }, { ...ENTRY, source_type: 'webshop_order' }],
+        journal_entries: [ENTRY, { ...ENTRY, source_type: 'import' }],
+      }),
+      routeParams,
+    )
+    const body = (await res.json()) as ErrorBody
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    const issue = body.error.details?.issues?.find((i) => i.field === 'journal_entries.1.source_type')
+    expect(issue?.message).toContain('/imports/sie')
+    expect(mockCreateDraft).not.toHaveBeenCalled()
+  })
+
+  it('creates manual and business-labelled drafts', async () => {
+    const res = await batchCreate(
+      makeRequest('/batch-create', {
+        journal_entries: [ENTRY, { ...ENTRY, source_type: 'webshop_order' }],
       }),
       routeParams,
     )
     const body = (await res.json()) as { data: { summary: { succeeded: number } } }
 
     expect(res.status).toBe(200)
-    expect(body.data.summary.succeeded).toBe(3)
+    expect(body.data.summary.succeeded).toBe(2)
     expect(mockCreateDraft.mock.calls.map((call) => (call[3] as { source_type: string }).source_type)).toEqual([
       'manual',
-      'import',
       'webshop_order',
     ])
   })

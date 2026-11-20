@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createQueuedMockSupabase, makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { roundOre, sumOre } from '@/lib/money'
 import type { EntityType, InvoiceItem } from '@/types'
 import {
   generatePeppolBisBillingInvoice,
+  isPeppolPreviewXml,
+  peppolAttachmentIssues,
   PEPPOL_BIS_BILLING_CUSTOMIZATION_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
+  PEPPOL_PREVIEW_INVOICE_NUMBER,
 } from '../peppol-bis-billing'
+import { countTextRowsLeftOutOfPeppol } from '../peppol-lines'
 
 function makeItem(overrides: Partial<InvoiceItem> = {}): InvoiceItem {
   return {
@@ -74,12 +81,13 @@ function makeValidInput() {
 
 /**
  * Per-line VAT exactly as the creation path stores it: every line is rounded to
- * öre on its own and the header VAT is the sum of those rounded amounts
- * (lib/invoices/build-invoice-write.ts). Sweden permits that; EN 16931 has no
- * way to express it, which is why the difference has to travel in BT-114.
+ * öre on its own (computeLineVat, which lib/invoices/build-invoice-write.ts
+ * stores) and the header VAT is the sum of those rounded amounts. Sweden
+ * permits that; EN 16931 has no way to express it, which is why the
+ * difference has to travel in BT-114.
  */
 function storedLineVat(lineTotal: number, vatRate: number): number {
-  return roundOre((lineTotal * vatRate) / 100)
+  return computeLineVat(lineTotal, vatRate)
 }
 
 /** An invoice built from single-unit lines with creation-path per-line VAT. */
@@ -328,6 +336,60 @@ describe('generatePeppolBisBillingInvoice', () => {
     ]))
   })
 
+  it('accepts a half-öre VAT line exactly as the invoice builder stores it (crm#1343)', async () => {
+    // 5713 st x 0,10 kr at 25 %: the builder stored 142,82 while this check
+    // computed 142,83, so the invoice could not be sent (LINE_VAT_MISMATCH).
+    // Both now use computeLineVat.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+    const input = makeValidInput()
+    const build = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer: input.customer,
+      documentType: 'invoice',
+      input: {
+        customer_id: input.customer.id,
+        invoice_date: '2026-08-13',
+        due_date: '2026-09-12',
+        currency: 'SEK',
+        items: [{ description: 'Etikett', quantity: 5713, unit: 'st', unit_price: 0.1, vat_rate: 25 }],
+      },
+    })
+    expect(build.ok).toBe(true)
+    if (!build.ok) return
+    input.items = build.items.map((row, index) => makeItem({
+      ...row,
+      id: `item-${index + 1}`,
+      line_type: 'product',
+    }))
+    input.invoice = makeInvoice({
+      ...input.invoice,
+      subtotal: build.invoiceFields.subtotal,
+      vat_amount: build.invoiceFields.vat_amount,
+      total: build.invoiceFields.total,
+      remaining_amount: build.invoiceFields.remaining_amount,
+      ore_rounding: false,
+    })
+    expect(input.items[0].vat_amount).toBe(142.83)
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok ? [] : result.issues.map(({ code }) => code)).toEqual([])
+  })
+
+  it('still flags the 142,82 the old rounding stored on that line', () => {
+    const input = makePerLineRoundingInput([{ unitPrice: 571.3, vatRate: 25 }])
+    input.items = [{ ...input.items[0], vat_amount: 142.82 }]
+    input.invoice = makeInvoice({ ...input.invoice, vat_amount: 142.82, total: 714.12, remaining_amount: 714.12 })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain('LINE_VAT_MISMATCH')
+  })
+
   it('rejects invoice totals that do not reconcile to the emitted lines', () => {
     const input = makeValidInput()
     input.invoice = makeInvoice({ ...input.invoice, total: 999 })
@@ -435,18 +497,52 @@ describe('generatePeppolBisBillingInvoice', () => {
     )
   })
 
-  it('prefers invoice_marking over your_reference for BT-10 BuyerReference', () => {
+  it('sends your_reference as BT-10 BuyerReference and invoice_marking as BT-13 OrderReference', () => {
     const input = makeValidInput()
-    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'KST 4711' })
+    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'PO & 4711' })
 
     const result = generatePeppolBisBillingInvoice(input)
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.xml).toContain('<cbc:BuyerReference>KST 4711</cbc:BuyerReference>')
+    expect(result.xml).toContain('<cbc:BuyerReference>REF &amp; 42</cbc:BuyerReference>')
+    expect(result.xml).toContain(
+      '  <cbc:BuyerReference>REF &amp; 42</cbc:BuyerReference>\n' +
+      '  <cac:OrderReference>\n' +
+      '    <cbc:ID>PO &amp; 4711</cbc:ID>\n' +
+      '  </cac:OrderReference>\n' +
+      '  <cac:AccountingSupplierParty>',
+    )
   })
 
-  it('accepts a marking-only invoice (no your_reference) as buyer reference', () => {
+  it('leaves out exactly the text rows the send dialog warns about, and keeps the note', () => {
+    const input = makeValidInput()
+    input.items = [
+      makeItem({ id: 'text-1', sort_order: 0, line_type: 'text', description: 'Avser projekt Norrland' }),
+      makeItem({ ...input.items[0], sort_order: 1 }),
+      makeItem({ id: 'text-2', sort_order: 2, line_type: 'text', description: ' ' }),
+      makeItem({ ...input.items[1], sort_order: 3 }),
+    ]
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).not.toContain('Avser projekt Norrland')
+    expect(result.xml.match(/<cac:InvoiceLine>/g)).toHaveLength(2)
+    expect(result.xml).toContain('<cbc:Note>Tack &lt;igen&gt;</cbc:Note>')
+    expect(countTextRowsLeftOutOfPeppol(input.items)).toBe(1)
+  })
+
+  it('omits BT-13 OrderReference when there is no invoice_marking', () => {
+    const result = generatePeppolBisBillingInvoice(makeValidInput())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).not.toContain('<cac:OrderReference>')
+  })
+
+  it('falls back to invoice_marking for BT-10 when there is no your_reference', () => {
     const input = makeValidInput()
     input.invoice = makeInvoice({
       ...input.invoice,
@@ -459,6 +555,25 @@ describe('generatePeppolBisBillingInvoice', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.xml).toContain('<cbc:BuyerReference>PO-2026-17</cbc:BuyerReference>')
+    expect(result.xml).toContain('<cac:OrderReference>\n    <cbc:ID>PO-2026-17</cbc:ID>')
+  })
+
+  it('sends the Er referens the invoice was issued with as BT-10 only, never the card or BT-19 (crm#1200)', () => {
+    // The Fakturareferens is copied into your_reference when the invoice is
+    // written; a later change to the card must not reach an issued invoice.
+    // BT-19 AccountingCost stays unset: the field is free text (a cost centre
+    // or a person), and the skill documents only BT-10 for buyer routing.
+    const input = makeValidInput()
+    input.customer = makeCustomer({ ...input.customer, invoice_reference: 'KST 5520' })
+    input.invoice = makeInvoice({ ...input.invoice, your_reference: 'KST 4410' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:BuyerReference>KST 4410</cbc:BuyerReference>')
+    expect(result.xml).not.toContain('KST 5520')
+    expect(result.xml).not.toContain('AccountingCost')
   })
 
   it('renders a per-line discount as a BG-27 allowance with net LineExtensionAmount', () => {
@@ -506,6 +621,7 @@ describe('generatePeppolBisBillingInvoice', () => {
         ...makeValidInput().invoice,
         credited_invoice_id: '22222222-2222-4222-8222-222222222222',
       }),
+      makeInvoice({ ...makeValidInput().invoice, total: -500 }),
       makeInvoice({ ...makeValidInput().invoice, is_self_billed: true }),
     ]) {
       const input = makeValidInput()
@@ -518,7 +634,7 @@ describe('generatePeppolBisBillingInvoice', () => {
     }
   })
 
-  // Founder decision 2026-09-29: with no valid bankgiro or plusgiro the
+  // Product decision 2026-09-29: with no valid bankgiro or plusgiro the
   // invoice is paid to the IBAN (with the BIC when there is one).
   describe('payee precedence: bankgiro, then plusgiro, then IBAN', () => {
     const IBAN = 'SE4550000000058398257466'
@@ -634,7 +750,7 @@ describe('generatePeppolBisBillingInvoice', () => {
     })
   })
 
-  // Founder decision 2026-09-29: every legal form with an organisationsnummer
+  // Product decision 2026-09-29: every legal form with an organisationsnummer
   // sends; only a form whose org number is the owner's personnummer waits for
   // a GLN. The gate reads that capability, never a list of forms.
   describe('sender legal form', () => {
@@ -678,5 +794,208 @@ describe('generatePeppolBisBillingInvoice', () => {
       expect(issue?.messageEn).toMatch(/personal identity number as its organisation number, so it needs a separate GLN/)
       expect(`${issue?.messageSv} ${issue?.messageEn}`).not.toMatch(/aktiebolag|limited compan/i)
     })
+  })
+})
+
+// crm#1084: the article number frozen on the line travels as BT-155 (Item
+// Seller's identifier) when the company prints article numbers.
+describe('generatePeppolBisBillingInvoice: article number', () => {
+  function inputWithArticleLine(showArticleNumber: boolean | undefined) {
+    const input = makeValidInput()
+    input.company = makeCompanySettings({ ...input.company, invoice_show_article_number: showArticleNumber })
+    input.items = [
+      { ...input.items[0], article_id: 'art-1', article_number: 'A-<100>' },
+      { ...input.items[1], article_id: null, article_number: null },
+    ]
+    return input
+  }
+
+  it('sends the number as SellersItemIdentification, after Name and before ClassifiedTaxCategory', () => {
+    const result = generatePeppolBisBillingInvoice(inputWithArticleLine(true))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const firstLine = result.xml.slice(result.xml.indexOf('<cac:InvoiceLine>'), result.xml.indexOf('</cac:InvoiceLine>'))
+    expect(firstLine).toContain('<cac:SellersItemIdentification>\n        <cbc:ID>A-&lt;100&gt;</cbc:ID>\n      </cac:SellersItemIdentification>')
+    expect(firstLine.indexOf('<cbc:Name>')).toBeLessThan(firstLine.indexOf('<cac:SellersItemIdentification>'))
+    expect(firstLine.indexOf('<cac:SellersItemIdentification>')).toBeLessThan(firstLine.indexOf('<cac:ClassifiedTaxCategory>'))
+    // The free-text line carries none.
+    expect(result.xml.split('<cac:SellersItemIdentification>')).toHaveLength(2)
+  })
+
+  it('sends no seller item identifier while the setting is off', () => {
+    for (const setting of [false, undefined]) {
+      const result = generatePeppolBisBillingInvoice(inputWithArticleLine(setting))
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.xml).not.toContain('SellersItemIdentification')
+    }
+  })
+})
+
+describe('embedded attachments (crm#1545)', () => {
+  const MB = 1024 * 1024
+  const pdf = (filename: string, bytes = 32) => ({
+    filename,
+    contentType: 'application/pdf',
+    content: Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(Math.max(bytes - 9, 0), 0x20)]),
+  })
+
+  it('embeds each PDF as an AdditionalDocumentReference between the order reference and the seller, in order', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'PO 4711' })
+    const first = pdf('Tidrapport <oktober>.pdf')
+    const second = pdf('Dagbok.pdf')
+
+    const result = generatePeppolBisBillingInvoice({ ...input, attachments: [first, second] })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain(
+      '  </cac:OrderReference>\n' +
+      '  <cac:AdditionalDocumentReference>\n' +
+      '    <cbc:ID>Tidrapport &lt;oktober&gt;.pdf</cbc:ID>\n' +
+      '    <cac:Attachment>\n' +
+      `      <cbc:EmbeddedDocumentBinaryObject mimeCode="application/pdf" filename="Tidrapport &lt;oktober&gt;.pdf">${first.content.toString('base64')}</cbc:EmbeddedDocumentBinaryObject>\n` +
+      '    </cac:Attachment>\n' +
+      '  </cac:AdditionalDocumentReference>\n' +
+      '  <cac:AdditionalDocumentReference>\n' +
+      '    <cbc:ID>Dagbok.pdf</cbc:ID>',
+    )
+    const xml = result.xml
+    expect(xml.indexOf('Dagbok.pdf')).toBeLessThan(xml.indexOf('<cac:AccountingSupplierParty>'))
+    // No DocumentTypeCode: in BIS Billing 3 it marks an invoiced object (BT-18), not an attachment.
+    expect(xml).not.toContain('DocumentTypeCode')
+    // The invoice number stays the document's first cbc:ID (the transport reads it from there).
+    expect(/<cbc:ID>([^<]+)<\/cbc:ID>/.exec(xml)?.[1]).toBe('F-2026-42')
+  })
+
+  it('emits no AdditionalDocumentReference without attachments', () => {
+    const result = generatePeppolBisBillingInvoice(makeValidInput())
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).not.toContain('AdditionalDocumentReference')
+  })
+
+  it('refuses a file that is not a PDF with a Swedish message naming it', () => {
+    const result = generatePeppolBisBillingInvoice({
+      ...makeValidInput(),
+      attachments: [pdf('ok.pdf'), { filename: 'bild.png', contentType: 'image/png', content: Buffer.from('png') }],
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        code: 'PEPPOL_ATTACHMENT_NOT_PDF',
+        field: 'attachments[1]',
+        messageSv: expect.stringContaining('bild.png är ingen PDF'),
+      }),
+    ])
+  })
+
+  it('accepts exactly 5 MB of files and refuses one byte more, in Swedish', () => {
+    const atLimit = generatePeppolBisBillingInvoice({
+      ...makeValidInput(),
+      attachments: [pdf('a.pdf', 3 * MB), pdf('b.pdf', 2 * MB)],
+    })
+    expect(atLimit.ok).toBe(true)
+
+    const over = generatePeppolBisBillingInvoice({
+      ...makeValidInput(),
+      attachments: [pdf('a.pdf', 3 * MB), pdf('b.pdf', 2 * MB + 1)],
+    })
+    expect(over.ok).toBe(false)
+    if (over.ok) return
+    expect(over.issues).toEqual([
+      expect.objectContaining({
+        code: 'PEPPOL_ATTACHMENTS_TOO_LARGE',
+        messageSv: expect.stringContaining('högst 5 MB tillsammans via Peppol'),
+      }),
+    ])
+  })
+})
+
+describe('peppolAttachmentIssues (crm#1545)', () => {
+  it('judges stored metadata the same way: a missing type is not a PDF', () => {
+    expect(peppolAttachmentIssues([{ filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 10 }])).toEqual([])
+    expect(peppolAttachmentIssues([{ filename: 'a.pdf', contentType: null, sizeBytes: 10 }]).map((i) => i.code))
+      .toEqual(['PEPPOL_ATTACHMENT_NOT_PDF'])
+  })
+})
+
+describe('draft preview (accounted#44)', () => {
+  function makeDraftInput() {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, status: 'draft', invoice_number: null })
+    return input
+  }
+
+  it('still refuses a draft without a number when no preview is asked for', () => {
+    const result = generatePeppolBisBillingInvoice(makeDraftInput())
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain('INVOICE_NUMBER_REQUIRED')
+  })
+
+  it('renders a draft with a marked placeholder number, the OCR derived from it, and a preview file name', () => {
+    const result = generatePeppolBisBillingInvoice({ ...makeDraftInput(), preview: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.preview).toBe(true)
+    expect(result.filename).toBe('peppol-invoice-preview-invoice-1.xml')
+    expect(result.xml).toContain(`<cbc:ID>${PEPPOL_PREVIEW_INVOICE_NUMBER}</cbc:ID>`)
+    expect(result.xml).toContain(`<cbc:PaymentID>${generateOcrReference(PEPPOL_PREVIEW_INVOICE_NUMBER)}</cbc:PaymentID>`)
+    expect(generateOcrReference(PEPPOL_PREVIEW_INVOICE_NUMBER)).toBe('000000')
+    expect(isPeppolPreviewXml(result.xml)).toBe(true)
+    // The marker sits between the declaration and the root element, so the
+    // UBL content is the same document finalize would produce.
+    const [declaration, comment, root] = result.xml.split('\n')
+    expect(declaration).toBe('<?xml version="1.0" encoding="UTF-8"?>')
+    expect(comment).toMatch(/^<!-- ACCOUNTED-PEPPOL-PREVIEW: .* -->$/)
+    expect(comment.slice(4, -3)).not.toContain('--')
+    expect(root).toMatch(/^<Invoice /)
+    // Everything after the marker matches the export of the same invoice
+    // numbered with the placeholder.
+    const numbered = makeDraftInput()
+    numbered.invoice = makeInvoice({ ...numbered.invoice, invoice_number: PEPPOL_PREVIEW_INVOICE_NUMBER })
+    const real = generatePeppolBisBillingInvoice(numbered)
+    expect(real.ok).toBe(true)
+    if (!real.ok) return
+    expect(result.xml.replace(`${comment}\n`, '')).toBe(real.xml)
+  })
+
+  it('keeps every other preflight check on a preview', () => {
+    const input = makeDraftInput()
+    input.invoice = makeInvoice({ ...input.invoice, your_reference: null, invoice_marking: null })
+
+    const result = generatePeppolBisBillingInvoice({ ...input, preview: true })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toEqual(['BUYER_REFERENCE_REQUIRED'])
+  })
+
+  it('is a no-op for an invoice that already has its number: that XML is the real document', () => {
+    const input = makeValidInput()
+
+    const preview = generatePeppolBisBillingInvoice({ ...input, preview: true })
+    const real = generatePeppolBisBillingInvoice(input)
+
+    expect(preview).toEqual(real)
+    expect(preview.ok && preview.preview).toBeFalsy()
+    expect(preview.ok && isPeppolPreviewXml(preview.xml)).toBe(false)
+  })
+
+  it('never reads user text as the preview marker', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, notes: '<!-- ACCOUNTED-PEPPOL-PREVIEW -->' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(isPeppolPreviewXml(result.xml)).toBe(false)
   })
 })

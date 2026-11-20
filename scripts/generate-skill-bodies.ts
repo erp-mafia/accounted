@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Generate a Supabase seed migration that inlines every atom SKILL.md body into
+ * Generate a Supabase seed migration that inlines atom SKILL.md bodies into
  * agent_atom_registry.body.
  *
  * Why a generated migration (not a runtime/seed-script write):
@@ -8,14 +8,20 @@
  *   - Skill bodies must reach prod via the one deploy path the project trusts:
  *     supabase/migrations applied on deploy. The SQL is generated, never hand-authored.
  *   - It also fixes the "registry never seeded" case (the manual seed may never have
- *     run in prod): the migration populates the rows on deploy.
+ *     run in production): the migration populates the rows on deploy.
  *
  * Determinism:
  *   - Atoms are emitted sorted by id; bodies are dollar-quoted with a collision-proof
  *     tag; `version` is derived from a committed content-hash manifest
- *     (scripts/.skill-body-manifest.json) so it only bumps when a SKILL.md changes.
+ *     (scripts/.skill-body-manifest.json) so it only bumps when an atom's row changes.
  *   - A no-change run emits NOTHING (byte-identical repo). A change emits ONE new
  *     timestamped migration (append-only: we never edit an existing migration).
+ *
+ * Incremental:
+ *   - The manifest records the row every earlier seed migration shipped (hash of the
+ *     seeded columns + version). A new seed carries only the atoms added or changed
+ *     against it, plus withdrawals, so replaying every seed in order on an empty
+ *     database builds the same registry one full seed of today's files would.
  *
  * Usage:
  *   npx tsx scripts/generate-skill-bodies.ts          # emit a migration if skills changed
@@ -37,11 +43,11 @@ const MANIFEST_PATH = join(ROOT, 'scripts', '.skill-body-manifest.json')
 
 const checkOnly = process.argv.includes('--check')
 
-interface ManifestEntry {
+export interface ManifestEntry {
   hash: string
   version: number
 }
-type Manifest = Record<string, ManifestEntry>
+export type Manifest = Record<string, ManifestEntry>
 
 function sha256(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex')
@@ -99,44 +105,127 @@ async function nextMigrationTimestamp(): Promise<string> {
   return String(max + 1).padStart(14, '0')
 }
 
+/** Every column the seed writes for an atom except `version`, in one place. */
+function seedColumns(atom: DiscoveredAtom) {
+  return {
+    id: atom.id,
+    tier: atom.tier,
+    title: atom.title,
+    description: atom.description,
+    sni_prefixes: atom.sni_prefixes,
+    trigger_signals: JSON.stringify(atom.trigger_signals ?? {}),
+    estimated_tokens: atom.estimated_tokens,
+    body_path: atom.body_path,
+    body: atom.body,
+    parent_atom_id: atom.parent_atom_id,
+    schema_version: atom.schema_version,
+    mcp_exposed: atom.mcp_exposed ?? true,
+    reviewed_at: atom.reviewed_at || null,
+  }
+}
+
+/**
+ * Fingerprint of the row the seed writes for an atom, version aside. A seed
+ * re-emits an atom exactly when this changes, so a title, path or token-count
+ * edit ships the same way a body edit does.
+ */
+export function atomHash(atom: DiscoveredAtom): string {
+  return sha256(JSON.stringify(seedColumns(atom)))
+}
+
 function buildValuesRow(atom: DiscoveredAtom, version: number): string {
-  const triggerJson = JSON.stringify(atom.trigger_signals ?? {})
+  const c = seedColumns(atom)
   return [
     '  (',
-    `    ${sqlStr(atom.id)},`,
-    `    ${sqlStr(atom.tier)},`,
-    `    ${sqlStr(atom.title)},`,
-    `    ${dollarQuote(atom.description)},`,
-    `    ${sqlTextArray(atom.sni_prefixes)},`,
-    `    ${dollarQuote(triggerJson)}::jsonb,`,
-    `    ${atom.estimated_tokens},`,
-    `    ${sqlStr(atom.body_path)},`,
-    `    ${dollarQuote(atom.body)},`,
-    `    ${atom.parent_atom_id ? sqlStr(atom.parent_atom_id) : 'NULL'},`,
+    `    ${sqlStr(c.id)},`,
+    `    ${sqlStr(c.tier)},`,
+    `    ${sqlStr(c.title)},`,
+    `    ${dollarQuote(c.description)},`,
+    `    ${sqlTextArray(c.sni_prefixes)},`,
+    `    ${dollarQuote(c.trigger_signals)}::jsonb,`,
+    `    ${c.estimated_tokens},`,
+    `    ${sqlStr(c.body_path)},`,
+    `    ${dollarQuote(c.body)},`,
+    `    ${c.parent_atom_id ? sqlStr(c.parent_atom_id) : 'NULL'},`,
     `    ${version},`,
-    `    ${atom.schema_version},`,
-    `    ${atom.mcp_exposed ?? true},`,
-    `    ${atom.reviewed_at ? sqlStr(atom.reviewed_at) : 'NULL'}`,
+    `    ${c.schema_version},`,
+    `    ${c.mcp_exposed},`,
+    `    ${c.reviewed_at ? sqlStr(c.reviewed_at) : 'NULL'}`,
     '  )',
   ].join('\n')
 }
 
-export function buildMigrationSql(atoms: DiscoveredAtom[], versions: Record<string, number>, removed: string[] = [], developerOnly: string[] = []): string {
+export interface SeedPlan {
+  added: string[]
+  changed: string[]
+  /** Ids an earlier seed shipped that are no longer agent atoms. */
+  removed: string[]
+  /** Removed ids whose rows the seed switches off (see buildMigrationSql). */
+  withdrawn: string[]
+  /** Added and changed atoms: the only rows the next seed writes. */
+  upserts: DiscoveredAtom[]
+  versions: Record<string, number>
+  /** The manifest to commit with the seed. */
+  manifest: Manifest
+}
+
+/**
+ * Diff today's atoms against the manifest of what earlier seeds shipped. New atoms
+ * start at version 1; an atom whose row changed is bumped by one; an unchanged atom
+ * keeps its version and stays out of the seed, because an earlier seed already wrote
+ * exactly that row.
+ */
+export function planSeed(atoms: DiscoveredAtom[], developerOnly: string[], previous: Manifest): SeedPlan {
+  const added: string[] = []
+  const changed: string[] = []
+  const upserts: DiscoveredAtom[] = []
+  const versions: Record<string, number> = {}
+  const manifest: Manifest = {}
+  for (const atom of atoms) {
+    const hash = atomHash(atom)
+    const prev = previous[atom.id]
+    let version = 1
+    if (!prev) {
+      added.push(atom.id)
+      upserts.push(atom)
+    } else if (prev.hash !== hash) {
+      changed.push(atom.id)
+      upserts.push(atom)
+      version = prev.version + 1
+    } else {
+      version = prev.version
+    }
+    versions[atom.id] = version
+    manifest[atom.id] = { hash, version }
+  }
+  const current = new Set(atoms.map((a) => a.id))
+  const developer = new Set(developerOnly)
+  const removed = Object.keys(previous).filter((id) => !current.has(id)).sort()
+  // Switched off once, by the seed that sees the id go: a community skill that
+  // left the repo, or a reference now marked developer-only (the ones an earlier
+  // seed shipped were switched off by that seed). Any other removed row stays as
+  // it is, as it always has.
+  const withdrawn = removed.filter((id) => id.startsWith('community/') || developer.has(id))
+  return { added, changed, removed, withdrawn, upserts, versions, manifest }
+}
+
+export function buildMigrationSql(atoms: DiscoveredAtom[], versions: Record<string, number>, withdrawn: string[] = []): string {
   const header = `-- AUTO-GENERATED by scripts/generate-skill-bodies.ts: DO NOT EDIT BY HAND.
 -- Regenerate with \`npm run skills:generate\` after editing any .claude/skills/**/SKILL.md.
 --
 -- Seeds agent_atom_registry rows with their SKILL.md body so the MCP server and the
 -- in-app agent read skill content from the DB (works on Vercel, Docker, self-hosted).
+-- Incremental: carries only the atoms added or changed since the previous seed, plus
+-- withdrawals; replaying every seed in order builds the whole registry.
 -- Idempotent: ON CONFLICT refreshes content fields but leaves is_active and
 -- mcp_exposed under manual control (they take column defaults on first insert).
--- The WHERE guard skips rows whose registry version is newer than this seed's:
--- two branches can each carry a full seed, and the one that applies last can
--- no longer downgrade atoms the other already bumped.
+-- The WHERE guard skips rows whose registry version is newer than this seed's, so
+-- a seed that applies after a newer one can never downgrade an atom.
 `
 
   const values = atoms.map((a) => buildValuesRow(a, versions[a.id])).join(',\n')
 
-  const insert = `INSERT INTO public.agent_atom_registry
+  const insert = !atoms.length ? '' : `INSERT INTO public.agent_atom_registry
   (id, tier, title, description, sni_prefixes, trigger_signals, estimated_tokens, body_path, body, parent_atom_id, version, schema_version, mcp_exposed, reviewed_at)
 VALUES
 ${values}
@@ -158,13 +247,12 @@ ON CONFLICT (id) DO UPDATE SET
 WHERE public.agent_atom_registry.version <= EXCLUDED.version;
 `
 
-  const withdrawal = removed.filter((id) => id.startsWith('community/'))
-  const disable = withdrawal.length ? `UPDATE public.agent_atom_registry SET is_active = false, mcp_exposed = false WHERE id IN (${withdrawal.map(sqlStr).join(', ')});\n` : ''
-  // Developer-audience references never reach an agent: earlier seeds may have
-  // shipped them, so switch those rows off by id (kept, never deleted). Moving a
-  // file back to `agent` re-seeds its body but leaves is_active to a person.
-  const developer = developerOnly.length ? `UPDATE public.agent_atom_registry SET is_active = false, mcp_exposed = false WHERE id IN (${developerOnly.map(sqlStr).join(', ')});\n` : ''
-  return `${header}\n${insert}\n${disable}${developer}\nNOTIFY pgrst, 'reload schema';\n`
+  // Withdrawn rows (a community skill that left the repo, a reference now marked
+  // developer-only) are switched off by id, kept and never deleted: other tables
+  // reference them. Moving a file back to `agent` re-seeds its body but leaves
+  // is_active to a person.
+  const withdraw = withdrawn.length ? `UPDATE public.agent_atom_registry SET is_active = false, mcp_exposed = false WHERE id IN (${withdrawn.map(sqlStr).join(', ')});\n` : ''
+  return `${header}\n${insert}\n${withdraw}\nNOTIFY pgrst, 'reload schema';\n`
 }
 
 async function main() {
@@ -200,18 +288,8 @@ async function main() {
     process.exit(1)
   }
 
-  const manifest = loadManifest()
-  const onDisk = new Map(atoms.map((a) => [a.id, sha256(a.tier === 'community' ? JSON.stringify([a.body, a.title, a.description, a.mcp_exposed, a.reviewed_at]) : a.body)]))
-
-  // Drift = added, changed, or removed atoms vs. the committed manifest.
-  const added: string[] = []
-  const changed: string[] = []
-  for (const [id, hash] of onDisk) {
-    const prev = manifest[id]
-    if (!prev) added.push(id)
-    else if (prev.hash !== hash) changed.push(id)
-  }
-  const removed = Object.keys(manifest).filter((id) => !onDisk.has(id))
+  const plan = planSeed(atoms, developerOnly, loadManifest())
+  const { added, changed, removed, withdrawn } = plan
   const hasDrift = added.length > 0 || changed.length > 0 || removed.length > 0
 
   if (checkOnly) {
@@ -232,30 +310,23 @@ async function main() {
     return
   }
 
-  // Compute versions: bump only changed atoms; new atoms start at 1.
-  const newManifest: Manifest = {}
-  const versions: Record<string, number> = {}
-  for (const atom of atoms) {
-    const hash = onDisk.get(atom.id)!
-    const prev = manifest[atom.id]
-    const version = !prev ? 1 : prev.hash === hash ? prev.version : prev.version + 1
-    versions[atom.id] = version
-    newManifest[atom.id] = { hash, version }
+  // A removed file that needs no withdrawal changes no row: record it in the
+  // manifest without an empty migration.
+  if (plan.upserts.length || withdrawn.length) {
+    const ts = await nextMigrationTimestamp()
+    const fileName = `${ts}_seed_agent_atom_bodies.sql`
+    await writeFile(join(MIGRATIONS_DIR, fileName), buildMigrationSql(plan.upserts, plan.versions, withdrawn), 'utf8')
+    console.log(`Wrote supabase/migrations/${fileName} (${plan.upserts.length} of ${atoms.length} atoms).`)
+  } else {
+    console.log('No registry row changes: manifest updated, no migration needed.')
   }
+  await saveManifest(plan.manifest)
 
-  const ts = await nextMigrationTimestamp()
-  const fileName = `${ts}_seed_agent_atom_bodies.sql`
-  const filePath = join(MIGRATIONS_DIR, fileName)
-
-  await writeFile(filePath, buildMigrationSql(atoms, versions, removed, developerOnly), 'utf8')
-  await saveManifest(newManifest)
-
-  console.log(`Wrote supabase/migrations/${fileName} (${atoms.length} atoms).`)
   if (added.length) console.log(`  added:   ${added.join(', ')}`)
   if (changed.length) console.log(`  changed: ${changed.join(', ')}`)
-  const withdrawn = removed.filter((id) => id.startsWith('community/'))
-  if (withdrawn.length) console.log(`  removed (community rows disabled): ${withdrawn.join(', ')}`)
-  if (developerOnly.length) console.log(`  developer-only (rows switched off): ${developerOnly.join(', ')}`)
+  if (withdrawn.length) console.log(`  withdrawn (rows switched off): ${withdrawn.join(', ')}`)
+  const dropped = removed.filter((id) => !withdrawn.includes(id))
+  if (dropped.length) console.log(`  removed (rows left as they are): ${dropped.join(', ')}`)
 }
 
 // Only run when invoked directly (not when imported by tests).

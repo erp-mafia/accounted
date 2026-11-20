@@ -2,12 +2,20 @@ import type { ArticleType } from '@/types'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { detectArticleColumns } from './column-detector'
 import { cellOrNull } from '../shared/column-utils'
-import { parseAmount } from '../opening-balance/parser'
+import { parseSwedishAmount } from '@/lib/money'
 import { readBestSheet } from '../shared/workbook-reader'
 import type { DetectedArticleColumns, ParsedArticleRow } from './types'
-import { deductionTypeForWorkType, normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
+import { deductionTypeForWorkType, normalizeHouseworkType } from '@/lib/bookkeeping/rot-rut-rules'
 
 const VALID_VAT_RATES = [0, 6, 12, 25] as const
+
+/**
+ * A price cell, through the importers' one amount parser; unreadable reads as
+ * 0. Read from lib/money directly, not the opening-balance parser, because
+ * the article import also runs this file in the browser (crm#1383) and that
+ * module pulls the BAS chart and the bank-file parser with it.
+ */
+const parseAmount = (value: string): number => parseSwedishAmount(value) ?? 0
 
 /** Snap an arbitrary VAT percentage to the nearest Swedish statutory rate. */
 function snapVatRate(n: number): number {
@@ -79,11 +87,11 @@ const INCL_VAT_HEADER_RE = /brutto|inkl|incl|gross/i
  * @param filename - Original filename
  * @param columnOverrides - Optional manual column mapping
  */
-export function parseArticlesFile(
+export async function parseArticlesFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedArticleColumns,
-): {
+): Promise<{
   filename: string
   sheet_name: string
   total_rows: number
@@ -93,8 +101,8 @@ export function parseArticlesFile(
   rows: ParsedArticleRow[]
   warnings: string[]
   notices: ImportNotice[]
-} {
-  const { sheetName, rawData } = readBestSheet(buffer, filename)
+}> {
+  const { sheetName, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedArticleColumns = columnOverrides ?? {

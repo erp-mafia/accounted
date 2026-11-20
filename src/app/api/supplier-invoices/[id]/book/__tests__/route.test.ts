@@ -30,9 +30,15 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
 }))
 
 const mockCreateSchedules = vi.fn()
-vi.mock('@/lib/bookkeeping/accruals/from-invoices', () => ({
-  createSchedulesForSupplierInvoice: (...args: unknown[]) => mockCreateSchedules(...args),
-}))
+vi.mock('@/lib/bookkeeping/accruals/from-invoices', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/accruals/from-invoices')>(
+    '@/lib/bookkeeping/accruals/from-invoices',
+  )
+  return {
+    ACCRUAL_RELEASE_FAILED_WARNING: actual.ACCRUAL_RELEASE_FAILED_WARNING,
+    createSchedulesForSupplierInvoice: (...args: unknown[]) => mockCreateSchedules(...args),
+  }
+})
 
 const mockCancelOrphan = vi.fn()
 vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
@@ -231,5 +237,60 @@ describe('POST /api/supplier-invoices/[id]/book', () => {
     expect(status).toBe(200)
     expect(mockCreateSchedules).toHaveBeenCalled()
     expect(body.warnings?.[0]?.code).toBe('ACCRUAL_SCHEDULE_FAILED')
+  })
+
+  // Upplupen kostnad (29xx): the months post right after the registration.
+  const accruedInvoice = () =>
+    makeUnbookedInvoice({
+      invoice_date: '2026-10-05',
+      items: [
+        {
+          id: 'item-1',
+          description: 'El juli-september',
+          account_number: '5020',
+          accrual_period_start: '2026-07-01',
+          accrual_period_end: '2026-09-30',
+          accrual_balance_account: '2990',
+        },
+      ],
+    })
+
+  it('warns when an upplupen kostnad month could not post after the booking', async () => {
+    const invoice = accruedInvoice()
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    mockCreateRegistrationEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { ...invoice, registration_journal_entry_id: 'je-1' }, error: null })
+    mockCreateSchedules.mockResolvedValue({ created: 1, failed: 0, releasesFailed: 1 })
+
+    const { status, body } = await parseJsonResponse<{
+      warnings?: Array<{ code: string }>
+    }>(await bookRequest())
+
+    expect(status).toBe(200)
+    expect(body.warnings?.map((w) => w.code)).toEqual(['ACCRUAL_RELEASE_FAILED'])
+  })
+
+  it('answers a locked upplupen kostnad month with SI_ACCRUED_COST_PERIOD_LOCKED and books nothing', async () => {
+    const { AccruedCostPeriodLockedError } = await import('@/lib/bookkeeping/errors')
+    enqueue({ data: accruedInvoice(), error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    // The registration builder refuses before it posts (every door).
+    mockCreateRegistrationEntry.mockRejectedValue(
+      new AccruedCostPeriodLockedError([{ date: '2026-08-31', reason: 'period_locked_at_set' }]),
+    )
+
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { blocked?: Array<{ date: string }> } }
+    }>(await bookRequest())
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_ACCRUED_COST_PERIOD_LOCKED')
+    expect(body.error.details?.blocked?.[0]?.date).toBe('2026-08-31')
+    expect(mockCreateSchedules).not.toHaveBeenCalled()
   })
 })

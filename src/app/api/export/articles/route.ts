@@ -1,10 +1,10 @@
-import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { textColumn, decimalColumn, integerColumn } from '@/lib/reports/xlsx-export'
 import { buildRegisterExport, parseExportFormat, todayIso } from '@/lib/export/register-export'
 import type { Article } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/export/articles[?format=csv][&include_inactive=1]
@@ -35,10 +35,12 @@ export const GET = withRouteContext(
           .select('*')
           .eq('company_id', companyId)
         if (!includeInactive) query = query.eq('active', true)
-        return query.order('name', { ascending: true }).range(from, to)
+        // Names repeat, so id makes the order total: fetchAllRows pages with
+        // .range() and a tie on a page boundary could repeat or drop a row.
+        return query.order('name', { ascending: true }).order('id', { ascending: true }).range(from, to)
       })) as unknown as Article[]
 
-      const { buffer, contentType, filename } = buildRegisterExport(
+      const { buffer, contentType, filename } = await buildRegisterExport(
         [
           {
             name: 'Artiklar',
@@ -83,13 +85,7 @@ export const GET = withRouteContext(
       // Audit trail: who exported what, when (sensitive bulk register download).
       log.info('register exported', { entity: 'articles', format, rowCount: articles.length })
 
-      return new NextResponse(new Uint8Array(buffer), {
-        headers: {
-          'Content-Type': contentType,
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Cache-Control': 'no-store',
-        },
-      })
+      return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: contentType, cacheControl: 'no-store' })
     } catch (err) {
       log.error('article export failed', err as Error)
       return errorResponse(err, log, { requestId })

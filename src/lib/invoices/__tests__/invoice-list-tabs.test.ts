@@ -7,6 +7,10 @@ import {
   matchesQuoteListTab,
   parseInvoiceListTab,
   parseQuoteListTab,
+  segmentViewActive,
+  invoiceListSegmentTabs,
+  QUOTE_LIST_SEGMENT_TABS,
+  statusPickerTabs,
   type InvoiceListTab,
   type QuoteListTab,
 } from '../invoice-list-tabs'
@@ -23,8 +27,10 @@ function row(overrides: Partial<Row> & { status: Row['status'] }): Row {
   }
 }
 
+const TODAY = '2026-10-13'
+
 function tabsFor(invoice: Row): InvoiceListTab[] {
-  return INVOICE_LIST_TABS.filter((tab) => matchesInvoiceListTab(invoice, tab))
+  return INVOICE_LIST_TABS.filter((tab) => matchesInvoiceListTab(invoice, tab, { today: TODAY }))
 }
 
 describe('isUnsentNumberedInvoice', () => {
@@ -56,12 +62,79 @@ describe('matchesInvoiceListTab', () => {
   })
 
   it('keeps sent and overdue invoices in the unpaid view, never in unsent', () => {
-    expect(tabsFor(row({ status: 'sent', invoice_number: 'F-12' }))).toEqual(['all', 'unpaid'])
-    expect(tabsFor(row({ status: 'overdue', invoice_number: 'F-12' }))).toEqual([
+    expect(tabsFor(row({ status: 'sent', invoice_number: 'F-12', due_date: '2026-10-30' }))).toEqual(['all', 'unpaid'])
+    expect(tabsFor(row({ status: 'overdue', invoice_number: 'F-12', due_date: '2026-09-30', remaining_amount: 100 }))).toEqual([
       'all',
       'unpaid',
       'overdue',
     ])
+  })
+
+  // Obetalda is the owed population (lib/invoices/overdue.ts isInvoiceOwed).
+  // It read sent and overdue only, and the first consolidation of the owed
+  // statuses pinned that for the operators to settle: a partly paid invoice
+  // with money left was missing from the view and its count, and sat under
+  // the settled section, while Att göra, the reminders and the reskontra
+  // counted it as owed.
+  describe('Obetalda is what the customer still owes', () => {
+    const unpaid = (invoice: Row) => matchesInvoiceListTab(invoice, 'unpaid', { today: TODAY })
+
+    it('lists a partly paid invoice with money left, due or not', () => {
+      expect(tabsFor(row({ status: 'partially_paid', invoice_number: 'F-7', due_date: '2026-10-30', remaining_amount: 200 }))).toEqual([
+        'all',
+        'unpaid',
+      ])
+      expect(tabsFor(row({ status: 'partially_paid', invoice_number: 'F-8', due_date: '2026-09-01', remaining_amount: 200 }))).toEqual([
+        'all',
+        'unpaid',
+        'overdue',
+      ])
+    })
+
+    it('counts a missing remainder as owed', () => {
+      expect(unpaid(row({ status: 'partially_paid', invoice_number: 'F-9' }))).toBe(true)
+      expect(unpaid(row({ status: 'sent', invoice_number: 'F-10', remaining_amount: null }))).toBe(true)
+    })
+
+    it('leaves out an invoice with nothing left, a credit note and a document that is not a faktura', () => {
+      expect(unpaid(row({ status: 'partially_paid', invoice_number: 'F-11', remaining_amount: 0 }))).toBe(false)
+      expect(unpaid(row({ status: 'sent', invoice_number: 'F-12', remaining_amount: 0 }))).toBe(false)
+      expect(unpaid(row({ status: 'sent', invoice_number: 'K-1', credited_invoice_id: 'orig', remaining_amount: 500 }))).toBe(false)
+      expect(unpaid(row({ status: 'sent', document_type: 'proforma', remaining_amount: 500 }))).toBe(false)
+      expect(unpaid(row({ status: 'paid', invoice_number: 'F-13', remaining_amount: 0 }))).toBe(false)
+    })
+  })
+
+  describe('Förfallna follows the due date, not the stored status (crm#1084)', () => {
+    const overdue = (invoice: Row) => matchesInvoiceListTab(invoice, 'overdue', { today: TODAY })
+
+    it('lists a sent invoice past its due date that no reminder ever flipped', () => {
+      expect(overdue(row({ status: 'sent', invoice_number: 'F-1', due_date: '2026-10-12', remaining_amount: 500 }))).toBe(true)
+    })
+
+    it('lists a partly paid invoice whose remainder is past due', () => {
+      expect(overdue(row({ status: 'partially_paid', invoice_number: 'F-2', due_date: '2026-09-01', remaining_amount: 200 }))).toBe(true)
+    })
+
+    it('leaves out an invoice due today or later, and a stored overdue whose due date moved', () => {
+      expect(overdue(row({ status: 'sent', invoice_number: 'F-3', due_date: TODAY, remaining_amount: 500 }))).toBe(false)
+      expect(overdue(row({ status: 'overdue', invoice_number: 'F-4', due_date: '2026-11-01', remaining_amount: 500 }))).toBe(false)
+    })
+
+    it('leaves out paid, cancelled, credited, draft and fully settled invoices', () => {
+      const past = { due_date: '2026-09-01', remaining_amount: 500 }
+      for (const status of ['paid', 'cancelled', 'credited', 'draft'] as const) {
+        expect(overdue(row({ status, invoice_number: 'F-5', ...past }))).toBe(false)
+      }
+      expect(overdue(row({ status: 'sent', invoice_number: 'F-6', due_date: '2026-09-01', remaining_amount: 0 }))).toBe(false)
+    })
+
+    it('leaves out credit notes and documents that are not fakturor', () => {
+      const past = { due_date: '2026-09-01', remaining_amount: 500 }
+      expect(overdue(row({ status: 'sent', invoice_number: 'K-1', credited_invoice_id: 'orig', ...past }))).toBe(false)
+      expect(overdue(row({ status: 'sent', document_type: 'proforma', ...past }))).toBe(false)
+      expect(overdue(row({ status: 'sent', document_type: 'quote', ...past }))).toBe(false)
+    })
   })
 
   it('does not put draft credit notes or drafts of other kinds in unsent or draft', () => {
@@ -99,6 +172,7 @@ describe('matchesInvoiceListTab', () => {
       row({ status: 'sent', invoice_number: 'F-2' }),
       row({ status: 'overdue', invoice_number: 'F-3' }),
       row({ status: 'paid', invoice_number: 'F-4' }),
+      row({ status: 'partially_paid', invoice_number: 'F-5', remaining_amount: 300 }),
     ]
     const buckets: InvoiceListTab[] = ['unsent', 'draft', 'unpaid', 'paid']
     for (const invoice of rows) {
@@ -156,5 +230,96 @@ describe('quotes', () => {
     expect(parseQuoteListTab('open')).toBe('open')
     expect(parseQuoteListTab('unpaid')).toBeNull()
     expect(parseQuoteListTab(null)).toBeNull()
+  })
+})
+
+describe('the collections tab', () => {
+  it('shows exactly the invoices the context marks as with the collections provider', () => {
+    const invoice = { id: 'inv-1', status: 'sent', invoice_number: '1', credited_invoice_id: null, document_type: 'invoice' } as const
+    expect(matchesInvoiceListTab(invoice, 'collections', { inCollection: new Set(['inv-1']) })).toBe(true)
+    expect(matchesInvoiceListTab(invoice, 'collections', { inCollection: new Set(['inv-2']) })).toBe(false)
+    expect(matchesInvoiceListTab(invoice, 'collections')).toBe(false)
+    // A case that needs a person (the Att göra row lands on this view).
+    expect(matchesInvoiceListTab(invoice, 'collections', { collectionAttention: new Set(['inv-1']) })).toBe(true)
+    expect(parseInvoiceListTab('collections')).toBe('collections')
+    expect(INVOICE_LIST_TABS).toContain('collections')
+  })
+
+  it('an overdue invoice "Hos inkasso" lists is that view\'s, never Förfallna\'s too (crm#1084)', () => {
+    const overdue = row({ id: 'inv-1', status: 'sent', invoice_number: 'F-1', due_date: '2026-09-01', remaining_amount: 500 })
+    const views = (context: Parameters<typeof matchesInvoiceListTab>[2]) =>
+      INVOICE_LIST_TABS.filter((tab) => matchesInvoiceListTab(overdue, tab, { today: TODAY, ...context }))
+    expect(views({})).toContain('overdue')
+    // With the provider (an open case past delivery).
+    expect(views({ inCollection: new Set(['inv-1']) })).toEqual(['all', 'unpaid', 'collections'])
+    // A case a person must look at (a refused handover, a failed read).
+    expect(views({ collectionAttention: new Set(['inv-1']) })).toEqual(['all', 'unpaid', 'collections'])
+    // Another invoice's case changes nothing for this one.
+    expect(views({ inCollection: new Set(['inv-2']) })).toEqual(['all', 'unpaid', 'overdue'])
+  })
+})
+
+
+describe('Förfallna follows the due date (crm#1084), with collections in play', () => {
+  const today = '2026-10-09'
+  const context = { today, inCollection: new Set(['at-provider']) }
+
+  it('follows the due date: a sent invoice past it is overdue though no reminder set the status', () => {
+    const sent = row({ status: 'sent', id: 'a', due_date: '2026-09-02', remaining_amount: 1250 })
+    expect(matchesInvoiceListTab(sent, 'overdue', context)).toBe(true)
+  })
+
+  it('includes a partly paid invoice past its due date', () => {
+    expect(matchesInvoiceListTab(row({ status: 'partially_paid', id: 'b', due_date: '2026-09-02', remaining_amount: 100 }), 'overdue', context)).toBe(
+      true,
+    )
+  })
+
+  it('leaves out an invoice not due yet, a paid one and one already at the provider', () => {
+    expect(matchesInvoiceListTab(row({ status: 'sent', id: 'c', due_date: today, remaining_amount: 1 }), 'overdue', context)).toBe(false)
+    expect(matchesInvoiceListTab(row({ status: 'overdue', id: 'd', due_date: '2026-09-02', remaining_amount: 0 }), 'overdue', context)).toBe(false)
+    expect(
+      matchesInvoiceListTab(row({ status: 'overdue', id: 'at-provider', due_date: '2026-09-02', remaining_amount: 10 }), 'overdue', context),
+    ).toBe(false)
+  })
+
+  it('never lists a credit note', () => {
+    expect(
+      matchesInvoiceListTab(row({ status: 'sent', id: 'e', due_date: '2026-09-02', remaining_amount: -10, credited_invoice_id: 'x' }), 'overdue', context),
+    ).toBe(false)
+  })
+})
+
+describe('one door per view: segments first, the rest in the status picker', () => {
+  it('shows at most five segments, Alla last, on both lists', () => {
+    for (const segments of [invoiceListSegmentTabs(false), invoiceListSegmentTabs(true), QUOTE_LIST_SEGMENT_TABS]) {
+      expect(segments.length).toBeLessThanOrEqual(5)
+      expect(segments[segments.length - 1]).toBe('all')
+    }
+  })
+
+  it('swaps Osända for Hos inkasso while collections is in play', () => {
+    expect(invoiceListSegmentTabs(false)).toContain('unsent')
+    expect(invoiceListSegmentTabs(false)).not.toContain('collections')
+    expect(invoiceListSegmentTabs(true)).toContain('collections')
+    expect(invoiceListSegmentTabs(true)).not.toContain('unsent')
+  })
+
+  it('leaves the segment views out of the status picker and keeps every other view in it', () => {
+    for (const collectionsShown of [false, true]) {
+      const segments = invoiceListSegmentTabs(collectionsShown)
+      const picker = statusPickerTabs(INVOICE_LIST_TABS, segments)
+      for (const tab of segments) expect(picker).not.toContain(tab)
+      expect([...picker, ...segments].sort()).toEqual([...INVOICE_LIST_TABS].sort())
+    }
+    const quotePicker = statusPickerTabs(QUOTE_LIST_TABS, QUOTE_LIST_SEGMENT_TABS)
+    expect([...quotePicker, ...QUOTE_LIST_SEGMENT_TABS].sort()).toEqual([...QUOTE_LIST_TABS].sort())
+  })
+
+  it('says when the active view is the segmented control\'s', () => {
+    expect(segmentViewActive('overdue', invoiceListSegmentTabs(true))).toBe(true)
+    expect(segmentViewActive('collections', invoiceListSegmentTabs(true))).toBe(true)
+    expect(segmentViewActive('paid', invoiceListSegmentTabs(true))).toBe(false)
+    expect(segmentViewActive('collections', invoiceListSegmentTabs(false))).toBe(false)
   })
 })

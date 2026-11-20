@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 @custom-variant dark (&:where(.dark, .dark *));
+/* Translucent chrome turns solid for people who ask for less transparency
+   (macOS and iOS "Reduce transparency"): reduced-transparency:bg-background. */
+@custom-variant reduced-transparency (@media (prefers-reduced-transparency: reduce));
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Spacing scale: locked.
@@ -12,9 +15,22 @@
 :root {
   color-scheme: light;
 
-  /* Sidebar column width (frame layout): the dashboard sidebar (SidebarV2)
-     and the panel's left offset both read it, so they stay in lockstep. */
-  --nav-w: 220px;
+  /* Navigation widths (frame layout): the rail on the frame (--rail-w) and
+     the area sidebar, the left column of the page panel (--side-w). Each is
+     written once, as a plain length. --nav-w is their sum, derived here and
+     never written as a number: where the page itself starts, which overlays
+     pinned to the page read (the floating bulk bar, the full-height item
+     view). A script cannot parse a calc(), so the assistant panel adds the
+     same two lengths (AgentSheet readNavWidth, navWidthFromParts).
+     The rail is as wide as the longest area name needs under its icon and no
+     wider: a 76px label ("Bookkeeping" is 75px and "Inställningar" 72px at
+     12px/500), 4px inside the button and 6px to the rail's edges. The
+     sidebar is 220px, and the prototype's 320px from a 1440px window up
+     (override below the :root block), where the page keeps more room than
+     it has on a 1280px laptop at 220px. */
+  --rail-w: 96px;
+  --side-w: 220px;
+  --nav-w: calc(var(--rail-w) + var(--side-w));
   /* Settings: width of the one control column every settings row shares
      (components/settings/SettingsRows.tsx), so fields and switches align. */
   --settings-control-w: 400px;
@@ -41,70 +57,113 @@
      agent provider raises it while the panel is docked and clears it again. */
   --agent-dock-w: 10px;
 
-  /* Grayscale Chrome Palette: paper white + warm beige */
+  /* Stil v3 palette (product decisions 2026-10-29): a warm ink scale on a
+     white panel over a warm frame. Every value is an HSL triplet because
+     data-palette and the white-label brand (lib/branding/brand-style.ts)
+     override these tokens as triplets. The washes and lines carry their own
+     alpha inside the triplet ("H S% L% / a"): they are translucent ink, so
+     one token reads the same on the panel, the frame and a floating layer.
+     Raw CSS that adds an alpha to one of them composes it with color-mix(),
+     never hsl(var(--x) / a). Text tokens stay opaque (precomputed on the
+     panel) so they never depend on what sits behind them. */
 
+  /* Ink rgb(28 24 18) at .90 on the panel: body text and values. */
   --background: 0 0% 100%;
-  --foreground: 0 0% 9%;
+  --foreground: 33 10% 18%;
+  /* #17140F: titles, amounts, the active choice. */
+  --strong: 38 21% 7%;
 
-  /* Warm-toned frame behind the floating page panel (frame layout) */
-  --frame: 40 18% 96%;
+  /* #F5F3EE: the warm frame behind the floating page panel */
+  --frame: 43 26% 95%;
 
   --card: 0 0% 100%;
-  --card-foreground: 0 0% 9%;
+  --card-foreground: 33 10% 18%;
 
   --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 9%;
+  --popover-foreground: 33 10% 18%;
 
-  --primary: 0 0% 9%;
-  --primary-foreground: 0 0% 100%;
+  /* The raised control surface: buttons, fields, the segmented thumb.
+     White on the panel in light; one step above the floating layer in dark. */
+  --control: 0 0% 100%;
 
-  --secondary: 40 11% 89%;                /* Warm beige paper chip */
-  --secondary-foreground: 0 0% 9%;
+  /* Ink; the primary button draws it translucent (bg-primary/88). */
+  --primary: 36 22% 9%;
+  --primary-foreground: 0 0% 99%;
 
-  --muted: 40 8% 93%;
-  --muted-foreground: 0 0% 40%;
+  /* Warm wash rgb(120 96 56): .10 marks the selected choice; Tailwind's
+     /60 (.06) is the hover tint and /35 (.035) the row hover. */
+  --secondary: 38 36% 35% / 0.1;
+  --secondary-foreground: 38 21% 7%;
 
-  --accent: 40 8% 93%;
-  --accent-foreground: 0 0% 9%;
+  --muted: 38 36% 35% / 0.07;
+  /* Ink .62: the lowest text tier. AA on the panel (4.9:1) and on the frame
+     (4.8:1); nothing uses a lighter tier. */
+  --muted-foreground: 40 3% 44%;
 
-  --destructive: 6 36% 48%;               /* Muted terracotta */
+  --accent: 38 36% 35% / 0.07;
+  --accent-foreground: 38 21% 7%;
+
+  /* #B23A27 */
+  --destructive: 8 64% 43%;
   --destructive-foreground: 0 0% 100%;
 
-  --border: 45 5% 85%;
-  --input: 45 5% 85%;
-  --ring: 0 0% 9%;
+  /* Outlines of single objects (a file, a dropzone, a chosen row). */
+  --border: 36 22% 9% / 0.1;
+  --input: 36 22% 9% / 0.12;
+  /* Dividers: drawn 0.5px (border-hairline); totals and Summa rules. */
+  --line: 36 22% 9% / 0.08;
+  --line-strong: 36 22% 9% / 0.18;
+  /* Keyboard focus: blue, drawn at .7 (3.2:1 against the panel). */
+  --ring: 215 100% 44%;
 
-  /* Radius */
+  /* Radius base: rounded-lg 8px (fields), rounded-md 6px (buttons, chips),
+     rounded-sm 4px (leaves). See the radius ladder in design.md. */
   --radius: 0.5rem;
 
-  /* Success: Sage green */
-  --success: 155 25% 40%;
+  /* Green #1F7A51 (5.3:1): income, the confirmation chip, check marks. */
+  --success: 153 59% 30%;
   --success-foreground: 0 0% 100%;
 
-  /* Warning: Muted ochre */
-  --warning: 38 55% 50%;
-  --warning-foreground: 0 0% 9%;
+  /* Amber #D4930F: warning glyphs and bars, never small text. */
+  --warning: 40 87% 45%;
+  --warning-foreground: 38 21% 7%;
 
-  /* Attn: darker ochre for the one-sentence attention line (.attn / AttnLine),
-     derived from --warning but AA-safe as small text on the page background. */
-  --attn: 38 50% 34%;
+  /* #8A5D04: the one-sentence attention line (.attn / AttnLine) and any
+     amber text, AA-safe (5.8:1) on the panel. */
+  --attn: 40 94% 28%;
 
   --warm-accent: 38 45% 52%;
 
   /* Chart colors */
-  --chart-1: 155 25% 40%;
-  --chart-2: 6 36% 48%;
-  --chart-3: 38 55% 50%;
-  --chart-4: 0 0% 50%;
+  /* A comparison pair (in/out, income/costs), board Rapporter-v3: blue and
+     ochre, never a good-or-bad red and green. */
+  --chart-1: 201 66% 36%;
+  --chart-2: 35 60% 41%;
+  --chart-3: 40 87% 45%;
+  --chart-4: 40 3% 44%;
 
-  /* Custom tokens */
+  /* Custom tokens: Inter for everything; Hedvig only for headline numbers. */
   --font-display: var(--font-hedvig-serif), Georgia, serif;
-  --font-body: var(--font-geist-sans), system-ui, sans-serif;
+  --font-body: var(--font-inter), system-ui, sans-serif;
 
-  /* Shadows: barely-there; chrome relies on hairline borders */
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 1px 1px rgba(15, 23, 42, 0.02);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.03);
-  --shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.05);
+  /* Shadows (Stil v3). --sh is the hairline lift every raised control and
+     single object carries instead of a border; --sh-h its hover; --sh-pop
+     the floating layers (menus, popovers, dialogs, drawers, toasts). The
+     --shadow-* names are kept for overlays that already reference them. */
+  --sh: 0 0 0 0.5px rgb(28 24 18 / 0.08), 0 1px 1px -1px rgb(28 24 18 / 0.1), 0 1px 2px 0 rgb(28 24 18 / 0.05);
+  --sh-h: 0 0 0 0.5px rgb(28 24 18 / 0.12), 0 1px 1px -1px rgb(28 24 18 / 0.12), 0 1px 3px 0 rgb(28 24 18 / 0.07);
+  --sh-pop: 0 0 0 0.5px rgb(28 24 18 / 0.08), 0 12px 28px -10px rgb(28 24 18 / 0.18), 0 1px 2px 0 rgb(28 24 18 / 0.05);
+  --shadow-sm: var(--sh);
+  --shadow-md: var(--sh-pop);
+  --shadow-lg: var(--sh-pop);
+  /* Frosted chrome: the top bar and floating bars (72% surface + blur). */
+  /* A drawer's edge and its shadow cast to the left over the page. */
+  --sh-drawer: 0 0 0 0.5px rgb(28 24 18 / 0.08), -16px 0 40px -16px rgb(28 24 18 / 0.22);
+  /* The page panel's own edge on the frame (no border). */
+  --sh-panel: 0 0 0 0.5px rgb(28 24 18 / 0.07), 0 1px 2px 0 rgb(28 24 18 / 0.04);
+  --material: rgb(255 255 255 / 0.72);
+  /* The veil behind a dialog: dims the whole window, sidebar included. */
+  --veil: rgb(28 24 18 / 0.16);
 
   /* Animation */
   --ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
@@ -113,12 +172,14 @@
      block is unlayered and therefore shadows Tailwind's own `ease-out` token,
      so retiming it would retime every ease-out utility in the app. New entry
      animations should use this one. */
-  --ease-emphasized: cubic-bezier(0.23, 1, 0.32, 1);
-  /* Two speeds (design.md, "Motion"): fast for state changes (hover, color,
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Three speeds (design.md, "Motion"): press for the pointer-down response
+     (a button or chip scales to .97), fast for state changes (hover, color,
      chevrons, toggles), base for layout changes (expand/collapse, drawers,
-     content entry). Tailwind's duration-150 / duration-300 are the same two
+     content entry). Tailwind's duration-100 / -150 / -300 are the same
      values; check:guards rejects every other duration. There is no spring
      token: nothing in the app overshoots. */
+  --duration-press: 100ms;
   --duration-fast: 150ms;
   --duration-base: 300ms;
 }
@@ -127,8 +188,37 @@
    paste a cubic-bezier literal. --ease-drawer is the sheet curve shared by
    the slide-over, the agent sheet and the page panel's resize. */
 @theme {
-  --ease-emphasized: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* The Stil v3 type scale (polish P8, 2026-10-31), set as Tailwind's own
+     named sizes so every text-* on every page follows it: 12px labels and
+     meta, 13px body and rows, 15px titles, 20px the rare page heading, and
+     24/28/32px for Hedvig headline numbers only. 14px, 17px and 18px are
+     gone; text-lg is the 15px title size like text-base. */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.375rem;
+  --text-lg: 0.9375rem;
+  --text-lg--line-height: 1.375rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 1.75rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl: 2rem;
+  --text-4xl--line-height: 2.5rem;
+}
+
+/* The area sidebar at the prototype's width where the window has room for it. */
+@media (min-width: 90rem) {
+  :root {
+    --side-w: 320px;
+  }
 }
 
 /* From md the bottom nav is hidden (DashboardNav is md:hidden), so nothing
@@ -147,82 +237,126 @@
   transition: none !important;
 }
 
+/* Dark (Stil v3, neutral): dark drops the warm tint. Four surface steps,
+   frame < panel < floating layer < raised control, and white ink tiers raised
+   from the light alphas so every text tier passes AA on the panel and on the
+   floating layer (contrast table on the canvas board Stil-v3-dark). */
 .dark {
   color-scheme: dark;
 
-  --background: 0 0% 7%;
-  --foreground: 0 0% 87%;
+  /* #1C1C1E panel; ink white .94 (15.1:1) */
+  --background: 240 3% 11%;
+  --foreground: 240 4% 95%;
+  /* #F5F5F7 */
+  --strong: 240 11% 96%;
 
+  /* #0D0D0D */
   --frame: 0 0% 5%;
 
-  --card: 0 0% 11%;
-  --card-foreground: 0 0% 87%;
+  --card: 240 3% 11%;
+  --card-foreground: 240 4% 95%;
 
-  --popover: 0 0% 11%;
-  --popover-foreground: 0 0% 87%;
+  /* #262628: menus, popovers, dialogs, drawers */
+  --popover: 240 3% 15%;
+  --popover-foreground: 240 4% 95%;
 
-  --primary: 0 0% 87%;
-  --primary-foreground: 0 0% 7%;
+  /* #2C2C2F */
+  --control: 240 3% 18%;
 
-  --secondary: 0 0% 14%;
-  --secondary-foreground: 0 0% 87%;
+  /* The primary button is a light chip with dark text. */
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 4% 9%;
 
-  --muted: 0 0% 16%;
-  --muted-foreground: 0 0% 50%;
+  --secondary: 0 0% 100% / 0.08;
+  --secondary-foreground: 240 11% 96%;
 
-  --accent: 0 0% 16%;
-  --accent-foreground: 0 0% 87%;
+  --muted: 0 0% 100% / 0.06;
+  /* White .64 (7.6:1 on the panel, 7.0:1 on a floating layer) */
+  --muted-foreground: 240 1% 68%;
 
-  --destructive: 6 32% 56%;
-  --destructive-foreground: 0 0% 100%;
+  --accent: 0 0% 100% / 0.06;
+  --accent-foreground: 240 11% 96%;
 
-  --border: 45 4% 18%;
-  --input: 45 4% 18%;
-  --ring: 0 0% 87%;
+  /* #FF7B6E */
+  --destructive: 5 100% 72%;
+  --destructive-foreground: 240 4% 9%;
 
-  --success: 155 22% 48%;
-  --success-foreground: 0 0% 100%;
+  --border: 0 0% 100% / 0.12;
+  --input: 0 0% 100% / 0.14;
+  --line: 0 0% 100% / 0.1;
+  --line-strong: 0 0% 100% / 0.2;
+  /* #6EA4FF */
+  --ring: 218 100% 72%;
 
-  --warning: 38 50% 55%;
-  --warning-foreground: 38 50% 90%;
+  /* Income text #52CF8C */
+  --success: 148 57% 57%;
+  --success-foreground: 240 4% 9%;
 
-  --attn: 38 45% 62%;
+  /* #F0B232, text-safe in dark (9.0:1) */
+  --warning: 40 86% 57%;
+  --warning-foreground: 240 4% 9%;
+
+  --attn: 40 86% 57%;
 
   --warm-accent: 38 42% 58%;
 
-  --chart-1: 155 22% 48%;
-  --chart-2: 6 32% 56%;
-  --chart-3: 38 50% 55%;
-  --chart-4: 0 0% 55%;
+  /* Charts differ in lightness, not only hue. */
+  --chart-1: 207 70% 70%;
+  --chart-2: 35 50% 53%;
+  --chart-3: 40 86% 57%;
+  --chart-4: 240 1% 65%;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --sh: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 1px 2px 0 rgb(0 0 0 / 0.6);
+  --sh-h: 0 0 0 0.5px rgb(255 255 255 / 0.18), 0 1px 3px 0 rgb(0 0 0 / 0.6);
+  --sh-pop: 0 0 0 0.5px rgb(255 255 255 / 0.1), 0 16px 36px -12px rgb(0 0 0 / 0.7), 0 1px 2px 0 rgb(0 0 0 / 0.5);
+  --sh-drawer: 0 0 0 0.5px rgb(255 255 255 / 0.1), -16px 0 40px -16px rgb(0 0 0 / 0.7);
+  --sh-panel: 0 0 0 0.5px rgb(255 255 255 / 0.06);
+  --material: rgb(30 30 32 / 0.72);
+  --veil: rgb(0 0 0 / 0.55);
 }
 
 /* Color palettes are independent of appearance mode. next-themes continues
    to own the .dark class while data-palette replaces only semantic chrome
-   tokens. Preview swatches share these rules so their colors cannot drift. */
+   tokens. Preview swatches share these rules so their colors cannot drift.
+   Neutral is the default (it is always applied), so it repeats the :root and
+   .dark values; the tinted palettes follow the same Stil v3 recipe in their
+   own hue: an opaque ink, a translucent wash of the primary hue for selected
+   and hover, and translucent lines of the ink for outlines and dividers. */
 :root[data-palette="neutral"],
 [data-palette-preview="neutral"] {
   --background: 0 0% 100%;
-  --primary: 0 0% 9%;
-  --secondary: 40 11% 89%;
-  --border: 45 5% 85%;
+  --foreground: 33 10% 18%;
+  --frame: 43 26% 95%;
+  --primary: 36 22% 9%;
+  --secondary: 38 36% 35% / 0.1;
+  --muted: 38 36% 35% / 0.07;
+  --accent: 38 36% 35% / 0.07;
+  --border: 36 22% 9% / 0.1;
+  --input: 36 22% 9% / 0.12;
+  --line: 36 22% 9% / 0.08;
+  --line-strong: 36 22% 9% / 0.18;
 }
 
 .dark[data-palette="neutral"],
 .dark [data-palette-preview="neutral"] {
-  --background: 0 0% 7%;
-  --primary: 0 0% 87%;
-  --secondary: 0 0% 14%;
-  --border: 45 4% 18%;
+  --background: 240 3% 11%;
+  --foreground: 240 4% 95%;
+  --frame: 0 0% 5%;
+  --primary: 0 0% 98%;
+  --secondary: 0 0% 100% / 0.08;
+  --muted: 0 0% 100% / 0.06;
+  --accent: 0 0% 100% / 0.06;
+  --border: 0 0% 100% / 0.12;
+  --input: 0 0% 100% / 0.14;
+  --line: 0 0% 100% / 0.1;
+  --line-strong: 0 0% 100% / 0.2;
 }
 
 :root[data-palette="indigo"],
 [data-palette-preview="indigo"] {
   --background: 228 42% 98%;
   --foreground: 229 30% 14%;
+  --strong: 229 34% 10%;
   --frame: 228 52% 94%;
   --card: 0 0% 100%;
   --card-foreground: 229 30% 14%;
@@ -230,14 +364,16 @@
   --popover-foreground: 229 30% 14%;
   --primary: 231 48% 34%;
   --primary-foreground: 225 40% 98%;
-  --secondary: 229 42% 89%;
+  --secondary: 231 48% 34% / 0.1;
   --secondary-foreground: 229 30% 14%;
-  --muted: 228 36% 93%;
+  --muted: 231 48% 34% / 0.07;
   --muted-foreground: 229 20% 38%;
-  --accent: 228 36% 93%;
+  --accent: 231 48% 34% / 0.07;
   --accent-foreground: 229 30% 14%;
-  --border: 229 24% 78%;
-  --input: 229 24% 78%;
+  --border: 229 30% 14% / 0.12;
+  --input: 229 30% 14% / 0.14;
+  --line: 229 30% 14% / 0.09;
+  --line-strong: 229 30% 14% / 0.2;
   --ring: 231 48% 34%;
 }
 
@@ -245,21 +381,25 @@
 .dark [data-palette-preview="indigo"] {
   --background: 231 28% 7%;
   --foreground: 228 22% 89%;
+  --strong: 228 30% 95%;
   --frame: 232 34% 4%;
-  --card: 231 24% 11%;
+  --card: 231 28% 7%;
   --card-foreground: 228 22% 89%;
   --popover: 231 24% 11%;
   --popover-foreground: 228 22% 89%;
+  --control: 231 22% 15%;
   --primary: 228 58% 74%;
   --primary-foreground: 231 25% 10%;
-  --secondary: 231 28% 16%;
+  --secondary: 228 58% 74% / 0.12;
   --secondary-foreground: 228 22% 89%;
-  --muted: 230 23% 18%;
+  --muted: 228 58% 74% / 0.08;
   --muted-foreground: 228 16% 64%;
-  --accent: 230 23% 18%;
+  --accent: 228 58% 74% / 0.08;
   --accent-foreground: 228 22% 89%;
-  --border: 231 20% 26%;
-  --input: 231 20% 26%;
+  --border: 228 22% 89% / 0.12;
+  --input: 228 22% 89% / 0.14;
+  --line: 228 22% 89% / 0.1;
+  --line-strong: 228 22% 89% / 0.2;
   --ring: 228 58% 74%;
 }
 
@@ -267,6 +407,7 @@
 [data-palette-preview="forest"] {
   --background: 145 25% 98%;
   --foreground: 150 24% 12%;
+  --strong: 150 28% 8%;
   --frame: 140 38% 93%;
   --card: 0 0% 100%;
   --card-foreground: 150 24% 12%;
@@ -274,14 +415,16 @@
   --popover-foreground: 150 24% 12%;
   --primary: 151 42% 28%;
   --primary-foreground: 140 30% 98%;
-  --secondary: 140 30% 87%;
+  --secondary: 151 42% 28% / 0.1;
   --secondary-foreground: 150 24% 12%;
-  --muted: 140 24% 92%;
+  --muted: 151 42% 28% / 0.07;
   --muted-foreground: 148 18% 34%;
-  --accent: 140 24% 92%;
+  --accent: 151 42% 28% / 0.07;
   --accent-foreground: 150 24% 12%;
-  --border: 142 20% 76%;
-  --input: 142 20% 76%;
+  --border: 150 24% 12% / 0.12;
+  --input: 150 24% 12% / 0.14;
+  --line: 150 24% 12% / 0.09;
+  --line-strong: 150 24% 12% / 0.2;
   --ring: 151 42% 28%;
 }
 
@@ -289,21 +432,25 @@
 .dark [data-palette-preview="forest"] {
   --background: 150 22% 6%;
   --foreground: 140 15% 88%;
+  --strong: 140 20% 95%;
   --frame: 150 28% 4%;
-  --card: 150 19% 10%;
+  --card: 150 22% 6%;
   --card-foreground: 140 15% 88%;
   --popover: 150 19% 10%;
   --popover-foreground: 140 15% 88%;
+  --control: 150 17% 14%;
   --primary: 145 38% 66%;
   --primary-foreground: 150 18% 8%;
-  --secondary: 150 22% 16%;
+  --secondary: 145 38% 66% / 0.12;
   --secondary-foreground: 140 15% 88%;
-  --muted: 150 20% 18%;
+  --muted: 145 38% 66% / 0.08;
   --muted-foreground: 143 14% 62%;
-  --accent: 150 20% 18%;
+  --accent: 145 38% 66% / 0.08;
   --accent-foreground: 140 15% 88%;
-  --border: 150 17% 26%;
-  --input: 150 17% 26%;
+  --border: 140 15% 88% / 0.12;
+  --input: 140 15% 88% / 0.14;
+  --line: 140 15% 88% / 0.1;
+  --line-strong: 140 15% 88% / 0.2;
   --ring: 145 38% 66%;
 }
 
@@ -311,21 +458,25 @@
 [data-palette-preview="sand"] {
   --background: 42 52% 97%;
   --foreground: 28 23% 13%;
+  --strong: 28 28% 9%;
   --frame: 39 56% 91%;
   --card: 42 45% 98%;
   --card-foreground: 28 23% 13%;
   --popover: 42 45% 98%;
   --popover-foreground: 28 23% 13%;
+  --control: 42 45% 99%;
   --primary: 24 36% 30%;
   --primary-foreground: 42 35% 98%;
-  --secondary: 38 42% 85%;
+  --secondary: 24 36% 30% / 0.1;
   --secondary-foreground: 28 23% 13%;
-  --muted: 40 38% 90%;
+  --muted: 24 36% 30% / 0.07;
   --muted-foreground: 28 18% 34%;
-  --accent: 40 38% 90%;
+  --accent: 24 36% 30% / 0.07;
   --accent-foreground: 28 23% 13%;
-  --border: 36 28% 74%;
-  --input: 36 28% 74%;
+  --border: 28 23% 13% / 0.12;
+  --input: 28 23% 13% / 0.14;
+  --line: 28 23% 13% / 0.09;
+  --line-strong: 28 23% 13% / 0.2;
   --ring: 24 36% 30%;
 }
 
@@ -333,21 +484,25 @@
 .dark [data-palette-preview="sand"] {
   --background: 28 22% 7%;
   --foreground: 39 20% 88%;
+  --strong: 39 25% 95%;
   --frame: 25 26% 4%;
-  --card: 29 20% 10%;
+  --card: 28 22% 7%;
   --card-foreground: 39 20% 88%;
   --popover: 29 20% 10%;
   --popover-foreground: 39 20% 88%;
+  --control: 30 18% 14%;
   --primary: 35 44% 66%;
   --primary-foreground: 28 18% 9%;
-  --secondary: 30 25% 16%;
+  --secondary: 35 44% 66% / 0.12;
   --secondary-foreground: 39 20% 88%;
-  --muted: 30 22% 18%;
+  --muted: 35 44% 66% / 0.08;
   --muted-foreground: 34 15% 63%;
-  --accent: 30 22% 18%;
+  --accent: 35 44% 66% / 0.08;
   --accent-foreground: 39 20% 88%;
-  --border: 31 18% 26%;
-  --input: 31 18% 26%;
+  --border: 39 20% 88% / 0.12;
+  --input: 39 20% 88% / 0.14;
+  --line: 39 20% 88% / 0.1;
+  --line-strong: 39 20% 88% / 0.2;
   --ring: 35 44% 66%;
 }
 
@@ -378,9 +533,27 @@
   --color-warning-foreground: hsl(var(--warning-foreground));
   --color-attn: hsl(var(--attn));
   --color-warm-accent: hsl(var(--warm-accent));
+  --color-strong: hsl(var(--strong));
+  --color-control: hsl(var(--control));
+  --color-line: hsl(var(--line));
+  --color-line-strong: hsl(var(--line-strong));
+  --color-veil: var(--veil);
+  /* The radius ladder (design.md): sm 4px leaves, md 6px buttons and chips,
+     lg 8px fields and single objects, pop 10px menus and popovers, xl 12px
+     the panel, dialogs and drawers. */
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+  --radius-pop: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  /* shadow-raised (controls, single objects), shadow-raised-hover, and
+     shadow-float (every floating layer). Tailwind's own shadow-sm..2xl stay
+     banned by check:guards. */
+  --shadow-raised: var(--sh);
+  --shadow-raised-hover: var(--sh-h);
+  --shadow-float: var(--sh-pop);
+  --shadow-panel: var(--sh-panel);
+  --shadow-drawer: var(--sh-drawer);
   --font-sans: var(--font-body);
   --font-mono: var(--font-geist-mono), monospace;
   --font-serif: var(--font-display);
@@ -390,10 +563,76 @@
   border-color: hsl(var(--border));
 }
 
+/* Stil v3 fields and raised controls: the control surface with the
+   hairline lift instead of a border. Focus keeps the hairline and adds a
+   soft blue halo; an invalid field gets a red hairline. Used by Input,
+   Textarea, SelectTrigger, ToolbarSearch and the pickers (FIELD_CLASS in
+   components/ui/field-classes.ts), so every field reads the same. */
+@utility field-surface {
+  border-width: 0;
+  background-color: hsl(var(--control));
+  box-shadow: var(--sh);
+}
+@utility field-focus {
+  box-shadow: 0 0 0 0.5px hsl(var(--input)), 0 0 0 3px color-mix(in srgb, hsl(var(--ring)) 18%, transparent);
+}
+@utility field-invalid {
+  box-shadow: 0 0 0 1px color-mix(in srgb, hsl(var(--destructive)) 55%, transparent);
+}
+@utility field-disabled {
+  background-color: hsl(var(--muted));
+  box-shadow: inset 0 0 0 0.5px hsl(var(--line));
+  color: hsl(var(--muted-foreground));
+}
+
+/* Hairline dividers (Stil v3): half a CSS pixel, one device pixel on a
+   retina screen, in the --line tone. Lists, tables, settings rows, report
+   sections and dialog footers divide with these; totals use the strong
+   variant. A 1px border-border stays for the outline of a single object. */
+@utility border-hairline {
+  border-style: solid;
+  border-width: 0.5px;
+  border-color: hsl(var(--line));
+}
+@utility border-b-hairline {
+  border-bottom-style: solid;
+  border-bottom-width: 0.5px;
+  border-bottom-color: hsl(var(--line));
+}
+@utility border-t-hairline {
+  border-top-style: solid;
+  border-top-width: 0.5px;
+  border-top-color: hsl(var(--line));
+}
+@utility border-l-hairline {
+  border-left-style: solid;
+  border-left-width: 0.5px;
+  border-left-color: hsl(var(--line));
+}
+@utility border-r-hairline {
+  border-right-style: solid;
+  border-right-width: 0.5px;
+  border-right-color: hsl(var(--line));
+}
+@utility border-t-total {
+  border-top-style: solid;
+  border-top-width: 0.5px;
+  border-top-color: hsl(var(--line-strong));
+}
+@utility border-b-total {
+  border-bottom-style: solid;
+  border-bottom-width: 0.5px;
+  border-bottom-color: hsl(var(--line-strong));
+}
+
+/* Stil v3 base text: Inter 13/20, the body and row size; anything without
+   its own text-* class reads at it. */
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: var(--font-body);
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -449,21 +688,26 @@ summary,
   }
 }
 
-/* Display typography - Hedvig Letters Serif */
+/* Headline numbers - Hedvig Letters Serif (Stil v3: the serif is for the
+   big amounts only, 24/28/32px; every title is Inter). Hedvig ships weight
+   400 only; never pair it with font-medium. */
 .font-display {
   font-family: var(--font-display);
+  font-weight: 400;
   font-optical-sizing: auto;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Layered so utility classes (e.g. font-sans on a pane title) can override:
-   unlayered element rules would beat Tailwind's layered utilities.
-   Hedvig ships weight 400 only; anything heavier is browser-synthesized. */
+/* Layered so utility classes (e.g. text-muted-foreground on a pane title)
+   can override: unlayered element rules would beat Tailwind's layered
+   utilities. Titles are Inter 500 with a hair of negative tracking; the
+   title primitives (PageHeader, CardTitle, DialogTitle, SlideOver) set the
+   strong ink, and a bare heading inherits its parent's colour. */
 @layer base {
   h1, h2, h3 {
-    font-family: var(--font-display);
-    font-weight: 400;
-    letter-spacing: -0.015em;
-    font-optical-sizing: auto;
+    font-family: var(--font-body);
+    font-weight: 500;
+    letter-spacing: -0.006em;
   }
 }
 
@@ -477,15 +721,32 @@ summary,
   text-wrap: balance;
 }
 
-/* Safe area padding for mobile devices with notch/home indicator */
-.safe-area-bottom {
-  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
-}
-
 /* Main content padding: clears the bottom nav (--bottom-nav-h) plus 1rem on
    mobile; the panel resets it from md. */
 .safe-area-main-padding {
   padding-bottom: calc(var(--bottom-nav-h) + 1rem);
+}
+
+/* Markdown (.prose) in dark mode: the typography plugin's palette is a fixed
+   light-theme gray, so headings, inline code and kbd were near-black on the
+   dark panel and rules came out bright. Map it to the theme tokens; light mode
+   keeps the plugin's own palette. */
+.dark .prose {
+  --tw-prose-body: hsl(var(--foreground));
+  --tw-prose-headings: hsl(var(--foreground));
+  --tw-prose-lead: hsl(var(--muted-foreground));
+  --tw-prose-links: hsl(var(--foreground));
+  --tw-prose-bold: hsl(var(--foreground));
+  --tw-prose-counters: hsl(var(--muted-foreground));
+  --tw-prose-bullets: hsl(var(--muted-foreground));
+  --tw-prose-hr: hsl(var(--border));
+  --tw-prose-quotes: hsl(var(--foreground));
+  --tw-prose-quote-borders: hsl(var(--border));
+  --tw-prose-captions: hsl(var(--muted-foreground));
+  --tw-prose-kbd: hsl(var(--foreground));
+  --tw-prose-code: hsl(var(--foreground));
+  --tw-prose-th-borders: hsl(var(--border));
+  --tw-prose-td-borders: hsl(var(--border));
 }
 
 /* Animation Keyframes */
@@ -502,17 +763,6 @@ summary,
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes slideInLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
   }
 }
 
@@ -629,25 +879,101 @@ summary,
    case of a foldout <tr> that runs its own transition inside a staggered
    tbody and would otherwise animate twice. */
 .stagger-enter > *:not([data-no-stagger]) {
-  animation: slideUp var(--duration-base) var(--ease-emphasized) both;
+  animation: rise var(--duration-base) var(--ease-emphasized) both;
 }
 .stagger-enter > *:nth-child(1) { animation-delay: 0ms; }
-.stagger-enter > *:nth-child(2) { animation-delay: 40ms; }
-.stagger-enter > *:nth-child(3) { animation-delay: 80ms; }
-.stagger-enter > *:nth-child(4) { animation-delay: 120ms; }
-.stagger-enter > *:nth-child(5) { animation-delay: 160ms; }
-.stagger-enter > *:nth-child(6) { animation-delay: 200ms; }
-.stagger-enter > *:nth-child(7) { animation-delay: 240ms; }
-.stagger-enter > *:nth-child(8) { animation-delay: 280ms; }
-.stagger-enter > *:nth-child(9) { animation-delay: 320ms; }
-.stagger-enter > *:nth-child(n+10) { animation-delay: 360ms; }
+.stagger-enter > *:nth-child(2) { animation-delay: 30ms; }
+.stagger-enter > *:nth-child(3) { animation-delay: 60ms; }
+.stagger-enter > *:nth-child(4) { animation-delay: 90ms; }
+.stagger-enter > *:nth-child(5) { animation-delay: 120ms; }
+.stagger-enter > *:nth-child(6) { animation-delay: 150ms; }
+.stagger-enter > *:nth-child(7) { animation-delay: 180ms; }
+.stagger-enter > *:nth-child(8) { animation-delay: 210ms; }
+.stagger-enter > *:nth-child(9) { animation-delay: 240ms; }
+.stagger-enter > *:nth-child(n+10) { animation-delay: 270ms; }
+
+/* Stil v3 entry: 3px rise with a 2px blur that clears, so content settles
+   instead of sliding. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+/* The four named motions (product decision 2026-10-29): press scale (the
+   Button and chip primitives, active:scale-[0.97] over duration-100), fold
+   away (.row-exit below), check draw and the rolling counter (RollingCount).
+   Nothing else moves.
+
+   Check draw: an <svg> check whose path carries pathLength="1" draws itself
+   once, after the confirmation chip has landed (DoneChip). */
+@keyframes check-draw {
+  to { stroke-dashoffset: 0; }
+}
+.check-draw path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: check-draw var(--duration-base) var(--ease-emphasized) 150ms forwards;
+}
+.animate-rise {
+  animation: rise var(--duration-base) var(--ease-emphasized) both;
+}
+
+/* Skeletons (Stil v3): a slow shimmer of the warm wash. LateReveal holds a
+   skeleton back for 300ms so a fast load never flashes it. Reduced motion
+   gets a still bar (the global rule below stops the animation). */
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+.skeleton-shimmer {
+  background: linear-gradient(90deg, hsl(var(--muted)) 0%, hsl(var(--secondary)) 50%, hsl(var(--muted)) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes late {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-late {
+  animation: late 200ms ease-out 300ms both;
+}
+
+/* Rolling counter: each digit is a column of 0-9 that slides to its value
+   (RollingCount). The column moves by whole em steps, so the digit lands on
+   the baseline at any font size. */
+.roll-digit {
+  display: inline-block;
+  height: 1.15em;
+  overflow: hidden;
+  line-height: 1.15em;
+  vertical-align: bottom;
+}
+.roll-digit > span {
+  display: block;
+  transition: transform var(--duration-base) var(--ease-emphasized);
+}
+
+/* Dates in lists and tables (YYYY-MM-DD): proportional figures, so the
+   hyphens do not float in wide tabular gaps. */
+.date-figures {
+  font-variant-numeric: proportional-nums;
+  white-space: nowrap;
+}
 
 /* Quiet settle for a freshly committed row (invoice editor line entry): a
    brief beige wash that fades to transparent, confirming where the row
    landed without moving anything. The global reduced-motion rule above
    collapses it to an instant no-op. */
 @keyframes row-settle {
-  from { background-color: hsl(var(--secondary) / 0.7); }
+  from { background-color: hsl(var(--secondary)); }
   to { background-color: transparent; }
 }
 .row-settle {
@@ -725,13 +1051,6 @@ input:-webkit-autofill:focus {
   -webkit-box-shadow: 0 0 0 1000px hsl(var(--card)) inset;
   -webkit-text-fill-color: hsl(var(--foreground));
   caret-color: hsl(var(--foreground));
-}
-
-/* Soft focus states */
-.focus-ring:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px hsl(var(--background)),
-              0 0 0 4px hsl(var(--primary) / 0.35);
 }
 
 /* Overlay-style scrollbars: invisible at rest, revealed only while the
@@ -839,6 +1158,9 @@ input[type="number"] {
     animation: none;
     opacity: 1;
   }
+  .check-draw path {
+    stroke-dashoffset: 0;
+  }
 }
 
 /* Brief sage settle tint on tolkning-filled fields (supplier-invoice
@@ -854,13 +1176,16 @@ input[type="number"] {
   animation: prefill-settle 0.9s ease-out both;
 }
 
-/* Dashboard top bar (founder decision 2026-09-07, PR #2390). The PageHeader
-   keeps its markup and becomes the panel's 48px top bar: sticky, full width,
-   13px/500 body-face title, help and primary action on the same line,
-   description hidden (it lives behind the "?" popover). The negative margins
-   undo MainContainer's padding (pt-4, px-4/md:px-6), so keep the two in
-   step. Unlayered on purpose: these rules must beat the Tailwind utilities
-   PageHeader and the hand-rolled headers carry. */
+/* Dashboard top bar (product decision 2026-09-07, PR #2390; Stil v3
+   2026-10-29). The PageHeader keeps its markup and becomes the panel's 48px
+   top bar: sticky, full width, 13px/500 title, help and primary action on
+   the same line, description hidden (it lives behind the "?" popover). The
+   bar is frosted material (72% of the panel + blur) with no hard divider:
+   content scrolls visibly under it. Reduced transparency gets the solid
+   panel. The negative margins undo MainContainer's padding (pt-4,
+   px-4/md:px-6), so keep the two in step. Unlayered on purpose: these rules
+   must beat the Tailwind utilities PageHeader and the hand-rolled headers
+   carry. */
 .page-header {
   position: sticky;
   top: 0;
@@ -871,8 +1196,16 @@ input[type="number"] {
   min-height: 3rem;
   margin: -1rem -1rem 1rem;
   padding: 0 1rem;
-  border-bottom: 1px solid hsl(var(--border) / 0.7);
-  background: hsl(var(--background));
+  background: var(--material);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .page-header {
+    background: hsl(var(--background));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 @media (min-width: 768px) {
   .page-header {
@@ -881,6 +1214,10 @@ input[type="number"] {
     padding-left: 1.5rem;
     padding-right: 1.5rem;
   }
+}
+/* A lone title (no action for this user) stays on the left. */
+.page-header > :last-child:not(:first-child) {
+  margin-left: auto;
 }
 .page-header-lead {
   min-width: 0;
@@ -892,6 +1229,7 @@ input[type="number"] {
   font-weight: 500;
   letter-spacing: 0;
   white-space: nowrap;
+  color: hsl(var(--strong));
 }
 /* A field label above a picker (PERIOD, DIMENSION) makes a toolbar two rows
    tall; the pickers' own values say what they are, in the top bar and in a
@@ -912,7 +1250,7 @@ input[type="number"] {
 .page-header-meta {
   margin: 0;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 20px;
   white-space: nowrap;
   overflow: hidden;
@@ -923,7 +1261,193 @@ input[type="number"] {
 }
 .page-header-action {
   width: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 .page-header-action > * {
   width: auto;
+}
+/* On a phone the top bar is one row: the title (truncating), the page's one
+   primary action and, when the other actions do not fit, a "more" button
+   that lists them (PageHeaderActions marks what it folds). The way back is a
+   chevron (PageHeaderParent). From md up nothing here applies. */
+@media (max-width: 767.98px) {
+  .page-header {
+    flex-wrap: nowrap;
+  }
+  .page-header > :first-child:not(:last-child) {
+    flex: 1 1 0%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .page-header > :first-child:not(:last-child) > .flex {
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+  .page-header-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* What follows the title (a status, a badge) gives way before the title
+     does; the "?" help keeps its size. */
+  .page-header > :first-child:not(:last-child) > .flex > .page-header-title ~ :not(button) {
+    flex-shrink: 9999;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  /* The facts line gives way before the title does. */
+  .page-header-lead:has(.page-header-meta) > :first-child {
+    flex: 0 1 auto;
+  }
+  .page-header-meta {
+    flex: 1 1 0%;
+  }
+  .page-header > :last-child:not(:first-child) {
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+  }
+  [data-topbar-folded=""],
+  [data-topbar-gone],
+  [data-topbar-measuring] [data-topbar-more] {
+    display: none !important;
+  }
+  /* A status that draws nothing (a posted voucher's) takes no gap in the
+     line under the bar. */
+  .page-header-below > :empty {
+    display: none;
+  }
+  /* A facts line that is also written under the bar leaves the bar. */
+  .page-header-meta[data-below] {
+    display: none;
+  }
+  /* Before the slot has measured itself (the server's markup, until the page
+     hydrates) a bar with a primary shows only that, so nothing is squeezed
+     for a moment; the slot then folds or restores the rest. */
+  [data-topbar-actions]:not([data-topbar-ready]):has([class*="bg-primary"])
+    :is(button, a):not([class*="bg-primary"]):not([aria-haspopup]):not([role="combobox"]) {
+    display: none;
+  }
+  /* Last resort, when the title would have no room at all: the primary shows
+     its symbol only. The label stays in the markup, so it is still the
+     button's name. */
+  [data-topbar-compact] {
+    font-size: 0 !important;
+    gap: 0 !important;
+  }
+  /* A folded menu button: unseen at the bar's end, where its menu opens. */
+  [data-topbar-actions] {
+    position: relative;
+  }
+  [data-topbar-folded="anchor"] {
+    position: absolute !important;
+    top: 0;
+    right: 0;
+    width: 2rem !important;
+    height: 100%;
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
+/* A visually hidden label sits at its static position, which inside a
+   horizontally scrolled table can lie far past the panel's edge and widen the
+   page on a phone. Pinned to its containing block's corner it stays hidden
+   and out of the way; a focusable one (skip link) leaves sr-only on focus. */
+.sr-only {
+  left: 0;
+  top: 0;
+}
+
+/* Print (crm#1203). A dashboard page prints as a document: the panel's
+   content on plain paper at the full page width, without the chrome around
+   it. Defined once here for every dashboard page instead of per page.
+
+   Scoped to pages that render the page panel (#main-content): standalone
+   documents (the årsredovisning, payslips, invoice previews) keep their own
+   print rules. Structural on purpose: whatever sits beside the panel in the
+   frame (sidebar, mobile nav, banners, the command palette) or beside the
+   shell at body level (the assistant and its button, toasts, open popovers,
+   the deploy prompt) is chrome, including chrome added later. Unlayered like
+   the top bar rules above, so they beat the panel's Tailwind utilities.
+
+   A page whose period or company lives in a top bar picker states it on
+   paper with ReportPrintHeader (components/reports). */
+@media print {
+  body:has(#main-content) > :not(:has(#main-content)),
+  :has(> #main-content) > :not(#main-content),
+  body :has(#main-content) > :not(#main-content):not(:has(#main-content)) {
+    display: none !important;
+  }
+
+  /* The frame: no warm backdrop, and no viewport-tall minimum, which can
+     push a blank page out after a short printout. */
+  body:has(#main-content),
+  :has(> #main-content) {
+    min-height: 0;
+    background: none;
+  }
+
+  /* The V7 shell wraps the panel in more than one frame (the icon rail sits
+     beside the frame that holds the area sidebar and the panel). Every frame
+     around the panel lets go of the screen: no viewport height, no clipping,
+     no card margin, border or backdrop. */
+  body :has(#main-content) {
+    display: block;
+    height: auto;
+    min-height: 0;
+    margin: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  /* The panel stops being a floating, self-scrolling card: no frame margin
+     or offset for the sidebar and assistant, no clipping to the viewport
+     height (which cut the printout at one screen), no border. */
+  #main-content {
+    margin: 0;
+    padding: 0;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* MainContainer's padding: the printer's page margin is the margin. */
+  #main-content > div {
+    padding: 0;
+  }
+
+  /* The top bar becomes the document heading: static, no bar styling, the
+     title in the display face. Its controls (help "?", pickers, actions) do
+     nothing on paper. */
+  .page-header {
+    position: static;
+    min-height: 0;
+    margin: 0 0 1rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .page-header-title {
+    font-size: 20px;
+    line-height: 28px;
+  }
+  .page-header-action,
+  .page-header-lead button {
+    display: none;
+  }
 }

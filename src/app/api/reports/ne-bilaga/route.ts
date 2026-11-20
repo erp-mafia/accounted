@@ -3,14 +3,14 @@ import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 import {
   generateNESRUSubmission,
   getZipFilename,
+  NESruBlockedError,
 } from '@/lib/reports/ne-bilaga/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { FilingIdentityError } from '@/lib/invariants/org-number'
 import { buildSruZip } from '@/lib/reports/filing-report-service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/reports/ne-bilaga
@@ -43,18 +43,22 @@ export const GET = withRouteContext(
         const zipBytes = await buildSruZip(generateNESRUSubmission(declaration))
         const filename = getZipFilename(declaration)
 
-        return new NextResponse(new Uint8Array(zipBytes), {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/zip',
-            'Content-Disposition': `attachment; filename="${filename}"`,
-            'X-Request-Id': requestId,
-          },
+        return fileResponse(new Uint8Array(zipBytes), {
+          filename,
+          contentType: 'application/zip',
+          headers: { 'X-Request-Id': requestId },
         })
       }
 
       return NextResponse.json({ data: declaration })
     } catch (err) {
+      if (err instanceof NESruBlockedError) {
+        return errorResponseFromCode('TAX_DECL_NE_SRU_BLOCKED', opLog, {
+          requestId,
+          details: { reason: getUserErrorMessage(err) },
+        })
+      }
+      if (err instanceof FilingIdentityError) return errorResponseFromCode(err.code, opLog, { requestId })
       opLog.error('ne-bilaga declaration generation failed', err as Error)
       return errorResponseFromCode('TAX_DECL_GENERATION_FAILED', opLog, {
         requestId,

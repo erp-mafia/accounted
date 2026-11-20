@@ -5,11 +5,7 @@
  *
  * Contract, docs and rules in src/lib/operations/transactions.ts.
  */
-import { ensureInitialized } from '@/lib/init'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { transactionsBulkBook } from '@/lib/operations/transactions'
-
-// The booking emits transaction.reconciled per row.
-ensureInitialized()
 
 export const POST = v1OperationHandler(transactionsBulkBook)

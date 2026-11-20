@@ -568,6 +568,79 @@ describe('runVatDeclarationChecks', () => {
     ).toBe('ERROR')
   })
 
+  // crm#1348: an earlier period's import moved off 4545 to a cost account in a
+  // later period, its importmoms left where it was. Ruta 50 goes negative with
+  // rutor 60-62 empty; the proportional rule only saw positive bases, so the
+  // period read as clean while Skatteverket refused it (FK005 tests presence).
+  it('flags ERROR for a negative import base with rutor 60-62 empty (FK005)', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta21: 4000,
+      ruta30: 1000,
+      ruta48: 1500,
+      ruta49: -500,
+      ruta50: -1200.5,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['IMPORT_BASE_WITHOUT_OUTPUT'])
+    const finding = findings[0]
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(/1[\s ]?200 kr/)
+    expect(finding.message).toContain('FK005')
+    expect(finding.message).toContain('storno')
+    expect(isFilingBlocked(findings)).toBe(true)
+  })
+
+  it('flags ERROR for negative importmoms with ruta 50 empty (FK006)', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta60: -250,
+      ruta48: -250,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['IMPORT_OUTPUT_WITHOUT_BASE'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK006')
+  })
+
+  it('does not flag an import credited in full, base and importmoms together', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: -1000,
+      ruta60: -250,
+      ruta48: -250,
+      ruta49: 0,
+    }
+    expect(runVatDeclarationChecks(rutor)).toEqual([])
+  })
+
+  // Presence is per ruta, as Skatteverket reads it: two rutor that net to zero
+  // are still two amounts in 60-62.
+  it('flags importmoms rutor that net to zero when ruta 50 is empty', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta60: 100, ruta61: -100 }
+    expect(
+      runVatDeclarationChecks(rutor).find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')?.status,
+    ).toBe('ERROR')
+  })
+
+  // Presence is read on whole kronor as filed: öre alone file as 0, so
+  // Skatteverket sees no amount and neither does the check.
+  it('does not flag an öre-only ruta 50 without importmoms', () => {
+    for (const ruta50 of [0.8, -0.8]) {
+      expect(runVatDeclarationChecks({ ...emptyRutor, ruta50 })).toEqual([])
+    }
+  })
+
+  // A 1 kr base sits exactly on the proportional rule's 1 kr floor, so only the
+  // presence rule sees it; Skatteverket files it as 1 and refuses (FK005).
+  it('flags a whole-krona import base the tolerance floor would absorb', () => {
+    const finding = runVatDeclarationChecks({ ...emptyRutor, ruta50: 1 })
+      .find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toContain('2615/2625/2635')
+  })
+
   // At a small import base the tolerance is the 1 kr floor, not 0.5% (which
   // would be 0.50 kr on a 100 kr base). Every other import case above has a
   // basis large enough that the percentage branch wins, so the floor branch of
@@ -591,10 +664,11 @@ describe('runVatDeclarationChecks', () => {
     ).toBe('ERROR')
   })
 
-  // The sales pair stays binary on purpose: rutor 07/08 have no source accounts
-  // in ACCOUNT_RUTA while their output VAT (2613/2616 etc.) still feeds ruta 10,
-  // and periodiserade invoice lines credit 29xx with the moms left on 2611. A
-  // proportional check would block filing on correct declarations.
+  // The sales pair stays binary on purpose: ruta 07 has no source account in
+  // ACCOUNT_RUTA and ruta 08 only 3913, while their output VAT (2613/2616
+  // etc.) still feeds ruta 10, and periodiserade invoice lines credit 29xx
+  // with the moms left on 2611. A proportional check would block filing on
+  // correct declarations.
   it('does not flag the sales pair when output VAT exceeds what ruta 05-08 implies', () => {
     const rutor: VatDeclarationRutor = {
       ...emptyRutor,
@@ -626,6 +700,188 @@ describe('runVatDeclarationChecks', () => {
     expect(codes).toContain('TAXABLE_SALES_WITHOUT_OUTPUT')
     expect(codes).toContain('RC_BASIS_MISSING')
     expect(codes).toContain('IMPORT_BASE_WITHOUT_OUTPUT')
+  })
+})
+
+// #83: Skatteverket's FK001-FK004 test presence ("om belopp anges", any filed
+// whole-krona amount, negative included), the same as FK005/FK006 (crm#1348).
+// The proportional and binary checks only see a positive side, so a credit
+// that moved one half of a sale or a reverse-charge purchase read as clean.
+describe('FK001-FK004 presence (#83)', () => {
+  // The messages format kronor as sv-SE does (minus sign, no-break space).
+  const kr = (amount: number) => `${amount.toLocaleString('sv-SE')} kr`
+
+  it('flags ERROR for a negative sales base with rutor 10-12 empty (FK001)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta05: -2000.4 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['TAXABLE_SALES_WITHOUT_OUTPUT'])
+    const [finding] = findings
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toContain('FK001')
+    expect(finding.message).toContain(`ruta 05 ${kr(-2000)}`)
+    expect(finding.message).toContain('kreditfaktura')
+    expect(finding.detail).toContain('4.1.1.5')
+    expect(isFilingBlocked(findings)).toBe(true)
+  })
+
+  it('flags ERROR for negative output VAT with rutor 05-08 empty (FK002)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta10: -500, ruta49: -500 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['OUTPUT_VAT_WITHOUT_SALES_BASE'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK002')
+    expect(findings[0].message).toContain(`ruta 10 ${kr(-500)}`)
+  })
+
+  it('flags ERROR for a negative reverse-charge basis with rutor 30-32 empty (FK003)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta21: -4000 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['RC_OUTPUT_MISSING'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK003')
+    expect(findings[0].message).toContain('storno')
+    expect(isFilingBlocked(findings)).toBe(true)
+  })
+
+  it('flags ERROR for negative fiktiv moms with rutor 20-24 empty (FK004)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta30: -1000, ruta48: -1000, ruta49: 0 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['RC_BASIS_MISSING'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK004')
+    expect(findings[0].message).toContain(`ruta 30 ${kr(-1000)}`)
+  })
+
+  it('does not flag a sale or a reverse-charge purchase credited in full, both halves together', () => {
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta05: -1000, ruta10: -250, ruta49: -250 })).toEqual([])
+    expect(runVatDeclarationChecks({
+      ...emptyRutor, ruta21: -4000, ruta30: -1000, ruta48: -1000, ruta49: 0,
+    })).toEqual([])
+  })
+
+  // Presence is per ruta: two rutor of one side that net to zero still file
+  // two amounts, while the proportional rule sees a zero sum.
+  it('flags fiktiv moms rutor that net to zero when rutor 20-24 are empty', () => {
+    const findings = runVatDeclarationChecks({ ...emptyRutor, ruta30: 120, ruta31: -120 })
+    const finding = findings.find((f) => f.code === 'RC_BASIS_MISSING')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toContain('FK004')
+    expect(finding?.message).toContain(`ruta 30 ${kr(120)}, ruta 31 ${kr(-120)}`)
+  })
+
+  // A counterpart of öre only files as 0 kr, so Skatteverket sees no amount:
+  // 4 kr of sales with 0.90 kr of moms is refused (FK001), while the binary
+  // check reads the 0.90 as output VAT and the proportional one stays inside
+  // its 1 kr tolerance.
+  it('flags a whole-krona sales base whose output VAT is öre only (FK001)', () => {
+    const findings = runVatDeclarationChecks({ ...emptyRutor, ruta05: 4, ruta10: 0.9, ruta49: 0.9 })
+    expect(findings.map((f) => f.code)).toEqual(['TAXABLE_SALES_WITHOUT_OUTPUT'])
+    expect(findings[0].message).toContain('FK001')
+  })
+
+  // crm#1822: the moms is booked, it is only under a krona. The finding
+  // still blocks (Skatteverket refuses the rutor), but it must say that the
+  // whole-krona rule empties the moms rutor, not that the books are short.
+  describe('moms booked but under a krona', () => {
+    it('FK003: names the booked fiktiv moms and tells the user not to correct the books', () => {
+      const findings = runVatDeclarationChecks({ ...emptyRutor, ruta21: 3, ruta30: 0.75, ruta48: 0.75 })
+      expect(findings.map((f) => f.code)).toEqual(['RC_OUTPUT_MISSING'])
+      const [finding] = findings
+      expect(finding.status).toBe('ERROR')
+      expect(isFilingBlocked(findings)).toBe(true)
+      expect(finding.belowOneKrona).toBe(true)
+      expect(finding.message).toContain('FK003')
+      expect(finding.message).toContain(`ruta 21 ${kr(3)}`)
+      expect(finding.message).toContain('ruta 30 0,75 kr')
+      expect(finding.message).toContain('under en krona')
+      expect(finding.message).toContain('hela kronor')
+      expect(finding.message).toContain('momsen saknas inte i bokföringen')
+      expect(finding.message).toContain('inget verifikat ska rättas')
+      expect(finding.message).toContain('Kontakta Skatteverket')
+      // The old cause read as if 2614 were empty.
+      expect(finding.message).not.toContain('Kontrollera att fiktiv moms är bokförd')
+      expect(finding.message).not.toContain('är tomma.')
+      expect(finding.detail).toContain('4.1.1.5')
+    })
+
+    it('FK003: the same at 12 % and 6 %, and for a credited purchase of the same size', () => {
+      const at12 = runVatDeclarationChecks({ ...emptyRutor, ruta21: 8, ruta31: 0.96, ruta48: 0.96 })
+      expect(at12[0].belowOneKrona).toBe(true)
+      expect(at12[0].message).toContain('ruta 31 0,96 kr')
+      const at6 = runVatDeclarationChecks({ ...emptyRutor, ruta20: 16, ruta32: 0.96, ruta48: 0.96 })
+      expect(at6[0].belowOneKrona).toBe(true)
+      const credited = runVatDeclarationChecks({ ...emptyRutor, ruta21: -3, ruta30: -0.75, ruta48: -0.75 })
+      expect(credited.map((f) => f.code)).toEqual(['RC_OUTPUT_MISSING'])
+      expect(credited[0].belowOneKrona).toBe(true)
+      expect(credited[0].message).not.toContain('storno')
+    })
+
+    it('FK001: output VAT of öre only on a sale of a few kronor', () => {
+      const [finding] = runVatDeclarationChecks({ ...emptyRutor, ruta05: 4, ruta10: 0.9, ruta49: 0.9 })
+      expect(finding.code).toBe('TAXABLE_SALES_WITHOUT_OUTPUT')
+      expect(finding.belowOneKrona).toBe(true)
+      expect(finding.message).toContain('ruta 10 0,90 kr')
+      expect(finding.message).toContain('momsen saknas inte i bokföringen')
+      expect(finding.message).not.toContain('Kontrollera att utgående moms är bokförd')
+    })
+
+    it('FK005: importmoms of öre only on an import of a few kronor', () => {
+      const findings = runVatDeclarationChecks({ ...emptyRutor, ruta50: 3, ruta60: 0.75, ruta48: 0.75 })
+      expect(findings.map((f) => f.code)).toEqual(['IMPORT_BASE_WITHOUT_OUTPUT'])
+      expect(findings[0].status).toBe('ERROR')
+      expect(findings[0].belowOneKrona).toBe(true)
+      expect(findings[0].message).toContain('FK005')
+      expect(findings[0].message).toContain('ruta 60 0,75 kr')
+      expect(findings[0].message).toContain('momsen saknas inte i bokföringen')
+      expect(findings[0].message).not.toContain('Kontrollera att importmoms är bokförd')
+    })
+
+    // Moms that is absent, or of the wrong sign, is still a bookkeeping
+    // matter and keeps the cause it had.
+    it('keeps the ordinary cause when no moms is booked at all', () => {
+      const [finding] = runVatDeclarationChecks({ ...emptyRutor, ruta21: -4000 })
+      expect(finding.belowOneKrona).toBeUndefined()
+      expect(finding.message).toContain('är tomma')
+      expect(finding.message).toContain('storno')
+    })
+
+    it('keeps the ordinary cause when the öre do not belong to the basis', () => {
+      // A credited purchase whose fiktiv moms is öre only: far too little.
+      const [far] = runVatDeclarationChecks({ ...emptyRutor, ruta21: -4000, ruta30: -0.75, ruta48: -0.75 })
+      expect(far.code).toBe('RC_OUTPUT_MISSING')
+      expect(far.belowOneKrona).toBeUndefined()
+      expect(far.message).toContain('storno')
+      // Basis and öre of opposite sign.
+      const [opposite] = runVatDeclarationChecks({ ...emptyRutor, ruta21: -3, ruta30: 0.4, ruta48: 0.4 })
+      expect(opposite.code).toBe('RC_OUTPUT_MISSING')
+      expect(opposite.belowOneKrona).toBeUndefined()
+    })
+
+    it('never marks the mirror direction: moms of a whole krona beside a basis of öre', () => {
+      const findings = runVatDeclarationChecks({ ...emptyRutor, ruta21: 0.8, ruta30: 1, ruta48: 1 })
+      expect(findings.every((f) => f.belowOneKrona === undefined)).toBe(true)
+    })
+  })
+
+  // A negative side of öre only files as 0 kr. (A positive one above the
+  // 0.50 kr epsilon is the existing checks' to judge, as before.)
+  it('does not flag a negative side that holds öre only', () => {
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta05: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta10: -0.8, ruta49: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta21: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta30: -0.8, ruta48: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta21: 0.8 })).toEqual([])
+  })
+
+  // The positive cases keep the findings and messages they had: the presence
+  // rule only adds what they missed.
+  it('keeps the proportional and binary messages for positive sides', () => {
+    const [rcBasis] = runVatDeclarationChecks({ ...emptyRutor, ruta30: 2500, ruta48: 2500 })
+    expect(rcBasis.code).toBe('RC_BASIS_MISSING')
+    expect(rcBasis.message).toMatch(/^Omvänd moms utan underlag/)
+    const [sales] = runVatDeclarationChecks({ ...emptyRutor, ruta05: 10000 })
+    expect(sales.code).toBe('TAXABLE_SALES_WITHOUT_OUTPUT')
+    expect(sales.message).toMatch(/^Du har redovisat momspliktig försäljning/)
   })
 })
 
@@ -701,5 +957,103 @@ describe('REVENUE_ACCOUNT_WITHOUT_RUTA', () => {
     ).map((f) => f.code)
 
     expect(codes).toEqual(['TAXABLE_SALES_WITHOUT_OUTPUT', 'REVENUE_ACCOUNT_WITHOUT_RUTA'])
+  })
+})
+
+// Moms on a moms account no ruta reads (2617/2644 from a chart before BAS
+// 2026, no momsruta set) is missing from the rutor and ruta 49 alike, so no
+// rutor-level check can see it: the finding needs the account list.
+describe('VAT_ACCOUNT_WITHOUT_RUTA', () => {
+  const rutor: VatDeclarationRutor = { ...emptyRutor, ruta48: 500, ruta49: -500 }
+
+  it('is silent without the account list', () => {
+    expect(runVatDeclarationChecks(rutor)).toEqual([])
+    expect(runVatDeclarationChecks(rutor, undefined, { vatAccountsWithoutRuta: [] })).toEqual([])
+  })
+
+  it('warns, naming the account and its amount, and does not block filing', () => {
+    const findings = runVatDeclarationChecks(rutor, undefined, {
+      vatAccountsWithoutRuta: [
+        { account_number: '2617', account_name: 'Utg moms omvänd skattskyldighet', amount: 2500 },
+      ],
+    })
+
+    expect(findings).toHaveLength(1)
+    const [finding] = findings
+    expect(finding.code).toBe('VAT_ACCOUNT_WITHOUT_RUTA')
+    expect(finding.status).toBe('WARNING')
+    expect(finding.message).toMatch(/Momskontot 2617 Utg moms omvänd skattskyldighet \(2\s500,00 kr\)/)
+    expect(finding.message).toMatch(/momsruta/)
+    expect(finding.message).toMatch(/OSS/)
+    expect(finding.detail).toMatch(/hindrar inte inlämning/)
+    expect(finding.rutor).toEqual(['ruta49'])
+    expect(isFilingBlocked(findings)).toBe(false)
+  })
+
+  it('names several accounts in one finding', () => {
+    const [finding] = runVatDeclarationChecks(rutor, undefined, {
+      vatAccountsWithoutRuta: [
+        { account_number: '2617', account_name: 'A', amount: 2500 },
+        { account_number: '2644', account_name: 'B', amount: 2000 },
+      ],
+    })
+
+    expect(finding.message).toMatch(/^2 momskonton/)
+    expect(finding.message).toContain('2644 B')
+  })
+
+  it('follows REVENUE_ACCOUNT_WITHOUT_RUTA', () => {
+    const codes = runVatDeclarationChecks(rutor, undefined, {
+      revenueAccountsWithoutRuta: [{ account_number: '3543', account_name: 'X', amount: 1 }],
+      vatAccountsWithoutRuta: [{ account_number: '2617', account_name: 'Y', amount: 1 }],
+    }).map((f) => f.code)
+
+    expect(codes).toEqual(['REVENUE_ACCOUNT_WITHOUT_RUTA', 'VAT_ACCOUNT_WITHOUT_RUTA'])
+  })
+})
+
+// #3440: under kontantmetoden the moms on invoices unpaid at the fiscal year
+// end belongs to the VAT period containing the year end. A WARNING while the
+// cut-off is incomplete, never a gate (product decision 2026-10-03).
+describe('KONTANTMETOD_CUTOFF_INCOMPLETE and LEGACY_KONTANTMETOD_VANDNING', () => {
+  const facts = (over: Partial<{
+    incompleteYearEnds: Array<{ fiscal_period_id: string; period_end: string }>
+    legacyCutoffPeriodEnds: string[]
+    unavailable: boolean
+  }> = {}) => ({ incompleteYearEnds: [], legacyCutoffPeriodEnds: [], ...over })
+
+  it('stays silent without facts (not a cash company, or not checked) and when the cut-off is complete', () => {
+    expect(runVatDeclarationChecks(emptyRutor)).toEqual([])
+    expect(runVatDeclarationChecks(emptyRutor, undefined, { kontantmetodCutoff: facts() })).toEqual([])
+  })
+
+  it('warns for each fiscal year ending inside the period whose cut-off is incomplete, without blocking', () => {
+    const checks = runVatDeclarationChecks(emptyRutor, undefined, {
+      kontantmetodCutoff: facts({ incompleteYearEnds: [{ fiscal_period_id: 'fp-1', period_end: '2026-12-31' }] }),
+    })
+    expect(checks).toEqual([expect.objectContaining({
+      code: 'KONTANTMETOD_CUTOFF_INCOMPLETE',
+      status: 'WARNING',
+      message: expect.stringContaining('2026-12-31'),
+    })])
+    expect(isFilingBlocked(checks)).toBe(false)
+  })
+
+  it('says so when the check could not run, rather than passing for complete', () => {
+    const checks = runVatDeclarationChecks(emptyRutor, undefined, { kontantmetodCutoff: facts({ unavailable: true }) })
+    expect(checks).toEqual([expect.objectContaining({ code: 'KONTANTMETOD_CUTOFF_INCOMPLETE', status: 'WARNING' })])
+    expect(checks[0]!.message).toMatch(/kunde inte köras/)
+  })
+
+  it('warns not to storno legacy vändningar in a period holding a legacy cut-off', () => {
+    const checks = runVatDeclarationChecks(emptyRutor, undefined, {
+      kontantmetodCutoff: facts({ legacyCutoffPeriodEnds: ['2025-12-31'] }),
+    })
+    expect(checks).toEqual([expect.objectContaining({
+      code: 'LEGACY_KONTANTMETOD_VANDNING',
+      status: 'WARNING',
+      message: expect.stringContaining('Makulera inte vändningarna'),
+    })])
+    expect(isFilingBlocked(checks)).toBe(false)
   })
 })

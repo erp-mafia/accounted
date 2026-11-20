@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
+import { isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { updateSupplier } from '@/lib/suppliers/update-supplier'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -24,30 +28,41 @@ export const GET = withRouteContext(
       return errorResponseFromCode('SUPPLIER_NOT_FOUND', opLog, { requestId })
     }
 
-    const { data: invoices } = await supabase
-      .from('supplier_invoices')
-      .select('status, total, remaining_amount, paid_amount, currency')
-      .eq('supplier_id', id)
-      .eq('company_id', companyId)
+    // Paged: past 1,000 invoices the count and the totals came up short.
+    const invoices = await fetchAllRows<{
+      status: string
+      total: number
+      remaining_amount: number | null
+      paid_amount: number | null
+      currency: string | null
+    }>(({ from, to }) =>
+      supabase
+        .from('supplier_invoices')
+        .select('status, total, remaining_amount, paid_amount, currency')
+        .eq('supplier_id', id)
+        .eq('company_id', companyId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
 
     // Amounts are in each invoice's own currency, so a single sum across a
     // mixed-currency supplier would be meaningless: group per currency instead
     // (nearly every supplier has exactly one).
     const perCurrency = new Map<string, { total_outstanding: number; total_paid: number }>()
-    if (invoices) {
-      for (const inv of invoices) {
-        const currency = inv.currency || 'SEK'
-        const row = perCurrency.get(currency) ?? { total_outstanding: 0, total_paid: 0 }
-        if (inv.status !== 'paid' && inv.status !== 'credited') {
-          row.total_outstanding += inv.remaining_amount || 0
-        }
-        row.total_paid += inv.paid_amount || 0
-        perCurrency.set(currency, row)
+    for (const inv of invoices) {
+      const currency = inv.currency || 'SEK'
+      const row = perCurrency.get(currency) ?? { total_outstanding: 0, total_paid: 0 }
+      // What the supplier ledger reads as open: a reversed or disputed
+      // invoice has a remainder nobody is asked to pay.
+      if (isMatchableSupplierInvoiceStatus(inv.status)) {
+        row.total_outstanding += inv.remaining_amount || 0
       }
+      row.total_paid += inv.paid_amount || 0
+      perCurrency.set(currency, row)
     }
 
     const stats = {
-      invoice_count: invoices?.length ?? 0,
+      invoice_count: invoices.length,
       by_currency: [...perCurrency.entries()]
         .map(([currency, row]) => ({
           currency,
@@ -61,11 +76,14 @@ export const GET = withRouteContext(
   },
 )
 
+// The same service as the v1 PATCH and gnubok_update_supplier
+// (lib/suppliers/update-supplier.ts), so the three doors take the same
+// fields and keep the same rules.
 export const PUT = withRouteContext(
   'supplier.update',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const opLog = log.child({ supplierId: id })
 
     const result = await validateBody(request, UpdateSupplierSchema, {
@@ -73,54 +91,12 @@ export const PUT = withRouteContext(
       operation: 'supplier.update',
     })
     if (!result.success) return result.response
-    const body = result.data
 
-    const { data, error } = await supabase
-      .from('suppliers')
-      .update({
-        name: body.name,
-        supplier_type: body.supplier_type,
-        email: body.email,
-        phone: body.phone,
-        address_line1: body.address_line1,
-        address_line2: body.address_line2,
-        postal_code: body.postal_code,
-        city: body.city,
-        country: body.country,
-        org_number: body.org_number,
-        vat_number: body.vat_number,
-        bankgiro: body.bankgiro,
-        plusgiro: body.plusgiro,
-        bank_account: body.bank_account,
-        iban: body.iban,
-        bic: body.bic,
-        clearing_number: body.clearing_number,
-        account_number: body.account_number,
-        default_expense_account: body.default_expense_account,
-        default_payment_terms: body.default_payment_terms,
-        default_currency: body.default_currency,
-        notes: body.notes,
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select()
-      .single()
+    const outcome = await updateSupplier({ supabase, companyId, userId: user.id, log: opLog }, id, result.data)
+    if (!outcome.ok) return sessionFailureResponse(outcome, opLog, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
 
-    if (error) {
-      if (error.code === '23505') {
-        return errorResponseFromCode('SUPPLIER_DUPLICATE_ORG_NUMBER', opLog, {
-          requestId,
-          details: { orgNumber: body.org_number },
-        })
-      }
-      opLog.error('supplier update failed', error)
-      return errorResponseFromCode('SUPPLIER_UPDATE_FAILED', opLog, {
-        requestId,
-        details: { reason: getUserErrorMessage(error) },
-      })
-    }
-
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

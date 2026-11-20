@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createTableMockSupabase } from '@/tests/helpers'
 import type { Logger } from '@/lib/logger'
@@ -17,7 +17,7 @@ vi.mock('@/lib/email/brand-sender', () => ({
 }))
 vi.mock('@/lib/support', () => ({ getSupportRecipientEmail: () => 'ops@example.test' }))
 
-import { runPeppolHealthCheck } from '@/lib/invoices/peppol-health'
+import { getPeppolAlertRecipients, runPeppolHealthCheck } from '@/lib/invoices/peppol-health'
 
 const NOW = new Date('2026-09-29T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString()
@@ -80,12 +80,12 @@ function makeLog() {
 }
 
 /** The alert kinds the pre-claim read asks about, in the check's order (one query per kind with rows). */
-function kindsAsked(answers: { failed?: unknown[]; stuck?: unknown[]; retry?: unknown[]; inbound?: unknown[] }): string[] {
+function kindsAsked(answers: { failed?: unknown[]; stuck?: unknown[]; retry?: unknown[]; inbound?: unknown[]; held?: unknown[]; heldRecovered?: unknown[] }): string[] {
   return [
     ...((answers.failed ?? []).length ? ['delivery_failed'] : []),
     ...((answers.stuck ?? []).length ? ['delivery_stuck'] : []),
     ...((answers.retry ?? []).length ? ['delivery_retry_stuck'] : []),
-    ...((answers.inbound ?? []).length ? ['inbound_unrouted'] : []),
+    ...((answers.inbound ?? []).length || (answers.held ?? []).length || (answers.heldRecovered ?? []).length ? ['inbound_unrouted'] : []),
   ]
 }
 const firstKind = (answers: Parameters<typeof kindsAsked>[0]) => kindsAsked(answers)[0]
@@ -96,6 +96,10 @@ function setup(answers: {
   stuck?: unknown[]
   retry?: unknown[]
   inbound?: unknown[]
+  /** Documents held back from the inbox ('routed'), the second inbound read. */
+  held?: unknown[]
+  /** Documents the re-listing found and held for a person, the third inbound read. */
+  heldRecovered?: unknown[]
   claimed?: Array<{ kind: string; ref_id: string }>
   claimError?: { message: string }
   /** Claims earlier runs made, read before claiming (one answer per kind asked about). */
@@ -107,7 +111,7 @@ function setup(answers: {
       { data: answers.stuck ?? [] },
       { data: answers.retry ?? [] },
     ],
-    peppol_inbound_documents: { data: answers.inbound ?? [] },
+    peppol_inbound_documents: [{ data: answers.inbound ?? [] }, { data: answers.held ?? [] }, { data: answers.heldRecovered ?? [] }],
     peppol_alerts: [
       ...kindsAsked(answers).map((kind) => ({ data: kind === firstKind(answers) ? (answers.existing ?? []) : [] })),
       answers.claimError ? { error: answers.claimError } : { data: answers.claimed ?? [] },
@@ -118,7 +122,7 @@ function setup(answers: {
   return { ...mock, service: mock.supabase as unknown as SupabaseClient }
 }
 
-const sentMails = () => emailMock.sendEmail.mock.calls.map(([mail]) => mail as { to: string; subject: string; text: string; html: string; fromName?: string; replyTo?: string })
+const sentMails = () => emailMock.sendEmail.mock.calls.map(([mail]) => mail as { to: string | string[]; subject: string; text: string; html: string; fromName?: string; replyTo?: string })
 
 describe('runPeppolHealthCheck', () => {
   beforeEach(() => {
@@ -163,7 +167,7 @@ describe('runPeppolHealthCheck', () => {
 
     const [digest, senderMail] = sentMails()
     expect(sentMails()).toHaveLength(2)
-    expect(digest.to).toBe('ops@example.test')
+    expect(digest.to).toEqual(['ops@example.test'])
     expect(digest.subject).toBe('[accounted peppol] 1 nytt Peppol-problem')
     expect(digest.text).toContain('Leverans misslyckades | Acme AB (company-1) | faktura 1042 (leverans delivery-failed) | 1 tim | Validation error: BR-CO-15')
 
@@ -253,6 +257,18 @@ describe('runPeppolHealthCheck', () => {
       'peppol health: sender mail failed, claim released for the next run',
       expect.objectContaining({ alert: true, reason: 'socket hang up' }),
     )
+  })
+
+  it('sends the digest to PEPPOL_ALERT_RECIPIENTS instead of the support address when set', async () => {
+    process.env.PEPPOL_ALERT_RECIPIENTS = 'founder@example.test'
+    try {
+      const { service } = setup({ stuck: [stuckDelivery], claimed: [{ kind: 'delivery_stuck', ref_id: 'delivery-stuck' }] })
+      await runPeppolHealthCheck(service, { now: NOW, log: makeLog() as unknown as Logger })
+      expect(sentMails()).toHaveLength(1)
+      expect(sentMails()[0].to).toEqual(['founder@example.test'])
+    } finally {
+      delete process.env.PEPPOL_ALERT_RECIPIENTS
+    }
   })
 
   it('releases every claim and mails no sender when the team digest fails, so nobody is mailed twice', async () => {
@@ -354,6 +370,78 @@ describe('runPeppolHealthCheck', () => {
     expect(summary.claimed.inbound_unrouted).toBe(1)
   })
 
+  it('reports a document held back from the inbox for hours, which was only ever a warning in the log', async () => {
+    const heldDocument = {
+      ...unroutedDocument,
+      id: 'inbound-held',
+      company_id: 'company-1',
+      status: 'routed',
+      last_error: 'awaiting owner member',
+      created_at: ago(5 * HOUR),
+    }
+    const { service, findCall, findCalls } = setup({
+      held: [heldDocument],
+      claimed: [{ kind: 'inbound_unrouted', ref_id: 'inbound-held' }],
+    })
+
+    const summary = await runPeppolHealthCheck(service, { now: NOW, log: makeLog() as unknown as Logger })
+
+    // Not before three hours: a hold is a state first, and the XML retry has its own page.
+    expect(findCalls('peppol_inbound_documents', 'in')).toContainEqual(['status', ['received', 'routed']])
+    expect(findCalls('peppol_inbound_documents', 'lt')).toContainEqual(['created_at', ago(3 * HOUR)])
+    // A week back, not the unrouted rule's 30 days: the first runs do not mail a month of old holds.
+    expect(findCalls('peppol_inbound_documents', 'gte')).toContainEqual(['created_at', ago(7 * DAY)])
+    // Terminal rows ('xml unavailable' keeps the status routed) are paged by the inbound cron, not mailed again.
+    expect(findCalls('peppol_inbound_documents', 'or')).toEqual([['last_error.is.null,last_error.not.like.terminal:*']])
+    // The existing claim: one report per document, however many runs see it held.
+    expect(findCall('peppol_alerts', 'upsert')?.[0]).toEqual([
+      { kind: 'inbound_unrouted', ref_id: 'inbound-held', company_id: 'company-1' },
+    ])
+    expect(sentMails()).toHaveLength(1)
+    expect(sentMails()[0].text).toContain(
+      'Inkommande dokument har fastnat | Acme AB (company-1) | Invoice qv-123 (dokument inbound-held, routed, mottagare 0007:5561234567, avsändare Leverantör AB) | 5 tim | awaiting owner member',
+    )
+    expect(summary.found.inbound_unrouted).toBe(1)
+    expect(summary.claimed.inbound_unrouted).toBe(1)
+  })
+
+  it('reports a document never routed: archived by a run that ended before routing it', async () => {
+    const neverRouted = { ...unroutedDocument, id: 'inbound-received', status: 'received', created_at: ago(4 * HOUR) }
+    const { service } = setup({
+      held: [neverRouted],
+      claimed: [{ kind: 'inbound_unrouted', ref_id: 'inbound-received' }],
+    })
+
+    const summary = await runPeppolHealthCheck(service, { now: NOW, log: makeLog() as unknown as Logger })
+
+    expect(sentMails()[0].text).toContain('Invoice qv-123 (dokument inbound-received, received, mottagare 0007:5561234567')
+    expect(summary.claimed.inbound_unrouted).toBe(1)
+  })
+
+  it('lists a document the re-listing found from before its delivery window, held for a person to decide', async () => {
+    const recovered = {
+      ...unroutedDocument,
+      id: 'inbound-recovered',
+      status: 'received',
+      last_error: 'terminal: held for review, found again by the re-listing (received 2026-08-14)',
+      created_at: ago(20 * MINUTE),
+    }
+    const { service, findCalls } = setup({
+      heldRecovered: [recovered],
+      claimed: [{ kind: 'inbound_unrouted', ref_id: 'inbound-recovered' }],
+    })
+
+    const summary = await runPeppolHealthCheck(service, { now: NOW, log: makeLog() as unknown as Logger })
+
+    expect(findCalls('peppol_inbound_documents', 'like')).toEqual([
+      ['last_error', 'terminal: held for review, found again by the re-listing%'],
+    ])
+    expect(sentMails()).toHaveLength(1)
+    expect(sentMails()[0].text).toContain('(dokument inbound-recovered, received, mottagare 0007:5561234567')
+    expect(sentMails()[0].text).toContain('terminal: held for review, found again by the re-listing (received 2026-08-14)')
+    expect(summary.claimed.inbound_unrouted).toBe(1)
+  })
+
   it('lists every new problem in one digest per run', async () => {
     const { service } = setup({
       failed: [failedDelivery],
@@ -370,7 +458,7 @@ describe('runPeppolHealthCheck', () => {
 
     await runPeppolHealthCheck(service, { now: NOW, log: makeLog() as unknown as Logger })
 
-    const digests = sentMails().filter((mail) => mail.to === 'ops@example.test')
+    const digests = sentMails().filter((mail) => [mail.to].flat().includes('ops@example.test'))
     expect(digests).toHaveLength(1)
     expect(digests[0].subject).toBe('[accounted peppol] 4 nya Peppol-problem')
     expect(digests[0].text.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(4)
@@ -422,5 +510,22 @@ describe('runPeppolHealthCheck', () => {
       /Failed to claim Peppol alerts: permission denied/,
     )
     expect(emailMock.sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+describe('getPeppolAlertRecipients', () => {
+  afterEach(() => {
+    delete process.env.PEPPOL_ALERT_RECIPIENTS
+  })
+
+  it('uses PEPPOL_ALERT_RECIPIENTS, comma separated, dropping blanks and non-addresses', () => {
+    process.env.PEPPOL_ALERT_RECIPIENTS = ' a@example.test, ,nope, b@example.test '
+    expect(getPeppolAlertRecipients()).toEqual(['a@example.test', 'b@example.test'])
+  })
+
+  it('falls back to the support address when unset or empty', () => {
+    expect(getPeppolAlertRecipients()).toEqual(['ops@example.test'])
+    process.env.PEPPOL_ALERT_RECIPIENTS = ' , '
+    expect(getPeppolAlertRecipients()).toEqual(['ops@example.test'])
   })
 })

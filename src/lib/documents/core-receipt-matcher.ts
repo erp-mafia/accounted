@@ -4,6 +4,7 @@
  *
  * These are pure functions with no Supabase or extension dependencies.
  */
+import { equalOre } from '@/lib/money'
 
 // Matching configuration (re-exported for consumers)
 /**
@@ -278,6 +279,33 @@ export function amountVarianceForMatch(
 
   // Cross-currency with no rate → not comparable.
   return null
+}
+
+/**
+ * Whether an underlag's amount is the bank row's own sum, not merely near it:
+ * equal to the öre in one currency (equalOre), or, for a total that had to be
+ * converted into kronor, within CONVERTED_AMOUNT_TOLERANCE_PERCENT. Null when
+ * the two cannot be compared, on the same terms as amountVarianceForMatch.
+ *
+ * AMOUNT_TOLERANCE_PERCENT scores how near a sum is; this says whether it
+ * agrees at all. A recurring charge from one seller moves by a few kronor
+ * from one month to the next, so a sum 2% off is near enough to score well
+ * and is still the other month's document (crm#1962).
+ */
+export function amountAgreesForMatch(
+  receiptTotal: number | null,
+  receiptCurrency: string,
+  receiptSek: number | null,
+  txAmount: number,
+  txCurrency: string,
+  txSek: number,
+): boolean | null {
+  if (receiptTotal == null || receiptTotal === 0) return null
+  if (txCurrency.toUpperCase() === receiptCurrency.toUpperCase()) {
+    return equalOre(Math.abs(txAmount), Math.abs(receiptTotal))
+  }
+  const variance = amountVarianceForMatch(receiptTotal, receiptCurrency, receiptSek, txAmount, txCurrency, txSek)
+  return variance == null ? null : variance <= CONVERTED_AMOUNT_TOLERANCE_PERCENT
 }
 
 export interface ProminentAmountMatch {

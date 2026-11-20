@@ -3,7 +3,7 @@ import { mapVismaToSalesInvoice, mapVismaToSupplierInvoice } from '../mapper'
 
 /**
  * Guards the paid/credit-note derivation against the fields eAccounting
- * actually populates (ElvaSmultron support case, 2026-08-08):
+ * actually populates (support case 2026-08-08):
  *
  *  - The /supplierinvoices LIST payload omits RemainingAmount. Reading the
  *    absence as 0 imported all 290 supplier invoices as fully paid, including
@@ -80,7 +80,7 @@ describe('mapVismaToSupplierInvoice payment status', () => {
   })
 
   it('PaymentStatus Unpaid (3) with a PRESENT RemainingAmount of 0 stays open at the full total', () => {
-    // Company 5208b894 (2026-09-10): every invoice Visma reported as unpaid
+    // One company (2026-09-10): every invoice Visma reported as unpaid
     // landed as paid because a present zero was read as the open balance.
     const dto = mapVismaToSupplierInvoice(supplierRaw({ PaymentStatus: 3, RemainingAmount: 0 }))
     expect(dto.paymentStatus.paid).toBe(false)
@@ -189,5 +189,14 @@ describe('mapVismaToSalesInvoice payment status', () => {
   it('unbooked unpaid invoice still derives sent from SendType', () => {
     const dto = mapVismaToSalesInvoice(salesRaw({ PaymentStatus: 1, SendType: 1 }))
     expect(dto.status).toBe('sent')
+  })
+
+  it('an unpaid invoice with no send or booking flag is sent, never a draft', () => {
+    // /customerinvoices lists issued invoices only; Visma keeps drafts under
+    // /customerinvoicedrafts. A draft here imported with its booking voucher
+    // linked, and Skicka then booked the sale a second time.
+    expect(mapVismaToSalesInvoice(salesRaw({ PaymentStatus: 1 })).status).toBe('sent')
+    expect(mapVismaToSalesInvoice(salesRaw()).status).toBe('sent')
+    expect(mapVismaToSalesInvoice(salesRaw({ IsSent: false, RemainingAmount: 75000 })).status).toBe('sent')
   })
 })

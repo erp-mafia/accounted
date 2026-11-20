@@ -179,11 +179,16 @@ export const config = {
      * through the rewrite, the integration looks healthy while no events
      * arrive. Keep in sync with `api_host` in instrumentation-client.ts.
      *
+     * `robots.txt` and `sitemap.xml` are excluded (anchored: the exact files
+     * only) because crawlers fetch them anonymously, and through
+     * updateSession() they were 307-bounced to /login on every host.
+     * app/robots.ts serves the first; the second has no route and answers 404.
+     *
      * The excluded alternatives must stay identical to
      * PROXY_MATCHER_EXCLUSIONS in lib/security/csp.ts (a test asserts it):
      * next.config.ts derives from it the paths that get the static CSP, so
      * a path added here without it would leave that path with no CSP at all.
      */
-    '/((?!_next/static|_next/image|favicon.ico|\\.well-known|rl/|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|\\.well-known|rl/|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|robots\\.txt$|sitemap\\.xml$|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$).*)',
   ],
 }

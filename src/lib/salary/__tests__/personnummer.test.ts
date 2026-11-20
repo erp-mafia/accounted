@@ -66,7 +66,7 @@ describe('validatePersonnummer', () => {
       // offset must not become a way to skip the checksum.
       const result = validatePersonnummer('199001619808')
       expect(result.valid).toBe(false)
-      expect(result.error).toContain('Luhn')
+      expect(result.error).toBe('Personnumrets kontrollsiffra stämmer inte. Kontrollera alla 12 siffror.')
     })
 
     it('rejects days 32-60, which are neither a day nor an offset day', () => {
@@ -281,6 +281,18 @@ describe('maskPersonnummer', () => {
   it('strips non-digits before masking', () => {
     expect(maskPersonnummer('19900101-9802')).toBe('19900101-XXXX')
   })
+
+  it('masks the 10-digit form (an enskild firma org number) without showing any serial digit', () => {
+    // The 8-digit slice used to show '90010198-XXXX': two serial digits.
+    expect(maskPersonnummer('9001019802')).toBe('900101-XXXX')
+    expect(maskPersonnummer('900101-9802')).toBe('900101-XXXX')
+  })
+
+  it('redacts a value of any other length whole', () => {
+    expect(maskPersonnummer('199001019')).toBe('XXXXXXXX-XXXX')
+    expect(maskPersonnummer('')).toBe('XXXXXXXX-XXXX')
+    expect(maskPersonnummer(null)).toBe('XXXXXXXX-XXXX')
+  })
 })
 
 describe('formatPersonnummer', () => {
@@ -340,12 +352,83 @@ describe('encryption key configuration guard (#1996)', () => {
     )
   })
 
-  it('falls back to the deterministic dev key outside production', () => {
+  it('falls back to the deterministic dev key under the test runner', () => {
     vi.stubEnv('NODE_ENV', 'test')
     vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
 
     const encrypted = encryptPersonnummer('199001019802')
     expect(decryptPersonnummer(encrypted)).toBe('199001019802')
+  })
+})
+
+// accounted#5: the dev key is public, so a value sealed with it in a shared
+// database can never be opened by the real key. Outside the test runner it is
+// allowed only against a local Supabase; everywhere else an empty key throws.
+describe('dev key only where it cannot reach a shared database (accounted#5)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  // `npm run dev` or a tsx script: no VITEST, NODE_ENV development or unset.
+  function outsideTestRunner(supabaseUrl: string | undefined) {
+    vi.stubEnv('VITEST', '')
+    vi.stubEnv('NODE_ENV', 'development')
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', supabaseUrl)
+  }
+
+  it.each([
+    ['a hosted project', 'https://abcdefghijklmnop.supabase.co'],
+    ['a non-URL value', 'not a url'],
+    ['no URL at all', undefined],
+  ])('refuses to seal against %s', (_label, url) => {
+    outsideTestRunner(url)
+    expect(() => encryptPersonnummer('199001019802')).toThrow(
+      expect.objectContaining({ code: PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED }),
+    )
+  })
+
+  it('refuses to open with the dev key against a hosted project', () => {
+    const ciphertext = encryptPersonnummer('199001019802')
+    outsideTestRunner('https://abcdefghijklmnop.supabase.co')
+    expect(() => decryptPersonnummer(ciphertext)).toThrow(
+      expect.objectContaining({ code: PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED }),
+    )
+  })
+
+  it('names the variable and the way out in the error', () => {
+    outsideTestRunner('https://abcdefghijklmnop.supabase.co')
+    expect(() => encryptPersonnummer('199001019802')).toThrow(/PERSONNUMMER_ENCRYPTION_KEY.*local Supabase/)
+  })
+
+  it.each(['http://localhost:54321', 'http://127.0.0.1:54321', 'http://[::1]:54321'])(
+    'uses the dev key against a local Supabase (%s)',
+    (url) => {
+      outsideTestRunner(url)
+      expect(decryptPersonnummer(encryptPersonnummer('199001019802'))).toBe('199001019802')
+    },
+  )
+
+  it('never uses the dev key in production, even against a local Supabase', () => {
+    outsideTestRunner('http://127.0.0.1:54321')
+    vi.stubEnv('NODE_ENV', 'production')
+    expect(() => encryptPersonnummer('199001019802')).toThrow(
+      expect.objectContaining({ code: PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED }),
+    )
+  })
+
+  it('uses a configured key against a hosted project', () => {
+    outsideTestRunner('https://abcdefghijklmnop.supabase.co')
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'a-real-key')
+    expect(decryptPersonnummer(encryptPersonnummer('199001019802'))).toBe('199001019802')
+  })
+
+  it('keeps the dev key under the test runner whatever the URL says', () => {
+    vi.stubEnv('VITEST', 'true')
+    vi.stubEnv('NODE_ENV', 'test')
+    vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', '')
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://abcdefghijklmnop.supabase.co')
+    expect(decryptPersonnummer(encryptPersonnummer('199001019802'))).toBe('199001019802')
   })
 })
 

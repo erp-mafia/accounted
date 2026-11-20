@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
+import { LoadError } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
@@ -41,6 +42,8 @@ export function InboxCreditNotePanel({
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [target, setTarget] = useState<CreditTargetResolution | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
+  // Bumped by "Försök igen" to read the credit target again.
+  const [attempt, setAttempt] = useState(0)
   const [picked, setPicked] = useState<string>('')
   const [busy, setBusy] = useState(false)
   const readingKey = JSON.stringify(extracted?.totals ?? null) + JSON.stringify(extracted?.invoice ?? null)
@@ -63,7 +66,7 @@ export function InboxCreditNotePanel({
     return () => {
       cancelled = true
     }
-  }, [itemId, readingKey])
+  }, [itemId, readingKey, attempt])
 
   const creditDate =
     typeof (extracted?.invoice as { invoiceDate?: unknown } | undefined)?.invoiceDate === 'string'
@@ -142,9 +145,13 @@ export function InboxCreditNotePanel({
 
   let body: React.ReactNode
   if (loadFailed) {
-    body = <AttnLine>{t('credit_note_load_failed')}</AttnLine>
+    body = <LoadError title={t('credit_note_load_failed')} onRetry={() => setAttempt((n) => n + 1)} />
   } else if (!target) {
-    body = <Skeleton className="h-16 w-full" />
+    body = (
+      <LateReveal>
+        <Skeleton className="h-16 w-full" />
+      </LateReveal>
+    )
   } else if (target.status === 'matched' && target.invoice) {
     const invoice = target.invoice
     body = (
@@ -156,7 +163,7 @@ export function InboxCreditNotePanel({
             amount: amountOf(invoice),
           })}
         </p>
-        <Button size="sm" className="w-full" loading={busy} onClick={() => credit(invoice)}>
+        <Button className="w-full" loading={busy} onClick={() => credit(invoice)}>
           {t('credit_note_credit_button', { number: numberOf(invoice) })}
         </Button>
       </>
@@ -205,7 +212,7 @@ export function InboxCreditNotePanel({
             ))}
           </SelectContent>
         </Select>
-        <Button size="sm" className="w-full" loading={busy} disabled={!chosen} onClick={() => chosen && credit(chosen)}>
+        <Button className="w-full" loading={busy} disabled={!chosen} onClick={() => chosen && credit(chosen)}>
           {t('credit_note_pick_button')}
         </Button>
       </>

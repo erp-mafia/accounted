@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
-import { getLatestSignoffs } from '@/lib/reconciliation/signoff-store'
-import { bankAccountKey } from '@/lib/reconciliation/schemas'
+import { supersededTwins, type TwinCandidate } from '@/lib/cash-accounts/twins'
+import { UNBOOKED_BANK_LINES } from '@/lib/composition/unbooked-bank-lines'
+import { RECONCILIATION_SIGNOFFS } from '@/lib/composition/reconciliation-signoffs'
+import { previousMonthEndIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('report-data-status')
 
@@ -52,6 +53,13 @@ export interface ReportDataStatus {
      * data ends). null when no such connection ever synced.
      */
     last_sync_at: string | null
+    /**
+     * True when bank rows the report's range covers are missing: the range
+     * reaches past last_sync_at and the feed has stopped, or is active but
+     * older than STALE_SYNC_HOURS. The same test as the bank feed caveat, so a
+     * screen reading the flag and an agent reading the caveat agree.
+     */
+    stale: boolean
     /** Earliest sign-off date across the company's bank accounts; null when any is unsigned or there are none. */
     reconciled_through: string | null
   }
@@ -138,7 +146,7 @@ async function build(
   const to = options.toDate ?? period.period_end
 
   const [unbooked, draftsRes, feedRes, recon] = await Promise.all([
-    countUnbookedBankTransactions(supabase, companyId, { fromDate: from, toDate: to }),
+    UNBOOKED_BANK_LINES.count(supabase, companyId, { fromDate: from, toDate: to }),
     supabase
       .from('journal_entries')
       .select('id', { count: 'exact', head: true })
@@ -192,14 +200,14 @@ async function build(
     // figures" would be wrong for one of them.
     caveats.push('Cash method (kontantmetoden): invoices are booked when paid; unpaid customer and supplier invoices enter the books only through the year-end (bokslut) entries.')
   }
-  if (feed.lastSyncAt && to >= feed.lastSyncAt.slice(0, 10)) {
+  const bankStale = isFeedStale(feed, to, now)
+  if (bankStale && feed.lastSyncAt) {
     const syncDate = feed.lastSyncAt.slice(0, 10)
-    if (feed.status === 'stopped') {
-      // A stopped feed is stale by definition once the range passes its last sync.
-      caveats.push(`The bank feed has stopped syncing (last synced ${syncDate}): transactions after that date are not imported unless added another way.`)
-    } else if ((now.getTime() - Date.parse(feed.lastSyncAt)) / 3_600_000 > STALE_SYNC_HOURS) {
-      caveats.push(`A bank feed last synced ${syncDate}: its transactions after that date are not imported yet.`)
-    }
+    caveats.push(
+      feed.status === 'stopped'
+        ? `The bank feed has stopped syncing (last synced ${syncDate}): transactions after that date are not imported unless added another way.`
+        : `A bank feed last synced ${syncDate}: its transactions after that date are not imported yet.`,
+    )
   }
   // Only for companies that sign off reconciliations at all (the adoption
   // gate countReconciliationDue uses): about 97% of companies with a bank
@@ -207,7 +215,8 @@ async function build(
   // expected sign-off date is capped at the last month end before today, so a
   // current-year report is not measured against a period end in the future.
   if (recon.adopted && recon.hasBankAccounts) {
-    const expectedThrough = to < lastMonthEnd(now) ? to : lastMonthEnd(now)
+    const lastMonthEnd = previousMonthEndIso(todayIsoStockholm(now))
+    const expectedThrough = to < lastMonthEnd ? to : lastMonthEnd
     if (recon.reconciledThrough === null) {
       caveats.push('At least one bank account has no reconciliation sign-off.')
     } else if (recon.reconciledThrough < expectedThrough) {
@@ -222,7 +231,12 @@ async function build(
     accounting_method: method,
     unbooked_transactions: unbooked.total,
     draft_entries: drafts,
-    bank: { feed_status: feed.status, last_sync_at: feed.lastSyncAt, reconciled_through: recon.reconciledThrough },
+    bank: {
+      feed_status: feed.status,
+      last_sync_at: feed.lastSyncAt,
+      stale: bankStale,
+      reconciled_through: recon.reconciledThrough,
+    },
     preliminary: status === 'open' || unbooked.total > 0 || drafts > 0,
     caveats,
   }
@@ -254,14 +268,25 @@ function bankFeed(rows: Array<{ status: string; last_synced_at: string | null }>
   return { status: null, lastSyncAt: null }
 }
 
+/**
+ * Whether the feed leaves rows out of a range ending `to`: only when the range
+ * reaches past the last sync. A stopped feed is stale by definition from
+ * there; an active one once its last sync is older than STALE_SYNC_HOURS. A
+ * feed that never synced has no date to measure from and is not called stale.
+ */
+function isFeedStale(
+  feed: { status: 'active' | 'stopped' | null; lastSyncAt: string | null },
+  to: string,
+  now: Date,
+): boolean {
+  if (!feed.lastSyncAt || to < feed.lastSyncAt.slice(0, 10)) return false
+  if (feed.status === 'stopped') return true
+  return (now.getTime() - Date.parse(feed.lastSyncAt)) / 3_600_000 > STALE_SYNC_HOURS
+}
+
 /** YYYY-MM-DD from a date or a timestamp (the UTC date of a timestamptz string). */
 function isoDate(value: string | null): string | null {
   return value ? value.slice(0, 10) : null
-}
-
-/** The last day of the month before `now`, YYYY-MM-DD (UTC). */
-function lastMonthEnd(now: Date): string {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).toISOString().slice(0, 10)
 }
 
 /**
@@ -278,32 +303,22 @@ async function bankReconciliation(
   const [accountsRes, signoffs] = await Promise.all([
     supabase
       .from('cash_accounts')
-      .select('id, iban, currency, updated_at')
+      .select('id, iban, currency, ledger_account, is_primary, created_at')
       .eq('company_id', companyId)
       .eq('enabled', true),
-    getLatestSignoffs(supabase, companyId),
+    RECONCILIATION_SIGNOFFS.latest(supabase, companyId),
   ])
   if (accountsRes.error) throw new Error(`cash account read failed: ${accountsRes.error.message}`)
-  const accounts = (accountsRes.data ?? []) as Array<{ id: string; iban: string | null; currency: string | null; updated_at: string | null }>
+  const accounts = (accountsRes.data ?? []) as Array<TwinCandidate & { iban: string | null; currency: string | null }>
   const adopted = signoffs.size > 0
   if (accounts.length === 0) return { reconciledThrough: null, hasBankAccounts: false, adopted }
 
-  const live: string[] = []
-  const byIban = new Map<string, (typeof accounts)[number]>()
-  for (const a of accounts) {
-    if (!a.iban) {
-      live.push(a.id)
-      continue
-    }
-    const key = `${a.iban}|${a.currency ?? 'SEK'}`
-    const prev = byIban.get(key)
-    if (!prev || (a.updated_at ?? '') > (prev.updated_at ?? '')) byIban.set(key, a)
-  }
-  for (const a of byIban.values()) live.push(a.id)
+  const twins = await supersededTwins(supabase, companyId, accounts)
+  const live = accounts.filter((a) => !twins.has(a.id)).map((a) => a.id)
 
   let earliest: string | null = null
   for (const id of live) {
-    const through = signoffs.get(bankAccountKey(id))?.through_date ?? null
+    const through = signoffs.get(RECONCILIATION_SIGNOFFS.bankAccountKey(id))?.through_date ?? null
     if (!through) return { reconciledThrough: null, hasBankAccounts: true, adopted }
     if (earliest === null || through < earliest) earliest = through
   }

@@ -6,7 +6,8 @@
  *
  * The rules are lib/transactions/document-attach.ts's, the same the dashboard
  * route and the MCP approval run: company ownership of both rows, never
- * replacing or detaching räkenskapsinformation, never another verifikat's
+ * replacing or detaching räkenskapsinformation (a further document on a
+ * booked row joins its verifikat beside the pin), never another verifikat's
  * underlag, and a dry run that writes nothing.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -34,6 +35,8 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as attach } from '../route'
 import { POST as detach } from '../../detach-document/route'
+import { isIdempotencyClaim } from '@/tests/helpers'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -78,14 +81,18 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete', 'remove'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['document_attachments', 'transactions', 'invoice_inbox_items', 'processing_history'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 const DOC_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const OLD_DOC_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const JE_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+const OTHER_JE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const MEMBER = { data: { company_id: COMPANY_ID, role: 'member' }, error: null }
+/** The read that asks which other bank rows pin the document: none. */
+const NO_OTHER_ROW = { data: [], error: null }
+const OTHER_TX_ID = '99999999-9999-4999-8999-999999999999'
 const BASE = `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`
 
 function request(url: string, init: RequestInit = {}): Request {
@@ -155,16 +162,218 @@ describe('POST /transactions/:id/attach-document', () => {
     expect(wrote(client)).toBe(false)
   })
 
-  it('409 DOC_ATTACH_REPLACES_POSTED when the pinned document is already räkenskapsinformation', async () => {
+  it('409 DOC_ATTACH_REPLACES_POSTED when the pinned document is underlag of another verifikat than the row\'s booking', async () => {
     const client = makeClient({
       company_members: MEMBER,
       transactions: { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID }, error: null },
-      document_attachments: { data: { journal_entry_id: JE_ID }, error: null },
+      document_attachments: { data: { journal_entry_id: OTHER_JE_ID }, error: null },
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ document_id: DOC_ID })
     expect(res.status).toBe(409)
     expect((await res.json()).error.code).toBe('DOC_ATTACH_REPLACES_POSTED')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 DOC_ATTACH_REPLACES_POSTED when the row is no longer booked but its pin is still a verifikat\'s underlag', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: null }, error: null },
+      document_attachments: { data: { journal_entry_id: JE_ID }, error: null },
+      transaction_voucher_links: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('DOC_ATTACH_REPLACES_POSTED')
+    expect(wrote(client)).toBe(false)
+  })
+
+  // A row booked with one receipt took no second document: every attach was
+  // refused as a replacement needing a storno, though nothing was replaced.
+  // Staged attaches met it when the row was booked between staging and
+  // approval; agents then linked the same document to the verifikat instead.
+  it('adds the document to the row\'s verifikat beside a pin that is already its underlag, leaving the pin', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID }, error: null },
+        NO_OTHER_ROW,
+        { data: { document_id: OLD_DOC_ID }, error: null },
+      ],
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null }, // the pin
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+        { data: null, error: null },
+      ],
+      invoice_inbox_items: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({
+      transaction_id: TX_ID,
+      document_id: DOC_ID,
+      previous_document_id: null,
+      journal_entry_id: JE_ID,
+      moved_from_transaction_ids: [],
+    })
+    const docUpdates = client.calls.filter((c) => c.table === 'document_attachments' && c.method === 'update')
+    expect(docUpdates[0]?.args[0]).toEqual({
+      journal_entry_id: JE_ID,
+      link_basis: 'client_asserted',
+      link_evidence: { rule_id: 'bank_row_extra_underlag' },
+    })
+    expect(client.calls).toContainEqual(
+      expect.objectContaining({ table: 'document_attachments', method: 'eq', args: ['id', DOC_ID] }),
+    )
+    // The pin is räkenskapsinformation: it is never moved.
+    expect(client.calls.some((c) => c.table === 'transactions' && c.method === 'update')).toBe(false)
+    // The inbox item the document came from reads matched to the row.
+    expect(client.calls).toContainEqual(
+      expect.objectContaining({ table: 'invoice_inbox_items', method: 'update', args: [{ matched_transaction_id: TX_ID }] }),
+    )
+  })
+
+  it('adds beside the pin on a samlingsverifikat the row is booked on through its voucher link', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: null }, error: null },
+        NO_OTHER_ROW,
+        { data: { document_id: OLD_DOC_ID }, error: null },
+      ],
+      transaction_voucher_links: { data: [{ transaction_id: TX_ID, journal_entry_id: JE_ID }], error: null },
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null },
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+        { data: null, error: null },
+      ],
+      invoice_inbox_items: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.journal_entry_id).toBe(JE_ID)
+    expect(client.calls.some((c) => c.table === 'transactions' && c.method === 'update')).toBe(false)
+  })
+
+  it('PERIOD_LOCKED when the verifikat\'s period is locked: nothing else is written', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID }, error: null },
+        NO_OTHER_ROW,
+      ],
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null },
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+        { data: null, error: { message: 'Cannot link documents to entries in a locked/closed fiscal period' } },
+      ],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID })
+    const { error } = await res.json()
+    // The published code, with the one answer for a document on a locked year
+    // in message and message_en, and attach-document's own next step as
+    // recovery_hint: not PERIOD_LOCKED's advice to move an entry date, nor
+    // the upload doors' advice to send the file again (#248).
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(res.status).toBe(400)
+    expect(error.code).toBe('PERIOD_LOCKED')
+    expect(error.message).toBe(answer.message_sv)
+    expect(error.message_en).toBe(answer.message_en)
+    expect(error.recovery_hint).toBe(getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation!.description)
+    expect(error.recovery_hint).not.toBe(answer.remediation!.description)
+    expect(error.recovery_hint).not.toBe(getErrorEntry('PERIOD_LOCKED')!.remediation?.description)
+    expect(error.details).toMatchObject({ journal_entry_id: JE_ID, reason: answer.message_sv })
+    const writes = client.calls.filter((c) => WRITES.has(c.method) && BOOKS.has(c.table)).map((c) => c.table)
+    expect(writes).toEqual(['document_attachments'])
+  })
+
+  it('a dry run says the document is added beside the pin on the verifikat, and writes nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID, merchant_name: 'Clas Ohlson', amount: -499, currency: 'SEK', date: '2026-04-12' }, error: null },
+        { data: [], error: null },
+      ],
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null },
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+      ],
+      pending_operations: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toMatchObject({
+      replaces_document: false,
+      previous_document_stays: false,
+      adds_to_verifikat: true,
+      previous_document_id: OLD_DOC_ID,
+      previous_document_file_name: 'kvitto.pdf',
+    })
+    expect(wrote(client)).toBe(false)
+  })
+
+  // #248: the dry run (and so staging) previewed an attach the write can only
+  // refuse; it asks the period of the verifikat the document would join.
+  const LOCKED_YEAR = { data: [{ id: JE_ID, fiscal_period: { is_closed: false, locked_at: '2026-02-01T00:00:00Z' } }], error: null }
+
+  it('a dry run on a booked row in a locked year refuses with the document answer, and writes nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [{ data: { id: TX_ID, document_id: null, journal_entry_id: JE_ID }, error: null }, NO_OTHER_ROW],
+      document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: null }, error: null },
+      journal_entries: LOCKED_YEAR,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    const { error } = await res.json()
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(res.status).toBe(400)
+    expect(error.code).toBe('PERIOD_LOCKED')
+    expect(error.message).toBe(answer.message_sv)
+    expect(error.message_en).toBe(answer.message_en)
+    expect(error.recovery_hint).toBe(getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation!.description)
+    expect(error.details).toMatchObject({ journal_entry_id: JE_ID })
+    expect(client.calls).toContainEqual(expect.objectContaining({ table: 'journal_entries', method: 'in', args: ['id', [JE_ID]] }))
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run adding beside the pin in a locked year refuses as the write does', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [{ data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID }, error: null }, NO_OTHER_ROW],
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null },
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+      ],
+      journal_entries: LOCKED_YEAR,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatchObject({
+      code: 'PERIOD_LOCKED',
+      message_en: getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!.message_en,
+    })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run re-attaching the document already on the row\'s verifikat reads no period and previews', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [{ data: { id: TX_ID, document_id: DOC_ID, journal_entry_id: JE_ID }, error: null }, NO_OTHER_ROW],
+      document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: JE_ID }, error: null },
+      journal_entries: LOCKED_YEAR,
+      pending_operations: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect(client.calls.some((c) => c.table === 'journal_entries')).toBe(false)
     expect(wrote(client)).toBe(false)
   })
 
@@ -185,8 +394,12 @@ describe('POST /transactions/:id/attach-document', () => {
   it('a dry run previews the pin and writes nothing', async () => {
     const client = makeClient({
       company_members: MEMBER,
-      transactions: { data: { id: TX_ID, document_id: null, journal_entry_id: JE_ID }, error: null },
+      transactions: [
+        { data: { id: TX_ID, document_id: null, journal_entry_id: JE_ID, merchant_name: 'Clas Ohlson', amount: -499, currency: 'SEK', date: '2026-04-12' }, error: null },
+        { data: [], error: null }, // no other transaction holds the document
+      ],
       document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: null }, error: null },
+      pending_operations: { data: [], error: null }, // no waiting link proposal
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ document_id: DOC_ID }, '?dry_run=true')
@@ -198,6 +411,12 @@ describe('POST /transactions/:id/attach-document', () => {
       document_id: DOC_ID,
       replaces_document: false,
       transaction_booked: true,
+      // Both sides of the pairing, for whoever approves a staged attach.
+      transaction_description: 'Clas Ohlson',
+      transaction_amount: -499,
+      transaction_date: '2026-04-12',
+      document_file_name: 'k.pdf',
+      shared_document_warning: null,
     })
     expect(wrote(client)).toBe(false)
   })
@@ -207,6 +426,7 @@ describe('POST /transactions/:id/attach-document', () => {
       company_members: MEMBER,
       transactions: [
         { data: { id: TX_ID, document_id: null, journal_entry_id: JE_ID }, error: null },
+        NO_OTHER_ROW,
         { data: { journal_entry_id: JE_ID }, error: null },
         { data: { document_id: DOC_ID }, error: null },
       ],
@@ -224,11 +444,129 @@ describe('POST /transactions/:id/attach-document', () => {
       document_id: DOC_ID,
       previous_document_id: null,
       journal_entry_id: JE_ID,
+      moved_from_transaction_ids: [],
     })
     const docUpdate = client.calls.find((c) => c.table === 'document_attachments' && c.method === 'update')
-    expect(docUpdate?.args[0]).toEqual({ journal_entry_id: JE_ID })
+    expect(docUpdate?.args[0]).toEqual({
+      journal_entry_id: JE_ID,
+      // An API key pinned it: client_asserted, the pin as evidence.
+      link_basis: 'client_asserted',
+      link_evidence: { rule_id: 'bank_row_document_pin' },
+    })
     const txUpdate = client.calls.find((c) => c.table === 'transactions' && c.method === 'update')
     expect(txUpdate?.args[0]).toEqual({ document_id: DOC_ID })
+  })
+
+  // crm#1950: the document sits on one bank row at a time. Attached to
+  // another row it kept its old one, whose booking then took it as underlag.
+  it('a dry run names the unbooked row the document would leave, warns the approver, and writes nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: null, journal_entry_id: null, merchant_name: 'Clas Ohlson', amount: -499, currency: 'SEK', date: '2026-04-12' }, error: null },
+        { data: [{ id: OTHER_TX_ID, document_id: DOC_ID }], error: null }, // pinned on another row
+      ],
+      document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: null }, error: null },
+      invoice_inbox_items: [
+        { data: null, error: null }, // the fit check's read of the item
+        { data: [{ matched_transaction_id: OTHER_TX_ID }], error: null }, // the item is matched to that row too
+        { data: null, error: null },
+      ],
+      bank_row_anchors: { data: [], error: null }, // no verifikat books that row
+      pending_operations: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const preview = (await res.json()).data.preview
+    expect(preview.moves_from_transaction_ids).toEqual([OTHER_TX_ID])
+    expect(preview.shared_document_warning).toContain(`banktransaktion ${OTHER_TX_ID.slice(0, 8)}`)
+    expect(preview.shared_document_warning).toContain('flyttas underlaget hit')
+    expect(preview.shared_document_warning).not.toMatch(/Godkänn båda/)
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run refuses a document that a booked row holds, as the approval would', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: null, journal_entry_id: null }, error: null },
+        { data: [{ id: OTHER_TX_ID }], error: null },
+      ],
+      document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: null }, error: null },
+      bank_row_anchors: { data: [{ transaction_id: OTHER_TX_ID, journal_entry_id: OTHER_JE_ID }], error: null },
+      transaction_voucher_links: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID }, '?dry_run=true')
+    expect(res.status).toBe(409)
+    const error = (await res.json()).error
+    expect(error.code).toBe('DOC_ATTACH_OTHER_VERIFIKAT')
+    expect(error.details).toMatchObject({ journal_entry_id: OTHER_JE_ID, held_by_transaction_id: OTHER_TX_ID })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('moves a document onto a booked row\'s verifikat beside its pin: the other row lets go before the link', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID }, error: null },
+        { data: [{ id: OTHER_TX_ID }], error: null }, // the document is pinned on an unbooked row
+        { data: null, error: null }, // that pin is cleared
+        { data: { document_id: OLD_DOC_ID }, error: null },
+      ],
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null }, // this row's pin
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+        { data: null, error: null },
+      ],
+      invoice_inbox_items: [{ data: null, error: null }, { data: [], error: null }],
+      bank_row_anchors: { data: [], error: null },
+      journal_entries: { data: [{ id: JE_ID, fiscal_period: { is_closed: false, locked_at: null } }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({
+      transaction_id: TX_ID,
+      document_id: DOC_ID,
+      previous_document_id: null,
+      journal_entry_id: JE_ID,
+      moved_from_transaction_ids: [OTHER_TX_ID],
+    })
+    const writes = client.calls.filter((c) => c.method === 'update' && BOOKS.has(c.table))
+    // Once the document is a verifikat's underlag the trigger keeps every pin on it.
+    expect(writes[0]).toMatchObject({ table: 'transactions', args: [{ document_id: null }] })
+    expect(writes.findIndex((c) => c.table === 'document_attachments')).toBeGreaterThan(0)
+    expect(client.calls).toContainEqual(
+      expect.objectContaining({ table: 'transactions', method: 'in', args: ['id', [OTHER_TX_ID]] }),
+    )
+  })
+
+  it('PERIOD_LOCKED before the document leaves its row when the verifikat it would join is in a locked period', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      transactions: [
+        { data: { id: TX_ID, document_id: OLD_DOC_ID, journal_entry_id: JE_ID }, error: null },
+        { data: [{ id: OTHER_TX_ID }], error: null },
+      ],
+      document_attachments: [
+        { data: { journal_entry_id: JE_ID, file_name: 'kvitto.pdf' }, error: null },
+        { data: { id: DOC_ID, file_name: 'faktura.pdf', journal_entry_id: null }, error: null },
+        { data: null, error: null },
+      ],
+      invoice_inbox_items: [{ data: null, error: null }, { data: [], error: null }],
+      bank_row_anchors: { data: [], error: null },
+      journal_entries: { data: [{ id: JE_ID, fiscal_period: { is_closed: false, locked_at: '2026-02-01T00:00:00Z' } }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ document_id: DOC_ID })
+    const { error } = await res.json()
+    const answer = getErrorEntry('DOC_UPLOAD_PERIOD_LOCKED')!
+    expect(error.code).toBe('PERIOD_LOCKED')
+    expect(error.message_en).toBe(answer.message_en)
+    expect(error.recovery_hint).toBe(getErrorEntry('DOC_ATTACH_PERIOD_LOCKED')!.remediation!.description)
+    expect(wrote(client)).toBe(false)
   })
 })
 

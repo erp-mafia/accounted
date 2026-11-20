@@ -50,6 +50,7 @@ function makeDeclaration() {
       '7651': 60_000,
       '7653': 4_000,
       '7754': 0,
+      '7654': 0,
       '7763': 100_000,
       '7670': 406_000,
       '7770': 0,
@@ -99,6 +100,19 @@ describe('GET /api/reports/ink2', () => {
     expect(body.data.ink2s['7763']).toBe(100_000)
     expect(body.data.ink2s['7670']).toBe(406_000)
     expect(generateMock).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_ID)
+  })
+
+  it('422s an SRU download whose number does not fit the form, with the way out', async () => {
+    const declaration = makeDeclaration()
+    generateMock.mockResolvedValue({
+      ...declaration,
+      companyInfo: { ...declaration.companyInfo, orgNumber: '198003740118', entityType: 'aktiebolag' },
+    })
+    const res = await GET(createMockRequest(`http://localhost/api/reports/ink2?period_id=${PERIOD_ID}&format=sru`), routeCtx)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('FILING_IDENTITY_REFUSED')
+    expect(body.error.message).toMatch(/kontakta supporten/)
   })
 
   it('500s a generator failure with the typed code and no stack leak', async () => {

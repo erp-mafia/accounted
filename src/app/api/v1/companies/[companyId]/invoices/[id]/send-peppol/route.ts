@@ -6,13 +6,8 @@
  *
  * Contract, docs and rules live in src/lib/operations/peppol.ts.
  */
-import { ensureInitialized } from '@/lib/init'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { invoicesSendPeppol } from '@/lib/operations/peppol'
-
-// Registers the configured access point adapter and wires the event bus the
-// issuance of a draft emits on.
-ensureInitialized()
 
 // The connector transport waits up to 25 s for the lookup and 50 s for the
 // submit (lib/invoices/transports/connector.ts), so the send gets 90 s.

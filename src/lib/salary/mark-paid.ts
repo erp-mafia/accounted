@@ -3,7 +3,8 @@
  *
  * One implementation behind the v1 verb POST /salary-runs/{id}/mark-paid and
  * the MCP tool gnubok_mark_salary_run_paid
- * (lib/operations/salary-run-structure.ts). It initiates no payment and posts
+ * (lib/operations/salary-run-structure.ts), and behind the dashboard's
+ * POST /api/salary/runs/{id}/paid. It initiates no payment and posts
  * no verifikat: booking does that, and the book step walks an approved run
  * through paid by itself (advanceAndBookSalaryRun in lib/salary/book-run.ts),
  * so marking paid first is only needed when the payment should be on record
@@ -11,10 +12,15 @@
  * caller-supplied date, so the audit trail says when it was recorded. No
  * event: the verifikat event fires from the book step.
  *
+ * A payment date that has not come yet needs confirmPaymentDateAhead
+ * (paymentDateAheadRefusal, crm#1216): the step says the salary left the
+ * bank, and Bokför then posts it as paid out on that date.
+ *
  * A dry run reads and checks and writes nothing (it is also the MCP staging
  * preview).
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { paymentDateAheadRefusal } from '@/lib/salary/payout-date'
 
 export interface SalaryRunMarkedPaid {
   id: string
@@ -25,7 +31,7 @@ export interface SalaryRunMarkedPaid {
 export async function markSalaryRunPaid(
   ctx: Pick<OperationContext, 'supabase' | 'companyId'>,
   salaryRunId: string,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; confirmPaymentDateAhead?: boolean } = {},
 ): Promise<OperationOutcome<SalaryRunMarkedPaid>> {
   const { supabase, companyId } = ctx
 
@@ -48,6 +54,9 @@ export async function markSalaryRunPaid(
   if (run.status !== 'approved') {
     return { ok: false, code: 'SALARY_RUN_MARK_PAID_NOT_APPROVED', details: { current_status: run.status } }
   }
+
+  const ahead = paymentDateAheadRefusal(run, options.confirmPaymentDateAhead)
+  if (ahead) return ahead
 
   if (options.dryRun) {
     return {

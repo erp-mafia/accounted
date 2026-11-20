@@ -5,10 +5,7 @@
  *
  * Contract, docs and rules live in src/lib/operations/peppol.ts.
  */
-import { ensureInitialized } from '@/lib/init'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { invoicesPeppolDeliveries } from '@/lib/operations/peppol'
-
-ensureInitialized()
 
 export const GET = v1OperationHandler(invoicesPeppolDeliveries)

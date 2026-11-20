@@ -1,5 +1,5 @@
 import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
-import { TokenBucketRateLimiter } from '../rate-limiter';
+import { TokenBucketRateLimiter, connectionRateKey } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { WINT_BASE_URL, WINT_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
@@ -74,7 +74,7 @@ export class WintClient {
   async get<T>(accessToken: string, path: string): Promise<T> {
     return withRetry(
       async () => {
-        await this.rateLimiter.acquire();
+        await this.rateLimiter.acquire(connectionRateKey(accessToken));
         const response = await fetchInExecutionBudget(`${this.baseUrl}${path}`, {
           headers: this.authHeaders(accessToken),
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

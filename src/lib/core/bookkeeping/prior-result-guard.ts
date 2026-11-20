@@ -1,4 +1,5 @@
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import type { TrialBalanceRow } from '@/types'
 
 /**
@@ -61,11 +62,6 @@ export function overMovedCarry(ibNet: number, handBookedNet: number): number {
   const left = roundOre(ibNet + handBookedNet)
   if (Math.abs(left) < ORE_TOLERANCE || Math.sign(left) === Math.sign(ibNet)) return 0
   return left
-}
-
-/** BAS 899x, Årets resultat: where an owner closes the year's result by hand. */
-function isAretsResultatAccount(account: string): boolean {
-  return account >= '8990' && account <= '8999'
 }
 
 /**

@@ -23,7 +23,7 @@ function mapping(
 }
 
 /**
- * Hand-rolled capturing mock (same approach as the importVouchers tests):
+ * Hand-rolled capturing mock:
  * we need to inspect the rows passed to .insert() and the payload/filters of
  * .update(), which createQueuedMockSupabase cannot do.
  */
@@ -556,7 +556,7 @@ describe('syncMappedAccounts: rename pass', () => {
 
 // A full-BAS SIE import creates 1 200+ accounts. PostgREST runs each request
 // under the authenticated role's 8 s statement_timeout, and one 1 200-row
-// INSERT measured 6.5 s to 8.2 s on prod (2026-09-09: cancelled for one
+// INSERT measured 6.5 s to 8.2 s in production (2026-09-09: cancelled for one
 // company, passed for the next). The create pass must therefore never send
 // the whole chart as one statement.
 describe('syncMappedAccounts: chunked create pass', () => {

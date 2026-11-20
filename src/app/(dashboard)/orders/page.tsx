@@ -4,26 +4,27 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { MoreHorizontal, ShoppingCart } from 'lucide-react'
+import { EllipsisHorizontalIcon, ShoppingCartIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState, LoadError } from '@/components/ui/empty-state'
+import { LateReveal, Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { TH_CLASS, TD_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
+import { cn, formatDate, formatRowAmount } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getCountryName } from '@/lib/vat/country-codes'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 
 const OrderBookingDialog = dynamic(() => import('@/components/orders/OrderBookingDialog'), {
@@ -104,7 +105,6 @@ export default function OrdersPage() {
   const [bookingOrder, setBookingOrder] = useState<WebshopOrder | null>(null)
   const [invoicingOrder, setInvoicingOrder] = useState<WebshopOrder | null>(null)
   const [markingOrder, setMarkingOrder] = useState<WebshopOrder | null>(null)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Snapshot of the selection the bulk dialog opened with: the list refresh
   // after a partial failure clears the live selection, but the dialog must
   // keep showing its per-order report.
@@ -112,9 +112,6 @@ export default function OrdersPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    // A reload changes which rows exist and which are still bookable
-    // (tab/page/store switch, or a completed sweep): start selection over.
-    setSelectedIds(new Set())
     try {
       const storeParam = storeScope ? `&store_scope=${encodeURIComponent(storeScope)}` : ''
       const res = await fetch(
@@ -196,15 +193,46 @@ export default function OrdersPage() {
     [load, t, toast, errorLocale],
   )
 
+  // A booked order whose verifikat lacks its orderunderlag (archiving never
+  // fails a booking) gets it here. Idempotent: a verifikat that already has
+  // one answers already_attached and nothing is filed twice.
+  const createUnderlag = useCallback(
+    async (order: WebshopOrder) => {
+      try {
+        const res = await fetch(`/api/webshop-orders/${order.id}/underlag`, { method: 'POST' })
+        const json = (await res.json().catch(() => null)) as {
+          data?: { already_attached: boolean }
+        } | null
+        if (!res.ok || !json?.data) {
+          toast({
+            title: t('underlag_create_failed'),
+            description: getErrorMessage(json, {
+              context: 'transaction',
+              statusCode: res.status,
+              locale: errorLocale,
+            }),
+            variant: 'destructive',
+          })
+          return
+        }
+        toast({
+          title: json.data.already_attached ? t('underlag_already_attached') : t('underlag_attached'),
+        })
+      } catch {
+        toast({ title: t('underlag_create_failed'), variant: 'destructive' })
+      }
+    },
+    [t, toast, errorLocale],
+  )
+
   const selectableIds = visibleRows
     .filter((o) => isBulkBookable(o, canWrite))
     .map((o) => o.id)
 
-  const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
-  const toggleSelect = useCallback(
-    (id: string, extend?: boolean) => range.toggle(id, extend),
-    [range],
-  )
+  // A tab, page or store switch, or a sweep that books rows, changes which
+  // rows are bookable: the selection follows (useBulkSelection prunes).
+  const selection = useBulkSelection(selectableIds)
+  const { selectedIds, toggle: toggleSelect } = selection
 
   const openBulkBooking = useCallback(() => {
     setBulkOrders(rows.filter((o) => selectedIds.has(o.id)))
@@ -255,31 +283,29 @@ export default function OrdersPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-2">
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-        </div>
+        <LateReveal>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="flex h-11 items-center gap-8 border-b-hairline">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="hidden h-3.5 w-16 md:block" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-16" />
+            </div>
+          ))}
+        </LateReveal>
       ) : loadFailed ? (
-        <div className="space-y-4 py-8 text-center">
-          <p className="text-sm text-muted-foreground">{t('load_failed')}</p>
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            {t('retry')}
-          </Button>
-        </div>
+        <LoadError title={t('load_failed_title')} onRetry={() => void load()} />
       ) : visibleRows.length === 0 && (tab !== 'all' || storeScope) ? (
         // Filtered to nothing: the orders exist, so no connect-your-shop CTA.
         // A live region so a filter change that empties the list is announced.
-        <div role="status" aria-live="polite">
-          <EmptyState
-            icon={ShoppingCart}
-            title={t('empty_filtered_title')}
-            description={t('empty_filtered_description')}
-          />
-        </div>
+        <p role="status" aria-live="polite" className="py-3 text-[13px] text-muted-foreground">
+          {t('empty_filtered_title')}
+        </p>
       ) : visibleRows.length === 0 ? (
         <EmptyState
-          icon={ShoppingCart}
+          icon={ShoppingCartIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('empty_action')}
@@ -292,43 +318,21 @@ export default function OrdersPage() {
         <div className="stagger-enter">
           {/* Bulkbar (transactions-page pattern): hidden until at least one
               bookable order is selected via the hover checkboxes. */}
-          {selectedIds.size > 0 && (
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
-              <span className="whitespace-nowrap">
-                <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-                {t('bulk_selected', { count: selectedIds.size })}
-              </span>
-              <Button size="sm" onClick={openBulkBooking}>
-                {t('bulk_book_selected')}
-              </Button>
-              {selectedIds.size < selectableIds.length && (
-                <button
-                  type="button"
-                  className={QUIET_LINK_CLASS}
-                  onClick={() => {
-                    setSelectedIds(new Set(selectableIds))
-                    range.resetAnchor()
-                  }}
-                >
-                  {t('bulk_select_all', { count: selectableIds.length })}
-                </button>
-              )}
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => {
-                  setSelectedIds(new Set())
-                  range.resetAnchor()
-                }}
-              >
-                {t('bulk_clear')}
-              </button>
-            </div>
-          )}
+          <BulkSelectionBar
+            selection={selection}
+            selectableCount={selectableIds.length}
+            countLabel={t('bulk_selected', { count: selectedIds.size })}
+            selectAllLabel={t('bulk_select_all', { count: selectableIds.length })}
+            clearLabel={t('bulk_clear')}
+          >
+            <Button onClick={openBulkBooking}>
+              {t('bulk_book_selected')}
+            </Button>
+          </BulkSelectionBar>
           {/* Negative margin + matching padding: lets the hover-revealed
               selection checkbox hang into the page margins without being
               clipped by the overflow container (transactions-page pattern). */}
-          <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
+          <div className="-mx-4 overflow-x-auto px-2 md:-mx-6 md:px-4">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -337,6 +341,7 @@ export default function OrdersPage() {
                 <th className={TH_CLASS}>{t('col_order')}</th>
                 {multiStore && <th className={TH_CLASS}>{t('col_store')}</th>}
                 <th className={TH_CLASS}>{t('col_customer')}</th>
+                <th className={TH_CLASS}>{t('col_country')}</th>
                 <th className={TH_CLASS}>{t('col_payment_method')}</th>
                 <th className={cn(TH_CLASS, 'text-right')}>{t('col_total')}</th>
                 <th className={TH_CLASS}>{t('col_status')}</th>
@@ -357,6 +362,7 @@ export default function OrdersPage() {
                   onInvoice={() => setInvoicingOrder(order)}
                   onMarkBooked={() => setMarkingOrder(order)}
                   onUnmark={() => void unmarkOrder(order)}
+                  onCreateUnderlag={() => void createUnderlag(order)}
                   t={t}
                 />
               ))}
@@ -364,7 +370,7 @@ export default function OrdersPage() {
           </table>
           </div>
           {count > PAGE_SIZE && (
-            <div className="mt-4 flex items-center justify-between text-[12.5px] text-muted-foreground">
+            <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
               <span>
                 {t('pagination', {
                   from: page * PAGE_SIZE + 1,
@@ -375,7 +381,6 @@ export default function OrdersPage() {
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  size="sm"
                   disabled={page === 0}
                   onClick={() => setPage((p) => p - 1)}
                 >
@@ -383,7 +388,6 @@ export default function OrdersPage() {
                 </Button>
                 <Button
                   variant="outline"
-                  size="sm"
                   disabled={(page + 1) * PAGE_SIZE >= count}
                   onClick={() => setPage((p) => p + 1)}
                 >
@@ -426,7 +430,7 @@ export default function OrdersPage() {
           orders={bulkOrders}
           settingsFor={settingsFor}
           onBooked={() => {
-            setSelectedIds(new Set())
+            selection.clear()
             void load()
           }}
         />
@@ -472,6 +476,7 @@ function OrderRow({
   onInvoice,
   onMarkBooked,
   onUnmark,
+  onCreateUnderlag,
   t,
 }: {
   order: WebshopOrder
@@ -484,8 +489,10 @@ function OrderRow({
   onInvoice: () => void
   onMarkBooked: () => void
   onUnmark: () => void
+  onCreateUnderlag: () => void
   t: ReturnType<typeof useTranslations<'webshop_orders'>>
 }) {
+  const locale = useLocale() === 'en' ? 'en' : 'sv'
   // Radix' onCheckedChange carries no mouse event: the preceding click records
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -520,21 +527,18 @@ function OrderRow({
           date column stays where it was. Selected rows keep it visible. */}
       <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
         {selectable && (
-          <Checkbox
+          <RowSelectCheckbox
             checked={isSelected}
             onClick={(e) => {
               shiftHeld.current = e.shiftKey
             }}
             onCheckedChange={() => onToggleSelect(order.id, shiftHeld.current)}
             aria-label={t('select_order_aria', { number: order.order_number })}
-            className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
-              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-            )}
+            className="absolute -left-4 top-1/2 -translate-y-1/2 md:-left-6"
           />
         )}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap date-figures text-muted-foreground')}>
         {formatDate(order.order_date)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
@@ -569,11 +573,20 @@ function OrderRow({
           <span className="text-muted-foreground">{'–'}</span>
         )}
       </td>
+      {/* ISO code in the cell, the country name in the native tooltip. For
+          Shopify this is where the goods go, which decides the VAT treatment
+          (crm#1032). */}
+      <td
+        className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}
+        title={order.customer_country ? getCountryName(order.customer_country, locale) : undefined}
+      >
+        {order.customer_country ?? ''}
+      </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
         {order.payment_method_title || order.payment_method || ''}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-        {formatCurrency(order.total, order.currency)}
+        {formatRowAmount(order.total, order.currency)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
         <OrderStatus order={order} t={t} />
@@ -591,25 +604,25 @@ function OrderRow({
               already says which rows wait, so a button on every row only
               repeats it. */}
           {bookable ? (
-            <Button variant="outline" size="sm" className={HOVER_REVEAL_CLASS} onClick={onBook}>
+            <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={onBook}>
               {t('action_book')}
             </Button>
           ) : invoiceable ? (
-            <Button variant="outline" size="sm" className={HOVER_REVEAL_CLASS} onClick={onInvoice}>
+            <Button variant="outline" className={HOVER_REVEAL_CLASS} onClick={onInvoice}>
               {t('action_create_invoice')}
             </Button>
           ) : null}
-          {(invoiceViaMenu || markable || unmarkable) && (
+          {(invoiceViaMenu || markable || unmarkable || booked) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={cn('shrink-0', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')}
                   aria-label={t('row_menu_aria', { number: order.order_number })}
                 >
-                  <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                  <EllipsisHorizontalIcon className="h-4 w-4 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -626,6 +639,20 @@ function OrderRow({
                 {unmarkable && (
                   <DropdownMenuItem onSelect={onUnmark}>
                     {t('action_unmark_booked')}
+                  </DropdownMenuItem>
+                )}
+                {/* Booked: the verifikat holds the orderunderlag; the
+                    second item files it when it is missing. */}
+                {booked && (
+                  <DropdownMenuItem asChild>
+                    <Link href={`/bookkeeping/${order.journal_entry_id}`}>
+                      {t('action_open_entry')}
+                    </Link>
+                  </DropdownMenuItem>
+                )}
+                {booked && canWrite && (
+                  <DropdownMenuItem onSelect={onCreateUnderlag}>
+                    {t('action_create_underlag')}
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -662,7 +689,7 @@ function OrderStatus({
     return order.manually_booked_journal_entry_id ? (
       <Link
         href={`/bookkeeping/${order.manually_booked_journal_entry_id}`}
-        className="text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+        className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
       >
         {t('status_marked_booked')}
       </Link>
@@ -674,7 +701,7 @@ function OrderStatus({
     return (
       <Link
         href={`/invoices/${order.invoice_id}`}
-        className="text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+        className="text-xs text-muted-foreground underline decoration-foreground/25 underline-offset-4 hover:text-foreground"
       >
         {t('status_invoiced')}
       </Link>

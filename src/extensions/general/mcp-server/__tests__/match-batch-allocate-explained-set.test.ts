@@ -4,13 +4,32 @@
  *
  * The dashboard door refuses a batch allocation with
  * BATCH_TX_POSSIBLE_DUPLICATE when posted, unlinked vouchers on the row's
- * settlement account sum exactly to the row (gecko's Bankgirot aggregate, PR
+ * settlement account sum exactly to the row (a Bankgirot aggregate, PR
  * #2300). The MCP door used to stage straight past that, so an agent could
- * book the aggregate a second time. Now the same detector runs before
- * staging: the refusal names the vouchers and the link call that resolves
- * the row, and force is bound to exactly those ids.
+ * book the aggregate a second time. The tool is now generated from the
+ * operation transactions.match-batch, whose dry run is the dashboard's guard
+ * (lib/transactions/match-batch.ts): the refusal names the vouchers and the
+ * link call that resolves the row (the binding's refusal hook), and force is
+ * bound to exactly those ids.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The sale-first rule (defer_invoice_booking) has its own suites
+// (lib/invoices/__tests__/sale-first.test.ts and the deferred-door tests);
+// here no invoice needs its sale booked first.
+// The gate has its own door test (src/lib/transactions/__tests__/match-batch-booked-row.test.ts);
+// this suite queues what follows it.
+vi.mock('@/lib/transactions/is-booked', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/transactions/is-booked')>()),
+  decideBankRowRebookingById: vi.fn(async () => ({ outcome: 'open' })),
+}))
+
+vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/sale-first')>()),
+  planSaleBeforeSettlement: vi.fn(async () => ({ ok: true, required: false })),
+  planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
+  planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
+}))
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const { mockDetectSet } = vi.hoisted(() => ({ mockDetectSet: vi.fn() }))
@@ -46,8 +65,6 @@ const txRow = {
   merchant_name: null,
   amount: 88250,
   currency: 'SEK',
-  amount_sek: null,
-  exchange_rate: null,
   cash_account_id: 'ca-1',
   date: '2026-07-31',
   journal_entry_id: null,
@@ -73,14 +90,20 @@ function run(supabase: unknown, extra: Record<string, unknown> = {}) {
   return allocate.execute(args(extra), 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never)
 }
 
-/** tx fetch + invoice tenant pre-check: everything the tool reads before the guard. */
+/** The document-type check: everything the operation reads before the guard. */
 function enqueuePreGuard(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
-  enqueue({ data: txRow, error: null })
   enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null })
 }
 
-/** The bank leg's cash account, period_status lookups + the pending_operations insert. */
+/** A refusal reads the row's cash account, for the account_key it names. */
+function enqueueRefusal(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
+  enqueue({ data: { cash_account_id: 'ca-1' }, error: null })
+}
+
+/** The dry run past the guards, the period_status lookups + the pending_operations insert. */
 function enqueueStage(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
+  enqueue({ data: txRow, error: null }) // transactions
+  enqueue({ data: [{ id: INV_ID, currency: 'SEK', exchange_rate: null, remaining_amount: 88250, total: 88250 }], error: null }) // invoices
   enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // cash_accounts (resolveSettlementAccount)
   enqueue({ data: { bookkeeping_locked_through: null }, error: null }) // company_settings
   enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null }) // fiscal_periods
@@ -97,6 +120,7 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     mockDetectSet.mockResolvedValue(explainingSet)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)
+    enqueueRefusal(enqueue)
 
     const err = await run(supabase).then(() => null, (e: Error & { code?: string }) => e)
     expect(err).toBeInstanceOf(Error)
@@ -105,8 +129,7 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     expect(err!.message).toContain('gnubok_reconcile_match')
     expect(err!.message).toContain('bank:ca-1')
     expect(err!.message).toContain(`expected_journal_entry_ids=${JSON.stringify([JE_A, JE_B])}`)
-    // The row the tool already holds goes to the detector: no second fetch.
-    expect(mockDetectSet).toHaveBeenCalledWith(supabase, 'company-1', expect.objectContaining({ id: TX_ID, cash_account_id: 'ca-1' }))
+    expect(mockDetectSet).toHaveBeenCalledWith(supabase, 'company-1', TX_ID)
     // Nothing was staged.
     const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
     expect(tables).not.toContain('pending_operations')
@@ -116,6 +139,7 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     mockDetectSet.mockResolvedValue({ ...explainingSet, vouchers: [explainingSet.vouchers[0]] })
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)
+    enqueueRefusal(enqueue)
 
     await expect(run(supabase)).rejects.toThrow(/gnubok_link_transaction_to_journal_entry/)
   })
@@ -126,6 +150,7 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
       mockDetectSet.mockResolvedValue({ ...explainingSet, vouchers })
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueuePreGuard(enqueue)
+      enqueueRefusal(enqueue)
       const err = await run(supabase, { __keyScopes: keyScopes }).then(() => null, (e: unknown) => e)
       expect(err).toBeInstanceOf(Error)
       return toToolError(err, { toolName: 'gnubok_match_batch_allocate' }).error
@@ -174,6 +199,7 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
       mockDetectSet.mockResolvedValue(explainingSet)
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueuePreGuard(enqueue)
+      enqueueRefusal(enqueue)
       const err = (await run(supabase).then(() => null, (e: unknown) => e)) as Error
       expect(err.message).toContain('gnubok_reconcile_match (account_key "bank:ca-1"')
       expect(err.message).not.toContain('reconciliation:write')
@@ -212,6 +238,7 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)
 
+    enqueueRefusal(enqueue)
     const err = await run(supabase, { force: true, expected_journal_entry_ids: [JE_A] }).then(
       () => null,
       (e: Error & { code?: string }) => e,
@@ -226,13 +253,13 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     const { supabase } = createQueuedMockSupabase()
     const err = await run(supabase, { force: true }).then(() => null, (e: Error & { code?: string }) => e)
     expect(err!.code).toBe('VALIDATION_ERROR')
-    expect(err!.message).toContain('expected_journal_entry_ids is required when force=true')
+    expect(err!.message).toContain('expected_journal_entry_ids')
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('rejects a malformed expected_journal_entry_ids at the boundary instead of silently filtering it', async () => {
     // No host validates inputSchema at runtime: a string, an empty array, a
-    // non-string element and more than 10 ids are each a validation error,
+    // non-uuid element and more than 10 ids are each a validation error,
     // never a filtered list that then reads as a force mismatch.
     for (const bad of [JE_A, [], [JE_A, 42], [JE_A, ''], Array.from({ length: 11 }, () => JE_A)]) {
       const { supabase } = createQueuedMockSupabase()
@@ -241,7 +268,7 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
         (e: Error & { code?: string }) => e,
       )
       expect(err?.code, JSON.stringify(bad)).toBe('VALIDATION_ERROR')
-      expect(err!.message).toContain('array of 1 to 10 journal_entry_id strings')
+      expect(err!.message).toContain('expected_journal_entry_ids')
       expect(supabase.from).not.toHaveBeenCalled()
     }
   })

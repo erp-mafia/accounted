@@ -78,14 +78,33 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns 400 when the run has no calculated employees', async () => {
+  it('returns an empty preview, not an error, for a run without employees', async () => {
     enqueue({ data: CALCULATED_RUN }) // salary_runs
-    enqueue({ data: [] }) // salary_run_employees: nothing calculated yet
+    enqueue({ data: [] }) // salary_run_employees: an empty roster is a valid run
     const response = await GET(
       createMockRequest('/api/salary/runs/run-1/preview'),
       createMockRouteParams({ id: 'run-1' }),
     )
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    // The shape the page renders as "no vouchers are posted": every entry null.
+    expect(data).toEqual({
+      balanced: true,
+      salaryEntry: null,
+      avgifterEntry: null,
+      vacationEntry: null,
+      pensionEntry: null,
+    })
+  })
+
+  it('returns 500, not an empty preview, when the roster read fails', async () => {
+    enqueue({ data: CALCULATED_RUN }) // salary_runs
+    enqueue({ data: null, error: { message: 'statement timeout' } }) // salary_run_employees
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(500)
   })
 
   it('returns 500 when the posted-voucher lookup fails for a booked run', async () => {
@@ -173,10 +192,10 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     // The voucher label rides beside the description, not inside it: the page
     // turns it into a link to /bookkeeping/<entry id>.
     expect(data.salaryEntry.description).toBe('Lön 2026-07')
-    expect(data.salaryEntry.voucher).toBe('A-214')
+    expect(data.salaryEntry.voucher).toBe('A214')
     expect(data.salaryEntry.journal_entry_id).toBe('je-1')
     expect(data.avgifterEntry.description).toBe('Lön 2026-07: Arbetsgivaravgifter')
-    expect(data.avgifterEntry.voucher).toBe('A-215')
+    expect(data.avgifterEntry.voucher).toBe('A215')
     expect(data.avgifterEntry.journal_entry_id).toBe('je-2')
     const avgifterLines = data.avgifterEntry.lines as Array<{ account_number: string; credit_amount: number }>
     expect(avgifterLines.find((l) => l.account_number === '2731')?.credit_amount).toBe(16073.84)

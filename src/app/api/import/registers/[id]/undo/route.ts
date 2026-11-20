@@ -3,10 +3,6 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { undoRegisterImport } from '@/lib/import/register-runs'
-import { ensureInitialized } from '@/lib/init'
-
-// The service client helper sits in the SIE import module, which can emit.
-ensureInitialized()
 
 // Deleting a few thousand imported rows (each checked against every table
 // that can point at it) can outlast the default function timeout; same

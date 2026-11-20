@@ -1,0 +1,31 @@
+-- journal_entries (company_id, id): a company's verifikat in id order.
+--
+-- Every paged read of journal_entries (fetchAllRows, and the entry step of
+-- fetchEntryLines in lib/bookkeeping/entry-lines.ts) filters on company_id
+-- and orders by id, the stable total order paging needs. No index served
+-- both: Postgres either sorted the company's rows on every page or, for a
+-- company with many verifikat, walked journal_entries_pkey in id order over
+-- every tenant's rows and filtered on company_id. A deep page of a large
+-- company's read (a high OFFSET) then walked the primary key from its start
+-- and filtered out every other company's rows on the way: the cost of a
+-- page grew with the whole table and with the offset, and the later pages
+-- of such a read reached the statement timeout and failed. Paged reads are
+-- among the most frequent statements on the table, so that cost was paid
+-- often.
+--
+-- With this index the same read is a range scan of the company's own
+-- entries in id order: the cost of a page is bounded by the company's
+-- size, never by the table's.
+--
+-- idx_journal_entries_company_id (company_id) stays: it is the deduplicated,
+-- far smaller index the plain company lookups and the foreign key from
+-- companies use (the same reason 20261012100500 kept idx_audit_log_company_id).
+--
+-- Plain CREATE INDEX, not CONCURRENTLY: CONCURRENTLY cannot run inside the
+-- migration transaction (precedent 20260710101000, 20261023093920). The
+-- build holds a SHARE lock on journal_entries: reads go on, writes to
+-- journal_entries wait for the build. Expect writes to pause for the
+-- seconds the build takes on a large table, as they did for
+-- idx_journal_entries_posted_needs_doc (20261023093920) on the same table.
+CREATE INDEX IF NOT EXISTS idx_journal_entries_company_id_id
+  ON public.journal_entries (company_id, id);

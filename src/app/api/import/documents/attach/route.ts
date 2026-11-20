@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
+import { readUploadedFile } from '@/lib/core/documents/staged-upload'
 import { planPermitsAttach } from '@/lib/documents/underlag-import'
 import { uploadedFileBaseName } from '@/lib/documents/upload-file-name'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
+import { errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
+import { linkBasisColumns } from '@/lib/links/stamp'
 
 const AttachFieldsSchema = z.object({
   journal_entry_id: z.string().uuid(),
@@ -40,7 +39,8 @@ const AttachFieldsSchema = z.object({
  * migrated verifikat.
  *
  * multipart/form-data:
- *   file:              the underlag
+ *   file:              the underlag, or upload_id + file_name + mime_type for
+ *                      one sent straight to Storage first (staged-upload.ts)
  *   journal_entry_id:  the target the user approved in the preview
  *   fiscal_period_id:  the year the plan was built against (echoed back)
  *   override:          'true' when the target was chosen by hand
@@ -60,11 +60,11 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
 
     const formData = await request.formData()
-    const file = formData.get('file') as File | null
-
-    if (!file) {
-      return errorResponseFromCode('DOC_UPLOAD_NO_FILE', log, { requestId })
+    const uploaded = await readUploadedFile(formData, companyId, user.id)
+    if (!uploaded.ok) {
+      return errorResponseFromCode(uploaded.code, log, { requestId })
     }
+    const file = uploaded.file
 
     // The multipart `filename` is not `File.name`. For a folder selection
     // Chrome writes the relative path (`2026/06/Leverantörsfakturor/A166_x.pdf`)
@@ -192,6 +192,11 @@ export const POST = withRouteContext(
         {
           upload_source: 'file_upload',
           journal_entry_id: journalEntryId,
+          // The old system's file name points at the migrated verifikat; a
+          // file the person placed by hand (override) is their confirmation.
+          linkBasis: override
+            ? linkBasisColumns('user_confirmed')
+            : linkBasisColumns('import_carried_over', { rule_id: 'underlag_filename_reference', reference: fileName.slice(0, 200) }),
           // The file lands on a posted verifikat by construction, so the
           // booking is already known and a model pass per file buys nothing.
           // Run inline through document.uploaded (the bus awaits its
@@ -212,11 +217,9 @@ export const POST = withRouteContext(
 
       // enforce_period_lock_documents: a migrated year is often closed by the
       // time the receipts arrive, and the trigger blocks the link outright.
-      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(message)) {
-        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
-          requestId,
-          details: { reason: getErrorMessage(err) },
-        })
+      // The registry message carries the reason and the way forward in full.
+      if (isPeriodLockRefusal(err)) {
+        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, { requestId })
       }
       if (/kunde inte verifieras|matchar inte den angivna filtypen/i.test(message)) {
         opLog.warn('underlag attach rejected by content validation', { reason: message })

@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(), createClient: vi.fn() }))
 vi.mock('@/lib/providers/fortnox/oauth', async original => ({
@@ -8,7 +8,11 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchCompanyInfoDirect
 import { createServiceClient } from '@/lib/supabase/server'
 import { exchangeFortnoxCode } from '@/lib/providers/fortnox/oauth'
 import { exchangeAuthToken } from '../provider-client'
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.stubEnv('PERSONNUMMER_ENCRYPTION_KEY', 'test-personnummer-key')
+})
+afterEach(() => vi.unstubAllEnvs())
 it('does not acknowledge reconnect when storing replacement tokens fails', async () => {
   const mock = createQueuedMockSupabase()
   vi.mocked(createServiceClient).mockReturnValue(mock.supabase as never)

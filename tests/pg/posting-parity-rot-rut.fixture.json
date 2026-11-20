@@ -1,0 +1,882 @@
+{
+  "dumps": [
+    {
+      "flow": "settle (dashboard): a begäran paid in full to the default account",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 1,
+          "entry_date": "2026-02-20",
+          "description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-01)",
+          "source_type": "rot_rut_payout",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1755",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-01)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1755",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-01)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "settle (dashboard): a partial beslut, the paid share cleared and the rest left on 1513",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 2,
+          "entry_date": "2026-02-21",
+          "description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-02)",
+          "source_type": "rot_rut_payout",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "2000",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-02)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "2000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1940",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-02)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "bank match (dashboard): a bank row matched to its begäran",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 3,
+          "entry_date": "2026-03-20",
+          "description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-03)",
+          "source_type": "rot_rut_payout",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3000",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-03)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "3000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-03)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "bank match (dashboard): one transfer paying two begäran, one voucher with a 1513 leg each",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 4,
+          "entry_date": "2026-03-23",
+          "description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-04, RUT 2026-05)",
+          "source_type": "rot_rut_payout",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3500",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-04)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "4000",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-05)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "7500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-04, RUT 2026-05)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "bank match (staged): a settle_rot_rut_payout approved",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 5,
+          "entry_date": "2026-04-20",
+          "description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-06)",
+          "source_type": "rot_rut_payout",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "4500",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-06)",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "4500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1930",
+              "line_description": "Utbetalning RUT-avdrag från Skatteverket (RUT 2026-06)",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "reclaim (dashboard): a refused RUT share booked back onto the customer",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 6,
+          "entry_date": "2026-05-25",
+          "description": "Nekat RUT-avdrag från Skatteverket (RUT 2026-07)",
+          "source_type": "rot_rut_reclaim",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "5000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Nekat RUT-avdrag faktura 007",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "5000",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Nekat RUT-avdrag faktura 007",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "reclaim (dashboard): the refused part of a partial beslut booked back onto the customer",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 7,
+          "entry_date": "2026-05-26",
+          "description": "Nekat RUT-avdrag från Skatteverket (RUT 2026-08)",
+          "source_type": "rot_rut_reclaim",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "1500",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Nekat RUT-avdrag faktura 008",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "1500",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Nekat RUT-avdrag faktura 008",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "reversal hook: a reclaim, reversed, hands the refused share back to Skatteverket's side",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 8,
+          "entry_date": "2026-06-22",
+          "description": "Nekat RUT-avdrag från Skatteverket (RUT 2026-09)",
+          "source_type": "rot_rut_reclaim",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "6000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Nekat RUT-avdrag faktura 009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "6000",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Nekat RUT-avdrag faktura 009",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "C",
+          "voucher_number": 9,
+          "entry_date": "2026-06-22",
+          "description": "Makulering: Nekat RUT-avdrag från Skatteverket (RUT 2026-09)",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "6000",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Reversal: Nekat RUT-avdrag faktura 009",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "6000",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Reversal: Nekat RUT-avdrag faktura 009",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "migrated deduction: a Visma invoice's RUT deduction moved from 1510 to 1513",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 10,
+          "entry_date": "2026-08-20",
+          "description": "RUT-avdrag faktura V-9001, omföring vid systembyte",
+          "source_type": "rot_rut_reclassification",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3750",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "RUT-avdrag faktura V-9001, omföring vid systembyte",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "3750",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "RUT-avdrag faktura V-9001, omföring vid systembyte",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "flow": "reversal hook: a reclassification, reversed, puts the deduction back on 1510",
+      "entries": [
+        {
+          "voucher_series": "C",
+          "voucher_number": 11,
+          "entry_date": "2026-08-21",
+          "description": "RUT-avdrag faktura V-9002, omföring vid systembyte",
+          "source_type": "rot_rut_reclassification",
+          "status": "reversed",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3750",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "RUT-avdrag faktura V-9002, omföring vid systembyte",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "3750",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "RUT-avdrag faktura V-9002, omföring vid systembyte",
+              "amount_in_currency": null
+            }
+          ]
+        },
+        {
+          "voucher_series": "C",
+          "voucher_number": 12,
+          "entry_date": "2026-08-21",
+          "description": "Makulering: RUT-avdrag faktura V-9002, omföring vid systembyte",
+          "source_type": "storno",
+          "status": "posted",
+          "notes": null,
+          "lines": [
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "3750",
+              "credit_amount": "0",
+              "exchange_rate": null,
+              "account_number": "1510",
+              "line_description": "Reversal: RUT-avdrag faktura V-9002, omföring vid systembyte",
+              "amount_in_currency": null
+            },
+            {
+              "currency": "SEK",
+              "tax_code": null,
+              "dimensions": {},
+              "debit_amount": "0",
+              "credit_amount": "3750",
+              "exchange_rate": null,
+              "account_number": "1513",
+              "line_description": "Reversal: RUT-avdrag faktura V-9002, omföring vid systembyte",
+              "amount_in_currency": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": {
+    "invoices": [
+      {
+        "invoice_number": "001",
+        "status": "sent",
+        "total": "4511.38",
+        "paid_amount": "0",
+        "remaining_amount": "2756.38",
+        "deduction_total": "1755.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": "B1:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "1755.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "002",
+        "status": "sent",
+        "total": "6000",
+        "paid_amount": "0",
+        "remaining_amount": "3500",
+        "deduction_total": "2500.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": "B2:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "2500.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "003",
+        "status": "sent",
+        "total": "7000",
+        "paid_amount": "0",
+        "remaining_amount": "4000",
+        "deduction_total": "3000.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": "B3:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "3000.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "004",
+        "status": "sent",
+        "total": "8000",
+        "paid_amount": "0",
+        "remaining_amount": "4500",
+        "deduction_total": "3500.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": "B4:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "3500.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "005",
+        "status": "sent",
+        "total": "9000",
+        "paid_amount": "0",
+        "remaining_amount": "5000",
+        "deduction_total": "4000.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": "B5:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "4000.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "006",
+        "status": "sent",
+        "total": "10000",
+        "paid_amount": "0",
+        "remaining_amount": "5500",
+        "deduction_total": "4500.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": "B6:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "4500.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "007",
+        "status": "sent",
+        "total": "11000",
+        "paid_amount": "0",
+        "remaining_amount": "11000.00",
+        "deduction_total": "5000.00",
+        "deduction_reclaimed_total": "5000.00",
+        "voucher": "B7:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "5000.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "008",
+        "status": "sent",
+        "total": "12000",
+        "paid_amount": "0",
+        "remaining_amount": "8000.00",
+        "deduction_total": "5500.00",
+        "deduction_reclaimed_total": "1500.00",
+        "voucher": "B8:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "5500.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "009",
+        "status": "sent",
+        "total": "13000",
+        "paid_amount": "0",
+        "remaining_amount": "7000.00",
+        "deduction_total": "6000.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": "B9:posted",
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "6000.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "V-9001",
+        "status": "sent",
+        "total": "10000",
+        "paid_amount": "0",
+        "remaining_amount": "6250.00",
+        "deduction_total": "3750.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": null,
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": "rut",
+            "deduction_amount": "3750.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      },
+      {
+        "invoice_number": "V-9002",
+        "status": "overdue",
+        "total": "10000",
+        "paid_amount": "0",
+        "remaining_amount": "10000.00",
+        "deduction_total": "0.00",
+        "deduction_reclaimed_total": "0.00",
+        "voucher": null,
+        "items": [
+          {
+            "description": "Städning",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          },
+          {
+            "description": "Material",
+            "deduction_type": null,
+            "deduction_amount": "0.00"
+          }
+        ]
+      }
+    ],
+    "payoutRequests": [
+      {
+        "name": "RUT 2026-01",
+        "status": "paid",
+        "requested_total": "1755.00",
+        "decided_total": "1755.00",
+        "settlement_voucher": "C1:posted",
+        "reclaim_voucher": null,
+        "items": [
+          {
+            "decided": "1755.00",
+            "reclaimed": null,
+            "requested": "1755.00",
+            "invoice_number": "001"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-02",
+        "status": "partially_paid",
+        "requested_total": "2500.00",
+        "decided_total": "2000.00",
+        "settlement_voucher": "C2:posted",
+        "reclaim_voucher": null,
+        "items": [
+          {
+            "decided": "2000.00",
+            "reclaimed": null,
+            "requested": "2500.00",
+            "invoice_number": "002"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-03",
+        "status": "paid",
+        "requested_total": "3000.00",
+        "decided_total": "3000.00",
+        "settlement_voucher": "C3:posted",
+        "reclaim_voucher": null,
+        "items": [
+          {
+            "decided": "3000.00",
+            "reclaimed": null,
+            "requested": "3000.00",
+            "invoice_number": "003"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-04",
+        "status": "paid",
+        "requested_total": "3500.00",
+        "decided_total": "3500.00",
+        "settlement_voucher": "C4:posted",
+        "reclaim_voucher": null,
+        "items": [
+          {
+            "decided": "3500.00",
+            "reclaimed": null,
+            "requested": "3500.00",
+            "invoice_number": "004"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-05",
+        "status": "paid",
+        "requested_total": "4000.00",
+        "decided_total": "4000.00",
+        "settlement_voucher": "C4:posted",
+        "reclaim_voucher": null,
+        "items": [
+          {
+            "decided": "4000.00",
+            "reclaimed": null,
+            "requested": "4000.00",
+            "invoice_number": "005"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-06",
+        "status": "paid",
+        "requested_total": "4500.00",
+        "decided_total": "4500.00",
+        "settlement_voucher": "C5:posted",
+        "reclaim_voucher": null,
+        "items": [
+          {
+            "decided": "4500.00",
+            "reclaimed": null,
+            "requested": "4500.00",
+            "invoice_number": "006"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-07",
+        "status": "rejected",
+        "requested_total": "5000.00",
+        "decided_total": "0.00",
+        "settlement_voucher": null,
+        "reclaim_voucher": "C6:posted",
+        "items": [
+          {
+            "decided": "0.00",
+            "reclaimed": "5000.00",
+            "requested": "5000.00",
+            "invoice_number": "007"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-08",
+        "status": "partially_paid",
+        "requested_total": "5500.00",
+        "decided_total": "4000.00",
+        "settlement_voucher": null,
+        "reclaim_voucher": "C7:posted",
+        "items": [
+          {
+            "decided": "4000.00",
+            "reclaimed": "1500.00",
+            "requested": "5500.00",
+            "invoice_number": "008"
+          }
+        ]
+      },
+      {
+        "name": "RUT 2026-09",
+        "status": "rejected",
+        "requested_total": "6000.00",
+        "decided_total": "0.00",
+        "settlement_voucher": null,
+        "reclaim_voucher": null,
+        "items": [
+          {
+            "decided": "0.00",
+            "reclaimed": null,
+            "requested": "6000.00",
+            "invoice_number": "009"
+          }
+        ]
+      }
+    ],
+    "transactions": [
+      {
+        "date": "2026-03-20",
+        "description": "SKATTEVERKET RUT",
+        "amount": "3000",
+        "category": "income_other",
+        "is_business": true,
+        "link_basis": "user_confirmed",
+        "voucher": "C3:posted"
+      },
+      {
+        "date": "2026-03-23",
+        "description": "SKATTEVERKET RUT x2",
+        "amount": "7500",
+        "category": "income_other",
+        "is_business": true,
+        "link_basis": "user_confirmed",
+        "voucher": "C4:posted"
+      },
+      {
+        "date": "2026-04-20",
+        "description": "SKATTEVERKET RUT agent",
+        "amount": "4500",
+        "category": "income_other",
+        "is_business": true,
+        "link_basis": "agent_proposed_user_approved",
+        "voucher": "C5:posted"
+      }
+    ]
+  }
+}

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { CreateJournalEntryInput, Currency } from '@/types'
 import { makeInvoice, makeSupplierInvoice } from '@/tests/helpers'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { AccountingMethodUnavailableError } from '@/lib/company/accounting-method'
 
 // Mock riksbanken. The revaluation deliberately uses fetchExchangeRate, the
 // documented booking path that returns null rather than one of the hardcoded
@@ -57,8 +58,8 @@ const {
  * cache is empty: no rate at all, never a fabricated one.
  */
 function mockRates(rates: Partial<Record<Currency, number>>) {
-  mockedFetchRate.mockImplementation(async (currency: Currency) => {
-    const rate = rates[currency]
+  mockedFetchRate.mockImplementation(async (currency) => {
+    const rate = rates[currency as Currency]
     return rate === undefined ? null : { currency, rate, date: '2024-12-31' }
   })
 }
@@ -81,7 +82,9 @@ function buildFromMap(config: MockTablesConfig): Record<string, unknown[]> {
   return {
     invoices: config.invoices || [],
     supplier_invoices: config.supplierInvoices || [],
-    company_settings: config.settings ? [config.settings] : [],
+    // Every company has a settings row (accounting_method is NOT NULL); the
+    // posting path refuses one it cannot read (accounted#58).
+    company_settings: [config.settings ?? { company_id: 'company-1', accounting_method: 'accrual' }],
     invoice_payments: config.invoicePayments || [],
     supplier_invoice_payments: config.supplierInvoicePayments || [],
   }
@@ -104,6 +107,7 @@ function createMockSupabase(config: MockTablesConfig) {
             ...((() => {
               const chain: Record<string, unknown> = {}
               chain.eq = vi.fn().mockReturnValue(chain)
+              chain.is = vi.fn().mockReturnValue(chain)
               chain.select = vi.fn().mockReturnValue(chain)
               // Terminal: return count
               Object.defineProperty(chain, 'then', {
@@ -205,6 +209,7 @@ function createFullMockSupabase(config: MockTablesConfig) {
         const journalChain: Record<string, unknown> = {}
         journalChain.select = vi.fn().mockReturnValue(journalChain)
         journalChain.eq = vi.fn().mockReturnValue(journalChain)
+        journalChain.is = vi.fn().mockReturnValue(journalChain)
         journalChain.then = (resolve: (val: unknown) => void) => {
           resolve(countResult)
         }
@@ -1441,6 +1446,42 @@ describe('currency-revaluation', () => {
       expect(preview.totalGain).toBe(1000)
     })
 
+    // accounted#58: the posting path used the preview's lenient scope, so an
+    // unreadable settings row revalued a kontantmetod or deferring company's
+    // unbooked rows and posted a write-down of an account standing at zero.
+    it('executeCurrencyRevaluation refuses when settings cannot be read, and posts nothing', async () => {
+      const eurInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2024-11-15',
+      })
+      mockRates({ EUR: 12.0 })
+      const supabase = createFullMockSupabase({ invoices: [eurInvoice], existingRevaluation: false })
+      const original = supabase.from
+      supabase.from = vi.fn().mockImplementation((table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'connection reset' } }),
+              }),
+            }),
+          }
+        }
+        return original(table)
+      })
+
+      const err = await executeCurrencyRevaluation(supabase, 'company-1', '2024-12-31', 'period-1').catch(
+        (e: unknown) => e,
+      )
+
+      expect(err).toBeInstanceOf(AccountingMethodUnavailableError)
+      expect((err as AccountingMethodUnavailableError).code).toBe('SETTINGS_ACCOUNTING_METHOD_UNREADABLE')
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
+    })
+
     it('under deferred booking only revalues rows whose registration is booked', async () => {
       const bookedInvoice = makeInvoice({
         status: 'sent',
@@ -1477,7 +1518,7 @@ describe('currency-revaluation', () => {
     })
 
     it('executeCurrencyRevaluation posts nothing when nothing was open on balansdagen', async () => {
-      // The Oppy case end to end: only a post-balansdagen invoice exists, so
+      // The reported case end to end: only a post-balansdagen invoice exists, so
       // the year-end run must not create any verifikat at all.
       const laterInvoice = makeInvoice({
         status: 'sent',

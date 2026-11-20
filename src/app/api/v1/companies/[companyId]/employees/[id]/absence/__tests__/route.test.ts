@@ -35,45 +35,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listAbsence, PUT as putAbsence, DELETE as deleteAbsence } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-  count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const tableCalls: string[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null, count: null })
-            resolve({ count: null, ...next })
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    tableCalls,
-    from: vi.fn((table: string) => {
-      tableCalls.push(table)
-      return buildChain(table)
-    }),
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -129,11 +94,11 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/employees/:id/absence', () => {
   it('lists absence days with qualified ids', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         salary_absence_days: { data: [SAMPLE_DAY], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listAbsence(
@@ -152,9 +117,9 @@ describe('GET /api/v1/companies/:companyId/employees/:id/absence', () => {
 
   it('rejects a missing from/to with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listAbsence(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/absence`),
@@ -165,9 +130,9 @@ describe('GET /api/v1/companies/:companyId/employees/:id/absence', () => {
 
   it('rejects a reversed range (from > to) with VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listAbsence(
       makeRequest(
@@ -182,9 +147,9 @@ describe('GET /api/v1/companies/:companyId/employees/:id/absence', () => {
 
   it('rejects a range beyond 92 days with ABSENCE_RANGE_TOO_LARGE', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listAbsence(
       makeRequest(
@@ -199,10 +164,10 @@ describe('GET /api/v1/companies/:companyId/employees/:id/absence', () => {
 
   it('returns 404 EMPLOYEE_NOT_FOUND for an unknown employee', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await listAbsence(
       makeRequest(
@@ -221,13 +186,13 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
 
   it('upserts the expanded range (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         salary_absence_days: [
           { data: [SAMPLE_DAY, { ...SAMPLE_DAY, id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', absence_date: '2026-03-04' }], error: null }, // bulk upsert
         ],
-      }),
+      }).supabase,
     )
 
     const res = await putAbsence(
@@ -244,11 +209,31 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(body.data.days[0].salary_absence_day_id).toBeTruthy()
   })
 
+  it('states one scheduled day of the employee when hours_per_day is left out', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: { id: EMPLOYEE_ID, hours_per_week: 40, workdays_per_week: 4 }, error: null },
+      }).supabase,
+    )
+
+    const res = await putAbsence(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/absence?dry_run=true`,
+        { method: 'PUT', body: JSON.stringify({ from: '2026-03-02', to: '2026-03-02', absence_type: 'sick' }) },
+      ),
+      absenceParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toMatchObject({ count: 1, days: [{ hours: 10 }] })
+  })
+
   it('rejects from > to with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await putAbsence(
       makeRequest(
@@ -262,13 +247,13 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
 
   it('maps the 24h trigger to 409 ABSENCE_HOURS_CONFLICT', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         salary_absence_days: [
           { data: null, error: { code: '23514', message: 'Total tid över 24h' } },
         ],
-      }),
+      }).supabase,
     )
 
     const res = await putAbsence(
@@ -285,12 +270,12 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
   })
 
   it('refuses dates a calculated run has already read: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run, nothing written', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: { data: { id: EMPLOYEE_ID }, error: null },
       salary_runs: { data: [REVIEW_RUN_MARCH], error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await putAbsence(
       makeRequest(
@@ -310,15 +295,15 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
       deviation_period_end: '2026-03-31',
       locked_dates: ['2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06'],
     })
-    expect(supabaseMock.tableCalls).not.toContain('salary_absence_days')
+    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
   })
 
   it('returns a dry-run preview without writing', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: { data: { id: EMPLOYEE_ID }, error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await putAbsence(
       makeRequest(
@@ -332,7 +317,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     const body = await res.json()
     expect(body.data.preview.count).toBe(5)
-    expect(supabaseMock.tableCalls).not.toContain('salary_absence_days')
+    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
   })
 
   it('forces TEST KEYS into dry-run on PUT (wrapper REQUIRES_IDEMPOTENCY regression)', async () => {
@@ -346,11 +331,11 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
       scopes: ['payroll:read', 'payroll:write'],
       mode: 'test',
     })
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: { data: { id: EMPLOYEE_ID }, error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await putAbsence(
       makeRequest(
@@ -364,7 +349,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(res.headers.get('X-Gnubok-Mode')).toBe('test')
     // The write table was never touched.
-    expect(supabaseMock.tableCalls).not.toContain('salary_absence_days')
+    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
   })
 
   it('rejects keys without payroll:write scope', async () => {
@@ -376,7 +361,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
       scopes: ['payroll:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await putAbsence(
       makeRequest(
@@ -390,7 +375,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await putAbsence(
       new Request(
@@ -406,11 +391,11 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
 describe('DELETE /api/v1/companies/:companyId/employees/:id/absence', () => {
   it('deletes the range and returns deleted_count', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         salary_absence_days: { data: null, error: null, count: 3 },
-      }),
+      }).supabase,
     )
 
     const res = await deleteAbsence(
@@ -427,12 +412,12 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/absence', () => {
   })
 
   it('refuses a range a calculated run has already read: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN, nothing deleted', async () => {
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       employees: { data: { id: EMPLOYEE_ID }, error: null },
       salary_runs: { data: [REVIEW_RUN_MARCH], error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await deleteAbsence(
       makeRequest(
@@ -449,14 +434,14 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/absence', () => {
       salary_run_id: REVIEW_RUN_MARCH.id,
       locked_dates: ['2026-03-30', '2026-03-31'],
     })
-    expect(supabaseMock.tableCalls).not.toContain('salary_absence_days')
+    expect(supabaseMock.tables()).not.toContain('salary_absence_days')
   })
 
   it('requires from and to', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await deleteAbsence(
       makeRequest(

@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/invoices/matchable-statuses'
+import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/bookkeeping/matchable-statuses'
 import { MAX_CHAIN_WALK } from './correction-chain'
 
 /**
@@ -24,9 +25,10 @@ export interface UnderlagReference {
   id: string
   /**
    * invoice_number / supplier_invoice_number, or the salary run's period as
-   * `YYYY-MM`: the UI builds the label from this.
+   * `YYYY-MM`: the UI builds the label from this. NULL for a supplier invoice
+   * without the supplier's number.
    */
-  number: string
+  number: string | null
   /**
    * Retained source document owned by a referenced supplier invoice, if any.
    *
@@ -59,7 +61,7 @@ interface InvoiceRow {
 
 interface SupplierInvoiceRow {
   id: string
-  supplier_invoice_number: string
+  supplier_invoice_number: string | null
   document_id?: string | null
   /** Embedded document row; see UnderlagReference.document_id for why. */
   document?: { journal_entry_id: string | null } | { journal_entry_id: string | null }[] | null
@@ -145,7 +147,7 @@ export async function getJournalEntryUnderlagReferences(
   }
 
   // --- Supplier invoices ---------------------------------------------------
-  const supplierInvoices = new Map<string, { number: string; documentId?: string }>()
+  const supplierInvoices = new Map<string, { number: string | null; documentId?: string }>()
 
   // Registration booking (accrual) on the invoice itself.
   const registrationLinks = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
@@ -268,8 +270,9 @@ export async function getJournalEntryUnderlagReferences(
  * verifikation for the sale, and the payment row identifies the inbetalning.
  * This is the TS mirror of the customer arm in the verifikat_without_documents
  * / transactions_without_documents RPCs (migration 20260906135702, #2298):
- * every TS surface (journal-list filter, documents/counts, transactions list)
- * must reach the same verdict as the dashboard badge and the MCP tools.
+ * every TS surface (documents/counts, the transactions list) must reach the
+ * same verdict as the dashboard badge, the MCP tools and the journal list's
+ * filter (the list_verifikat_missing_underlag RPC, crm#1390).
  *
  * Values are invoice ids per journal entry id, direct link first and then
  * payment rows in id order, deduplicated. Only entries with at least one link
@@ -283,7 +286,7 @@ export async function getJournalEntryUnderlagReferences(
  * order (invoices, then invoice_payments) so queued test mocks stay simple.
  */
 export async function getInvoiceReferencesForJournalEntries(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   journalEntryIds: readonly string[],
 ): Promise<Map<string, string[]>> {

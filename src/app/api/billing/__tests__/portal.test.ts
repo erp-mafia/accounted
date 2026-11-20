@@ -28,10 +28,32 @@ vi.mock('@/lib/sandbox/guard', async (importOriginal) => {
   return { ...actual, guardSandbox: (...args: unknown[]) => guardSandboxMock(...args) }
 })
 
+// Stripe as it stood on 2026-11-02: one configuration, the account default,
+// whose plan list still offered the pre-raise prices. The portal module is
+// real, so these tests open the session the way production does.
 const portalCreate = vi.fn()
-vi.mock('@/lib/stripe/client', () => ({
+const configurationsCreate = vi.fn()
+const defaultConfiguration = {
+  id: 'bpc_default',
+  metadata: {},
+  features: {
+    subscription_update: {
+      enabled: true,
+      products: [{ product: 'prod_plan', prices: ['price_old_199', 'price_old_1999'] }],
+    },
+  },
+}
+vi.mock('@/lib/stripe/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/stripe/client')>()),
   getStripe: () => ({
-    billingPortal: { sessions: { create: portalCreate } },
+    billingPortal: {
+      sessions: { create: portalCreate },
+      configurations: {
+        list: () => (async function* () { yield defaultConfiguration })(),
+        create: configurationsCreate,
+      },
+    },
+    prices: { retrieve: async (id: string) => ({ id, product: 'prod_plan' }) },
   }),
 }))
 
@@ -46,12 +68,19 @@ vi.mock('@/lib/branding/resolve', () => ({
   resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
 }))
 
-const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL
+const originalEnv = {
+  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+  STRIPE_PRICE_MONTHLY: process.env.STRIPE_PRICE_MONTHLY,
+  STRIPE_PRICE_YEARLY: process.env.STRIPE_PRICE_YEARLY,
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
+  process.env.STRIPE_PRICE_MONTHLY = 'price_249'
+  process.env.STRIPE_PRICE_YEARLY = 'price_2388'
+  configurationsCreate.mockResolvedValue({ id: 'bpc_checkout_prices' })
   resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
     brand: host === 'portal.brand.test' ? { domain: host } : null,
     lookupFailed: false,
@@ -61,8 +90,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  if (originalAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
-  else process.env.NEXT_PUBLIC_APP_URL = originalAppUrl
+  for (const [name, value] of Object.entries(originalEnv)) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
 })
 
 describe('POST /api/billing/portal', () => {
@@ -138,6 +169,29 @@ describe('POST /api/billing/portal', () => {
     )
   })
 
+  // 2026-11-02: a customer on 249 a month switched to yearly in the portal and
+  // was put on the old 1 999 a year, the default configuration's price.
+  it('opens the portal on a configuration offering only the checkout prices, never the default one', async () => {
+    enqueue({ data: { stripe_customer_id: 'cus_1' } })
+    portalCreate.mockResolvedValue({ url: 'https://stripe.test/portal' })
+
+    const { status } = await parseJsonResponse(
+      await POST(createMockRequest('/api/billing/portal', { method: 'POST' }), routeParams),
+    )
+
+    expect(status).toBe(200)
+    expect(portalCreate).toHaveBeenCalledWith(expect.objectContaining({ configuration: 'bpc_checkout_prices' }))
+    expect(configurationsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        features: expect.objectContaining({
+          subscription_update: expect.objectContaining({
+            products: [expect.objectContaining({ prices: ['price_249', 'price_2388'] })],
+          }),
+        }),
+      }),
+    )
+  })
+
   describe('return URL', () => {
     function portalFrom(url: string) {
       enqueue({ data: { stripe_customer_id: 'cus_1' } })
@@ -155,6 +209,7 @@ describe('POST /api/billing/portal', () => {
         customer: 'cus_1',
         return_url: 'https://app.accounted.test/settings/billing',
         locale: 'sv',
+        configuration: 'bpc_checkout_prices',
       })
     })
 

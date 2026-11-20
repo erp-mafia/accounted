@@ -1,19 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => log }))
 vi.mock('../lib/route-from-arkiv', () => ({
   routeStaleQueueItems: vi.fn(),
   requeueHiddenRoutedItems: vi.fn(),
 }))
+vi.mock('../lib/provider-retry', () => ({
+  retryProviderUnavailableReadings: vi.fn(),
+}))
 
 import { runInboxSweep, PROCESSING_STUCK_MS } from '../lib/sweep'
-import { emptyResult } from '../lib/extract-invoice-fields'
+import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { requeueHiddenRoutedItems, routeStaleQueueItems } from '../lib/route-from-arkiv'
+import { retryProviderUnavailableReadings } from '../lib/provider-retry'
+
+const NO_REREAD = { attempted: 0, read: 0, unavailable: 0 }
 
 /**
  * The staged-upload crash recovery: only rows that are (a) still
  * 'processing', (b) older than the stuck threshold, and (c) still carrying a
  * NULL extracted_data are flipped, and the flip writes the same empty
- * skeleton the synchronous swallow-failure path persists. No re-extraction.
+ * skeleton the synchronous swallow-failure path persists. No re-extraction
+ * of a stuck row; the only re-read is the provider retry, mocked here and
+ * tested in provider-retry.test.ts.
  */
 
 interface Captured {
@@ -83,6 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(routeStaleQueueItems).mockResolvedValue(0)
   vi.mocked(requeueHiddenRoutedItems).mockResolvedValue(0)
+  vi.mocked(retryProviderUnavailableReadings).mockResolvedValue(NO_REREAD)
 })
 
 describe('runInboxSweep', () => {
@@ -91,7 +102,7 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 2, routed: 0, requeued: 0 })
+    expect(summary).toEqual({ flipped: 2, routed: 0, requeued: 0, reread: NO_REREAD })
     // The stale scan targets processing rows older than the threshold.
     expect(captured.selectFilters).toEqual([
       { method: 'eq', args: ['status', 'processing'] },
@@ -118,7 +129,10 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 1, routed: 0, requeued: 0 })
+    expect(summary).toEqual({ flipped: 1, routed: 0, requeued: 0, reread: NO_REREAD })
+    // A reading that died is reported as an error, naming the item: it was an info line nobody read.
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('readings died'), { flipped: 1, items: ['i1'] })
   })
 
   it('does nothing when no processing row is stale', async () => {
@@ -126,20 +140,21 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 0, routed: 0, requeued: 0 })
+    expect(summary).toEqual({ flipped: 0, routed: 0, requeued: 0, reread: NO_REREAD })
     expect(captured.updatePayload).toBeUndefined()
+    expect(log.error).not.toHaveBeenCalled()
   })
 
   it('never throws: a failed select reports zero flips', async () => {
     const { supabase } = makeSupabase({ staleIds: [], selectError: { message: 'boom' } })
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0, requeued: 0 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0, requeued: 0, reread: NO_REREAD })
   })
 
   it('never throws: a failed update reports zero flips', async () => {
     const { supabase } = makeSupabase({ staleIds: ['i1'], updateError: { message: 'boom' } })
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0, requeued: 0 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0, requeued: 0, reread: NO_REREAD })
   })
 
   it('brings routed rows back to Underlag and routes stale ones on every pass', async () => {
@@ -147,9 +162,32 @@ describe('runInboxSweep', () => {
     vi.mocked(requeueHiddenRoutedItems).mockResolvedValue(3)
     vi.mocked(routeStaleQueueItems).mockResolvedValue(1)
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 1, requeued: 3 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 1, requeued: 3, reread: NO_REREAD })
     expect(requeueHiddenRoutedItems).toHaveBeenCalledWith(supabase)
     expect(routeStaleQueueItems).toHaveBeenCalledWith(supabase)
+  })
+
+  it('reads again the readings the provider could not take, on every pass, after the cheap steps', async () => {
+    const { supabase } = makeSupabase({ staleIds: [] })
+    vi.mocked(retryProviderUnavailableReadings).mockResolvedValue({ attempted: 2, read: 1, unavailable: 1 })
+
+    await expect(runInboxSweep(supabase)).resolves.toEqual({
+      flipped: 0,
+      routed: 0,
+      requeued: 0,
+      reread: { attempted: 2, read: 1, unavailable: 1 },
+    })
+    expect(retryProviderUnavailableReadings).toHaveBeenCalledWith(supabase)
+    const retryOrder = vi.mocked(retryProviderUnavailableReadings).mock.invocationCallOrder[0]
+    expect(retryOrder).toBeGreaterThan(vi.mocked(routeStaleQueueItems).mock.invocationCallOrder[0])
+  })
+
+  it('never throws: a failed routing still lets the re-read run', async () => {
+    const { supabase } = makeSupabase({ staleIds: [] })
+    vi.mocked(routeStaleQueueItems).mockRejectedValue(new Error('boom'))
+
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0, requeued: 0, reread: NO_REREAD })
+    expect(retryProviderUnavailableReadings).toHaveBeenCalledWith(supabase)
   })
 
   it('never throws: a failed requeue still lets the routing run', async () => {
@@ -157,6 +195,6 @@ describe('runInboxSweep', () => {
     vi.mocked(requeueHiddenRoutedItems).mockRejectedValue(new Error('boom'))
     vi.mocked(routeStaleQueueItems).mockResolvedValue(2)
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 2, requeued: 0 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 2, requeued: 0, reread: NO_REREAD })
   })
 })

@@ -1,3 +1,5 @@
+import { FLYTT_EXTENSION_ORIGIN } from '@/lib/auth/flytt-extension'
+
 /**
  * Origin-header validation for the MCP Streamable HTTP endpoint.
  *
@@ -14,10 +16,17 @@
  * self-hosted domains without hardcoding) and NEXT_PUBLIC_APP_URL (covers
  * proxies that rewrite Host). Anything else is a cross-site browser request
  * the endpoint never serves (it sets no CORS headers), so reject explicitly.
+ *
+ * One foreign origin is named: Accounted's own browser extension "Flytta
+ * till Accounted" (lib/auth/flytt-extension.ts), whose page calls the
+ * endpoint with the user's key. It is matched as the whole origin string, so
+ * no other extension id passes, and it opens nothing by itself: every call
+ * still needs a valid key.
  */
 export function isForbiddenOrigin(request: Request): boolean {
   const origin = request.headers.get('origin')
   if (!origin) return false
+  if (origin === FLYTT_EXTENSION_ORIGIN) return false
 
   let originHost: string
   try {

@@ -15,13 +15,13 @@ import {
 import { Label } from '@/components/ui/label'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Switch } from '@/components/ui/switch'
-import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFormat } from '@/lib/hooks/use-format'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { startBrowserDownload } from '@/lib/browser/download-file'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import type { ApiResponse, ArchiveEstimate } from '@/types'
-import { Download } from 'lucide-react'
+import { ArrowDownTrayIcon } from '@/components/icons'
 
 type Scope = 'all' | 'period'
 type ArchiveMode = 'active-company' | 'migration-reset-source'
@@ -33,6 +33,14 @@ const LAST_DOWNLOAD_STORAGE_KEY = 'Accounted:last-backup-download'
  * supporting documents) as a ZIP. The normal mode uses the owner/admin-only
  * full-archive route; migration-reset mode uses its owner-only retained-source
  * route without making that archived company active.
+ *
+ * The routes stream the ZIP, which runs to gigabytes for years of underlag,
+ * so the browser's own download manager saves it straight to disk and shows
+ * the progress: read into the tab first, the archive would have to fit in its
+ * memory. The browser cannot hand a refusal back to this dialog, so the size
+ * request (which the route authorizes the same way) carries an access
+ * refusal. A failure while the archive is built (an SIE import in progress, a
+ * storage outage) can only show as a failed download, logged by the route.
  */
 export function FullArchiveDialog({
   open,
@@ -48,7 +56,6 @@ export function FullArchiveDialog({
   const t = useTranslations('import')
   const tCompany = useTranslations('settings_company')
   const errorLocale = useLocale() as ErrorLocale
-  const { toast } = useToast()
   const { company } = useCompany()
   const { formatDateLong } = useFormat()
 
@@ -56,8 +63,8 @@ export function FullArchiveDialog({
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [includeDocuments, setIncludeDocuments] = useState(true)
   const [estimate, setEstimate] = useState<ArchiveEstimate | null>(null)
+  const [refusal, setRefusal] = useState<string | null>(null)
   const [isLoadingEstimate, setIsLoadingEstimate] = useState(false)
-  const [isDownloading, setIsDownloading] = useState(false)
   const [lastDownloadedAt, setLastDownloadedAt] = useState<string | null>(null)
   const isMigrationResetSource = mode === 'migration-reset-source'
   const archiveCompanyId = isMigrationResetSource
@@ -96,16 +103,26 @@ export function FullArchiveDialog({
   useEffect(() => {
     if (!open || !archiveUrl || (!isMigrationResetSource && scope === 'period' && !periodId)) {
       setEstimate(null)
+      setRefusal(null)
       return
     }
     let cancelled = false
     setIsLoadingEstimate(true)
     setEstimate(null)
+    setRefusal(null)
     ;(async () => {
       try {
         const separator = archiveUrl.includes('?') ? '&' : '?'
         const res = await fetch(`${archiveUrl}${separator}estimate=1`)
-        if (!res.ok) return
+        if (!res.ok) {
+          // A 4xx is the answer the download would get too (no access, no
+          // retained source): say it here, since a browser download cannot.
+          if (res.status >= 400 && res.status < 500 && !cancelled) {
+            const body: unknown = await res.json().catch(() => null)
+            if (!cancelled) setRefusal(getErrorMessage(body, { statusCode: res.status, locale: errorLocale }))
+          }
+          return
+        }
         const { data } = (await res.json()) as ApiResponse<ArchiveEstimate>
         if (!cancelled && data) setEstimate(data)
       } catch {
@@ -117,97 +134,31 @@ export function FullArchiveDialog({
     return () => {
       cancelled = true
     }
-  }, [open, archiveUrl, isMigrationResetSource, scope, periodId])
+  }, [open, archiveUrl, isMigrationResetSource, scope, periodId, errorLocale])
 
-  const handleDownload = useCallback(async () => {
+  const handleDownload = useCallback(() => {
     if (!archiveUrl || (!isMigrationResetSource && scope === 'period' && !periodId)) return
-
-    setIsDownloading(true)
-    try {
-      const res = await fetch(archiveUrl)
-      if (!res.ok) {
-        if (res.status === 413) {
-          const body = await res.json().catch(() => ({}))
-          const sizeMb = body.size_bytes ? Math.round(body.size_bytes / (1024 * 1024)) : null
-          toast({
-            title: t('archive_toast_too_large_title'),
-            description: isMigrationResetSource
-              ? sizeMb
-                ? tCompany('reset_archive_too_large_with_size', { size: sizeMb })
-                : tCompany('reset_archive_too_large')
-              : sizeMb
-                ? t('archive_toast_too_large_with_size', { size: sizeMb })
-                : t('archive_toast_too_large_generic'),
-            variant: 'destructive',
-          })
-          return
-        }
-        const body = await res.json().catch(() => ({}))
-        throw new Error(readArchiveError(body, t('archive_toast_failed')))
-      }
-
-      const blob = await res.blob()
-      const contentDisposition = res.headers.get('Content-Disposition') || ''
-      const match = contentDisposition.match(/filename="?([^";]+)"?/)
-      const filename = match?.[1] || (isMigrationResetSource
-        ? 'migration_reset_archive.zip'
-        : 'arkiv.zip')
-
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
-
-      const now = new Date().toISOString()
-      if (storageKey) {
-        window.localStorage.setItem(storageKey, now)
-        setLastDownloadedAt(now)
-      }
-
-      toast({ title: t('archive_toast_created'), description: filename })
-    } catch (err) {
-      toast({
-        title: t('archive_toast_failed'),
-        description:
-          err instanceof Error
-            ? getErrorMessage(err, { locale: errorLocale })
-            : t('archive_error_fallback'),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsDownloading(false)
+    startBrowserDownload(archiveUrl)
+    const now = new Date().toISOString()
+    if (storageKey) {
+      window.localStorage.setItem(storageKey, now)
+      setLastDownloadedAt(now)
     }
-  }, [
-    archiveUrl,
-    errorLocale,
-    isMigrationResetSource,
-    periodId,
-    scope,
-    storageKey,
-    t,
-    tCompany,
-    toast,
-  ])
+    onOpenChange(false)
+  }, [archiveUrl, isMigrationResetSource, onOpenChange, periodId, scope, storageKey])
 
   const plannedSizeBytes = estimate
     ? includeDocuments
       ? estimate.total_bytes
       : Math.max(0, estimate.total_bytes - estimate.document_bytes)
     : 0
-  const isOverLimit = !!estimate && plannedSizeBytes > estimate.size_limit_bytes
-  const canDownload = !isDownloading
-    && !isOverLimit
-    && (isMigrationResetSource || scope === 'all' || !!periodId)
+  const canDownload = !refusal && (isMigrationResetSource || scope === 'all' || !!periodId)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent size="confirm">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">
+          <DialogTitle className="text-lg">
             {isMigrationResetSource
               ? tCompany('reset_archive_download_title')
               : t('export_archive_title')}
@@ -290,26 +241,14 @@ export function FullArchiveDialog({
             )}
           </div>
 
-          {isOverLimit && (
-            <AttnLine>
-              {isMigrationResetSource
-                ? tCompany('reset_archive_over_limit', {
-                    limit: formatBytes(estimate!.size_limit_bytes),
-                  })
-                : t('archive_over_limit', { limit: formatBytes(estimate!.size_limit_bytes) })}
-            </AttnLine>
-          )}
+          <p className="text-xs leading-5 text-muted-foreground">{t('archive_download_note')}</p>
+
+          {refusal && <AttnLine>{refusal}</AttnLine>}
         </div>
         <DialogFooter>
-          <Button onClick={handleDownload} disabled={!canDownload} loading={isDownloading}>
-            {isDownloading ? (
-              t('archive_creating')
-            ) : (
-              <>
-                <Download className="mr-2 h-4 w-4" />
-                {t('archive_download_button')}
-              </>
-            )}
+          <Button onClick={handleDownload} disabled={!canDownload}>
+            <ArrowDownTrayIcon className="h-4 w-4" />
+            {t('archive_download_button')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -324,15 +263,4 @@ function formatBytes(bytes: number): string {
   const mb = kb / 1024
   if (mb < 1024) return `${mb.toFixed(1)} MB`
   return `${(mb / 1024).toFixed(2)} GB`
-}
-
-function readArchiveError(body: unknown, fallback: string): string {
-  if (!body || typeof body !== 'object') return fallback
-  const error = (body as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
 }

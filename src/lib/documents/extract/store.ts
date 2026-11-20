@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiStatus } from '@/lib/ai'
+import { classifyExtractionError } from '@/lib/documents/inbox-extraction/extraction-failure'
+import { PROVIDER_UNAVAILABLE } from '@/lib/documents/read/types'
 import type { CompanyIdentity } from '@/lib/documents/classify/classify'
 import { humanAgent, recordActivity, softwareAgent } from '@/lib/documents/provenance'
 import type { WordBox } from '@/lib/documents/read/types'
@@ -243,4 +245,8 @@ async function autonomyLevel(supabase: SupabaseClient, companyId: string, schema
 
 const skip = (reason: SkipReason): ExtractOutcome => ({ status: 'skipped', reason })
 
-const failure = (err: unknown): ExtractOutcome => ({ status: 'error', reason: (err instanceof Error ? err.message : String(err)).slice(0, 300) })
+const failure = (err: unknown): ExtractOutcome => {
+  const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300)
+  // The queue waits out a provider outage instead of spending the job's attempts on it.
+  return { status: 'error', reason: classifyExtractionError(err) === 'provider_unavailable' ? `${PROVIDER_UNAVAILABLE}: ${reason}` : reason }
+}

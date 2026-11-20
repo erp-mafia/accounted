@@ -45,4 +45,30 @@ describe('gnubok_list_customers: personal identifiers', () => {
     expect(serialized).not.toContain(PERSONAL_NUMBER)
     expect(serialized).not.toMatch(/"personal_number"/)
   })
+
+  it("nulls an enskild firma's VAT number and masks a legacy foreign-typed personnummer (#95)", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'c-1', name: 'Acme AB', customer_type: 'swedish_business', org_number: '556677-8899', vat_number: 'SE556677889901', personal_number: null },
+        { id: 'c-2', name: 'Bertil Bygg', customer_type: 'swedish_business', org_number: '900101-1234', vat_number: 'SE900101123401', personal_number: null },
+        // Filed as a foreign business before the write paths refused it.
+        { id: 'c-3', name: 'Doris', customer_type: 'non_eu_business', org_number: PERSONAL_NUMBER, vat_number: null, personal_number: null },
+      ],
+    })
+
+    const result = (await tool().execute({}, 'company-1', 'user-1', supabase as never)) as {
+      customers: Array<Record<string, unknown>>
+    }
+
+    const byName = Object.fromEntries(result.customers.map((c) => [c.name as string, c]))
+    expect(byName['Acme AB']).toMatchObject({ org_number: '556677-8899', vat_number: 'SE556677889901' })
+    expect(byName['Acme AB']).not.toHaveProperty('personal_number_masked')
+    expect(byName['Bertil Bygg']).toMatchObject({ org_number: null, vat_number: null, personal_number_masked: MASKED })
+    expect(byName['Doris']).toMatchObject({ org_number: null, personal_number_masked: MASKED })
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('9001011234')
+    expect(serialized).not.toContain('900101-1234')
+    expect(serialized).not.toContain(PERSONAL_NUMBER)
+  })
 })

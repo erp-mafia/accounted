@@ -26,6 +26,9 @@ const NOT_BOOKING: Record<string, string> = {
   // Completes invoice_items for invoices imported by the Arcim migration;
   // those rows are bookkept in the source system and never state a delivery.
   'extensions/general/arcim-migration/lib/complete-invoice-lines.ts': 'import completion, no booking',
+  // Registers an invoice the books already hold, or links the row the register
+  // holds without its verifikat (crm#1302): no verifikat is ever written here.
+  'lib/invoices/register-booked-invoice.ts': 'registration of a booked invoice, no booking',
 }
 
 const COLUMN_LIST = /^\s*[\w:!.*()]+(\s*,\s*[\w:!.*()]+)+\s*$/
@@ -57,8 +60,10 @@ describe('invoice header projections carry delivery_country (#2906)', () => {
   })
 
   it('finds the hand-written projections it guards', () => {
-    // mark-sent, mark-paid, credit (x2), INVOICE_FULL_COLUMNS, kontantmetod cut-off.
-    expect(projections.length).toBeGreaterThanOrEqual(6)
+    // v1 mark-sent, mark-paid and credit responses, INVOICE_FULL_COLUMNS, the
+    // kontantmetod cut-off. (The v1 credit's own read of the original went
+    // when it moved onto creditInvoice, which selects '*'.)
+    expect(projections.length).toBeGreaterThanOrEqual(5)
   })
 
   it('every one selects delivery_country, or is a documented non-booking read', () => {

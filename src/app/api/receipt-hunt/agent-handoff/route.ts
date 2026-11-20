@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { loadConnectedAiClients } from '@/lib/onboarding/ai-clients.server'
 import { countVerifikatMissingDocument } from '@/lib/worklist/categories'
-
-ensureInitialized()
 
 /**
  * GET /api/receipt-hunt/agent-handoff: what the Kvittojakten button needs to

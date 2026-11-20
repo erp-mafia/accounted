@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
-import { PAID_CAPABILITIES } from '@/lib/entitlements/keys'
+import { TRIAL_CAPABILITIES } from '@/lib/entitlements/keys'
 
 // Tests for 20260826130300_suppress_trial_for_byra_companies.sql (WL-10):
 // the company-creation trial trigger (trg_seed_trial_capability_grants /
@@ -13,10 +13,11 @@ import { PAID_CAPABILITIES } from '@/lib/entitlements/keys'
 // The trigger is AFTER INSERT ON companies and reads NEW.team_id, so plain
 // inserts through the pool exercise it on every creation path.
 
-// Full PAID set (20260818170000); must stay in step with
-// lib/entitlements/keys.ts PAID_CAPABILITIES. Sorted: trialGrantKeys()
+// Full trial set (20261022120000); must stay in step with
+// lib/entitlements/keys.ts TRIAL_CAPABILITIES (PAID_CAPABILITIES minus the
+// paid-plan-only keys, which a trial never includes). Sorted: trialGrantKeys()
 // orders by capability_key.
-const TRIAL_KEYS = [...PAID_CAPABILITIES].sort()
+const TRIAL_KEYS = [...TRIAL_CAPABILITIES].sort()
 
 async function insertTeam(params: {
   createdBy: string
@@ -61,18 +62,21 @@ async function trialGrantKeys(companyId: string): Promise<string[]> {
 }
 
 describe('trial suppression for byrå-team companies', () => {
-  it('the trial seed covers the full nine-key PAID set', () => {
+  it('the trial seed covers the full eleven-key trial set', () => {
     // Guard against the seed list drifting from lib/entitlements/keys.ts:
-    // if PAID_CAPABILITIES grows, the migration VALUES list (and this test)
+    // if TRIAL_CAPABILITIES grows, the migration VALUES list (and this test)
     // must grow with it. multi_user joined at 20260901081417; zettle_sync
-    // at 20260909100300.
+    // at 20260909100300; collections at 20261022120000 (paid-plan only from
+    // 20261012030000 until then); signing at 20261028130000.
     expect(TRIAL_KEYS).toEqual(
       [
         'ai',
         'bank_sync',
+        'collections',
         'email_send',
         'multi_user',
         'shopify_sync',
+        'signing',
         'skatteverket',
         'stripe_payments',
         'woocommerce_sync',
@@ -134,10 +138,11 @@ describe('trial suppression for byrå-team companies', () => {
       [byraTeam],
     )
 
-    const { rows } = await getPool().query<{ ok: boolean }>(
-      `SELECT public.company_has_capability($1, 'ai') AS ok`,
+    // The capability gate's read (company_capability_grant_rows) cascades it.
+    const { rows } = await getPool().query<{ source: string; team_id: string | null; expires_at: Date | null }>(
+      `SELECT source, team_id, expires_at FROM public.company_capability_grant_rows($1, ARRAY['ai'], false)`,
       [companyId],
     )
-    expect(rows[0]!.ok).toBe(true)
+    expect(rows).toEqual([{ source: 'manual', team_id: byraTeam, expires_at: null }])
   })
 })

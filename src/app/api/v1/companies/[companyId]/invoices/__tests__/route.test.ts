@@ -84,19 +84,31 @@ function projectRow(data: unknown, columns: string | null): unknown {
 function makeFlexibleSupabase(
   byTable: Record<string, { data?: unknown; error?: unknown }>,
   inserts: InsertCapture[] = [],
+  filters: Array<{ table: string; method: string; args: unknown[] }> = [],
+  selects: Array<{ table: string; columns: string }> = [],
 ) {
   const buildChain = (table: string, columns: string | null): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => {
+            // The read of the invoices' own payment reference facts
+            // (withPaymentReference) is a second read of `invoices`: it gets
+            // its own answer, `invoice_reference_facts`, and no rows when a
+            // test names none.
+            if (table === 'invoices' && columns?.includes('autogiro_payer_number')) {
+              resolve(byTable.invoice_reference_facts ?? { data: [], error: null })
+              return
+            }
             const result = byTable[table] ?? { data: null, error: null }
             resolve(table === 'customers' ? { ...result, data: projectRow(result.data, columns) } : result)
           }
         }
         if (prop === 'select') {
-          return (requested?: unknown) =>
-            buildChain(table, typeof requested === 'string' ? requested : columns)
+          return (requested?: unknown) => {
+            if (typeof requested === 'string') selects.push({ table, columns: requested })
+            return buildChain(table, typeof requested === 'string' ? requested : columns)
+          }
         }
         if (prop === 'insert') {
           return (payload: unknown) => {
@@ -104,7 +116,10 @@ function makeFlexibleSupabase(
             return buildChain(table, columns)
           }
         }
-        return (..._args: unknown[]) => buildChain(table, columns)
+        return (...args: unknown[]) => {
+          filters.push({ table, method: String(prop), args })
+          return buildChain(table, columns)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -184,6 +199,83 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     // Default response shape MUST NOT include the full customer object.
     expect(body.data[0].customer).toBeUndefined()
     expect(body.meta.request_id).toMatch(/^req_/)
+  })
+
+  // crm#1487: what each invoice asks for, from its own rounding choice; the
+  // company setting decides only a draft that has none.
+  it('returns amount_to_pay and ore_rounding_amount on every row', async () => {
+    const selects: Array<{ table: string; columns: string }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: {
+            data: [
+              { ...SAMPLE_INVOICE, total: 4.38, ore_rounding: false, deduction_total: 0, credited_invoice_id: null },
+              { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', total: -4.38, ore_rounding: true, deduction_total: 0, credited_invoice_id: INVOICE_ID },
+              { ...SAMPLE_INVOICE, id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', status: 'draft', total: 4.38, ore_rounding: null, deduction_total: 0, credited_invoice_id: null },
+            ],
+            error: null,
+          },
+          company_settings: { data: { ore_rounding: true }, error: null },
+        },
+        [],
+        [],
+        selects,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.map((r: { amount_to_pay: number }) => r.amount_to_pay)).toEqual([4.38, -4, 4])
+    expect(body.data.map((r: { ore_rounding_amount: number }) => r.ore_rounding_amount)).toEqual([0, 0.38, -0.38])
+    // Read for the computation only, never returned.
+    expect(body.data[0].ore_rounding).toBeUndefined()
+    expect(body.data[0].deduction_total).toBeUndefined()
+    const invoiceSelect = selects.find((s) => s.table === 'invoices')!.columns
+    expect(invoiceSelect).toContain('ore_rounding')
+    expect(invoiceSelect).toContain('deduction_total')
+  })
+
+  // crm#1367: a received self-billed sale has invoice_number null by design;
+  // without the customer's number it listed like an unsent draft.
+  it('returns external_invoice_number and is_self_billed on every row', async () => {
+    const selects: Array<{ table: string; columns: string }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: {
+            data: [
+              { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true, status: 'paid', remaining_amount: 0 },
+              SAMPLE_INVOICE,
+            ],
+            error: null,
+          },
+        },
+        [],
+        [],
+        selects,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const invoiceSelect = selects.find((s) => s.table === 'invoices')?.columns ?? ''
+    expect(invoiceSelect).toContain('external_invoice_number')
+    expect(invoiceSelect).toContain('is_self_billed')
+    expect(body.data[0]).toMatchObject({ invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true })
+    expect(body.data[1]).toMatchObject({ invoice_number: '2026-0042', external_invoice_number: null, is_self_billed: false })
   })
 
   it('embeds the full customer when ?expand=customer is requested', async () => {
@@ -281,6 +373,88 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
+  it('reports a sent invoice past its due date as overdue and one not yet due as sent (crm#1084)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: {
+          data: [
+            SAMPLE_INVOICE,
+            { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', due_date: '2099-12-31' },
+            { ...SAMPLE_INVOICE, id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'partially_paid', remaining_amount: 100 },
+          ],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?limit=10`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.map((row: { status: string }) => row.status)).toEqual(['overdue', 'sent', 'partially_paid'])
+    // credited_invoice_id is read by the rule, never returned.
+    expect(body.data[0].credited_invoice_id).toBeUndefined()
+  })
+
+  it('?status=overdue filters on the due date and the open remainder, not the stored status', async () => {
+    const filters: Array<{ table: string; method: string; args: unknown[] }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: [SAMPLE_INVOICE], error: null },
+        },
+        [],
+        filters,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?status=overdue`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const invoiceFilters = filters.filter((f) => f.table === 'invoices').map((f) => [f.method, ...f.args])
+    expect(invoiceFilters).toContainEqual(['in', 'status', ['sent', 'overdue', 'partially_paid']])
+    expect(invoiceFilters).toContainEqual(['eq', 'document_type', 'invoice'])
+    expect(invoiceFilters).toContainEqual(['is', 'credited_invoice_id', null])
+    expect(invoiceFilters).toContainEqual(['gt', 'remaining_amount', 0])
+    expect(invoiceFilters.some((f) => f[0] === 'lt' && f[1] === 'due_date')).toBe(true)
+    expect(invoiceFilters).not.toContainEqual(['eq', 'status', 'overdue'])
+    const body = await res.json()
+    expect(body.data[0].status).toBe('overdue')
+  })
+
+  it('?status=sent leaves out invoices that are overdue by date', async () => {
+    const filters: Array<{ table: string; method: string; args: unknown[] }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: [], error: null },
+        },
+        [],
+        filters,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?status=sent`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const invoiceFilters = filters.filter((f) => f.table === 'invoices').map((f) => [f.method, ...f.args])
+    expect(invoiceFilters).toContainEqual(['in', 'status', ['sent', 'overdue']])
+    const or = invoiceFilters.find((f) => f[0] === 'or')
+    expect(String(or?.[1])).toMatch(/^document_type\.neq\.invoice,credited_invoice_id\.not\.is\.null,total\.lt\.0,due_date\.gte\.\d{4}-\d{2}-\d{2},remaining_amount\.lte\.0$/)
+  })
+
   it('emits a next_cursor when the page is full', async () => {
     const overFetched = [
       SAMPLE_INVOICE,
@@ -304,6 +478,115 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
   })
 })
 
+// crm#1886: the reference the invoice PDF prints was returned by no door, so
+// an integrator who delivers the invoice itself had to rebuild the check digit.
+describe('GET invoices: payment_reference (crm#1886)', () => {
+  const DRAFT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const facts = (overrides: Record<string, unknown> = {}) => ({
+    id: INVOICE_ID,
+    payment_details: null,
+    autogiro_payer_number: null,
+    customer: { language: 'sv' },
+    ...overrides,
+  })
+  const supabaseWith = (tables: Record<string, { data?: unknown; error?: unknown }>) =>
+    makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      ...tables,
+    })
+
+  it('lists each invoice with the reference its PDF prints, null on a draft', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseWith({
+        invoices: {
+          data: [SAMPLE_INVOICE, { ...SAMPLE_INVOICE, id: DRAFT_ID, status: 'draft', invoice_number: null }],
+          error: null,
+        },
+        company_settings: { data: { bankgiro: '5050-1055' }, error: null },
+        invoice_reference_facts: { data: [facts()], error: null },
+      }),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // 2026-0042: its digits and a Luhn check digit.
+    expect(body.data[0]).toMatchObject({ id: INVOICE_ID, payment_reference: '202600425', payment_reference_type: 'ocr' })
+    expect(body.data[1]).toMatchObject({ id: DRAFT_ID, payment_reference: null, payment_reference_type: null })
+  })
+
+  it('returns the reference on the detail, and the invoice number when the PDF prints no OCR', async () => {
+    const detail = async (tables: Record<string, { data?: unknown; error?: unknown }>) => {
+      mockServiceClient.mockReturnValue(supabaseWith({ invoices: { data: SAMPLE_INVOICE, error: null }, ...tables }))
+      const res = await getInvoice(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+      expect(res.status).toBe(200)
+      return (await res.json()).data
+    }
+    const giro = { company_settings: { data: { bankgiro: '5050-1055' }, error: null } }
+
+    expect(await detail({ ...giro, invoice_reference_facts: { data: [facts()] } })).toMatchObject({
+      payment_reference: '202600425',
+      payment_reference_type: 'ocr',
+    })
+    // An English invoice prints "Reference" with the number.
+    expect(
+      await detail({ ...giro, invoice_reference_facts: { data: [facts({ customer: { language: 'en' } })] } }),
+    ).toMatchObject({ payment_reference: '2026-0042', payment_reference_type: 'invoice_number' })
+    // No giro printed: nothing to pay an OCR to.
+    expect(await detail({ invoice_reference_facts: { data: [facts()] } })).toMatchObject({
+      payment_reference: '2026-0042',
+      payment_reference_type: 'invoice_number',
+    })
+    // Debited by Autogiro: the customer is asked for nothing.
+    expect(
+      await detail({ ...giro, invoice_reference_facts: { data: [facts({ autogiro_payer_number: '4711' })] } }),
+    ).toMatchObject({ payment_reference: null, payment_reference_type: null })
+  })
+
+  it('is null on a credit note', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseWith({
+        invoices: {
+          data: { ...SAMPLE_INVOICE, invoice_number: 'KR-2026-0042', total: -12500, credited_invoice_id: DRAFT_ID },
+          error: null,
+        },
+        company_settings: { data: { bankgiro: '5050-1055' }, error: null },
+        invoice_reference_facts: { data: [facts()], error: null },
+      }),
+    )
+
+    const res = await getInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect((await res.json()).data).toMatchObject({ payment_reference: null, payment_reference_type: null })
+  })
+
+  it('answers 500 instead of a guessed reference when the settings cannot be read', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseWith({
+        invoices: { data: SAMPLE_INVOICE, error: null },
+        company_settings: { data: null, error: { message: 'connection reset' } },
+      }),
+    )
+
+    const res = await getInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(500)
+  })
+})
+
 describe('GET /api/v1/companies/:companyId/invoices/:id', () => {
   it('returns the invoice with the embedded customer', async () => {
     mockServiceClient.mockReturnValue(
@@ -322,6 +605,8 @@ describe('GET /api/v1/companies/:companyId/invoices/:id', () => {
     const body = await res.json()
     expect(body.data.id).toBe(INVOICE_ID)
     expect(body.data.customer.name).toBe('Acme AB')
+    // Sent and past its due date with money left: reported as overdue (crm#1084).
+    expect(body.data.status).toBe('overdue')
   })
 
   it('returns 404 when the invoice does not exist for the company', async () => {
@@ -553,6 +838,9 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     const body = await res.json()
     expect(body.data.customer_id).toBe(CUSTOMER_ID)
     expect(body.data.total).toBe(12500)
+    // The same shape as GET (crm#1487).
+    expect(body.data.amount_to_pay).toBe(12500)
+    expect(body.data.ore_rounding_amount).toBe(0)
     // A domestic customer has nothing to explain: meta carries no warnings.
     expect(body.meta.warnings).toBeUndefined()
   })
@@ -1415,6 +1703,89 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
   })
 })
 
+// accounted#33: the delivery-note branch ignored the RPC error and
+// inserted a note with a null number.
+describe('POST /api/v1/companies/:companyId/invoices: delivery note numbering (#33)', () => {
+  function deliveryNoteBody() {
+    return {
+      customer_id: CUSTOMER_ID,
+      invoice_date: '2026-05-12',
+      due_date: '2026-06-11',
+      document_type: 'delivery_note',
+      currency: 'SEK',
+      items: [{ description: 'Leverans', quantity: 2, unit: 'st', unit_price: 500 }],
+    }
+  }
+
+  function supabaseWithRpc(rpcResult: { data: unknown; error: unknown }, inserts: InsertCapture[]) {
+    const createdNote = {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      invoice_number: rpcResult.data,
+      customer_id: CUSTOMER_ID,
+      status: 'draft',
+      document_type: 'delivery_note',
+      currency: 'SEK',
+      subtotal: 0,
+      vat_amount: 0,
+      total: 0,
+    }
+    const rpc = vi.fn().mockResolvedValue(rpcResult)
+    return {
+      rpc,
+      client: {
+        ...makeFlexibleSupabase(
+          {
+            company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+            customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+            invoices: { data: createdNote, error: null },
+            invoice_items: { data: null, error: null },
+          },
+          inserts,
+        ),
+        rpc,
+      },
+    }
+  }
+
+  it('numbers the note from the FS-series at insert', async () => {
+    withInvoiceWriteScope()
+    const inserts: InsertCapture[] = []
+    const { client, rpc } = supabaseWithRpc({ data: 'FS-20261000', error: null }, inserts)
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, deliveryNoteBody()),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(rpc).toHaveBeenCalledWith('generate_delivery_note_number', { p_company_id: COMPANY_ID })
+    const header = inserts.find((insert) => insert.table === 'invoices')?.payload as Record<string, unknown>
+    expect(header.invoice_number).toBe('FS-20261000')
+    expect(header.document_type).toBe('delivery_note')
+  })
+
+  it('returns 500 and inserts nothing when the number cannot be allocated', async () => {
+    withInvoiceWriteScope()
+    const inserts: InsertCapture[] = []
+    const { client } = supabaseWithRpc(
+      { data: null, error: { message: 'Company settings not found', code: 'P0001' } },
+      inserts,
+    )
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, deliveryNoteBody()),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+    expect(inserts.find((insert) => insert.table === 'invoices')).toBeUndefined()
+  })
+})
+
 // ──────────────────────────────────────────────────────────────────
 // PATCH /api/v1/companies/:companyId/invoices/:id
 // ──────────────────────────────────────────────────────────────────
@@ -1614,5 +1985,73 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────
+// Er referens from the customer card's Fakturareferens (crm#1200)
+// ──────────────────────────────────────────────────────────────────
+
+describe('POST /api/v1/companies/:companyId/invoices: Er referens and Märkning from the customer card', () => {
+  // The customers mock honours select(), so a card value only reaches the
+  // route when it actually selects invoice_reference and invoice_marking.
+  const CUSTOMER_WITH_REFERENCE = {
+    ...SWEDISH_BUSINESS_CUSTOMER,
+    contact_person: 'Karin Ek',
+    invoice_reference: 'KST 4410',
+    invoice_marking: '4500012345',
+  }
+
+  async function create(body: Record<string, unknown>) {
+    withInvoiceWriteScope()
+    const inserts: InsertCapture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          customers: { data: CUSTOMER_WITH_REFERENCE, error: null },
+          invoices: { data: { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', customer_id: CUSTOMER_ID, status: 'draft' }, error: null },
+          invoice_items: { data: null, error: null },
+        },
+        inserts,
+      ),
+    )
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000 }],
+        ...body,
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status, JSON.stringify(await res.clone().json())).toBe(201)
+    return inserts.find((capture) => capture.table === 'invoices')?.payload as Record<string, unknown>
+  }
+
+  it('writes the Fakturareferens when the request states none', async () => {
+    expect((await create({})).your_reference).toBe('KST 4410')
+  })
+
+  it('reads an empty your_reference as none', async () => {
+    expect((await create({ your_reference: '  ' })).your_reference).toBe('KST 4410')
+  })
+
+  it('keeps the your_reference the request states', async () => {
+    expect((await create({ your_reference: 'Inköp 77' })).your_reference).toBe('Inköp 77')
+  })
+
+  it('writes the card\'s Märkning when the request states none (crm#1477)', async () => {
+    expect((await create({})).invoice_marking).toBe('4500012345')
+  })
+
+  it('reads an empty invoice_marking as none', async () => {
+    expect((await create({ invoice_marking: '  ' })).invoice_marking).toBe('4500012345')
+  })
+
+  it('keeps the invoice_marking the request states', async () => {
+    expect((await create({ invoice_marking: 'Projekt Norr' })).invoice_marking).toBe('Projekt Norr')
   })
 })

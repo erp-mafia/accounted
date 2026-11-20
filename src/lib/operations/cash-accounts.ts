@@ -12,17 +12,22 @@
 import { z } from 'zod'
 import type { CashAccount } from '@/types'
 import {
-  CreateCashAccountSchema,
+  CreateCashAccountRequestSchema,
   CurrencySchema,
+  splitCreateCashAccountRequest,
   SetInvoicePayeeDefaultSchema,
   UpdateCashAccountFieldsSchema,
 } from '@/lib/api/schemas'
 import {
+  createCardAccount,
   createCashAccount,
   setCashAccountPayeeDefault,
   setPrimaryCashAccount,
   updateCashAccount,
 } from '@/lib/cash-accounts/manage'
+import { changeCashAccountLedgers } from '@/lib/cash-accounts/ledger-change'
+import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
+import { accountNumberSchema } from '@/lib/invariants/zod'
 import type { OperationOutcome } from './types'
 import { defineOperation } from './types'
 
@@ -41,11 +46,14 @@ const Payee = z.object({
 
 const CashAccountOut = z.object({
   cash_account_id: z.string().uuid(),
-  ledger_account: z.string().describe('BAS 19xx account the bank account books on, as a string.'),
+  kind: z.enum(['bank', 'card']).describe('bank: a bank, till or payment-provider account. card: a company card on a liability account.'),
+  ledger_account: z.string().describe('BAS account the account books on, as a string: 19xx for a bank account, 2480-2489/2890/2894/2896/2899 for a company card.'),
+  card_issuer: z.string().nullable().describe('Company cards only: the issuer (eurocard, amex, ...).'),
+  card_last4: z.array(z.string()).nullable().describe('Company cards only: the last four digits of the cards billed on the statement.'),
   name: z.string().nullable(),
   currency: z.string(),
-  iban: z.string().nullable().describe('The bank identity IBAN (written by the bank sync).'),
-  source: z.enum(['enable_banking', 'manual', 'sie_import']),
+  iban: z.string().nullable().describe('The bank identity IBAN (written by the bank sync; on an account typed in by hand, the IBAN typed for it). A bank connection with this IBAN lands on this account.'),
+  source: z.enum(['enable_banking', 'open_payments', 'manual', 'sie_import']),
   bank_connected: z.boolean().describe('True when a bank connection holds the account.'),
   enabled: z.boolean(),
   is_primary: z.boolean(),
@@ -59,7 +67,10 @@ type CashAccountOutput = z.infer<typeof CashAccountOut>
 function toPublic(row: CashAccount): CashAccountOutput {
   return {
     cash_account_id: row.id,
+    kind: row.kind ?? 'bank',
     ledger_account: row.ledger_account,
+    card_issuer: row.card_issuer ?? null,
+    card_last4: row.card_last4 ?? null,
     name: row.name ?? null,
     currency: row.currency,
     iban: row.iban ?? null,
@@ -97,7 +108,10 @@ const CASH_ACCOUNT_ID = z
 
 const EXAMPLE_ACCOUNT = {
   cash_account_id: '7f3a…',
+  kind: 'bank',
   ledger_account: '1931',
+  card_issuer: null,
+  card_last4: null,
   name: 'Sparkonto',
   currency: 'SEK',
   iban: 'SE4550000000058398257466',
@@ -130,9 +144,9 @@ export const cashAccountsCreate = defineOperation({
   risk: 'low',
   reversible: false,
   docs: {
-    summary: 'Create a bank account by hand (no bank connection), with the payee details invoices print.',
+    summary: 'Create a bank account by hand (no bank connection), with the payee details invoices print, or a company card.',
     description:
-      'Adds a manual bank account (cash_accounts, source manual) in a currency, on the next free BAS 19xx ledger account for that currency unless ledger_account (1920-1999) is given, and adds that account to the chart if missing. payee holds what customer invoices print (bankgiro, IBAN, ...); invoice_payee defaults to true. A later bank connection with the same IBAN takes this row over in place. Owner/admin only. Idempotent. Dry-runnable.',
+      'Adds a manual bank account (cash_accounts, source manual) in a currency, on the next free BAS 19xx ledger account for that currency unless ledger_account (1920-1999) is given, and adds that account to the chart if missing. payee holds what customer invoices print (bankgiro, IBAN, ...); invoice_payee defaults to true. A later bank connection with the same IBAN takes this row over in place. With kind card it adds a company card (företagskort) instead: its statement rows book against a liability account (2480-2489, 2890, 2894, 2896, 2899; the first one no account holds and no verifikat uses unless ledger_account is given), card_issuer is required and payee fields are refused. Owner/admin only. Idempotent. Dry-runnable.',
     useWhen:
       'The company has a bank account that is not connected through the bank integration (a savings account, a currency account, a bank without PSD2) and it should appear in Konton, the booking flows or on invoices.',
     doNotUseFor:
@@ -141,6 +155,8 @@ export const cashAccountsCreate = defineOperation({
       'An IBAN another account of the company already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE: one physical account must exist once.',
       'A ledger_account another cash account holds returns 409 CASH_ACCOUNT_LEDGER_TAKEN; omit it to get the next free one.',
       'ledger_account is a STRING in 1920-1999 ("1931"), never a number, and never a till (1910-1919) or a PSP clearing account.',
+      'A company card (kind card) takes ledger_account in 2480-2489, 2890, 2894, 2896 or 2899 (never 2893), and no payee or invoice_payee: a card is never printed on invoices.',
+      'A card purchase is stored with a negative amount (money owed grows), the payment from the bank with a positive one: the company perspective of every cash account.',
       'Owner or admin only: a member key gets 403 FORBIDDEN.',
       'Creating an account does not make it the default payee: set that with PUT /cash-accounts/payee-defaults.',
     ],
@@ -149,19 +165,34 @@ export const cashAccountsCreate = defineOperation({
       response: { data: EXAMPLE_ACCOUNT, meta: META },
     },
   },
-  input: CreateCashAccountSchema,
+  input: CreateCashAccountRequestSchema,
   output: CashAccountOut,
-  errorCodes: ['FORBIDDEN', 'CASH_ACCOUNT_IBAN_DUPLICATE', 'CASH_ACCOUNT_LEDGER_TAKEN', 'CASH_ACCOUNT_NO_FREE_LEDGER'],
+  errorCodes: [
+    'FORBIDDEN',
+    'CASH_ACCOUNT_IBAN_DUPLICATE',
+    'CASH_ACCOUNT_LEDGER_TAKEN',
+    'CASH_ACCOUNT_NO_FREE_LEDGER',
+    'CARD_ACCOUNT_LEDGER_INVALID',
+    'CARD_ACCOUNT_NO_FREE_LEDGER',
+  ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/cash-accounts' },
   mcp: {
     name: 'gnubok_create_cash_account',
     title: 'Create Cash Account',
     description:
-      'Stage a manual bank account (no bank connection) with its payee details; it gets the next free 19xx ledger account unless ledger_account is given. Refused for an IBAN the company already has. Owner/admin only.',
-    keywords: ['nytt bankkonto', 'lägg till bankkonto', 'sparkonto', 'valutakonto', 'manuellt bankkonto', 'kassakonto'],
-    stage: { pendingType: 'create_cash_account', title: (input) => `Nytt bankkonto: ${String(input.name)}` },
+      'Stage a manual bank account (next free 19xx unless ledger_account is given; refused for an IBAN the company has) or, with kind card, a company card on a liability account (2890, 2899, ...). Owner/admin only.',
+    keywords: ['nytt bankkonto', 'lägg till bankkonto', 'sparkonto', 'valutakonto', 'manuellt bankkonto', 'kassakonto', 'företagskort', 'kreditkort', 'kortkonto'],
+    stage: {
+      pendingType: 'create_cash_account',
+      title: (input) => `${input.kind === 'card' ? 'Nytt företagskort' : 'Nytt bankkonto'}: ${String(input.name)}`,
+    },
   },
-  run: async (ctx, input, { dryRun }) => publicOutcome(await createCashAccount(ctx, input, { dryRun })),
+  run: async (ctx, input, { dryRun }) => {
+    const split = splitCreateCashAccountRequest(input)
+    return publicOutcome(split.kind === 'card'
+      ? await createCardAccount(ctx, split.input, { dryRun })
+      : await createCashAccount(ctx, split.input, { dryRun }))
+  },
 })
 
 export const cashAccountsUpdate = defineOperation({
@@ -173,7 +204,7 @@ export const cashAccountsUpdate = defineOperation({
   docs: {
     summary: 'Edit a bank account: verifikationsserie, payee details, name, or turn it on/off.',
     description:
-      'Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account and the primary flag are not editable here. Idempotent. Dry-runnable.',
+      'Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account (POST /cash-accounts/change-ledgers) and the primary flag are not editable here. Idempotent. Dry-runnable.',
     useWhen:
       'The company changes bank details customers pay to, wants its own voucher series per bank account, or stops using a manually added account.',
     doNotUseFor:
@@ -182,7 +213,7 @@ export const cashAccountsUpdate = defineOperation({
       'Payee fields, name, invoice_payee and enabled are owner/admin only (403 FORBIDDEN); voucher_series alone is open to any writer.',
       'Payee fields on a PSP clearing account or a till return 400 INVOICE_PAYEE_ACCOUNT_INVALID: only 1920-1999 bank accounts print on invoices.',
       'enabled on an account a bank connection holds returns 409 CASH_ACCOUNT_ENABLED_BANK_MANAGED; disabling the primary returns 400 CASH_ACCOUNT_DISABLE_PRIMARY, and one with unbooked transactions 400 CASH_ACCOUNT_DISABLE_UNRESOLVED.',
-      'An iban another account already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE.',
+      'An iban another account already carries (printed or as its bank identity iban, enabled or not) returns 409 CASH_ACCOUNT_IBAN_DUPLICATE with details.existing_cash_account_id. If that account was added by mistake: on it, send enabled=false and iban "" (one request is fine). On a disabled account typed in by hand, clearing or changing iban also moves its bank identity iban, which frees the IBAN for the right account.',
       'Changing voucher_series only affects entries booked afterwards; nothing posted is renumbered.',
     ],
     example: {
@@ -213,7 +244,7 @@ export const cashAccountsUpdate = defineOperation({
     name: 'gnubok_update_cash_account',
     title: 'Update Cash Account',
     description:
-      'Stage an edit of a bank account: voucher_series, the payee details invoices print (bankgiro, IBAN, ...), name, invoice_payee, or enabled. Payee and enabled changes are owner/admin only. Not the ledger account or the primary.',
+      'Stage an edit of a bank account: voucher_series, the payee details invoices print (bankgiro, IBAN, ...), name, invoice_payee, or enabled. Payee and enabled are owner/admin only. Ledger account: gnubok_change_bank_ledgers.',
     keywords: ['ändra bankkonto', 'bankgiro', 'betaluppgifter', 'verifikationsserie bankkonto', 'stäng av bankkonto'],
     stage: { pendingType: 'update_cash_account', title: () => 'Ändra bankkonto' },
   },
@@ -314,6 +345,111 @@ export const cashAccountsSetPayeeDefault = defineOperation({
       ok: true,
       data: {
         defaults: outcome.data.defaults.map((d) => ({ currency: d.currency, cash_account_id: d.cash_account_id })),
+      },
+    }
+  },
+})
+
+const LedgerMove = z.object({
+  cash_account_id: z.string().uuid().nullable(),
+  name: z.string().nullable(),
+  iban_last4: z.string().nullable(),
+  currency: z.string(),
+  from_ledger: z.string().nullable().describe('The ledger account the account books on now.'),
+  to_ledger: z.string(),
+  booked_rows: z.number().int().describe('Bank rows already booked: their verifikat stay on from_ledger.'),
+  unbooked_rows: z.number().int().describe('Bank rows not booked yet: they book on to_ledger.'),
+  swapped: z.boolean().describe('Moved because another account asked for its ledger account.'),
+})
+
+export const cashAccountsChangeLedgers = defineOperation({
+  id: 'cash-accounts.change-ledgers',
+  kind: 'write',
+  scope: 'companies:write',
+  risk: 'medium',
+  reversible: true,
+  docs: {
+    summary: 'Change which 19xx ledger account bank-connected accounts book on from now on.',
+    description:
+      'Moves one or more accounts that one bank connection syncs (Enable Banking or Open Payments) to other 19xx ledger accounts, as the dashboard does under Inställningar > Kopplingar. Unbooked bank rows follow the account; posted verifikat stay on the old ledger account (move a balance with a voucher if needed). Another account of the connection on a requested ledger account swaps to the mover\'s old one. Owner/admin only. Dry-run first: the preview lists each move with booked and unbooked row counts.',
+    useWhen: 'A company migrated from another system books its bank on other 19xx accounts than the bank connection chose.',
+    doNotUseFor: 'Accounts typed in by hand or from SIE (no bank connection), or rebooking posted verifikat (gnubok_correct_entry).',
+    pitfalls: [
+      'All accounts must be synced by one active bank connection: 400 VALIDATION_ERROR with details.reason several_connections or not_bank_connected; a connection not active answers BANK_LEDGER_CHANGE_NOT_ACTIVE.',
+      'A ledger account another bank account holds is refused with a sentence naming it; two moves to the same ledger account return BANK_SELECTION_LEDGER_CONFLICT.',
+      'Owner or admin only: a member key gets 403 FORBIDDEN.',
+    ],
+    // A USD account the connection put on the SEK default, moved to the USD one.
+    example: {
+      request: { accounts: [{ cash_account_id: '7f3a…', ledger_account: CURRENCY_LEDGER_DEFAULTS.USD }] },
+      response: {
+        data: {
+          connection_id: '0c1d…',
+          moves: [
+            {
+              cash_account_id: '7f3a…',
+              name: 'Valutakonto',
+              iban_last4: null,
+              currency: 'USD',
+              from_ledger: CURRENCY_LEDGER_DEFAULTS.SEK,
+              to_ledger: CURRENCY_LEDGER_DEFAULTS.USD,
+              booked_rows: 4,
+              unbooked_rows: 20,
+              swapped: false,
+            },
+          ],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z
+    .object({
+      accounts: z
+        .array(
+          z
+            .object({
+              cash_account_id: CASH_ACCOUNT_ID,
+              // That it is a bank account (19xx) is the service's rule (isCashLedger).
+              ledger_account: accountNumberSchema.describe('The 19xx account to book on, as a string.'),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(50),
+    })
+    .strict(),
+  output: z.object({ connection_id: z.string().uuid(), moves: z.array(LedgerMove) }),
+  errorCodes: [
+    'CASH_ACCOUNT_NOT_FOUND',
+    'FORBIDDEN',
+    'VALIDATION_ERROR',
+    'BANK_LEDGER_CHANGE_NOT_ACTIVE',
+    'BANK_SELECTION_LEDGER_CONFLICT',
+  ],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/cash-accounts/change-ledgers' },
+  mcp: {
+    name: 'gnubok_change_bank_ledgers',
+    title: 'Change Bank Ledger Accounts',
+    description:
+      'Stage moving bank-connected accounts to other 19xx ledger accounts (e.g. back to the accounts used before a migration). Unbooked rows follow; posted verifikat stay. The preview counts both. Owner/admin only.',
+    keywords: ['byt bokföringskonto bank', 'ändra 19xx', 'bankkonto fel konto', 'bokföringskonto bankkoppling'],
+    stage: {
+      pendingType: 'change_bank_ledgers',
+      title: (input) => {
+        const n = Array.isArray(input.accounts) ? input.accounts.length : 0
+        return n === 1 ? 'Byt bokföringskonto på bankkonto' : `Byt bokföringskonto på ${n} bankkonton`
+      },
+    },
+  },
+  run: async (ctx, input, { dryRun }) => {
+    const outcome = await changeCashAccountLedgers(ctx, input, { dryRun })
+    if (!outcome.ok || outcome.dryRun) return outcome
+    return {
+      ok: true,
+      data: {
+        connection_id: outcome.data.connection_id,
+        moves: outcome.data.moves.map(({ uid: _uid, ...move }) => move),
       },
     }
   },

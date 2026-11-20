@@ -19,7 +19,6 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { disposeAsset, previewAssetDisposal } from '@/lib/bokslut/assets/asset-service'
 import {
   AssetViewSchema,
-  DisposalPreviewSchema,
   DisposeAssetSchema,
   assetView,
   disposalPreviewView,

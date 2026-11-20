@@ -1,7 +1,9 @@
+import { sekOfForeign } from '@/lib/bookkeeping/currency-utils'
 import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { roundOre as round } from '@/lib/money'
+import { addDaysIso } from '@/lib/dates/iso'
 import { createLogger } from '@/lib/logger'
 import type { Currency, WebshopOrder } from '@/types'
 import type {
@@ -82,6 +84,7 @@ type ExistingRow = Pick<
   | 'customer_email'
   | 'customer_orgnr'
   | 'customer_country'
+  | 'ships_nothing'
   | 'vat_breakdown'
   | 'line_items'
 >
@@ -138,9 +141,40 @@ function sameLineItems(
   )
 }
 
-function financialsDiffer(existing: ExistingRow, incoming: WebshopOrderUpsert): boolean {
+/**
+ * Whether a stored order or paid date is the UTC day of the instant the
+ * incoming Swedish day was read from. Rows synced before the syncs read the
+ * Swedish calendar day (#58) hold the UTC day, which lags it by exactly one
+ * for an order placed between midnight and 01:00/02:00 Stockholm time. That
+ * is our reading changing, not the store. (A store-side edit moving a date
+ * exactly one day later passes too; the verifikat keeps its own date.)
+ */
+function isUtcDayOfSameInstant(stored: string | null, incoming: string | null): boolean {
+  return stored !== null && incoming !== null && addDaysIso(stored, 1) === incoming
+}
+
+/**
+ * `frozen`: a booked row compares its dates with isUtcDayOfSameInstant, so a
+ * row booked on the UTC day is not flagged as changed in the store after
+ * booking. Its verifikat keeps the date it was booked with.
+ */
+function financialsDiffer(
+  existing: ExistingRow,
+  incoming: WebshopOrderUpsert,
+  { frozen = false }: { frozen?: boolean } = {},
+): boolean {
   for (const field of FINANCIAL_FIELDS) {
-    if ((existing[field] ?? null) !== (incoming[field] ?? null)) return true
+    const before = existing[field] ?? null
+    const after = incoming[field] ?? null
+    if (before === after) continue
+    if (
+      frozen &&
+      (field === 'order_date' || field === 'paid_date') &&
+      isUtcDayOfSameInstant(before as string | null, after as string | null)
+    ) {
+      continue
+    }
+    return true
   }
   return !sameVatBreakdown(existing.vat_breakdown, incoming.vat_breakdown)
 }
@@ -194,7 +228,7 @@ async function resolveFx(
     cache.set(cacheKey, rate)
   }
   if (rate === null) return { total_sek: null, exchange_rate: null }
-  return { total_sek: round(row.total * rate), exchange_rate: rate }
+  return { total_sek: sekOfForeign(row.total, rate), exchange_rate: rate }
 }
 
 export async function upsertWebshopOrders(
@@ -245,7 +279,7 @@ export async function upsertWebshopOrders(
     const { data: existingData, error: existingError } = await supabase
       .from('webshop_orders')
       .select(
-        'id, external_id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, vat_breakdown, line_items',
+        'id, external_id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, ships_nothing, vat_breakdown, line_items',
       )
       .eq('company_id', companyId)
       .in('external_id', lookupIds)
@@ -313,6 +347,7 @@ export async function upsertWebshopOrders(
           customer_email: incoming.customer_email,
           customer_orgnr: incoming.customer_orgnr,
           customer_country: incoming.customer_country,
+          ships_nothing: incoming.ships_nothing === true,
           payment_method: incoming.payment_method,
           payment_method_title: incoming.payment_method_title,
           gateway_reference: incoming.gateway_reference,
@@ -324,16 +359,26 @@ export async function upsertWebshopOrders(
       }
 
       if (isFrozen(existing)) {
-        const drifted = financialsDiffer(existing, incoming)
+        const drifted = financialsDiffer(existing, incoming, { frozen: true })
         const update: Record<string, unknown> = { ...safeFields(incoming) }
         if (drifted && !existing.remote_changed_after_freeze) {
           update.remote_changed_after_freeze = true
         }
+        // A booked row gets its country filled in once, never changed or
+        // cleared: rows booked before the sync read a country (Shopify,
+        // crm#1032) get it on Hämta äldre ordrar, a known country stays the
+        // one the order was booked with, and a store that later withholds
+        // addresses cannot erase it. Not a financial field, so the freeze
+        // trigger allows the write.
+        const countryFilled =
+          existing.customer_country === null && incoming.customer_country !== null
+        if (countryFilled) update.customer_country = incoming.customer_country
         const changedSafe =
           existing.status !== incoming.status ||
           existing.refunded_total !== incoming.refunded_total ||
           existing.store_label !== incoming.store_label ||
           existing.connection_id !== incoming.connection_id ||
+          countryFilled ||
           update.remote_changed_after_freeze === true
         if (!changedSafe) {
           result.unchanged += 1
@@ -380,6 +425,7 @@ export async function upsertWebshopOrders(
         customer_email: incoming.customer_email,
         customer_orgnr: incoming.customer_orgnr,
         customer_country: incoming.customer_country,
+        ships_nothing: incoming.ships_nothing === true,
         payment_method: incoming.payment_method,
         payment_method_title: incoming.payment_method_title,
         gateway_reference: incoming.gateway_reference,
@@ -413,6 +459,7 @@ export async function upsertWebshopOrders(
         (existing.customer_email ?? null) === (incoming.customer_email ?? null) &&
         (existing.customer_orgnr ?? null) === (incoming.customer_orgnr ?? null) &&
         (existing.customer_country ?? null) === (incoming.customer_country ?? null) &&
+        (existing.ships_nothing ?? false) === (incoming.ships_nothing === true) &&
         sameLineItems(existing.line_items, incoming.line_items)
       if (unchanged) {
         result.unchanged += 1

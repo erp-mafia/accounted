@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} } }));
+vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} }, connectionRateKey: (credential: string) => credential }));
 import { fetchMigrationPage, fetchSalesInvoicesHydrated, fetchSupplierInvoicesHydrated, hydrateSalesInvoices, hydrateSupplierInvoices } from '../provider-data-fetcher';
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '../bokio/mapper';
 import type { SupplierInvoiceDto } from '../dto';
@@ -100,6 +100,10 @@ describe('Bokio invoice voucher hydration', () => {
     expect(result.unhydratedIds.has(listed.id)).toBe(true);
     expect(result.hydration.failed).toBe(1);
     expect(result.hydration.abortedBy).toBe(status === 404 ? undefined : 'auth');
+    // The refusal itself goes back with the result, so the migration can tell
+    // a dead token (401) from a token without the journal scope (403).
+    if (status === 404) expect(result.authError).toBeUndefined();
+    else expect(result.authError).toMatchObject({ statusCode: status });
   });
 
   it.each([

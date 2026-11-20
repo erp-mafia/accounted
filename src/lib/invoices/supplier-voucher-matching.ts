@@ -13,45 +13,75 @@
  * kontantmetod company's invoice with no registration verifikat, the 19xx
  * credit (`bank_credit`): there Dr cost, Dr 2641 / Cr 1930 IS the payment of
  * the invoice, and refusing it left mark-paid, which books the cost and the
- * moms a second time, as the only way to close the invoice (issue #2854).
+ * moms a second time, as the only way to close the invoice (issue #2854). A
+ * purchase the owner paid with private money credits 2018 or 2893 instead and
+ * settles the same way, on a verifikat that books a purchase (crm#1817).
  *
  * A voucher without the settlement side is rejected with
  * LINK_SI_VOUCHER_NO_AP_DEBIT / LINK_SI_VOUCHER_NO_BANK_CREDIT.
+ *
+ * ONE VERIFIKAT MAY PAY SEVERAL DEBTS (GitHub issue 3490). A bank payment that
+ * covers several leverantörsskulder is one verifikat, and some of those debts
+ * may have no invoice here at all (a company that came in by SIE carries them
+ * as part of the 2440 opening balance). What a voucher can settle is therefore
+ * its settlement side less the payment rows that already point at it for other
+ * invoices, on both sides, and a link may state `amount`: this invoice's share
+ * of it, in the invoice's currency. The share is bounded by the invoice's
+ * remainder and by what the voucher has left; the rest stays available.
+ * Without a stated share nothing is split on a guess: what the voucher has
+ * left must fit inside the invoice's remainder
+ * (LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING otherwise).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
+import type { ScopeFreeLinkBasis } from '@/lib/links/link-basis'
 import { createLogger } from '@/lib/logger'
-import {
-  CONFIDENCE,
-  amountsMatchExact,
-  amountsMatchFuzzy,
-  customerNameMatches,
-  descriptionMentionsReference,
-} from './invoice-matching'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
+import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
+import { postingPort } from '@/lib/posting/port'
 import type { SupplierInvoice, Supplier } from '@/types'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import {
+  bookRegistrationBeforeSettlement,
+  planRegistrationBeforeSettlementById,
+  type RegistrationFirstRefusal,
+} from '@/lib/supplier-invoices/registration-first'
+import {
+  SUPPLIER_SETTLEMENT_ACCOUNTS_BEYOND_PREFIX,
   resolveSupplierSettlementSide,
+  settlesOnAccount,
+  supplierInvoiceLinePostingAccounts,
+  voucherBooksPurchase,
+  vouchersBookingPurchase,
+  type PurchaseCheckLine,
   type SupplierSettlementSide,
   type SupplierSettlementSideName,
 } from './supplier-settlement-side'
 import {
   AMOUNT_TOLERANCE,
-  DATE_PROXIMITY_BUMP,
   DEFAULT_DATE_WINDOW_DAYS,
   EXCLUDED_SOURCE_TYPES,
-  candidateAmountBand,
-  isDateWithinDays,
-  round2,
-  type FiscalPeriodRow,
-  type VoucherMatchLineRow as JournalEntryLine,
+  collectSettlementVouchers,
+  lockedPeriodIds,
+  rankVoucherCandidates,
+  scoreNamedVoucherCandidate,
+  scoreVoucherCandidate,
+  sekBookedReason,
+  sekBookedSettlement,
+  storedRemaining,
+  voucherCapacity,
+  voucherLinkEvents,
+  voucherShareFields,
+  type SettlementSideLine,
   type VoucherRow,
+  type VoucherScoreContext,
+  type VoucherShareFields,
 } from './voucher-matching-shared'
-import { formatAmount as formatNumber } from '@/lib/utils'
+import type { VoucherNumber } from './voucher-label'
+import { roundOre } from '@/lib/money'
 
 const log = createLogger('supplier-voucher-matching')
 
@@ -59,8 +89,9 @@ const log = createLogger('supplier-voucher-matching')
 const PAYMENT_ROW_CHUNK = 100
 
 /** Payment rows that already point at a voucher for ANOTHER invoice have used
- *  part of its 19xx credit. Only read on the bank_credit side; mirrors the
- *  capacity block of link_supplier_invoice_to_voucher (20260921190300). */
+ *  part of its settlement side, the 244x debit as much as the 19xx credit.
+ *  Mirrors the capacity block of link_supplier_invoice_to_voucher
+ *  (20261011153000; 19xx only before that). */
 interface VoucherPaymentRow {
   journal_entry_id: string | null
   supplier_invoice_id: string
@@ -68,14 +99,14 @@ interface VoucherPaymentRow {
   currency: string | null
 }
 
-export interface SupplierVoucherCandidate {
+export interface SupplierVoucherCandidate extends VoucherShareFields {
   journal_entry_id: string
   voucher_series: string | null
   voucher_number: number | null
   entry_date: string
   description: string
   /** What this voucher can settle, always positive: the 244x debit
-   *  (`ap_debit`), or on `bank_credit` the 19xx credit less what payment rows
+   *  (`ap_debit`) or the 19xx credit (`bank_credit`), less what payment rows
    *  for other invoices have already used of it. Expressed in `currency` below
    *  (the INVOICE's currency), never in the raw SEK ledger column: see
    *  ledgerLineSideAmountIn. Kept under this name for API/UI back-compat
@@ -97,11 +128,6 @@ export interface SupplierVoucherCandidate {
   match_reason: string
 }
 
-interface CandidateContext {
-  invoice: SupplierInvoice & { supplier?: Supplier }
-  remainingAmount: number
-}
-
 /**
  * Find posted journal entries that carry the invoice's settlement side (244x
  * debit, or 19xx credit: see the module header) and could plausibly be the
@@ -111,6 +137,14 @@ interface CandidateContext {
  *
  * `options.settlementSide` lets a caller that already resolved the side (to
  * show it) pass it in instead of paying for a second lookup.
+ *
+ * `options.includeShared` also offers vouchers that have MORE left than the
+ * invoice needs and that nothing else ties to it: a payment of several debts,
+ * linkable with a stated share (`link_amount`). Only the surfaces where a
+ * person picks set it; the unattended reconcile pass keeps the amount matches.
+ *
+ * `options.voucher` reads only the voucher a person named by its number, at
+ * any date (SettlementVoucherSearch.voucher).
  */
 export async function findMatchingVouchersForSupplierInvoice(
   supabase: SupabaseClient,
@@ -120,186 +154,132 @@ export async function findMatchingVouchersForSupplierInvoice(
     limit?: number
     dateWindowDays?: number
     settlementSide?: SupplierSettlementSide
+    includeShared?: boolean
+    voucher?: VoucherNumber
   } = {},
 ): Promise<SupplierVoucherCandidate[]> {
   const limit = options.limit ?? 10
   const windowDays = options.dateWindowDays ?? DEFAULT_DATE_WINDOW_DAYS
 
-  const remainingAmount = computeRemaining(invoice)
+  const remainingAmount = storedRemaining(invoice)
   if (remainingAmount <= AMOUNT_TOLERANCE) return []
 
   const settlement =
     options.settlementSide ??
     (await resolveSupplierSettlementSide(supabase, companyId, invoice.id))
-  const onBankCredit = settlement.side === 'bank_credit'
-  const amountColumn = settlement.entrySide === 'credit' ? 'credit_amount' : 'debit_amount'
-
-  const dueDate = new Date(invoice.due_date)
-  const dateFrom = new Date(dueDate)
-  dateFrom.setDate(dateFrom.getDate() - windowDays)
-  const dateTo = new Date(dueDate)
-  dateTo.setDate(dateTo.getDate() + windowDays)
-
-  // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
-  // the scope filters used to sit on a `journal_entries!inner` embed, which
-  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
-  // journal_entry_lines table across all tenants. The old `.limit(limit * 10)`
-  // went with the embed: the match set is one company's AP debits inside a
-  // date window around the due date, and an arbitrary cap could drop the
-  // exact-amount voucher the ranking below is looking for.
-  // `amount_in_currency` is part of the column list on purpose: on a foreign
-  // invoice it is the ONLY column quoted in the invoice's currency (debit_amount
-  // is always SEK). Dropping it here would make every FX line unconvertible and
-  // this matcher would silently return no candidates.
-  // `documentCurrency()` and not `invoice.currency` directly: a NULL code would
-  // test `!== 'SEK'` and send a plain domestic invoice down the FX path where
-  // nothing is convertible. The label guard in scoreCandidate still compares
-  // the RAW `invoice.currency`, so such a row behaves as it did before.
   const invoiceCurrency = documentCurrency(invoice.currency)
-  const isForeignInvoice = invoiceCurrency !== 'SEK'
-  let lines: Array<JournalEntryLine & { journal_entries: VoucherRow }>
-  try {
-    lines = await fetchEntryLines({
-      supabase,
-      entryColumns:
-        'id, voucher_series, voucher_number, entry_date, description, status, source_type, fiscal_period_id, company_id',
-      lineColumns:
-        'id, journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
-          .eq('company_id', companyId)
-          .eq('status', 'posted')
-          .gte('entry_date', dateFrom.toISOString().slice(0, 10))
-          .lte('entry_date', dateTo.toISOString().slice(0, 10)),
-      filterLines: (q: EntryLinesQuery) => {
-        const scoped = q
-          .like('account_number', `${settlement.accountPrefix}%`)
-          .gt(amountColumn, 0)
-        // Only lines actually labelled with the invoice's currency can be
-        // expressed in it at all; everything else is unscoreable, so this is a
-        // strict superset of what survives scoring and keeps the FX candidate
-        // set small. No-op on a SEK invoice.
-        if (isForeignInvoice) return scoped.eq('currency', invoiceCurrency)
-        // Every payout a kontantmetod company makes credits 19xx, so the
-        // unbanded set is its whole bank history in the window. Band the
-        // kronor column around the invoice (candidateAmountBand). A 244x debit
-        // is rare enough to stay unbanded, exactly as before.
-        if (!onBankCredit) return scoped
-        const band = candidateAmountBand(remainingAmount, invoice.total)
-        return scoped.gte(amountColumn, band.floor).lte(amountColumn, band.ceil)
-      },
-    })
-  } catch {
-    // Unchanged posture: a candidate-search failure returns no candidates
-    // rather than breaking the reconciliation screen.
-    return []
-  }
+  const logContext = { companyId, supplierInvoiceId: invoice.id }
 
-  // Sum the settlement side per voucher across its lines (a samlings-
-  // verifikation paying several supplier invoices in one shot will have one
-  // 2440 row per supplier; BAS 2026 reserves 2440-2449 for leverantörsskulder,
-  // and a voucher paying mixed SEK + EUR suppliers debits both 2440 and 2441).
-  const byEntry = new Map<
-    string,
-    { entry: VoucherRow; apDebitTotal: number; lineCurrency: string | null }
-  >()
+  // The shared voucher-link matcher (voucher-matching-shared.ts), the same
+  // search the customer side runs. A foreign invoice on the 244x side reads
+  // every AP debit in the window, whatever its label: a payment voucher that
+  // carries its 2440 debit in SEK only (an SIE import, a manual verifikat)
+  // settles the invoice through the SEK-booked fallback, which the link
+  // validator accepts too (feedback seq 930807).
+  const byEntry = await collectSettlementVouchers({
+    supabase,
+    companyId,
+    invoice,
+    remainingAmount,
+    side: {
+      accountPrefix: settlement.accountPrefix,
+      alsoAccounts: SUPPLIER_SETTLEMENT_ACCOUNTS_BEYOND_PREFIX[settlement.side],
+      entrySide: settlement.entrySide,
+      bankSide: settlement.side === 'bank_credit',
+    },
+    windowDays,
+    sekBookedAllowed: true,
+    voucher: options.voucher,
+    log,
+    logContext,
+  })
+  if (byEntry.size === 0) return []
 
-  for (const line of lines) {
-    const entry = line.journal_entries
-    if (!entry) continue
-    if (EXCLUDED_SOURCE_TYPES.includes(entry.source_type ?? '')) continue
-
-    // The settlement side quoted in the INVOICE's currency. On SEK this reads
-    // the ledger column exactly as before; on a foreign invoice it reads
-    // amount_in_currency and returns null for a line that carries no figure
-    // in that currency.
-    const debit = ledgerLineSideAmountIn(line, invoiceCurrency, settlement.entrySide)
-    if (debit === null || debit <= 0) continue
-
-    const existing = byEntry.get(entry.id)
-    if (existing) {
-      existing.apDebitTotal += debit
-    } else {
-      byEntry.set(entry.id, {
-        entry,
-        apDebitTotal: debit,
-        lineCurrency: line.currency,
+  // A credit on the owner's private funds (2018, 2893) is a payment only on a
+  // verifikat that books a purchase, as the validator and the RPC judge it
+  // (voucherBooksPurchase, crm#1817): never an owner's deposit or loan that
+  // happens to fit the amount. Only vouchers that carry such a credit are
+  // read; a 19xx credit counts as it always did. A failed read offers none of
+  // them.
+  const onOwnerFunds = Array.from(byEntry).filter(([, voucher]) => voucher.beyondPrefix)
+  if (onOwnerFunds.length > 0) {
+    let purchases = new Set<string>()
+    try {
+      purchases = await vouchersBookingPurchase(supabase, invoice.id, onOwnerFunds.map(([entryId]) => entryId))
+    } catch (error) {
+      log.warn('purchase guard read failed; no owner-funds voucher candidates', {
+        ...logContext,
+        message: error instanceof Error ? error.message : String(error),
       })
     }
-  }
-
-  if (byEntry.size === 0) return []
-
-  // Drop entries already fully linked to *this* supplier invoice.
-  const candidateEntryIds = Array.from(byEntry.keys())
-  if (onBankCredit) {
-    // A 19xx credit says "money left the bank", not "this supplier was paid":
-    // last month's payment of a recurring invoice is a perfect amount match
-    // for this month's. So every payment row on the voucher counts, whichever
-    // invoice it belongs to, and the candidate is scored on what the credit
-    // has LEFT, as the RPC settles it.
-    const rows = await fetchVoucherPaymentRows(supabase, companyId, candidateEntryIds)
-    for (const [entryId, candidate] of byEntry) {
-      const capacity = bankCreditCapacity(
-        candidate.apDebitTotal,
-        rows.filter((r) => r.journal_entry_id === entryId),
-        invoice.id,
-        invoiceCurrency,
-      )
-      if (capacity === null) byEntry.delete(entryId)
-      else candidate.apDebitTotal = capacity
+    for (const [entryId, voucher] of onOwnerFunds) {
+      if (purchases.has(entryId)) continue
+      // Not a purchase: only the 19xx part of the voucher settles. Through
+      // the SEK-booked fallback the parts are not told apart, so it is not
+      // offered.
+      const bankPart = voucher.sekBooked ? 0 : roundOre(voucher.amount - (voucher.beyondPrefix?.amount ?? 0))
+      if (bankPart <= AMOUNT_TOLERANCE) byEntry.delete(entryId)
+      else voucher.amount = bankPart
     }
-  } else {
-    const { data: existingLinks } = await supabase
-      .from('supplier_invoice_payments')
-      .select('journal_entry_id')
-      .eq('company_id', companyId)
-      .eq('supplier_invoice_id', invoice.id)
-      .in('journal_entry_id', candidateEntryIds)
+    if (byEntry.size === 0) return []
+  }
 
-    const alreadyLinked = new Set(
-      (existingLinks ?? [])
-        .map((row) => (row as { journal_entry_id: string | null }).journal_entry_id)
-        .filter((id): id is string => !!id),
-    )
-    for (const id of alreadyLinked) byEntry.delete(id)
+  // Every payment row on a voucher counts, whichever invoice it belongs to,
+  // and the candidate is scored on what the voucher has LEFT, as the RPC
+  // settles it. On the 19xx side that is what keeps last month's payment of a
+  // recurring invoice off this month's (a 19xx credit says "money left the
+  // bank", not "this supplier was paid"); on the 244x side it is what lets one
+  // verifikat pay several invoices without paying any of them twice. A voucher
+  // already linked to this invoice, or with nothing left, is not a candidate.
+  // The SEK-booked fallback reads the kronor voucher as the payment of this
+  // invoice's whole remainder: it cannot also carry another invoice's row
+  // (voucherCapacity, shared with the customer side).
+  const rows = await fetchVoucherPaymentRows(supabase, companyId, Array.from(byEntry.keys()))
+  const usedByEntry = new Map<string, number>()
+  for (const [entryId, voucher] of byEntry) {
+    const voucherRows = rows
+      .filter((r) => r.journal_entry_id === entryId)
+      .map((r) => ({ invoiceId: r.supplier_invoice_id, amount: r.amount, currency: r.currency }))
+    const capacity = voucherCapacity(voucher, voucherRows, invoice.id, invoiceCurrency)
+    if (capacity === null) {
+      byEntry.delete(entryId)
+      continue
+    }
+    voucher.amount = capacity.left
+    usedByEntry.set(entryId, capacity.used)
   }
   if (byEntry.size === 0) return []
 
-  // Period-lock flags (informational, linking is allowed in locked periods
-  // because no JE is mutated).
-  const periodIds = Array.from(
-    new Set(Array.from(byEntry.values()).map((v) => v.entry.fiscal_period_id)),
+  const lockedPeriods = await lockedPeriodIds(
+    supabase,
+    Array.from(new Set(Array.from(byEntry.values()).map((v) => v.entry.fiscal_period_id))),
+    log,
+    logContext,
   )
-  const { data: periods, error: periodsError } = await supabase
-    .from('fiscal_periods')
-    .select('id, is_closed, locked_at')
-    .in('id', periodIds)
 
-  // Fail closed when the period state cannot be read: the flag is advisory
-  // (linking mutates no journal entry), so over-flagging costs a badge, while
-  // claiming "open" would tell the user a period is writable right before the
-  // enforce_period_lock trigger refuses the write.
-  const periodStateUnknown = !!periodsError || !periods
-  if (periodStateUnknown) {
-    log.warn('fiscal period lock state unavailable, flagging candidates as locked', {
-      companyId,
-      supplierInvoiceId: invoice.id,
-      reason: periodsError?.message,
-    })
+  const scoreContext: VoucherScoreContext = {
+    currency: invoice.currency,
+    remainingAmount,
+    total: invoice.total,
+    dueDate: invoice.due_date,
+    windowDays,
+    // The ankomstnummer is Accounted's own sequence (1, 2, 3, ...): no bank or
+    // source system writes it on a payment, so it counts only when the amount
+    // corroborates it. All 31 arrival-number auto-links in production on 2026-09-16
+    // were of the kind "14" inside "(1814)" with an unrelated amount (desk crm#64).
+    references: [
+      { label: 'Fakturanummer', value: invoice.supplier_invoice_number, countsWithoutAmount: true },
+      { label: 'Ankomstnummer', value: invoice.arrival_number, countsWithoutAmount: false },
+    ],
+    counterparty: { name: invoice.supplier?.name, label: 'leverantörsnamn' },
+    includeShared: options.includeShared === true,
   }
-  const lockedPeriods = new Set(
-    periodStateUnknown
-      ? periodIds
-      : (periods as FiscalPeriodRow[])
-          .filter((p) => Boolean(p.is_closed) || Boolean(p.locked_at))
-          .map((p) => p.id),
-  )
-
-  const ctx: CandidateContext = { invoice, remainingAmount }
+  const score = options.voucher ? scoreNamedVoucherCandidate : scoreVoucherCandidate
   const candidates: SupplierVoucherCandidate[] = []
-  for (const { entry, apDebitTotal, lineCurrency } of byEntry.values()) {
-    const scored = scoreCandidate(entry, apDebitTotal, lineCurrency, ctx)
+  for (const { entry, amount, lineCurrency, sekBooked } of byEntry.values()) {
+    // A share is not on offer through the SEK-booked fallback: the validator
+    // and the RPC refuse one there (the kursdifferens would be a guess).
+    const scored = score(entry, amount, lineCurrency, scoreContext, !sekBooked)
     if (!scored) continue
     candidates.push({
       journal_entry_id: entry.id,
@@ -307,126 +287,17 @@ export async function findMatchingVouchersForSupplierInvoice(
       voucher_number: entry.voucher_number,
       entry_date: entry.entry_date,
       description: entry.description,
-      ap_debit_amount: round2(apDebitTotal),
+      ap_debit_amount: roundOre(amount),
       settlement_side: settlement.side,
       currency: invoice.currency,
       ap_line_currency: lineCurrency,
       period_locked: lockedPeriods.has(entry.fiscal_period_id),
       confidence: scored.confidence,
-      match_reason: scored.match_reason,
+      match_reason: sekBooked ? sekBookedReason(scored.match_reason, sekBooked.sekTotal) : scored.match_reason,
+      ...voucherShareFields(amount, usedByEntry.get(entry.id) ?? 0, remainingAmount, Boolean(sekBooked)),
     })
   }
-
-  candidates.sort(
-    (a, b) => b.confidence - a.confidence || a.entry_date.localeCompare(b.entry_date),
-  )
-  return candidates.slice(0, limit)
-}
-
-function scoreCandidate(
-  entry: VoucherRow,
-  apDebitTotal: number,
-  lineCurrency: string | null,
-  ctx: CandidateContext,
-): { confidence: number; match_reason: string } | null {
-  // Reference in the voucher text: the supplier's invoice number, or our own
-  // ankomstnummer, as a whole number (descriptionMentionsReference). A
-  // reference alone does not prove THIS payment: a bank text naming the
-  // invoice can still be a partial payment, and short numbers recur in dates
-  // and inside other invoices' numbers. Only together with an amount that
-  // settles the invoice (the remainder, or the total) does it earn 0.99. An
-  // invoice number with another amount stays a strong hint for a person
-  // (0.90), below the unattended auto-link bar. The ankomstnummer is
-  // Accounted's own sequence (1, 2, 3, ...): no bank or source system writes
-  // it on a payment, so it counts only when the amount corroborates it. All
-  // 31 arrival-number auto-links in prod on 2026-09-16 were of the kind "14"
-  // inside "(1814)" with an unrelated amount (desk crm#64).
-  const invoiceNumberHit = descriptionMentionsReference(
-    entry.description,
-    ctx.invoice.supplier_invoice_number,
-  )
-  const arrivalHit = descriptionMentionsReference(entry.description, ctx.invoice.arrival_number)
-  const settlesInvoice =
-    amountsMatchExact(apDebitTotal, ctx.remainingAmount) ||
-    amountsMatchExact(apDebitTotal, ctx.invoice.total)
-  if (invoiceNumberHit && settlesInvoice) {
-    return {
-      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-      match_reason: `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning och beloppet stämmer`,
-    }
-  }
-  if (arrivalHit && settlesInvoice) {
-    return {
-      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-      match_reason: `Ankomstnummer ${ctx.invoice.arrival_number} omnämnt i verifikatets beskrivning och beloppet stämmer`,
-    }
-  }
-  if (invoiceNumberHit) {
-    return {
-      confidence: CONFIDENCE.REFERENCE_AMOUNT_MISMATCH,
-      match_reason: `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning, men beloppet (${formatNumber(apDebitTotal)} ${ctx.invoice.currency}) avviker från fakturans`,
-    }
-  }
-
-  // Label guard, unchanged in shape. It is no longer what makes the amounts
-  // comparable (that used to be the bug: `lineCurrency ?? invoice.currency`
-  // passes on exactly the FX rows it existed to catch, and the SEK
-  // debit_amount was then compared against a foreign remainder).
-  // `apDebitTotal` already arrives expressed in ctx.invoice.currency, and any
-  // line that could not be expressed there was dropped before summing. What
-  // survives here is the counterparty discriminator: a 244x debit stamped with
-  // another document's currency belongs to another supplier invoice.
-  const lineCurrencyEffective = lineCurrency ?? ctx.invoice.currency
-  if (lineCurrencyEffective !== ctx.invoice.currency) {
-    return null
-  }
-
-  const exactRemaining = amountsMatchExact(apDebitTotal, ctx.remainingAmount)
-  const exactTotal =
-    !exactRemaining && amountsMatchExact(apDebitTotal, ctx.invoice.total)
-  const fuzzyRemaining =
-    !exactRemaining &&
-    !exactTotal &&
-    amountsMatchFuzzy(apDebitTotal, ctx.remainingAmount)
-
-  // Supplier name in description: reuse customer-side helper since the logic
-  // (significant tokens of the counterparty name appearing in free text) is
-  // identical regardless of AR vs AP.
-  const supplierMatch = customerNameMatches(
-    ctx.invoice.supplier?.name,
-    entry.description,
-    null,
-  )
-
-  let confidence = 0
-  let reason = ''
-  if (exactRemaining && supplierMatch) {
-    confidence = CONFIDENCE.EXACT_AMOUNT_CUSTOMER
-    reason = `Exakt belopp (${formatNumber(apDebitTotal)} ${ctx.invoice.currency}) och leverantörsnamn matchar`
-  } else if (exactRemaining) {
-    confidence = CONFIDENCE.EXACT_AMOUNT_ONLY
-    reason = `Exakt belopp (${formatNumber(apDebitTotal)} ${ctx.invoice.currency})`
-  } else if (exactTotal && supplierMatch) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_CUSTOMER
-    reason = `Fakturans totalbelopp och leverantörsnamn matchar`
-  } else if (exactTotal) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY + 0.05
-    reason = `Fakturans totalbelopp matchar`
-  } else if (fuzzyRemaining && supplierMatch) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_CUSTOMER
-    reason = `Belopp nära (±1%) och leverantörsnamn matchar`
-  } else if (fuzzyRemaining) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY
-    reason = `Belopp nära (±1%)`
-  } else {
-    return null
-  }
-
-  if (isDateWithinDays(entry.entry_date, ctx.invoice.due_date, 7)) {
-    confidence = Math.min(CONFIDENCE.OCR_REFERENCE_MATCH - 0.001, confidence + DATE_PROXIMITY_BUMP)
-  }
-
-  return { confidence, match_reason: reason }
+  return rankVoucherCandidates(candidates, limit)
 }
 
 export type SupplierVoucherLinkErrorCode =
@@ -439,9 +310,12 @@ export type SupplierVoucherLinkErrorCode =
   | 'LINK_SI_VOUCHER_CUTOFF_ALREADY_POSTED'
   | 'LINK_SI_VOUCHER_ALREADY_LINKED'
   | 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING'
+  | 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_VOUCHER'
+  | 'LINK_SI_VOUCHER_AMOUNT_INVALID'
   | 'LINK_SI_VOUCHER_CURRENCY_MISMATCH'
   | 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID'
   | 'LINK_SI_VOUCHER_DB_ERROR'
+  | 'SI_BANK_PAYMENT_UNDER_WAY'
 
 export type ValidateSupplierVoucherResult =
   | {
@@ -455,6 +329,9 @@ export type ValidateSupplierVoucherResult =
       remainingAfter: number
       isFullyPaid: boolean
       paymentAmount: number
+      /** What the voucher has left after this link, in the invoice's
+       *  currency: for other invoices, or for a debt with no invoice here. */
+      voucherRemainingAfter: number
     }
   | {
       ok: false
@@ -468,17 +345,31 @@ export type ValidateSupplierVoucherResult =
  * judged before approval the way the commit will judge it. The RPC stays the
  * authority: one guard is NOT mirrored here, the posted kontantmetod cut-off
  * (LINK_SI_VOUCHER_CUTOFF_ALREADY_POSTED), which surfaces at commit.
+ *
+ * `amount` is the stated share of the voucher that is this invoice's, in the
+ * invoice's currency (see the module header); omitted, what the voucher has
+ * left must fit inside the invoice's remainder.
  */
 export async function validateVoucherForSupplierInvoiceLink(
   supabase: SupabaseClient,
   companyId: string,
   invoice: SupplierInvoice & { supplier?: Supplier },
   journalEntryId: string,
+  amount?: number | null,
 ): Promise<ValidateSupplierVoucherResult> {
-  const remainingAmount = computeRemaining(invoice)
+  // A stated share is a positive amount to the öre, judged first as in the RPC.
+  const statedAmount = amount == null ? null : roundOre(amount)
+  if (statedAmount !== null && !(Number.isFinite(statedAmount) && statedAmount > 0)) {
+    return { ok: false, code: 'LINK_SI_VOUCHER_AMOUNT_INVALID', details: { amount } }
+  }
+
+  const remainingAmount = storedRemaining(invoice)
   if (remainingAmount <= AMOUNT_TOLERANCE) {
     return { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID' }
   }
+
+  const signedBankPayment = await signedBankPaymentRefusal(supabase, companyId, invoice.id)
+  if (signedBankPayment) return signedBankPayment
 
   const { data: voucher, error: voucherError } = await supabase
     .from('journal_entries')
@@ -528,20 +419,42 @@ export async function validateVoucherForSupplierInvoiceLink(
   // below still compares the RAW invoice.currency, so a NULL row is rejected
   // exactly as before rather than newly failing as "unconvertible".
   const invoiceCurrency = documentCurrency(invoice.currency)
+
+  // A credit on the owner's private funds settles only on a verifikat that
+  // books a purchase, as the RPC's supplier_invoice_voucher_books_purchase()
+  // judges it (crm#1817). The invoice's line accounts are read only when the
+  // verifikat carries such a credit and debits no cost account.
+  const purchaseLines = lines as PurchaseCheckLine[]
+  let booksPurchase = onBankCredit && voucherBooksPurchase(purchaseLines, [])
+  const creditsOwnerFunds = purchaseLines.some(
+    (line) =>
+      Number(line.credit_amount) > 0 &&
+      SUPPLIER_SETTLEMENT_ACCOUNTS_BEYOND_PREFIX[settlement.side].includes(line.account_number ?? ''),
+  )
+  if (onBankCredit && !booksPurchase && creditsOwnerFunds) {
+    try {
+      booksPurchase = voucherBooksPurchase(
+        purchaseLines,
+        await supplierInvoiceLinePostingAccounts(supabase, invoice.id),
+      )
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_DB_ERROR',
+        details: { reason: error instanceof Error ? error.message : String(error) },
+      }
+    }
+  }
+
   let apDebitTotal = 0
   let lineCurrency: string | null = null
   // A settlement-side line that carries no amount in the invoice's currency.
   // Fail CLOSED on it, UNLESS the whole matched side is genuinely SEK-booked:
   // then the fallback below mirrors the RPC's SEK-booked settlement gate
-  // (migration 20260830140000).
+  // (migration 20260830140000), through the predicate the candidate finder
+  // shares (sekBookedSettlement).
   let unconvertibleLineCurrency: string | null | undefined
-  // Fallback classification, counted per LINE exactly as the RPC does: a line
-  // labelled with the invoice's currency whose amount_in_currency is 0 is
-  // still a readable LINE and must keep the fallback disabled, because its
-  // real SEK ledger movement is excluded from sekSideTotal.
-  let readableCount = 0
-  let sekSideTotal = 0
-  let foreignLabelCount = 0
+  const sideLines: SettlementSideLine[] = []
   for (const raw of lines) {
     const line = raw as {
       account_number: string
@@ -550,18 +463,10 @@ export async function validateVoucherForSupplierInvoiceLink(
       currency: string | null
       amount_in_currency: number | string | null
     }
-    if (!line.account_number?.startsWith(settlement.accountPrefix)) continue
+    if (!settlesOnAccount(settlement, line.account_number, booksPurchase)) continue
     const rawDebit =
       Number(settlement.entrySide === 'credit' ? line.credit_amount : line.debit_amount) || 0
-    if (invoiceCurrency !== 'SEK' && rawDebit > 0) {
-      if (line.currency === invoiceCurrency && line.amount_in_currency != null) {
-        readableCount += 1
-      } else if ((line.currency ?? 'SEK') === 'SEK') {
-        sekSideTotal += rawDebit
-      } else {
-        foreignLabelCount += 1
-      }
-    }
+    sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawDebit })
     const debit = ledgerLineSideAmountIn(line, invoiceCurrency, settlement.entrySide)
     if (debit === null) {
       if (rawDebit > 0 && unconvertibleLineCurrency === undefined) {
@@ -573,53 +478,54 @@ export async function validateVoucherForSupplierInvoiceLink(
     apDebitTotal += debit
     if (!lineCurrency) lineCurrency = line.currency
   }
-  apDebitTotal = round2(apDebitTotal)
+  apDebitTotal = roundOre(apDebitTotal)
 
-  if (unconvertibleLineCurrency !== undefined) {
-    // SEK-booked settlement fallback, mirroring the RPC gate byte-for-byte:
-    // zero readable lines, every unreadable line SEK-booked, a sane
-    // exchange_rate, and the voucher's SEK total within 10% of remaining *
-    // rate. The RPC settles the FULL remaining; on ap_debit it also books the
-    // FX residual to 3960/7960 as its own verifikat, on bank_credit it books
-    // nothing (no skuld was carried at the invoice rate). The validation
-    // outcome only has to agree.
-    const exchangeRate = Number(invoice.exchange_rate)
-    const fallbackEligible =
-      readableCount === 0 &&
-      foreignLabelCount === 0 &&
-      sekSideTotal > 0 &&
-      Number.isFinite(exchangeRate) &&
-      exchangeRate > 0 &&
-      exchangeRate < 100000
-    if (!fallbackEligible) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
-        details: {
-          invoice_currency: invoice.currency,
-          line_currency: unconvertibleLineCurrency,
-        },
-      }
+  if (unconvertibleLineCurrency !== undefined && statedAmount !== null) {
+    // A stated share needs the voucher's side in the invoice's currency. The
+    // fallback below reads a kronor voucher as the payment of the invoice's
+    // WHOLE remainder and the RPC books the kursdifferens from that; the
+    // kronor behind a part of it are not in the books, so a share would book
+    // a kursdifferens on a guess. Answered before the fallback, as in the RPC.
+    return {
+      ok: false,
+      code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
+      details: {
+        invoice_currency: invoice.currency,
+        line_currency: unconvertibleLineCurrency,
+        reason: 'amount_needs_invoice_currency',
+      },
     }
-    const sekTotal = round2(sekSideTotal)
-    const bookedSek = round2(remainingAmount * exchangeRate)
-    if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
+  }
+  if (unconvertibleLineCurrency !== undefined) {
+    // SEK-booked settlement fallback, mirroring the RPC gate byte-for-byte
+    // (sekBookedSettlement). The RPC settles the FULL remaining; on ap_debit
+    // it also books the FX residual to 3960/7960 as its own verifikat, on
+    // bank_credit it books nothing (no skuld was carried at the invoice
+    // rate). The validation outcome only has to agree.
+    const fallback = sekBookedSettlement(sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
+    if (!fallback.eligible) {
       return {
         ok: false,
         code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
-        details: {
-          invoice_currency: invoice.currency,
-          line_currency: unconvertibleLineCurrency,
-          reason: 'fx_deviation_too_large',
-          expected_sek: bookedSek,
-          voucher_sek: sekTotal,
-        },
+        details:
+          fallback.reason === 'fx_deviation_too_large'
+            ? {
+                invoice_currency: invoice.currency,
+                line_currency: unconvertibleLineCurrency,
+                reason: 'fx_deviation_too_large',
+                expected_sek: fallback.bookedSek,
+                voucher_sek: fallback.sekTotal,
+              }
+            : {
+                invoice_currency: invoice.currency,
+                line_currency: unconvertibleLineCurrency,
+              },
       }
     }
     // Full-remaining settlement, exactly as the RPC computes it. lineCurrency
     // is null here (no readable line), so the label guard below passes and the
     // exceeds-remaining guard sees an equal amount.
-    apDebitTotal = round2(remainingAmount)
+    apDebitTotal = roundOre(remainingAmount)
   }
   const sekFallback = unconvertibleLineCurrency !== undefined
 
@@ -642,47 +548,73 @@ export async function validateVoucherForSupplierInvoiceLink(
     }
   }
 
-  if (onBankCredit) {
-    // Capacity of the 19xx credit, as in the RPC: rows for OTHER invoices have
-    // used part of it; this invoice's own row is the already-linked guard's.
-    const rows = (await fetchVoucherPaymentRows(supabase, companyId, [journalEntryId])).filter(
-      (r) => r.supplier_invoice_id !== invoice.id,
-    )
-    if (sekFallback && rows.length > 0) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
-        details: { linked_rows: rows.length },
-      }
-    }
-    if (rows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
-        details: {
-          invoice_currency: invoice.currency,
-          reason: 'voucher_settles_other_currency',
-        },
-      }
-    }
-    const used = round2(rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
-    if (apDebitTotal - used <= AMOUNT_TOLERANCE) {
-      return {
-        ok: false,
-        code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
-        details: { bank_credit: apDebitTotal, already_linked: used },
-      }
-    }
-    apDebitTotal = round2(apDebitTotal - used)
-  }
-
-  if (apDebitTotal > remainingAmount + AMOUNT_TOLERANCE) {
+  // Capacity of the settlement side, on both sides as in the RPC: rows for
+  // OTHER invoices have used part of it; this invoice's own row is the
+  // already-linked guard's.
+  const sideKey = onBankCredit ? 'bank_credit' : 'ap_debit'
+  const rows = (await fetchVoucherPaymentRows(supabase, companyId, [journalEntryId])).filter(
+    (r) => r.supplier_invoice_id !== invoice.id,
+  )
+  if (sekFallback && rows.length > 0) {
     return {
       ok: false,
-      code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
-      details: onBankCredit
-        ? { bank_credit: apDebitTotal, remaining: round2(remainingAmount) }
-        : { ap_debit: apDebitTotal, remaining: round2(remainingAmount) },
+      code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
+      details: { linked_rows: rows.length },
+    }
+  }
+  if (rows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) {
+    return {
+      ok: false,
+      code: 'LINK_SI_VOUCHER_CURRENCY_MISMATCH',
+      details: {
+        invoice_currency: invoice.currency,
+        reason: 'voucher_settles_other_currency',
+      },
+    }
+  }
+  const used = roundOre(rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
+  const sideTotal = apDebitTotal
+  if (apDebitTotal - used <= AMOUNT_TOLERANCE) {
+    return {
+      ok: false,
+      code: 'LINK_SI_VOUCHER_FULLY_ALLOCATED',
+      details: { [sideKey]: sideTotal, already_linked: used },
+    }
+  }
+  // From here on apDebitTotal is what the voucher has LEFT.
+  apDebitTotal = roundOre(apDebitTotal - used)
+
+  if (statedAmount === null) {
+    // No stated share: nothing is split on a guess. What the voucher has left
+    // must fit inside the invoice's remainder.
+    if (apDebitTotal > remainingAmount + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+        details: { [sideKey]: apDebitTotal, remaining: roundOre(remainingAmount) },
+      }
+    }
+  } else {
+    // A stated share: bounded by the invoice's remainder and by what the
+    // voucher has left. The rest of the voucher stays available.
+    if (statedAmount > remainingAmount + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+        details: { amount: statedAmount, remaining: roundOre(remainingAmount) },
+      }
+    }
+    if (statedAmount > apDebitTotal + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
+        details: {
+          amount: statedAmount,
+          available: apDebitTotal,
+          [sideKey]: sideTotal,
+          already_linked: used,
+        },
+      }
     }
   }
 
@@ -697,8 +629,8 @@ export async function validateVoucherForSupplierInvoiceLink(
     return { ok: false, code: 'LINK_SI_VOUCHER_ALREADY_LINKED' }
   }
 
-  const paymentAmount = Math.min(apDebitTotal, round2(remainingAmount))
-  const remainingAfter = Math.max(0, round2(remainingAmount - paymentAmount))
+  const paymentAmount = Math.min(statedAmount ?? apDebitTotal, apDebitTotal, roundOre(remainingAmount))
+  const remainingAfter = Math.max(0, roundOre(remainingAmount - paymentAmount))
   const isFullyPaid = remainingAfter <= AMOUNT_TOLERANCE
 
   return {
@@ -710,13 +642,29 @@ export async function validateVoucherForSupplierInvoiceLink(
     remainingAfter,
     isFullyPaid,
     paymentAmount,
+    voucherRemainingAfter: roundOre(apDebitTotal - paymentAmount),
   }
 }
 
 export interface LinkSupplierInvoiceToVoucherParams {
+  /**
+   * Set only by the provider-migration pass (bulk-reconcile-supplier-
+   * vouchers.ts): its invoices' registrations arrived with the imported SIE
+   * journal, unlinked, so a missing link does not mean unbooked there and the
+   * registration is never booked a second time. Every other caller leaves it
+   * unset, and a deferring company's unbooked invoice is booked first.
+   */
+  registrationInLedger?: boolean
   supplierInvoiceId: string
   journalEntryId: string
   notes?: string
+  /** The share of the voucher that is this invoice's, in the invoice's
+   *  currency. Omitted: what the voucher has left must fit inside the
+   *  invoice's remainder (see the module header). */
+  amount?: number
+  /** Why the pair is linked, on a door no person chose it on. Left out: the
+   *  caller named this verifikat for this invoice. */
+  linkBasis?: ScopeFreeLinkBasis
 }
 
 export interface LinkSupplierInvoiceToVoucherResult {
@@ -726,9 +674,14 @@ export interface LinkSupplierInvoiceToVoucherResult {
   remainingAmount: number
   paymentAmount: number
   journalEntryId: string
+  /** What the voucher has left after this link, in the invoice's currency;
+   *  null from a database that predates migration 20261011153000. */
+  voucherRemaining: number | null
   /** Bank transaction auto-reconciled to the linked voucher, if exactly one
    *  unbooked line matched it; null when nothing was safely linkable. */
   reconciledTransactionId: string | null
+  /** The registration verifikat this link booked first (defer_invoice_booking), else null. */
+  registrationJournalEntryId: string | null
 }
 
 /**
@@ -748,6 +701,7 @@ interface RpcLinkOk {
   payment_amount: number
   journal_entry_id: string
   currency: string
+  voucher_remaining?: number | null
 }
 
 interface RpcLinkErr {
@@ -763,20 +717,77 @@ export async function linkSupplierInvoiceToVoucher(
   params: LinkSupplierInvoiceToVoucherParams,
 ): Promise<
   | { ok: true; result: LinkSupplierInvoiceToVoucherResult }
-  | { ok: false; code: SupplierVoucherLinkErrorCode; details?: Record<string, unknown> }
+  // A link refusal, or the Bokför step's code when the registration the link
+  // books first was refused (details.registration_first).
+  | { ok: false; code: SupplierVoucherLinkErrorCode | RegistrationFirstRefusal['code']; details?: Record<string, unknown> }
 > {
+  const signedBankPayment = await signedBankPaymentRefusal(supabase, companyId, params.supplierInvoiceId)
+  if (signedBankPayment) return signedBankPayment
+
+  // Faktureringsmetoden with defer_invoice_booking: an invoice registered
+  // without its verifikat is booked first by the Bokför step, so the linked
+  // voucher's 244x debit clears a skuld the ledger carries
+  // (lib/supplier-invoices/registration-first.ts). The link is validated
+  // first, so neither refusal leaves the registration booked.
+  let registrationJournalEntryId: string | null = null
+  if (!params.registrationInLedger) {
+    const registration = await bookRegistrationBeforeVoucherLink(supabase, userId, companyId, params)
+    if (!registration.ok) return registration
+    registrationJournalEntryId = registration.journalEntryId
+  }
+
   // All validation + writes happen inside link_supplier_invoice_to_voucher
   // (PL/pgSQL). The function locks the invoice row, validates the voucher,
   // and applies UPDATE + INSERT in a single PG transaction so a failure on
   // either rolls back automatically. The previous TS implementation did
   // UPDATE-then-INSERT with a manual rollback that could overwrite a
   // concurrent sibling's successful write: PR #602 review fix.
-  const { data, error } = await supabase.rpc('link_supplier_invoice_to_voucher', {
-    p_supplier_invoice_id: params.supplierInvoiceId,
-    p_journal_entry_id: params.journalEntryId,
-    p_user_id: userId,
-    p_company_id: companyId,
-    p_notes: params.notes ?? null,
+  // The posting port (its SQL step): a foreign-currency invoice can get a
+  // kursdifferens verifikat from the RPC, so its payment event is recorded
+  // first and the RPC links it to that draft before the number is drawn
+  // (when the link posts none, the event stays unlinked). Off: nothing is
+  // read or built and the RPC is called as before.
+  let businessEvents: SqlBusinessEventLink | undefined
+  try {
+    businessEvents = await postingPort.recordEventsForSql({
+      supabase,
+      companyId,
+      events: () =>
+        voucherLinkEvents(supabase, companyId, {
+          side: 'supplier',
+          invoiceId: params.supplierInvoiceId,
+          journalEntryId: params.journalEntryId,
+          amount: params.amount,
+          linkBasis: params.linkBasis,
+        }),
+    })
+  } catch (err) {
+    // strict: an event that could not be recorded stops the link before any number.
+    log.error('link_supplier_invoice_to_voucher business event not recorded (strict)', err, {
+      companyId,
+      supplierInvoiceId: params.supplierInvoiceId,
+    })
+    return { ok: false, code: 'LINK_SI_VOUCHER_DB_ERROR', details: { reason: err instanceof Error ? err.message : String(err) } }
+  }
+
+  // Through the engine door (commitSupplierInvoiceVoucherLink, reached
+  // through the posting port), which announces the kursdifferens verifikat the
+  // RPC posts for a foreign-currency invoice with journal_entry.committed.
+  const { data, error } = await postingPort.commitSqlPosting({
+    supabase,
+    companyId,
+    userId,
+    fn: 'link_supplier_invoice_to_voucher',
+    args: [
+      {
+        supplierInvoiceId: params.supplierInvoiceId,
+        journalEntryId: params.journalEntryId,
+        notes: params.notes ?? null,
+        amount: params.amount ?? null,
+        ...(params.linkBasis ? { linkBasis: params.linkBasis } : {}),
+        ...(businessEvents ? { businessEvents } : {}),
+      },
+    ],
   })
 
   if (error) {
@@ -884,8 +895,65 @@ export async function linkSupplierInvoiceToVoucher(
       remainingAmount: result.remaining_amount,
       paymentAmount: result.payment_amount,
       journalEntryId: result.journal_entry_id,
+      voucherRemaining: result.voucher_remaining ?? null,
       reconciledTransactionId,
+      registrationJournalEntryId,
     },
+  }
+}
+
+/**
+ * The registration-first step of a voucher link. When the invoice must be
+ * booked first, validates the link (the RPC re-checks it) and runs the Bokför
+ * step; a no-op otherwise, with no read beyond the company setting.
+ */
+async function bookRegistrationBeforeVoucherLink(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: LinkSupplierInvoiceToVoucherParams,
+): Promise<
+  | { ok: true; journalEntryId: string | null }
+  | { ok: false; code: string; details?: Record<string, unknown> }
+> {
+  const opCtx = { supabase, companyId, userId, log }
+  const plan = await planRegistrationBeforeSettlementById(opCtx, params.supplierInvoiceId)
+  if (!plan.ok) return linkRefusal(plan)
+  if (!plan.required) return { ok: true, journalEntryId: null }
+
+  const { data: row, error } = await supabase
+    .from('supplier_invoices')
+    .select(
+      'id, supplier_invoice_number, arrival_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, supplier_id, supplier:suppliers(id, name)',
+    )
+    .eq('id', params.supplierInvoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) return { ok: false, code: 'LINK_SI_VOUCHER_DB_ERROR', details: { reason: error.message } }
+  if (!row) return { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND' }
+  const invoice = row as unknown as SupplierInvoice & { supplier?: Supplier }
+
+  const validation = await validateVoucherForSupplierInvoiceLink(
+    supabase,
+    companyId,
+    invoice,
+    params.journalEntryId,
+    params.amount,
+  )
+  if (!validation.ok) return { ok: false, code: validation.code, details: validation.details }
+
+  const booked = await bookRegistrationBeforeSettlement(opCtx, plan)
+  if (!booked.ok) return linkRefusal(booked)
+  return { ok: true, journalEntryId: booked.bookedHere ? booked.journalEntryId : null }
+}
+
+/** A registration refusal as a link refusal: a typed bookkeeping error answers with its own code. */
+function linkRefusal(refusal: RegistrationFirstRefusal): { ok: false; code: string; details?: Record<string, unknown> } {
+  const errorCode = (refusal.error as { code?: unknown } | null | undefined)?.code
+  return {
+    ok: false,
+    code: typeof errorCode === 'string' ? errorCode : refusal.code,
+    details: refusal.details,
   }
 }
 
@@ -911,32 +979,16 @@ async function fetchVoucherPaymentRows(
 }
 
 /**
- * What a voucher's 19xx credit can still settle for `invoiceId`, or null when
- * it is not a candidate at all: already linked to this invoice, carrying rows
- * in another currency (the used part is unreadable), or nothing left.
+ * A signed bank payment still executes: settling the invoice against a verifikat
+ * beside it pays the supplier twice, the same refusal as mark-paid (crm#1243).
+ * Linked verifikat are not that payment: the bank match is, and it stays open.
  */
-function bankCreditCapacity(
-  bankCredit: number,
-  voucherRows: VoucherPaymentRow[],
-  invoiceId: string,
-  invoiceCurrency: string,
-): number | null {
-  if (voucherRows.some((r) => r.supplier_invoice_id === invoiceId)) return null
-  if (voucherRows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) return null
-  const used = round2(voucherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
-  const left = round2(bankCredit - used)
-  return left > AMOUNT_TOLERANCE ? left : null
-}
-
-function computeRemaining(invoice: SupplierInvoice): number {
-  // Trust the stored value whenever present, including the legitimate 0 for
-  // a fully-paid invoice. Falling through to `total - paid_amount` for the
-  // 0 case can leak rounding drift across multiple payments and return a
-  // tiny positive number, slipping a fully-paid invoice past
-  // LINK_SI_VOUCHER_INVOICE_FULLY_PAID. PR #602 review fix.
-  if (typeof invoice.remaining_amount === 'number') {
-    return Math.max(0, invoice.remaining_amount)
-  }
-  const paid = invoice.paid_amount ?? 0
-  return Math.max(0, round2(invoice.total - paid))
+async function signedBankPaymentRefusal(
+  supabase: SupabaseClient,
+  companyId: string,
+  supplierInvoiceId: string,
+): Promise<{ ok: false; code: 'SI_BANK_PAYMENT_UNDER_WAY'; details: Record<string, unknown> } | null> {
+  const signedBankPayment = await findSignedBankPayment(supabase, companyId, supplierInvoiceId)
+  if (!signedBankPayment) return null
+  return { ok: false, code: 'SI_BANK_PAYMENT_UNDER_WAY', details: signedBankPaymentDetails(signedBankPayment) }
 }

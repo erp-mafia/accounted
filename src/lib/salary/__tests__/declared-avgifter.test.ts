@@ -4,6 +4,7 @@ import {
   computeDeclaredAvgifter,
   computeDeclaredAvgifterWithOverrides,
   declaredAvgifterByCategory,
+  declaredAvgifterForRun,
   reportingCategory,
   resolveDeclaredAvgifterParams,
 } from '../declared-avgifter'
@@ -162,6 +163,53 @@ describe('computeDeclaredAvgifterWithOverrides', () => {
     expect(declared.totalAmount).toBe(16075)
     expect(declared.byCategory.standard?.amount).toBe(16075)
     expect(declared.byCategory.standard?.basis).toBe(51158)
+  })
+})
+
+describe('declaredAvgifterForRun (crm#1149)', () => {
+  const ROW = {
+    avgifter_basis: 3456.78,
+    avgifter_rate: 0.3142,
+    avgifter_category: 'standard',
+    employee: { f_skatt_status: 'a_skatt' },
+  }
+
+  it('declares the whole-krona avgift where the öre-exact one is 1 086,12: trunc(3 456 × 31,42 %) = 1 085', () => {
+    // 3 456,78 × 31,42 % = 1 086,120..., the engine's öre-exact avgift 1 086,12.
+    // The AGI declares underlag 3 456 and Skatteverket draws 1 085.
+    const declared = declaredAvgifterForRun([ROW], { avgifterTotal: 0.3142 })
+    expect(declared.totalUnderlag).toBe(3456)
+    expect(declared.totalAmount).toBe(1085)
+  })
+
+  it('applies the AGI row rules: borttag and F-skatt rows add nothing, a basis override is inert, an amount override counts', () => {
+    const declared = declaredAvgifterForRun(
+      [
+        ROW,
+        // Borttag tombstone: the earlier submission stays on file.
+        { ...ROW, removed_from_agi: true },
+        // F-skatt payee: no underlag, its overrides ignored.
+        {
+          ...ROW,
+          avgifter_basis: 0,
+          avgifter_basis_override: 15000,
+          avgifter_amount_override: 4713,
+          employee: { f_skatt_status: 'f_skatt' },
+        },
+        // Basis-only override never reaches the IU: the filed 3 456,78 counts.
+        { ...ROW, avgifter_basis_override: 40000 },
+        // Amount override (FoU-style): its manual amount is declared.
+        { ...ROW, avgifter_amount_override: 500.75 },
+      ],
+      { avgifterTotal: 0.3142 },
+    )
+    // Two computing rows: trunc(6 912 × 31,42 %) = 2 171; plus trunc(500,75) = 500.
+    expect(declared.totalAmount).toBe(2171 + 500)
+    expect(declared.totalUnderlag).toBe(6912 + 3456)
+  })
+
+  it('declares nothing for an empty roster', () => {
+    expect(declaredAvgifterForRun([], null).totalAmount).toBe(0)
   })
 })
 

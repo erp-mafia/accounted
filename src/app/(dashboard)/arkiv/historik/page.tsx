@@ -10,10 +10,10 @@ import { ArkivHistory } from '@/components/arkiv/ArkivHistory'
 export default async function ArkivHistoryPage() {
   const companyId = await getDashboardCompanyId()
   if (!companyId || !isArkivSectionEnabled(companyId)) notFound()
-  const t = await getTranslations('arkiv')
+  const [t, tNav] = await Promise.all([getTranslations('arkiv'), getTranslations('nav')])
   return (
     <div className="space-y-6">
-      <PageHeader title={t('history_title')} help={<HelpPopover>{t('history_help')}</HelpPopover>} />
+      <PageHeader parent={{ label: tNav('v3_archive'), href: '/arkiv' }} title={t('history_title')} help={<HelpPopover>{t('history_help')}</HelpPopover>} />
       <ArkivHistory />
     </div>
   )

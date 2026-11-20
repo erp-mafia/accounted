@@ -85,6 +85,58 @@ describe('commitPendingOperation: reconciliation_match with a bank 1:N pair (#15
     expect((result.data as { applied: Array<{ allocated_amount: number }> }).applied.map((a) => a.allocated_amount)).toEqual([-500, -300])
   })
 
+  it('commits a staged pair of verifikat with no outside row: nothing in applied is not a failure when something was settled (crm#1074)', async () => {
+    const ledgerOnly = { external_ids: [], journal_entry_ids: [E1, E2] }
+    const settlement = {
+      settlement_id: '66666666-6666-4666-8666-666666666666',
+      account_number: '1930',
+      entries: [
+        { journal_entry_id: E1, voucher_series: 'A', voucher_number: 12, entry_date: '2026-03-18', amount: -1250 },
+        { journal_entry_id: E2, voucher_series: 'A', voucher_number: 31, entry_date: '2026-04-21', amount: 1250 },
+      ],
+    }
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's committed update
+    matchMock.mockResolvedValue({ dry_run: false, considered: 1, applied: [], settled: [settlement], skipped: [] })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { account_key: KEY, pairs: [ledgerOnly] } }),
+    )
+
+    expect(matchMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', KEY, { pairs: [ledgerOnly] }, { dryRun: false })
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ account_key: KEY, applied_count: 0, settled_count: 1, settled: [settlement] })
+  })
+
+  it('auto-rejects a settlement the ledger no longer allows at approval time, carrying the policy code', async () => {
+    const ledgerOnly = { external_ids: [], journal_entry_ids: [E1, E2] }
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+    matchMock.mockResolvedValue({
+      dry_run: false,
+      considered: 1,
+      applied: [],
+      settled: [],
+      skipped: [{ pair: ledgerOnly, code: 'ENTRY_NOT_OPEN', message: 'Verifikat A12 står inte bland verifikaten utan bankrad.' }],
+    })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { account_key: KEY, pairs: [ledgerOnly] } }),
+    )
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('ENTRY_NOT_OPEN')
+  })
+
   it('reports a refused split (sum mismatch at commit time) as a 409 auto-reject carrying the skip code', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

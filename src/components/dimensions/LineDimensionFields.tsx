@@ -33,7 +33,7 @@ const FALLBACK_FIELDS: { sieDimNo: string; label: string }[] = [
  * per active registry dimension, ordered by sort_order then sie_dim_no (the
  * seeded 1/6 pair sorts first). Labels are the registry dimension names and
  * hardcoded-Swedish fallbacks: the component mounts on the voucher editor,
- * a stays-Swedish surface per .claude/rules/i18n.md (same convention as
+ * a stays-Swedish surface (same convention as
  * DimensionCombobox).
  */
 export default function LineDimensionFields({

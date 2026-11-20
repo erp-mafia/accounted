@@ -19,11 +19,18 @@
  * Every write first checks the register lock (lib/salary/register-locks.ts):
  * dates a run in review, approved, paid or booked has already read through
  * its deviation window are refused with SALARY_REGISTER_DATES_LOCKED_BY_RUN,
- * dry runs included. Draft runs and corrected originals never lock.
+ * dry runs included. Draft runs and corrected originals never lock. A write a
+ * draft run reads clears its calculation (invalidate-calculation.ts).
+ *
+ * A day without stated hours is one scheduled day of the employee
+ * (work-schedule.ts defaultDayHours), the length the calendar offers and the
+ * calculation weighs a row against. No door defaults the hours itself.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { invalidateRunCalculation } from './invalidate-calculation'
 import { assertRegisterDatesUnlocked, assertRegisterRangeUnlocked } from './register-locks'
+import { defaultDayHours } from './work-schedule'
 
 export type AbsenceResult<T> =
   | { ok: true; data: T }
@@ -52,10 +59,10 @@ async function assertEmployee(
   supabase: SupabaseClient,
   companyId: string,
   employeeId: string,
-): Promise<AbsenceResult<{ id: string }>> {
+): Promise<AbsenceResult<{ id: string; hours_per_week: number | null; workdays_per_week: number | null }>> {
   const { data, error } = await supabase
     .from('employees')
-    .select('id')
+    .select('id, hours_per_week, workdays_per_week')
     .eq('id', employeeId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -66,7 +73,7 @@ async function assertEmployee(
   if (!data) {
     return { ok: false, code: 'EMPLOYEE_NOT_FOUND' }
   }
-  return { ok: true, data: data as { id: string } }
+  return { ok: true, data: data as { id: string; hours_per_week: number | null; workdays_per_week: number | null } }
 }
 
 /** Expand [from, to] (inclusive, ISO dates) to per-day ISO strings.
@@ -159,7 +166,8 @@ export async function upsertAbsenceDay(
     day: {
       absence_date: string
       absence_type: string
-      hours: number
+      /** Omitted: one scheduled day of the employee. */
+      hours?: number
       notes?: string | null
       salary_run_employee_id?: string | null
     }
@@ -171,6 +179,12 @@ export async function upsertAbsenceDay(
   const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, [args.day.absence_date])
   if (locked) return locked
 
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    employeeId: args.employeeId,
+    absenceDays: { from: args.day.absence_date, to: args.day.absence_date },
+  })
+  if (invalidated) return invalidated
+
   // Atomic upsert on the natural-key unique index: a rejected write (24h
   // cap, constraint) leaves any existing row untouched.
   const { data, error } = await supabase
@@ -181,7 +195,7 @@ export async function upsertAbsenceDay(
         employee_id: args.employeeId,
         absence_date: args.day.absence_date,
         absence_type: args.day.absence_type,
-        hours: args.day.hours,
+        hours: args.day.hours ?? defaultDayHours(emp.data.hours_per_week, emp.data.workdays_per_week),
         notes: args.day.notes ?? null,
         salary_run_employee_id: args.day.salary_run_employee_id ?? null,
       },
@@ -205,13 +219,14 @@ export async function upsertAbsenceRange(
     from: string
     to: string
     absenceType: string
+    /** Omitted: one scheduled day of the employee. */
     hoursPerDay?: number
     notes?: string | null
     includeWeekends?: boolean
     /** Validate + expand only; return the would-be days without writing. */
     dryRun?: boolean
   },
-): Promise<AbsenceResult<{ count: number; days: AbsenceDayRow[] | Array<{ absence_date: string; absence_type: string; hours: number }> }>> {
+): Promise<AbsenceResult<{ count: number; hours_per_day: number; days: AbsenceDayRow[] | Array<{ absence_date: string; absence_type: string; hours: number }> }>> {
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
@@ -229,7 +244,7 @@ export async function upsertAbsenceRange(
   const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, dates)
   if (locked) return locked
 
-  const hours = args.hoursPerDay ?? 8
+  const hours = args.hoursPerDay ?? defaultDayHours(emp.data.hours_per_week, emp.data.workdays_per_week)
   const rows = dates.map((absence_date) => ({
     company_id: args.companyId,
     employee_id: args.employeeId,
@@ -245,6 +260,7 @@ export async function upsertAbsenceRange(
       ok: true,
       data: {
         count: rows.length,
+        hours_per_day: hours,
         days: rows.map((r) => ({
           absence_date: r.absence_date,
           absence_type: r.absence_type,
@@ -255,8 +271,14 @@ export async function upsertAbsenceRange(
   }
 
   if (rows.length === 0) {
-    return { ok: true, data: { count: 0, days: [] } }
+    return { ok: true, data: { count: 0, hours_per_day: hours, days: [] } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    employeeId: args.employeeId,
+    absenceDays: { from: args.from, to: args.to },
+  })
+  if (invalidated) return invalidated
 
   // Bulk atomic upsert on the natural-key unique index (employee, date,
   // type). One statement: a retry converges on the same end state, and a
@@ -273,7 +295,7 @@ export async function upsertAbsenceRange(
   }
 
   const inserted = (data ?? []) as unknown as AbsenceDayRow[]
-  return { ok: true, data: { count: inserted.length, days: inserted } }
+  return { ok: true, data: { count: inserted.length, hours_per_day: hours, days: inserted } }
 }
 
 export async function deleteAbsenceRange(
@@ -312,6 +334,12 @@ export async function deleteAbsenceRange(
     }
     return { ok: true, data: { deleted_count: count ?? 0 } }
   }
+
+  const invalidated = await invalidateRunCalculation(supabase, args.companyId, {
+    employeeId: args.employeeId,
+    absenceDays: { from: args.from, to: args.to },
+  })
+  if (invalidated) return invalidated
 
   let query = supabase
     .from('salary_absence_days')
