@@ -89,9 +89,11 @@ export const avanzaFormat: BankFileFormat = {
     const typeIdx = headers.indexOf('typ av transaktion')
     const textIdx = headers.indexOf('värdepapper/beskrivning')
     const amountIdx = headers.indexOf('belopp')
-    const currencyIdx = headers.indexOf('transaktionsvaluta') >= 0
-      ? headers.indexOf('transaktionsvaluta')
-      : headers.indexOf('valuta')
+    // Only the newer export names the currency of Belopp. The older one's
+    // "Valuta" sits with Courtage and ISIN, the security's currency, while
+    // Belopp is the kronor that moved on the account: read as the row's
+    // currency it would turn a US share bought on an ISK into a USD row.
+    const currencyIdx = headers.indexOf('transaktionsvaluta')
 
     const accounts = new Set<string>()
 
@@ -109,6 +111,11 @@ export const avanzaFormat: BankFileFormat = {
       }
 
       const amountStr = fields[amountIdx]
+      // An empty or "-" Belopp on a whole row: a row that moved no money on
+      // the account, such as a värdepappersöverföring in a depot export. Left
+      // out on purpose, so no warning (unreadRows in parser.ts). A row cut
+      // short before Belopp is still a warning: that may be a lost bank row.
+      if (fields.length >= headers.length && (amountStr === '' || amountStr === '-')) continue
       // Avanza writes a decimal comma ("548,7", "-322400", "1 234,50"), so
       // the comma is the only decimal mark; "12abc" is null, never truncated.
       const amount = parseSwedishAmount(amountStr, ',')

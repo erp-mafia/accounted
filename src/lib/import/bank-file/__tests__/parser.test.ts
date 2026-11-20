@@ -3368,6 +3368,30 @@ describe('Avanza format', () => {
     expect(result.issues).toEqual([expect.objectContaining({ row: 2, severity: 'warning' })])
   })
 
+  it('leaves out a row that moved no money, without a warning', () => {
+    const content = [
+      AVANZA_HEADER,
+      '2026-07-31;1234567;Värdepappersöverföring;EXEMPELFOND;10;;-;SEK;;;;;',
+      '2026-07-30;1234567;Värdepappersöverföring;EXEMPELFOND;10;;;SEK;;;;;',
+      '2026-06-30;1234567;Inlåningsränta;;;;548,7;SEK;;;;;',
+    ].join('\n')
+
+    const result = parseBankFile(content, 'transaktioner.csv')
+    expect(result.transactions.map((t) => t.amount)).toEqual([548.7])
+    expect(result.issues).toEqual([])
+    expect(result.stats.skipped_rows).toBe(0)
+  })
+
+  it('reads the older export\'s Valuta as the security\'s currency, not the row\'s', () => {
+    const content = [
+      'Datum;Konto;Typ av transaktion;Värdepapper/beskrivning;Antal;Kurs;Belopp;Courtage;Valuta;ISIN;Resultat',
+      '2024-03-28;1234567;Köp;EXEMPEL INC;1;101,5;-1052,77;1;USD;US0000000000;',
+    ].join('\n')
+
+    const result = parseBankFile(content, 'transaktioner.csv')
+    expect(result.transactions.map((t) => [t.amount, t.currency])).toEqual([[-1052.77, 'SEK']])
+  })
+
   it('refuses an export that spans several Avanza accounts', () => {
     const content = [
       AVANZA_HEADER,
