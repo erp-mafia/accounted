@@ -3529,6 +3529,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företagets Billo-brevlåda är redan kopplad till en annan tjänst. Koppla bort den där först.',
     message_en: 'The company\'s Billo mailbox is already connected to another partner. Disconnect it there first.',
   },
+  DIGITAL_MAILBOX_SENDER_ELSEWHERE: {
+    httpStatus: 409,
+    message_sv: 'Företaget skickar redan via Kivra genom en annan tjänst, och Kivra tog inte emot vår förfrågan om att Accounted också får skicka. Kontakta oss så löser vi det.',
+    message_en: 'The company already sends through Kivra via another service, and Kivra did not take our request for Accounted to send too. Contact us and we will sort it out.',
+  },
+  DIGITAL_MAILBOX_SENDER_REQUEST_REJECTED: {
+    httpStatus: 409,
+    message_sv: 'Kivra nekade att Accounted skickar för företaget, eftersom det redan skickar via en annan tjänst. Kontakta oss så hjälper vi till.',
+    message_en: 'Kivra declined to let Accounted send for the company, since it already sends through another service. Contact us and we will help.',
+  },
   DIGITAL_MAILBOX_PROVIDER_FAILED: {
     httpStatus: 502,
     message_sv: 'Den digitala brevlådan svarade inte som väntat. Försök igen om en stund.',
